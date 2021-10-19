@@ -1,0 +1,85 @@
+#ifndef __MONITOR_H
+#define __MONITOR_H
+
+#include <stdio.h>
+#include <perf/core.h>
+#include <perf/cpumap.h>
+#include <perf/threadmap.h>
+#include <perf/evlist.h>
+#include <perf/evsel.h>
+#include <perf/mmap.h>
+#include <perf/event.h>
+
+struct monitor;
+void monitor_register(struct monitor *m);
+struct monitor * monitor_find(char *name);
+int get_possible_cpus(void);
+void print_time(FILE *fp);
+
+
+#define MONITOR_REGISTER(m) \
+__attribute__((constructor)) static void __monitor_register_##m(void) \
+{ \
+    monitor_register(&m); \
+}
+
+struct env {
+    int trigger_freq;
+    bool guest;
+    char *cpumask;
+    int interval;
+    int latency;  // unit: us
+    int freq;
+    char *event;
+    char *filter;
+    bool interruptible;
+    bool uninterruptible;
+    int greater_than;
+    bool callchain;
+    bool test;
+    bool precise;
+    bool verbose;
+};
+
+struct monitor {
+    struct monitor *next;
+    const char *name;
+    int pages;
+    int reinit;
+    int (*init)(struct perf_evlist *evlist, struct env *env);
+    int (*filter)(struct perf_evlist *evlist, struct env *env);
+    void (*deinit)(struct perf_evlist *evlist);
+    void (*read)(struct perf_counts_values *count, int cpu);
+
+    /* PERF_RECORD_* */
+
+    //PERF_RECORD_LOST			= 2,
+    void (*lost)(union perf_event *event);
+
+    //PERF_RECORD_COMM			= 3,
+    void (*comm)(union perf_event *event);
+
+    //PERF_RECORD_EXIT			= 4,
+    void (*exit)(union perf_event *event);
+
+    //PERF_RECORD_THROTTLE			= 5,
+	//PERF_RECORD_UNTHROTTLE			= 6,
+    void (*throttle)(union perf_event *event);
+    void (*unthrottle)(union perf_event *event);
+
+    //PERF_RECORD_FORK			= 7,
+    void (*fork)(union perf_event *event);
+
+    //PERF_RECORD_SAMPLE			= 9,
+    void (*sample)(union perf_event *event);
+
+    //PERF_RECORD_SWITCH			= 14,
+    //PERF_RECORD_SWITCH_CPU_WIDE		= 15,
+    void (*context_switch)(union perf_event *event);
+    void (*context_switch_cpu)(union perf_event *event);
+
+    //PERF_RECORD_NAMESPACES			= 16,
+    void (*namespace)(union perf_event *event);
+};
+
+#endif

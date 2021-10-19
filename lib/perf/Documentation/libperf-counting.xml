@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN" "http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd">
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<refentry>
+<refmeta>
+<refentrytitle>libperf-counting</refentrytitle>
+<manvolnum>7</manvolnum>
+<refmiscinfo class="source">libperf</refmiscinfo>
+<refmiscinfo class="version"></refmiscinfo>
+<refmiscinfo class="manual">libperf Manual</refmiscinfo>
+</refmeta>
+<refnamediv>
+  <refname>libperf-counting</refname>
+  <refpurpose>counting interface</refpurpose>
+</refnamediv>
+<refsect1 id="_description">
+<title>DESCRIPTION</title>
+<simpara>The counting interface provides API to measure and get count for specific perf events.</simpara>
+<simpara>The following test tries to explain count on <literal>counting.c</literal> example.</simpara>
+<simpara>It is by no means complete guide to counting, but shows libperf basic API for counting.</simpara>
+<simpara>The <literal>counting.c</literal> comes with libperf package and can be compiled and run like:</simpara>
+<programlisting language="bash" linenumbering="unnumbered">$ gcc -o counting counting.c -lperf
+$ sudo ./counting
+count 176792, enabled 176944, run 176944
+count 176242, enabled 176242, run 176242</programlisting>
+<simpara>It requires root access, because of the <literal>PERF_COUNT_SW_CPU_CLOCK</literal> event,
+which is available only for root.</simpara>
+<simpara>The <literal>counting.c</literal> example monitors two events on the current process and displays
+their count, in a nutshell it:</simpara>
+<itemizedlist>
+<listitem>
+<simpara>
+creates events
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+adds them to the event list
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+opens and enables events through the event list
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+does some workload
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+disables events
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+reads and displays event counts
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+destroys the event list
+</simpara>
+</listitem>
+</itemizedlist>
+<simpara>The first thing you need to do before using libperf is to call init function:</simpara>
+<programlisting language="c" linenumbering="unnumbered">  8 static int libperf_print(enum libperf_print_level level,
+  9                          const char *fmt, va_list ap)
+ 10 {
+ 11         return vfprintf(stderr, fmt, ap);
+ 12 }
+
+ 14 int main(int argc, char **argv)
+ 15 {
+ ...
+ 35         libperf_init(libperf_print);</programlisting>
+<simpara>It will setup the library and sets function for debug output from library.</simpara>
+<simpara>The <literal>libperf_print</literal> callback will receive any message with its debug level,
+defined as:</simpara>
+<programlisting language="c" linenumbering="unnumbered">enum libperf_print_level {
+        LIBPERF_ERR,
+        LIBPERF_WARN,
+        LIBPERF_INFO,
+        LIBPERF_DEBUG,
+        LIBPERF_DEBUG2,
+        LIBPERF_DEBUG3,
+};</programlisting>
+<simpara>Once the setup is complete we start by defining specific events using the <literal>struct perf_event_attr</literal>.</simpara>
+<simpara>We create software events for cpu and task:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 20         struct perf_event_attr attr1 = {
+ 21                 .type        = PERF_TYPE_SOFTWARE,
+ 22                 .config      = PERF_COUNT_SW_CPU_CLOCK,
+ 23                 .read_format = PERF_FORMAT_TOTAL_TIME_ENABLED|PERF_FORMAT_TOTAL_TIME_RUNNING,
+ 24                 .disabled    = 1,
+ 25         };
+ 26         struct perf_event_attr attr2 = {
+ 27                 .type        = PERF_TYPE_SOFTWARE,
+ 28                 .config      = PERF_COUNT_SW_TASK_CLOCK,
+ 29                 .read_format = PERF_FORMAT_TOTAL_TIME_ENABLED|PERF_FORMAT_TOTAL_TIME_RUNNING,
+ 30                 .disabled    = 1,
+ 31         };</programlisting>
+<simpara>The <literal>read_format</literal> setup tells perf to include timing details together with each count.</simpara>
+<simpara>Next step is to prepare threads map.</simpara>
+<simpara>In this case we will monitor current process, so we create threads map with single pid (0):</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 37         threads = perf_thread_map__new_dummy();
+ 38         if (!threads) {
+ 39                 fprintf(stderr, "failed to create threads\n");
+ 40                 return -1;
+ 41         }
+ 42
+ 43         perf_thread_map__set_pid(threads, 0, 0);</programlisting>
+<simpara>Now we create libperf&#8217;s event list, which will serve as holder for the events we want:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 45         evlist = perf_evlist__new();
+ 46         if (!evlist) {
+ 47                 fprintf(stderr, "failed to create evlist\n");
+ 48                 goto out_threads;
+ 49         }</programlisting>
+<simpara>We create libperf&#8217;s events for the attributes we defined earlier and add them to the list:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 51         evsel = perf_evsel__new(&amp;attr1);
+ 52         if (!evsel) {
+ 53                 fprintf(stderr, "failed to create evsel1\n");
+ 54                 goto out_evlist;
+ 55         }
+ 56
+ 57         perf_evlist__add(evlist, evsel);
+ 58
+ 59         evsel = perf_evsel__new(&amp;attr2);
+ 60         if (!evsel) {
+ 61                 fprintf(stderr, "failed to create evsel2\n");
+ 62                 goto out_evlist;
+ 63         }
+ 64
+ 65         perf_evlist__add(evlist, evsel);</programlisting>
+<simpara>Configure event list with the thread map and open events:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 67         perf_evlist__set_maps(evlist, NULL, threads);
+ 68
+ 69         err = perf_evlist__open(evlist);
+ 70         if (err) {
+ 71                 fprintf(stderr, "failed to open evsel\n");
+ 72                 goto out_evlist;
+ 73         }</programlisting>
+<simpara>Both events are created as disabled (note the <literal>disabled = 1</literal> assignment above),
+so we need to enable the whole list explicitly (both events).</simpara>
+<simpara>From this moment events are counting and we can do our workload.</simpara>
+<simpara>When we are done we disable the events list.</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 75         perf_evlist__enable(evlist);
+ 76
+ 77         while (count--);
+ 78
+ 79         perf_evlist__disable(evlist);</programlisting>
+<simpara>Now we need to get the counts from events, following code iterates through the
+events list and read counts:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 81         perf_evlist__for_each_evsel(evlist, evsel) {
+ 82                 perf_evsel__read(evsel, 0, 0, &amp;counts);
+ 83                 fprintf(stdout, "count %llu, enabled %llu, run %llu\n",
+ 84                         counts.val, counts.ena, counts.run);
+ 85         }</programlisting>
+<simpara>And finally cleanup.</simpara>
+<simpara>We close the whole events list (both events) and remove it together with the threads map:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 87         perf_evlist__close(evlist);
+ 88
+ 89 out_evlist:
+ 90         perf_evlist__delete(evlist);
+ 91 out_threads:
+ 92         perf_thread_map__put(threads);
+ 93         return err;
+ 94 }</programlisting>
+</refsect1>
+<refsect1 id="_reporting_bugs">
+<title>REPORTING BUGS</title>
+<simpara>Report bugs to &lt;<ulink url="mailto:linux-perf-users@vger.kernel.org">linux-perf-users@vger.kernel.org</ulink>&gt;.</simpara>
+</refsect1>
+<refsect1 id="_license">
+<title>LICENSE</title>
+<simpara>libperf is Free Software licensed under the GNU LGPL 2.1</simpara>
+</refsect1>
+<refsect1 id="_resources">
+<title>RESOURCES</title>
+<simpara><ulink url="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git</ulink></simpara>
+</refsect1>
+<refsect1 id="_see_also">
+<title>SEE ALSO</title>
+<simpara>libperf(3), libperf-sampling(7)</simpara>
+</refsect1>
+</refentry>

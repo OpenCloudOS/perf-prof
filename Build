@@ -1,0 +1,14 @@
+perf-monitor-y += trace_helpers.o lib/rbtree.o lib/rblist.o
+perf-monitor-y += monitor.o tep.o
+perf-monitor-y += split-lock.o
+perf-monitor-y += irq-off.o
+perf-monitor-y += profile.o
+perf-monitor-y += trace.o
+perf-monitor-y += signal.o
+perf-monitor-y += task-state.o
+perf-monitor-y += watchdog.o
+
+bin-y += perf-monitor
+perf-monitor-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
+LDFLAGS_perf-monitor += -lpthread -ldl -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list
+

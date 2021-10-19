@@ -1,0 +1,297 @@
+'\" t
+.\"     Title: libperf
+.\"    Author: [FIXME: author] [see http://docbook.sf.net/el/author]
+.\" Generator: DocBook XSL Stylesheets v1.78.1 <http://docbook.sf.net/>
+.\"      Date: 09/27/2021
+.\"    Manual: libperf Manual
+.\"    Source: libperf
+.\"  Language: English
+.\"
+.TH "LIBPERF" "3" "09/27/2021" "libperf" "libperf Manual"
+.\" -----------------------------------------------------------------
+.\" * Define some portability stuff
+.\" -----------------------------------------------------------------
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.\" http://bugs.debian.org/507673
+.\" http://lists.gnu.org/archive/html/groff/2009-02/msg00013.html
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\" -----------------------------------------------------------------
+.\" * set default formatting
+.\" -----------------------------------------------------------------
+.\" disable hyphenation
+.nh
+.\" disable justification (adjust text to left margin only)
+.ad l
+.\" -----------------------------------------------------------------
+.\" * MAIN CONTENT STARTS HERE *
+.\" -----------------------------------------------------------------
+.SH "NAME"
+libperf \- Linux kernel perf event library
+.SH "SYNOPSIS"
+.sp
+\fBGeneric API:\fR
+.sp
+.nf
+  #include <perf/core\&.h>
+
+  enum libperf_print_level {
+          LIBPERF_ERR,
+          LIBPERF_WARN,
+          LIBPERF_INFO,
+          LIBPERF_DEBUG,
+          LIBPERF_DEBUG2,
+          LIBPERF_DEBUG3,
+  };
+
+  typedef int (*libperf_print_fn_t)(enum libperf_print_level level,
+                                    const char *, va_list ap);
+
+  void libperf_init(libperf_print_fn_t fn);
+.fi
+.sp
+\fBAPI to handle CPU maps:\fR
+.sp
+.nf
+  #include <perf/cpumap\&.h>
+
+  struct perf_cpu_map;
+
+  struct perf_cpu_map *perf_cpu_map__dummy_new(void);
+  struct perf_cpu_map *perf_cpu_map__new(const char *cpu_list);
+  struct perf_cpu_map *perf_cpu_map__read(FILE *file);
+  struct perf_cpu_map *perf_cpu_map__get(struct perf_cpu_map *map);
+  struct perf_cpu_map *perf_cpu_map__merge(struct perf_cpu_map *orig,
+                                           struct perf_cpu_map *other);
+  void perf_cpu_map__put(struct perf_cpu_map *map);
+  int perf_cpu_map__cpu(const struct perf_cpu_map *cpus, int idx);
+  int perf_cpu_map__nr(const struct perf_cpu_map *cpus);
+  bool perf_cpu_map__empty(const struct perf_cpu_map *map);
+  int perf_cpu_map__max(struct perf_cpu_map *map);
+
+  #define perf_cpu_map__for_each_cpu(cpu, idx, cpus)
+.fi
+.sp
+\fBAPI to handle thread maps:\fR
+.sp
+.nf
+  #include <perf/threadmap\&.h>
+
+  struct perf_thread_map;
+
+  struct perf_thread_map *perf_thread_map__new_dummy(void);
+
+  void perf_thread_map__set_pid(struct perf_thread_map *map, int thread, pid_t pid);
+  char *perf_thread_map__comm(struct perf_thread_map *map, int thread);
+  int perf_thread_map__nr(struct perf_thread_map *threads);
+  pid_t perf_thread_map__pid(struct perf_thread_map *map, int thread);
+
+  struct perf_thread_map *perf_thread_map__get(struct perf_thread_map *map);
+  void perf_thread_map__put(struct perf_thread_map *map);
+.fi
+.sp
+\fBAPI to handle event lists:\fR
+.sp
+.nf
+  #include <perf/evlist\&.h>
+
+  struct perf_evlist;
+
+  void perf_evlist__add(struct perf_evlist *evlist,
+                        struct perf_evsel *evsel);
+  void perf_evlist__remove(struct perf_evlist *evlist,
+                           struct perf_evsel *evsel);
+  struct perf_evlist *perf_evlist__new(void);
+  void perf_evlist__delete(struct perf_evlist *evlist);
+  struct perf_evsel* perf_evlist__next(struct perf_evlist *evlist,
+                                       struct perf_evsel *evsel);
+  int perf_evlist__open(struct perf_evlist *evlist);
+  void perf_evlist__close(struct perf_evlist *evlist);
+  void perf_evlist__enable(struct perf_evlist *evlist);
+  void perf_evlist__disable(struct perf_evlist *evlist);
+
+  #define perf_evlist__for_each_evsel(evlist, pos)
+
+  void perf_evlist__set_maps(struct perf_evlist *evlist,
+                             struct perf_cpu_map *cpus,
+                             struct perf_thread_map *threads);
+  int perf_evlist__poll(struct perf_evlist *evlist, int timeout);
+  int perf_evlist__filter_pollfd(struct perf_evlist *evlist,
+                                 short revents_and_mask);
+
+  int perf_evlist__mmap(struct perf_evlist *evlist, int pages);
+  void perf_evlist__munmap(struct perf_evlist *evlist);
+
+  struct perf_mmap *perf_evlist__next_mmap(struct perf_evlist *evlist,
+                                           struct perf_mmap *map,
+                                           bool overwrite);
+
+  #define perf_evlist__for_each_mmap(evlist, pos, overwrite)
+.fi
+.sp
+\fBAPI to handle events:\fR
+.sp
+.nf
+  #include <perf/evsel\&.h>*
+
+  struct perf_evsel;
+
+  struct perf_counts_values {
+          union {
+                  struct {
+                          uint64_t val;
+                          uint64_t ena;
+                          uint64_t run;
+                  };
+                  uint64_t values[3];
+          };
+  };
+
+  struct perf_evsel *perf_evsel__new(struct perf_event_attr *attr);
+  void perf_evsel__delete(struct perf_evsel *evsel);
+  int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
+                       struct perf_thread_map *threads);
+  void perf_evsel__close(struct perf_evsel *evsel);
+  void perf_evsel__close_cpu(struct perf_evsel *evsel, int cpu);
+  int perf_evsel__mmap(struct perf_evsel *evsel, int pages);
+  void perf_evsel__munmap(struct perf_evsel *evsel);
+  void *perf_evsel__mmap_base(struct perf_evsel *evsel, int cpu, int thread);
+  int perf_evsel__read(struct perf_evsel *evsel, int cpu, int thread,
+                       struct perf_counts_values *count);
+  int perf_evsel__enable(struct perf_evsel *evsel);
+  int perf_evsel__enable_cpu(struct perf_evsel *evsel, int cpu);
+  int perf_evsel__disable(struct perf_evsel *evsel);
+  int perf_evsel__disable_cpu(struct perf_evsel *evsel, int cpu);
+  struct perf_cpu_map *perf_evsel__cpus(struct perf_evsel *evsel);
+  struct perf_thread_map *perf_evsel__threads(struct perf_evsel *evsel);
+  struct perf_event_attr *perf_evsel__attr(struct perf_evsel *evsel);
+.fi
+.sp
+\fBAPI to handle maps (perf ring buffers):\fR
+.sp
+.nf
+  #include <perf/mmap\&.h>
+
+  struct perf_mmap;
+
+  void perf_mmap__consume(struct perf_mmap *map);
+  int perf_mmap__read_init(struct perf_mmap *map);
+  void perf_mmap__read_done(struct perf_mmap *map);
+  union perf_event *perf_mmap__read_event(struct perf_mmap *map);
+.fi
+.sp
+\fBStructures to access perf API events:\fR
+.sp
+.nf
+  #include <perf/event\&.h>
+
+  struct perf_record_mmap;
+  struct perf_record_mmap2;
+  struct perf_record_comm;
+  struct perf_record_namespaces;
+  struct perf_record_fork;
+  struct perf_record_lost;
+  struct perf_record_lost_samples;
+  struct perf_record_read;
+  struct perf_record_throttle;
+  struct perf_record_ksymbol;
+  struct perf_record_bpf_event;
+  struct perf_record_sample;
+  struct perf_record_switch;
+  struct perf_record_header_attr;
+  struct perf_record_record_cpu_map;
+  struct perf_record_cpu_map_data;
+  struct perf_record_cpu_map;
+  struct perf_record_event_update_cpus;
+  struct perf_record_event_update_scale;
+  struct perf_record_event_update;
+  struct perf_trace_event_type;
+  struct perf_record_header_event_type;
+  struct perf_record_header_tracing_data;
+  struct perf_record_header_build_id;
+  struct perf_record_id_index;
+  struct perf_record_auxtrace_info;
+  struct perf_record_auxtrace;
+  struct perf_record_auxtrace_error;
+  struct perf_record_aux;
+  struct perf_record_itrace_start;
+  struct perf_record_thread_map_entry;
+  struct perf_record_thread_map;
+  struct perf_record_stat_config_entry;
+  struct perf_record_stat_config;
+  struct perf_record_stat;
+  struct perf_record_stat_round;
+  struct perf_record_time_conv;
+  struct perf_record_header_feature;
+  struct perf_record_compressed;
+.fi
+.SH "DESCRIPTION"
+.sp
+The libperf library provides an API to access the linux kernel perf events subsystem\&.
+.sp
+Following objects are key to the libperf interface:
+.TS
+tab(:);
+lt lt
+lt lt
+lt lt
+lt lt
+lt lt.
+T{
+.sp
+struct perf_cpu_map
+T}:T{
+.sp
+Provides a CPU list abstraction\&.
+T}
+T{
+.sp
+struct perf_thread_map
+T}:T{
+.sp
+Provides a thread list abstraction\&.
+T}
+T{
+.sp
+struct perf_evsel
+T}:T{
+.sp
+Provides an abstraction for single a perf event\&.
+T}
+T{
+.sp
+struct perf_evlist
+T}:T{
+.sp
+Gathers several struct perf_evsel object and performs functions on all of them\&.
+T}
+T{
+.sp
+struct perf_mmap
+T}:T{
+.sp
+Provides an abstraction for accessing perf ring buffer\&.
+T}
+.TE
+.sp 1
+.sp
+The exported API functions bind these objects together\&.
+.SH "REPORTING BUGS"
+.sp
+Report bugs to <\m[blue]\fBlinux\-perf\-users@vger\&.kernel\&.org\fR\m[]\&\s-2\u[1]\d\s+2>\&.
+.SH "LICENSE"
+.sp
+libperf is Free Software licensed under the GNU LGPL 2\&.1
+.SH "RESOURCES"
+.sp
+\m[blue]\fBhttps://git\&.kernel\&.org/pub/scm/linux/kernel/git/torvalds/linux\&.git\fR\m[]
+.SH "SEE ALSO"
+.sp
+libperf\-sampling(7), libperf\-counting(7)
+.SH "NOTES"
+.IP " 1." 4
+linux-perf-users@vger.kernel.org
+.RS 4
+\%mailto:linux-perf-users@vger.kernel.org
+.RE

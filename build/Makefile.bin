@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-2.0
+###
+# Main build makefile.
+#
+#  Lots of this code have been borrowed or heavily inspired from parts
+#  of kbuild code, which is not credited, but mostly developed by:
+#
+#  Copyright (C) Sam Ravnborg <sam@mars.ravnborg.org>, 2015
+#  Copyright (C) Linus Torvalds <torvalds@linux-foundation.org>, 2015
+#
+
+PHONY := __build
+__build:
+
+ifeq ($(V),1)
+  quiet =
+  Q =
+else
+  quiet=quiet_
+  Q=@
+endif
+
+build-dir := $(srctree)/build
+
+# Generic definitions
+include $(build-dir)/Build.include
+include $(srctree)/scripts/Makefile.include
+
+
+# Init all relevant variables used in build files so
+# 1) they have correct type
+# 2) they do not inherit any value from the environment
+subdir-y     :=
+libs-y       :=
+
+# Build definitions
+build-file := $(dir)/Build
+-include $(build-file)
+
+
+# Create directory unless it exists
+quiet_cmd_mkdir = MKDIR   $(dir $@)
+      cmd_mkdir = mkdir -p $(dir $@)
+     rule_mkdir = $(if $(wildcard $(dir $@)),,@$(call echo-cmd,mkdir) $(cmd_mkdir))
+
+# Link command
+quiet_cmd_link = LINK    $@
+      cmd_link = $(CC) -o $@ $(filter-out FORCE,$^) $(LDFLAGS_$@)
+
+#quiet_cmd_descend = DESCEND $(dir $@)
+#      cmd_descend = mkdir -p $(OUTPUT)$(2) && $(MAKE) $(COMMAND_O) -C $(2) $(3)
+#	  descend = @set -e; $(echo-cmd) $(cmd_descend)
+
+# '$(OUTPUT)/dir' prefix to all objects
+objprefix      := $(subst ./,,$(OUTPUT)$(dir)/)
+
+subdir-y       := $(patsubst %/,%,$(filter %/, $(bin-y)))
+bin-y          := $(filter-out %/, $(bin-y))
+
+$(foreach bin,$(bin-y), \
+	$(if $(strip $($(bin)-libs)), \
+	    $(eval libs-y += $(addsuffix -phony,$($(bin)-libs)))) \
+	$(eval $(addprefix $(objprefix),$(bin)): $(addprefix $(objprefix),$(bin)-in.o $($(bin)-libs))) \
+	$(foreach o,$($(bin)-libs), \
+		$(eval $(addprefix $(objprefix),$(o)): $(addsuffix -phony,$(o)))) \
+	)
+bin-clean-y    := $(patsubst %,%-clean,$(bin-y))
+libs-clean-y   := $(patsubst %,%-clean,$(libs-y))
+subdir-clean-y := $(patsubst %,%-clean,$(subdir-y))
+
+PHONY += $(subdir-y) $(bin-clean-y) $(libs-clean-y) $(subdir-clean-y)
+
+bin-y          := $(addprefix $(objprefix),$(bin-y))
+bin-in-y       := $(patsubst %,%-in.o,$(bin-y))
+
+
+$(libs-y): FORCE
+	$(call descend,$(dir $@))
+
+$(libs-clean-y):
+	$(call descend,$(dir $@),clean)
+
+$(bin-in-y): FORCE
+	$(Q)$(MAKE) -f $(build-dir)/Makefile.build dir=$(dir) obj=$(patsubst %-in.o,%,$(notdir $@))
+
+$(bin-y):
+	$(call if_changed,link)
+
+$(bin-clean-y):
+	$(Q)$(MAKE) -f $(build-dir)/Makefile.build dir=$(dir) obj=$(patsubst %-clean,%,$(notdir $@)) clean
+
+$(subdir-y):
+	$(Q)$(MAKE) -f $(build-dir)/Makefile.bin dir=$(dir)/$@
+
+$(subdir-clean-y):
+	$(Q)$(MAKE) -f $(build-dir)/Makefile.bin dir=$(dir)/$@ clean
+
+__build: $(libs-y) $(bin-in-y) $(bin-y) $(subdir-y)
+	@:
+
+clean: $(bin-clean-y) $(libs-clean-y) $(subdir-clean-y)
+	$(Q)$(RM)  $(bin-y)
+
+
+PHONY += FORCE
+FORCE:
+

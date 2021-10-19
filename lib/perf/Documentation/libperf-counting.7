@@ -1,0 +1,358 @@
+'\" t
+.\"     Title: libperf-counting
+.\"    Author: [FIXME: author] [see http://docbook.sf.net/el/author]
+.\" Generator: DocBook XSL Stylesheets v1.78.1 <http://docbook.sf.net/>
+.\"      Date: 09/27/2021
+.\"    Manual: libperf Manual
+.\"    Source: libperf
+.\"  Language: English
+.\"
+.TH "LIBPERF\-COUNTING" "7" "09/27/2021" "libperf" "libperf Manual"
+.\" -----------------------------------------------------------------
+.\" * Define some portability stuff
+.\" -----------------------------------------------------------------
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.\" http://bugs.debian.org/507673
+.\" http://lists.gnu.org/archive/html/groff/2009-02/msg00013.html
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\" -----------------------------------------------------------------
+.\" * set default formatting
+.\" -----------------------------------------------------------------
+.\" disable hyphenation
+.nh
+.\" disable justification (adjust text to left margin only)
+.ad l
+.\" -----------------------------------------------------------------
+.\" * MAIN CONTENT STARTS HERE *
+.\" -----------------------------------------------------------------
+.SH "NAME"
+libperf-counting \- counting interface
+.SH "DESCRIPTION"
+.sp
+The counting interface provides API to measure and get count for specific perf events\&.
+.sp
+The following test tries to explain count on counting\&.c example\&.
+.sp
+It is by no means complete guide to counting, but shows libperf basic API for counting\&.
+.sp
+The counting\&.c comes with libperf package and can be compiled and run like:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+$ gcc \-o counting counting\&.c \-lperf
+$ sudo \&./counting
+count 176792, enabled 176944, run 176944
+count 176242, enabled 176242, run 176242
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+It requires root access, because of the PERF_COUNT_SW_CPU_CLOCK event, which is available only for root\&.
+.sp
+The counting\&.c example monitors two events on the current process and displays their count, in a nutshell it:
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+creates events
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+adds them to the event list
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+opens and enables events through the event list
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+does some workload
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+disables events
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+reads and displays event counts
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04'\(bu\h'+03'\c
+.\}
+.el \{\
+.sp -1
+.IP \(bu 2.3
+.\}
+destroys the event list
+.RE
+.sp
+The first thing you need to do before using libperf is to call init function:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+  8 static int libperf_print(enum libperf_print_level level,
+  9                          const char *fmt, va_list ap)
+ 10 {
+ 11         return vfprintf(stderr, fmt, ap);
+ 12 }
+
+ 14 int main(int argc, char **argv)
+ 15 {
+ \&.\&.\&.
+ 35         libperf_init(libperf_print);
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+It will setup the library and sets function for debug output from library\&.
+.sp
+The libperf_print callback will receive any message with its debug level, defined as:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+enum libperf_print_level {
+        LIBPERF_ERR,
+        LIBPERF_WARN,
+        LIBPERF_INFO,
+        LIBPERF_DEBUG,
+        LIBPERF_DEBUG2,
+        LIBPERF_DEBUG3,
+};
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+Once the setup is complete we start by defining specific events using the struct perf_event_attr\&.
+.sp
+We create software events for cpu and task:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 20         struct perf_event_attr attr1 = {
+ 21                 \&.type        = PERF_TYPE_SOFTWARE,
+ 22                 \&.config      = PERF_COUNT_SW_CPU_CLOCK,
+ 23                 \&.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED|PERF_FORMAT_TOTAL_TIME_RUNNING,
+ 24                 \&.disabled    = 1,
+ 25         };
+ 26         struct perf_event_attr attr2 = {
+ 27                 \&.type        = PERF_TYPE_SOFTWARE,
+ 28                 \&.config      = PERF_COUNT_SW_TASK_CLOCK,
+ 29                 \&.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED|PERF_FORMAT_TOTAL_TIME_RUNNING,
+ 30                 \&.disabled    = 1,
+ 31         };
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+The read_format setup tells perf to include timing details together with each count\&.
+.sp
+Next step is to prepare threads map\&.
+.sp
+In this case we will monitor current process, so we create threads map with single pid (0):
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 37         threads = perf_thread_map__new_dummy();
+ 38         if (!threads) {
+ 39                 fprintf(stderr, "failed to create threads\en");
+ 40                 return \-1;
+ 41         }
+ 42
+ 43         perf_thread_map__set_pid(threads, 0, 0);
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+Now we create libperf\(cqs event list, which will serve as holder for the events we want:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 45         evlist = perf_evlist__new();
+ 46         if (!evlist) {
+ 47                 fprintf(stderr, "failed to create evlist\en");
+ 48                 goto out_threads;
+ 49         }
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+We create libperf\(cqs events for the attributes we defined earlier and add them to the list:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 51         evsel = perf_evsel__new(&attr1);
+ 52         if (!evsel) {
+ 53                 fprintf(stderr, "failed to create evsel1\en");
+ 54                 goto out_evlist;
+ 55         }
+ 56
+ 57         perf_evlist__add(evlist, evsel);
+ 58
+ 59         evsel = perf_evsel__new(&attr2);
+ 60         if (!evsel) {
+ 61                 fprintf(stderr, "failed to create evsel2\en");
+ 62                 goto out_evlist;
+ 63         }
+ 64
+ 65         perf_evlist__add(evlist, evsel);
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+Configure event list with the thread map and open events:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 67         perf_evlist__set_maps(evlist, NULL, threads);
+ 68
+ 69         err = perf_evlist__open(evlist);
+ 70         if (err) {
+ 71                 fprintf(stderr, "failed to open evsel\en");
+ 72                 goto out_evlist;
+ 73         }
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+Both events are created as disabled (note the disabled = 1 assignment above), so we need to enable the whole list explicitly (both events)\&.
+.sp
+From this moment events are counting and we can do our workload\&.
+.sp
+When we are done we disable the events list\&.
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 75         perf_evlist__enable(evlist);
+ 76
+ 77         while (count\-\-);
+ 78
+ 79         perf_evlist__disable(evlist);
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+Now we need to get the counts from events, following code iterates through the events list and read counts:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 81         perf_evlist__for_each_evsel(evlist, evsel) {
+ 82                 perf_evsel__read(evsel, 0, 0, &counts);
+ 83                 fprintf(stdout, "count %llu, enabled %llu, run %llu\en",
+ 84                         counts\&.val, counts\&.ena, counts\&.run);
+ 85         }
+.fi
+.if n \{\
+.RE
+.\}
+.sp
+And finally cleanup\&.
+.sp
+We close the whole events list (both events) and remove it together with the threads map:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+ 87         perf_evlist__close(evlist);
+ 88
+ 89 out_evlist:
+ 90         perf_evlist__delete(evlist);
+ 91 out_threads:
+ 92         perf_thread_map__put(threads);
+ 93         return err;
+ 94 }
+.fi
+.if n \{\
+.RE
+.\}
+.SH "REPORTING BUGS"
+.sp
+Report bugs to <\m[blue]\fBlinux\-perf\-users@vger\&.kernel\&.org\fR\m[]\&\s-2\u[1]\d\s+2>\&.
+.SH "LICENSE"
+.sp
+libperf is Free Software licensed under the GNU LGPL 2\&.1
+.SH "RESOURCES"
+.sp
+\m[blue]\fBhttps://git\&.kernel\&.org/pub/scm/linux/kernel/git/torvalds/linux\&.git\fR\m[]
+.SH "SEE ALSO"
+.sp
+libperf(3), libperf\-sampling(7)
+.SH "NOTES"
+.IP " 1." 4
+linux-perf-users@vger.kernel.org
+.RS 4
+\%mailto:linux-perf-users@vger.kernel.org
+.RE

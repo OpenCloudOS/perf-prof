@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN" "http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd">
+<?asciidoc-toc?>
+<?asciidoc-numbered?>
+<refentry>
+<refmeta>
+<refentrytitle>libperf-sampling</refentrytitle>
+<manvolnum>7</manvolnum>
+<refmiscinfo class="source">libperf</refmiscinfo>
+<refmiscinfo class="version"></refmiscinfo>
+<refmiscinfo class="manual">libperf Manual</refmiscinfo>
+</refmeta>
+<refnamediv>
+  <refname>libperf-sampling</refname>
+  <refpurpose>sampling interface</refpurpose>
+</refnamediv>
+<refsect1 id="_description">
+<title>DESCRIPTION</title>
+<simpara>The sampling interface provides API to measure and get count for specific perf events.</simpara>
+<simpara>The following test tries to explain count on <literal>sampling.c</literal> example.</simpara>
+<simpara>It is by no means complete guide to sampling, but shows libperf basic API for sampling.</simpara>
+<simpara>The <literal>sampling.c</literal> comes with libperf package and can be compiled and run like:</simpara>
+<programlisting language="bash" linenumbering="unnumbered">$ gcc -o sampling sampling.c -lperf
+$ sudo ./sampling
+cpu   0, pid      0, tid      0, ip     ffffffffad06c4e6, period                    1
+cpu   0, pid   4465, tid   4469, ip     ffffffffad118748, period             18322959
+cpu   0, pid      0, tid      0, ip     ffffffffad115722, period             33544846
+cpu   0, pid   4465, tid   4470, ip         7f84fe0cdad6, period             23687474
+cpu   0, pid      0, tid      0, ip     ffffffffad9e0349, period             34255790
+cpu   0, pid   4465, tid   4469, ip     ffffffffad136581, period             38664069
+cpu   0, pid      0, tid      0, ip     ffffffffad9e55e2, period             21922384
+cpu   0, pid   4465, tid   4470, ip         7f84fe0ebebf, period             17655175
+...</programlisting>
+<simpara>It requires root access, because it uses hardware cycles event.</simpara>
+<simpara>The <literal>sampling.c</literal> example profiles/samples all CPUs with hardware cycles, in a
+nutshell it:</simpara>
+<itemizedlist>
+<listitem>
+<simpara>
+creates events
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+adds them to the event list
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+opens and enables events through the event list
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+sleeps for 3 seconds
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+disables events
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+reads and displays recorded samples
+</simpara>
+</listitem>
+<listitem>
+<simpara>
+destroys the event list
+</simpara>
+</listitem>
+</itemizedlist>
+<simpara>The first thing you need to do before using libperf is to call init function:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 12 static int libperf_print(enum libperf_print_level level,
+ 13                          const char *fmt, va_list ap)
+ 14 {
+ 15         return vfprintf(stderr, fmt, ap);
+ 16 }
+
+ 23 int main(int argc, char **argv)
+ 24 {
+ ...
+ 40         libperf_init(libperf_print);</programlisting>
+<simpara>It will setup the library and sets function for debug output from library.</simpara>
+<simpara>The <literal>libperf_print</literal> callback will receive any message with its debug level,
+defined as:</simpara>
+<programlisting language="c" linenumbering="unnumbered">enum libperf_print_level {
+        LIBPERF_ERR,
+        LIBPERF_WARN,
+        LIBPERF_INFO,
+        LIBPERF_DEBUG,
+        LIBPERF_DEBUG2,
+        LIBPERF_DEBUG3,
+};</programlisting>
+<simpara>Once the setup is complete we start by defining cycles event using the <literal>struct perf_event_attr</literal>:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 29         struct perf_event_attr attr = {
+ 30                 .type        = PERF_TYPE_HARDWARE,
+ 31                 .config      = PERF_COUNT_HW_CPU_CYCLES,
+ 32                 .disabled    = 1,
+ 33                 .freq        = 1,
+ 34                 .sample_freq = 10,
+ 35                 .sample_type = PERF_SAMPLE_IP|PERF_SAMPLE_TID|PERF_SAMPLE_CPU|PERF_SAMPLE_PERIOD,
+ 36         };</programlisting>
+<simpara>Next step is to prepare CPUs map.</simpara>
+<simpara>In this case we will monitor all the available CPUs:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 42         cpus = perf_cpu_map__new(NULL);
+ 43         if (!cpus) {
+ 44                 fprintf(stderr, "failed to create cpus\n");
+ 45                 return -1;
+ 46         }</programlisting>
+<simpara>Now we create libperf&#8217;s event list, which will serve as holder for the cycles event:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 48         evlist = perf_evlist__new();
+ 49         if (!evlist) {
+ 50                 fprintf(stderr, "failed to create evlist\n");
+ 51                 goto out_cpus;
+ 52         }</programlisting>
+<simpara>We create libperf&#8217;s event for the cycles attribute we defined earlier and add it to the list:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 54         evsel = perf_evsel__new(&amp;attr);
+ 55         if (!evsel) {
+ 56                 fprintf(stderr, "failed to create cycles\n");
+ 57                 goto out_cpus;
+ 58         }
+ 59
+ 60         perf_evlist__add(evlist, evsel);</programlisting>
+<simpara>Configure event list with the cpus map and open event:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 62         perf_evlist__set_maps(evlist, cpus, NULL);
+ 63
+ 64         err = perf_evlist__open(evlist);
+ 65         if (err) {
+ 66                 fprintf(stderr, "failed to open evlist\n");
+ 67                 goto out_evlist;
+ 68         }</programlisting>
+<simpara>Once the events list is open, we can create memory maps AKA perf ring buffers:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 70         err = perf_evlist__mmap(evlist, 4);
+ 71         if (err) {
+ 72                 fprintf(stderr, "failed to mmap evlist\n");
+ 73                 goto out_evlist;
+ 74         }</programlisting>
+<simpara>The event is created as disabled (note the <literal>disabled = 1</literal> assignment above),
+so we need to enable the events list explicitly.</simpara>
+<simpara>From this moment the cycles event is sampling.</simpara>
+<simpara>We will sleep for 3 seconds while the ring buffers get data from all CPUs, then we disable the events list.</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 76         perf_evlist__enable(evlist);
+ 77         sleep(3);
+ 78         perf_evlist__disable(evlist);</programlisting>
+<simpara>Following code walks through the ring buffers and reads stored events/samples:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 80         perf_evlist__for_each_mmap(evlist, map, false) {
+ 81                 if (perf_mmap__read_init(map) &lt; 0)
+ 82                         continue;
+ 83
+ 84                 while ((event = perf_mmap__read_event(map)) != NULL) {
+
+                            /* process event */
+
+108                         perf_mmap__consume(map);
+109                 }
+110                 perf_mmap__read_done(map);
+111         }</programlisting>
+<simpara>Each sample needs to get parsed:</simpara>
+<programlisting language="c" linenumbering="unnumbered"> 85                         int cpu, pid, tid;
+ 86                         __u64 ip, period, *array;
+ 87                         union u64_swap u;
+ 88
+ 89                         array = event-&gt;sample.array;
+ 90
+ 91                         ip = *array;
+ 92                         array++;
+ 93
+ 94                         u.val64 = *array;
+ 95                         pid = u.val32[0];
+ 96                         tid = u.val32[1];
+ 97                         array++;
+ 98
+ 99                         u.val64 = *array;
+100                         cpu = u.val32[0];
+101                         array++;
+102
+103                         period = *array;
+104
+105                         fprintf(stdout, "cpu %3d, pid %6d, tid %6d, ip %20llx, period %20llu\n",
+106                                 cpu, pid, tid, ip, period);</programlisting>
+<simpara>And finally cleanup.</simpara>
+<simpara>We close the whole events list (both events) and remove it together with the threads map:</simpara>
+<programlisting language="c" linenumbering="unnumbered">113 out_evlist:
+114         perf_evlist__delete(evlist);
+115 out_cpus:
+116         perf_cpu_map__put(cpus);
+117         return err;
+118 }</programlisting>
+</refsect1>
+<refsect1 id="_reporting_bugs">
+<title>REPORTING BUGS</title>
+<simpara>Report bugs to &lt;<ulink url="mailto:linux-perf-users@vger.kernel.org">linux-perf-users@vger.kernel.org</ulink>&gt;.</simpara>
+</refsect1>
+<refsect1 id="_license">
+<title>LICENSE</title>
+<simpara>libperf is Free Software licensed under the GNU LGPL 2.1</simpara>
+</refsect1>
+<refsect1 id="_resources">
+<title>RESOURCES</title>
+<simpara><ulink url="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git</ulink></simpara>
+</refsect1>
+<refsect1 id="_see_also">
+<title>SEE ALSO</title>
+<simpara>libperf(3), libperf-counting(7)</simpara>
+</refsect1>
+</refentry>

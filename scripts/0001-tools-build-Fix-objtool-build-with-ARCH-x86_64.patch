@@ -1,0 +1,106 @@
+From 60cbdf5d051d4f4db23d267d511ca241d4be7c0d Mon Sep 17 00:00:00 2001
+From: Josh Poimboeuf <jpoimboe@redhat.com>
+Date: Fri, 22 Jul 2016 14:19:20 -0500
+Subject: [PATCH] tools build: Fix objtool build with ARCH=x86_64
+
+The objtool build fails in a cross-compiled environment on a non-x86
+host with "ARCH=x86_64":
+
+  tools/objtool/objtool-in.o: In function `decode_instructions':
+  tools/objtool/builtin-check.c:276: undefined reference to `arch_decode_instruction'
+
+We could override the ARCH environment variable and change it back to
+x86, similar to what the objtool Makefile was doing before; but it's
+tricky to override environment variables consistently.
+
+Instead, take a similar approach used by the Linux top-level Makefile
+and introduce a SRCARCH Makefile variable which evaluates to "x86" when
+ARCH is either "x86_64" or "x86".
+
+Reported-by: Stephen Rothwell <sfr@canb.auug.org.au>
+Signed-off-by: Josh Poimboeuf <jpoimboe@redhat.com>
+Cc: Andy Lutomirski <luto@amacapital.net>
+Cc: H. Peter Anvin <hpa@zytor.com>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Thomas Gleixner <tglx@linutronix.de>
+Link: http://lkml.kernel.org/r/20160722191920.ej62fnspnqurbaa7@treble
+Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+---
+ tools/objtool/Build         |  2 +-
+ tools/objtool/Makefile      |  2 +-
+ tools/scripts/Makefile.arch | 32 ++++++++++++++++++++++++++++++++
+ 3 files changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/tools/objtool/Build b/tools/objtool/Build
+index 2457916..d6cdece 100644
+--- a/tools/objtool/Build
++++ b/tools/objtool/Build
+@@ -1,4 +1,4 @@
+-objtool-y += arch/$(ARCH)/
++objtool-y += arch/$(SRCARCH)/
+ objtool-y += builtin-check.o
+ objtool-y += elf.o
+ objtool-y += special.o
+diff --git a/tools/objtool/Makefile b/tools/objtool/Makefile
+index 91b5f98..0b43770 100644
+--- a/tools/objtool/Makefile
++++ b/tools/objtool/Makefile
+@@ -33,7 +33,7 @@ elfshdr := $(shell echo '\#include <libelf.h>' | $(CC) $(CFLAGS) -x c -E - | gre
+ CFLAGS += $(if $(elfshdr),,-DLIBELF_USE_DEPRECATED)
+ 
+ AWK = awk
+-export srctree OUTPUT CFLAGS ARCH AWK
++export srctree OUTPUT CFLAGS SRCARCH AWK
+ include $(srctree)/tools/build/Makefile.include
+ 
+ $(OBJTOOL_IN): fixdep FORCE
+diff --git a/tools/scripts/Makefile.arch b/tools/scripts/Makefile.arch
+index 887321c..ad85b92 100644
+--- a/tools/scripts/Makefile.arch
++++ b/tools/scripts/Makefile.arch
+@@ -5,10 +5,42 @@ HOSTARCH := $(shell uname -m | sed -e s/i.86/x86/ -e s/x86_64/x86/ \
+                                   -e s/ppc.*/powerpc/ -e s/mips.*/mips/ \
+                                   -e s/sh[234].*/sh/ -e s/aarch64.*/arm64/ \
+                                   -e s/tile.*/tile/ )
++
+ ifndef ARCH
+ ARCH := $(HOSTARCH)
+ endif
+ 
++SRCARCH := $(ARCH)
++
++# Additional ARCH settings for x86
++ifeq ($(ARCH),i386)
++        SRCARCH := x86
++endif
++ifeq ($(ARCH),x86_64)
++        SRCARCH := x86
++endif
++
++# Additional ARCH settings for sparc
++ifeq ($(ARCH),sparc32)
++       SRCARCH := sparc
++endif
++ifeq ($(ARCH),sparc64)
++       SRCARCH := sparc
++endif
++
++# Additional ARCH settings for sh
++ifeq ($(ARCH),sh64)
++       SRCARCH := sh
++endif
++
++# Additional ARCH settings for tile
++ifeq ($(ARCH),tilepro)
++       SRCARCH := tile
++endif
++ifeq ($(ARCH),tilegx)
++       SRCARCH := tile
++endif
++
+ LP64 := $(shell echo __LP64__ | ${CC} ${CFLAGS} -E -x c - | tail -n 1)
+ ifeq ($(LP64), 1)
+   IS_64_BIT := 1
+-- 
+2.9.3
+
