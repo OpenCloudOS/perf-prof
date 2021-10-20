@@ -43,6 +43,7 @@ struct env env = {
     .guest = 0,
     .latency = 20000,
     .freq = 10,
+    .verbose = 0,
 };
 
 static volatile bool exiting;
@@ -139,7 +140,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         env.precise = 1;
         break;
     case 'v':
-        env.verbose = 1;
+        env.verbose++;
         break;
     case ARGP_KEY_ARG:
         switch (state->arg_num) {
@@ -200,7 +201,7 @@ static void print_lost_fn(union perf_event *event, int cpu)
 
 static void print_fork_exit_fn(union perf_event *event, int cpu, int exit)
 {
-    if (env.verbose) {
+    if (env.verbose >= 2) {
         print_time(stderr);
         fprintf(stderr, "%s ppid %u ptid %u pid %u tid %u on CPU #%d - %d\n",
                         exit ? "exit" : "fork",
@@ -212,7 +213,7 @@ static void print_fork_exit_fn(union perf_event *event, int cpu, int exit)
 
 static void print_comm_fn(union perf_event *event, int cpu)
 {
-    if (env.verbose) {
+    if (env.verbose >= 2) {
         print_time(stderr);
         fprintf(stderr, "comm pid %u tid %u %s on CPU #%d\n",
                         event->comm.pid,  event->comm.tid,
@@ -222,7 +223,7 @@ static void print_comm_fn(union perf_event *event, int cpu)
 
 static void print_context_switch_fn(union perf_event *event, int cpu)
 {
-    if (env.verbose) {
+    if (env.verbose >= 2) {
         print_time(stderr);
         fprintf(stderr, "switch on CPU #%d\n", cpu);
     }
@@ -230,7 +231,7 @@ static void print_context_switch_fn(union perf_event *event, int cpu)
 
 static void print_context_switch_cpu_fn(union perf_event *event, int cpu)
 {
-    if (env.verbose) {
+    if (env.verbose >= 2) {
         print_time(stderr);
         fprintf(stderr, "switch next pid %u tid %u on CPU #%d\n",
                         event->context_switch.next_prev_pid, event->context_switch.next_prev_tid,
