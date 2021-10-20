@@ -446,6 +446,7 @@ static void watchdog_sample(union perf_event *event)
             printf("%16s %6u [%03d] %llu.%06llu: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                     data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000);
             __print_callchain(event);
+            fflush(stdout);
             fsync(fileno(stdout));
         }
     } else if (type == PERF_TYPE_TRACEPOINT) {
@@ -472,6 +473,7 @@ static void watchdog_sample(union perf_event *event)
             struct sample_type_raw *raw = (void *)event->sample.array;;
             tep__update_comm(NULL, data->tid_entry.tid);
             tep__print_event(data->time/1000, data->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+            fflush(stdout);
             fsync(fileno(stdout));
         }
     }
