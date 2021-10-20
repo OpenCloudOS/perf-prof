@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include "monitor.h"
 #include "trace_helpers.h"
+#include "tep.h"
 
 struct monitor profile;
 struct monitor_ctx {
@@ -37,7 +38,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .size          = sizeof(struct perf_event_attr),
         .sample_period = env->freq,
         .freq          = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ |
                          (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = 0,
         .pinned        = 1,
@@ -69,12 +70,13 @@ static void profile_exit(struct perf_evlist *evlist)
 static void profile_sample(union perf_event *event)
 {
     // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
+    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
     struct sample_type_data {
         struct {
             __u32    pid;
             __u32    tid;
         }    tid_entry;
+        __u64   time;
         struct {
             __u32    cpu;
             __u32    reserved;
@@ -99,7 +101,8 @@ static void profile_sample(union perf_event *event)
     }
 
     print_time(stdout);
-    printf("cpu %d pid %d tid %d %lu cycles\n", data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid, counter);
+    printf("%16s %6u [%03d] %llu.%06llu: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
     if (ctx.env->callchain && ctx.ksyms) {
         __u64 i;
         for (i = 0; i < data->callchain.nr; i++) {

@@ -78,7 +78,7 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
-        watchdog.pages = 4;
+        watchdog.pages = 8;
     }
     __get_cpuid(1, &eax, &ebx, &ecx, &edx);
     ctx.hypervisor = !!(ecx & CPUID_EXT_HYPERVISOR);
@@ -362,16 +362,24 @@ static unsigned long sample_period(void)
 }
 static int will_hardlockup(__u32 cpu, __u64 now)
 {
+    unsigned long thresh;
+
     if (!ctx.watchdog[cpu].watchdog_running ||
         !ctx.watchdog[cpu].hrtimer_touch_ts)
         return 0;
 
+    thresh = hrtimer_sample_period() + (NSEC_PER_SEC / 5);
+
     if (ctx.watchdog[cpu].hrtimer_interrupts == ctx.watchdog[cpu].hrtimer_interrupts_saved &&
-        now - ctx.watchdog[cpu].hrtimer_touch_ts > hrtimer_sample_period() + (NSEC_PER_SEC / 5)) {
+        now - ctx.watchdog[cpu].hrtimer_touch_ts > thresh) {
         print_time(stdout);
-        printf("WILL: hard lockup - CPU#%u [%llu - %llu > %llu]\n", cpu, now,
-                    ctx.watchdog[cpu].hrtimer_touch_ts, hrtimer_sample_period() + (NSEC_PER_SEC / 5));
+        printf("WILL: hard lockup - CPU#%u [%llu - %llu > %lu]\n", cpu, now,
+                    ctx.watchdog[cpu].hrtimer_touch_ts, thresh);
         return 1;
+    } else if (ctx.env->verbose) {
+        print_time(stdout);
+        printf("DEBUG: hard lockup - CPU#%u [%llu - %llu <= %lu]\n", cpu, now,
+                    ctx.watchdog[cpu].hrtimer_touch_ts, thresh);
     }
     return 0;
 }
@@ -386,6 +394,10 @@ static int will_softlockup(__u32 cpu, __u64 now)
         printf("WILL: soft lockup - CPU#%u [%lu - %lu > %lu]\n", cpu, get_timestamp(now),
                     ctx.watchdog[cpu].watchdog_touch_ts, sample_period());
         return 1;
+    } else if (ctx.env->verbose) {
+        print_time(stdout);
+        printf("DEBUG: soft lockup - CPU#%u [%lu - %lu <= %lu]\n", cpu, get_timestamp(now),
+                    ctx.watchdog[cpu].watchdog_touch_ts, sample_period());
     }
     return 0;
 }
@@ -419,9 +431,6 @@ static void watchdog_sample(union perf_event *event)
     type = perf_evsel__attr(evsel)->type;
     config = perf_evsel__attr(evsel)->config;
 
-    //print_time(stdout);
-    //printf("type %u config %llu\n", type, config);
-
     if (type == ctx.profile_type) {
         if (will_hardlockup(cpu, data->time)) {
             ctx.watchdog[cpu].print_stack = 1;
@@ -434,7 +443,8 @@ static void watchdog_sample(union perf_event *event)
             ctx.watchdog[cpu].print_sched || 
             ctx.env->verbose) {
             print_time(stdout);
-            printf("cpu %d pid %d tid %d\n", data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid);
+            printf("%16s %6u [%03d] %llu.%06llu: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000);
             __print_callchain(event);
             fsync(fileno(stdout));
         }

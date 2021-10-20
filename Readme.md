@@ -52,7 +52,7 @@ Mandatory or optional arguments to long options are also mandatory or optional
 for any corresponding short options.
 ```
 
-监控框架采样模块化设计，目前支持一些基础的监控模块：
+监控框架采用模块化设计，目前支持一些基础的监控模块：
 
 - split-lock，监控硬件pmu，发生split-lock的次数，以及触发情况。
 - irq-off，监控中断关闭的情况。

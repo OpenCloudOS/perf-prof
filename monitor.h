@@ -38,7 +38,7 @@ struct env {
     bool callchain;
     bool test;
     bool precise;
-    bool verbose;
+    int verbose;
 };
 
 struct monitor {
