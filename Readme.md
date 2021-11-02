@@ -14,13 +14,13 @@
 ```
 # ./perf-monitor  --help
 Usage: perf-monitor [OPTION...]
-Monitor based on perf_event
+onitor based on perf_event
 
 USAGE:
     perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]
     perf-monitor irq-off [-L lat] [-C cpu] [-g] [--precise]
-    perf-monitor profile [-F freq] [-C cpu] [-g]
-    perf-monitor trace -e event [-C cpu]
+    perf-monitor profile [-F freq] [-C cpu] [-g] [--exclude-*] [--than PCT]
+    perf-monitor trace -e event [--filter filter] [-C cpu]
     perf-monitor signal [--filter comm] [-C cpu] [-g]
     perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g]
     perf-monitor watchdog [-F freq] [-g] [-C cpu] [-v]
@@ -33,6 +33,8 @@ EXAMPLES:
   -D, --uninterruptible      TASK_UNINTERRUPTIBLE
   -e, --event=event          event selector. use 'perf list tracepoint' to list
                              available tp events
+      --exclude-kernel       exclude kernel
+      --exclude-user         exclude user
       --filter=filter        event filter/comm filter
   -F, --freq=n               profile at this frequency, Dflt: 10
   -g, --call-graph           Enable call-graph recording
@@ -42,13 +44,13 @@ EXAMPLES:
       --precise              Generate precise interrupt
   -S, --interruptible        TASK_INTERRUPTIBLE
       --test                 Test verification
-      --than=ms              Greater than specified time, ms
+      --than=ms              Greater than specified time, ms/percent
   -T, --trigger=T            Trigger Threshold, Dflt: 1000
   -v, --verbose              Verbose debug output
   -?, --help                 Give this help list
       --usage                Give a short usage message
 
-Mandatory or optional arguments to long options are also mandatory or optional
+andatory or optional arguments to long options are also mandatory or optional
 for any corresponding short options.
 ```
 
@@ -56,6 +58,7 @@ for any corresponding short options.
 
 - split-lock，监控硬件pmu，发生split-lock的次数，以及触发情况。
 - irq-off，监控中断关闭的情况。
+- profile，分析采样栈，可以分析内核态CPU利用率超过一定百分比抓取内核态栈。
 - trace，读取某个tracepoint事件。
 - signal，监控给特定进程发送的信号。
 - task-state，监控进程处于D、S状态的时间，超过指定时间可以打印栈。
@@ -77,10 +80,10 @@ struct monitor monitor_signal = {
     .deinit = signal_exit,
     .sample = signal_sample,
 };
-MONITOR_REGISTER(monitor_signal)
+ONITOR_REGISTER(monitor_signal)
 ```
 
-定义模块初始化、过滤、销毁、处理采样接口。
+定义模块初始化、过滤、销毁、处理采样等接口。
 
 ## 3 monitor.init
 
@@ -240,6 +243,8 @@ TRACEEVENT_PLUGIN_DIR
 
 ### 6.1 watchdog
 
+监控hard、soft lockup的情况，在将要发生时，预先打印出内核栈。
+
 总共监控5个事件。
 
 - **timer:hrtimer_expire_entry**，加上过滤器，用于跟踪watchdog_timer_fn的执行。
@@ -251,3 +256,39 @@ TRACEEVENT_PLUGIN_DIR
 在pmu:bus-cycles事件发生时，判断hard lockup，如果预测将要发生硬死锁，就输出抓取的内核栈。
 
 在timer:hrtimer_expire_entry事件发生时，判断soft lockup，如果预测将要发生软死锁，就输出线程调度信息和pmu:bus-cycles事件采样的内核栈。
+
+在发生hardlockup时，一般伴随着长时间关闭中断，可能会导致其他cpu执行也卡住，导致perf-monitor工具也无法执行。这样的场景，可以借助crash来分析内核perf_event的ring buffer来获取到一定的栈。虽然工具无法执行，但采样还是会持续采的。
+
+```
+用法:
+	perf-monitor watchdog -F 1 -g
+
+  -F, --freq=n               指定采样的频率，采样是使用内核的pmu事件，会发起nmi中断，-F指定发起nmi中断的频率。
+  -g, --call-graph           抓取内核栈，发起pmu事件时，把内核态栈采样到。
+  -C, --cpu=CPU              指定在哪些cpu上启用watchdog监控，不指定默认会读取/proc/sys/kernel/watchdog_cpumask来确定所有启用的CPU，默认开启nohzfull的cpu不启用watchdog。
+```
+
+
+
+### 6.2 profile
+
+分析采样栈，可以分析内核态CPU利用率超过一定百分比抓取内核态栈。
+
+共监控1个事件。
+
+- **pmu:ref-cycles**，参数时钟默认以固定频率运行，以tsc的频率运行。会先从内核获取tsc_khz的频率，然后固定间隔采样。
+
+```
+用法:
+	perf-monitor profile [-F freq] [-C cpu] [-g] [--exclude-user] [--exclude-kernel] [--than PCT]
+例子:
+	perf-monitor profile -F 100 -C 0 -g --exclude-user --than 30  #对cpu0采样，在内核态利用率超过30%打印内核栈。
+
+  -F, --freq=n               以固定频率采样。
+  -C, --cpu=CPU              指定在哪些cpu上采样栈。
+  -g, --call-graph           抓取采样点的栈。
+      --exclude-user         过滤掉用户态的采样，只采样内核态，可以减少采样点。降低cpu压力。
+      --exclude-kernel       过滤掉内核态采样，只采样用户态。
+      --than=PCT             百分比，指定采样的用户态或者内核态超过一定百分比才输出信息，包括栈信息。可以抓取偶发内核态占比高的问题。
+```
+

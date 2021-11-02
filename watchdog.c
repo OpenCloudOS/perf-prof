@@ -424,9 +424,13 @@ static void watchdog_sample(union perf_event *event)
     __u32 type;
     __u64 config;
 
-    evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id);
-    if (!evsel)
+    evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
+    if (!evsel) {
+        print_time(stderr);
+        fprintf(stderr, "%16s %6u [%03d] %llu.%06llu: ID %llu TO EVSEL FAILED!\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->stream_id);
         return ;
+    }
 
     type = perf_evsel__attr(evsel)->type;
     config = perf_evsel__attr(evsel)->config;
@@ -440,7 +444,7 @@ static void watchdog_sample(union perf_event *event)
         ctx.watchdog[cpu].hrtimer_interrupts_saved = ctx.watchdog[cpu].hrtimer_interrupts;
 
         if (ctx.watchdog[cpu].print_stack ||
-            ctx.watchdog[cpu].print_sched || 
+            ctx.watchdog[cpu].print_sched ||
             ctx.env->verbose) {
             print_time(stdout);
             printf("%16s %6u [%03d] %llu.%06llu: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
@@ -479,6 +483,40 @@ static void watchdog_sample(union perf_event *event)
     }
 }
 
+static void watchdog_throttle(union perf_event *event)
+{
+    struct perf_evsel *evsel;
+    int cpu;
+    const char *str;
+    __u32 type;
+    __u64 time;
+
+    if (!ctx.env->verbose)
+        return;
+
+    evsel = perf_evlist__id_to_evsel(ctx.evlist, event->throttle.stream_id, &cpu);
+    if (!evsel)
+        return;
+
+    type = event->header.type;
+    time = event->throttle.time;
+    if (type == PERF_RECORD_THROTTLE) {
+        str = "throttle";
+    } else if (type == PERF_RECORD_UNTHROTTLE) {
+        str = "unthrottle";
+    } else
+        return;
+
+    type = perf_evsel__attr(evsel)->type;
+    if (type == ctx.profile_type) {
+        print_time(stdout);
+        printf("==> [%03d] %llu.%06llu: %s\n", cpu, time / NSEC_PER_SEC, (time % NSEC_PER_SEC)/1000, str);
+    } else if (type == PERF_TYPE_TRACEPOINT) {
+        /* This won't happen */
+    }
+}
+
+
 struct monitor watchdog = {
     .name = "watchdog",
     .pages = 2,
@@ -487,6 +525,8 @@ struct monitor watchdog = {
     .deinit = watchdog_exit,
     .comm   = monitor_tep__comm,
     .sample = watchdog_sample_stage_init,
+    .throttle = watchdog_throttle,
+    .unthrottle = watchdog_throttle,
 };
 MONITOR_REGISTER(watchdog)
 

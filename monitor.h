@@ -15,7 +15,7 @@ void monitor_register(struct monitor *m);
 struct monitor * monitor_find(char *name);
 int get_possible_cpus(void);
 void print_time(FILE *fp);
-
+int get_tsc_khz(void);
 
 #define MONITOR_REGISTER(m) \
 __attribute__((constructor)) static void __monitor_register_##m(void) \
@@ -36,6 +36,8 @@ struct env {
     bool uninterruptible;
     int greater_than;
     bool callchain;
+    bool exclude_user;
+    bool exclude_kernel;
     bool test;
     bool precise;
     int verbose;
