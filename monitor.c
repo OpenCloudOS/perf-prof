@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <linux/perf_event.h>
 #include <sys/time.h>
+#include <linux/kvm.h>
+#include <sys/ioctl.h>
 
 #include <monitor.h>
 #include <tep.h>
@@ -56,8 +58,8 @@ const char argp_program_doc[] =
 "USAGE:\n"
 "    perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]\n"
 "    perf-monitor irq-off [-L lat] [-C cpu] [-g] [--precise]\n"
-"    perf-monitor profile [-F freq] [-C cpu] [-g]\n"
-"    perf-monitor trace -e event [-C cpu]\n"
+"    perf-monitor profile [-F freq] [-C cpu] [-g] [--exclude-*] [--than PCT]\n"
+"    perf-monitor trace -e event [--filter filter] [-C cpu]\n"
 "    perf-monitor signal [--filter comm] [-C cpu] [-g]\n"
 "    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g]\n"
 "    perf-monitor watchdog [-F freq] [-g] [-C cpu] [-v]\n"
@@ -79,7 +81,9 @@ static const struct argp_option opts[] = {
     { "filter", 502, "filter", 0, "event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
-    { "than", 503, "ms", 0, "Greater than specified time, ms" },
+    { "exclude-user", 504, NULL, 0, "exclude user" },
+    { "exclude-kernel", 505, NULL, 0, "exclude kernel" },
+    { "than", 503, "ms", 0, "Greater than specified time, ms/percent" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
     { "precise", 501, NULL, 0, "Generate precise interrupt" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
@@ -129,6 +133,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'D':
         env.uninterruptible = 1;
+        break;
+    case 504:
+        env.exclude_user = 1;
+        break;
+    case 505:
+        env.exclude_kernel = 1;
         break;
     case 503:
         env.greater_than = strtol(arg, NULL, 10);
@@ -183,6 +193,41 @@ int get_possible_cpus(void)
     perf_cpu_map__put(cpumap);
     return cpus + 1;
 }
+
+int get_tsc_khz(void)
+{
+    int kvm, vm, vcpu;
+    int tsc_khz = 0;
+
+    kvm = open("/dev/kvm", O_RDWR);
+    if (kvm < 0) {
+        fprintf(stderr, "open kvm failed\n");
+        return 0;
+    }
+    vm = ioctl(kvm, KVM_CREATE_VM, 0);
+    if (kvm < 0) {
+        fprintf(stderr, "create vm failed\n");
+        close(kvm);
+        return 0;
+    }
+    vcpu = ioctl(vm, KVM_CREATE_VCPU, 0);
+    if (vcpu < 0) {
+        fprintf(stderr, "create vm failed\n");
+        close(vm);
+        close(kvm);
+        return 0;
+    }
+    if (ioctl(vm, KVM_CHECK_EXTENSION, KVM_CAP_GET_TSC_KHZ) == 1) {
+        tsc_khz = ioctl(vcpu, KVM_GET_TSC_KHZ, 0);
+        if (tsc_khz < 0)
+            tsc_khz = 0;
+    }
+    close(vcpu);
+    close(vm);
+    close(kvm);
+    return tsc_khz;
+}
+
 
 void print_time(FILE *fp)
 {

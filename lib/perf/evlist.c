@@ -292,15 +292,19 @@ add:
 	return 0;
 }
 
-struct perf_evsel *perf_evlist__id_to_evsel(struct perf_evlist *evlist, uint64_t id)
+struct perf_evsel *perf_evlist__id_to_evsel(struct perf_evlist *evlist,
+                   uint64_t id, int *pcpu)
 {
     int hash;
     struct perf_sample_id *sid;
 
 	hash = hash_64(id, PERF_EVLIST__HLIST_BITS);
     hlist_for_each_entry(sid, &evlist->heads[hash], node) {
-        if (sid->id == id)
+        if (sid->id == id) {
+            if (pcpu)
+                *pcpu = sid->cpu;
             return sid->evsel;
+        }
     }
     return NULL;
 }
