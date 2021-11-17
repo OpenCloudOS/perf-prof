@@ -36,6 +36,7 @@ struct env {
     bool uninterruptible;
     int greater_than;
     bool callchain;
+    int mmap_pages;
     bool exclude_user;
     bool exclude_kernel;
     bool test;

@@ -85,6 +85,7 @@ static const struct argp_option opts[] = {
     { "exclude-kernel", 505, NULL, 0, "exclude kernel" },
     { "than", 503, "ms", 0, "Greater than specified time, ms/percent" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
+    { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", 501, NULL, 0, "Generate precise interrupt" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
@@ -145,6 +146,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'g':
         env.callchain = 1;
+        break;
+    case 'm':
+        env.mmap_pages = strtol(arg, NULL, 10);
         break;
     case 501:
         env.precise = 1;
@@ -362,6 +366,9 @@ int main(int argc, char *argv[])
     err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
     if (err)
         return err;
+
+    if (env.mmap_pages)
+        monitor->pages = env.mmap_pages;
 
     setlinebuf(stdout);
     libperf_init(libperf_print);
