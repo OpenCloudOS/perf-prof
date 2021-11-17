@@ -67,7 +67,7 @@ static int irq_off_init(struct perf_evlist *evlist, struct env *env)
     }
 
     if (env->callchain)
-        irq_off.pages = 4;
+        irq_off.pages *= 2;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {

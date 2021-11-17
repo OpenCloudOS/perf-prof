@@ -20,7 +20,7 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
-        monitor_signal.pages = 4;
+        monitor_signal.pages *= 2;
         monitor_signal.sample = signal_sample_callchain;
     }
     ctx.env = env;

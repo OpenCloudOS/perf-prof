@@ -78,7 +78,7 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
-        watchdog.pages = 8;
+        watchdog.pages *= 2;
     }
     __get_cpuid(1, &eax, &ebx, &ecx, &edx);
     ctx.hypervisor = !!(ecx & CPUID_EXT_HYPERVISOR);

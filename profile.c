@@ -72,7 +72,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
     }
 
     if (env->callchain)
-        profile.pages = 4;
+        profile.pages *= 2;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
