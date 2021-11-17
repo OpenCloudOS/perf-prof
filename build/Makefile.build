@@ -152,10 +152,10 @@ __build: $(in-target)
 
 subdir-clean-y := $(addsuffix -clean,$(subdir-y))
 $(subdir-clean-y):
-	$(Q)$(MAKE) -f $(build-dir)/Makefile.build dir=$(dir)/$@ obj=$(obj) clean
+	$(Q)$(MAKE) -f $(build-dir)/Makefile.build dir=$(dir)/$(patsubst %-clean,%,$(notdir $@)) obj=$(obj) clean
 
 clean: $(subdir-clean-y)
-	$(call _clean,clean,$(in-target) $(obj-y) *.o *.cmd .*.d)
+	$(call _clean,clean,$(in-target) $(obj-y) $(objprefix)*.o $(objprefix).*.cmd $(objprefix).*.d)
 
 PHONY += FORCE
 FORCE:

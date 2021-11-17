@@ -1,4 +1,4 @@
-perf-monitor-y += trace_helpers.o lib/rbtree.o lib/rblist.o
+perf-monitor-y += trace_helpers.o lib/
 perf-monitor-y += monitor.o tep.o
 perf-monitor-y += split-lock.o
 perf-monitor-y += irq-off.o
