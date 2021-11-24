@@ -14,21 +14,23 @@
 ```
 # ./perf-monitor  --help
 Usage: perf-monitor [OPTION...]
-onitor based on perf_event
+Monitor based on perf_event
 
 USAGE:
     perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]
-    perf-monitor irq-off [-L lat] [-C cpu] [-g] [--precise]
-    perf-monitor profile [-F freq] [-C cpu] [-g] [--exclude-*] [--than PCT]
+    perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]
+    perf-monitor profile [-F freq] [-C cpu] [-g] [-m pages] [--exclude-*] [--than PCT]
     perf-monitor trace -e event [--filter filter] [-C cpu]
-    perf-monitor signal [--filter comm] [-C cpu] [-g]
-    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g]
-    perf-monitor watchdog [-F freq] [-g] [-C cpu] [-v]
+    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]
+    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]
+    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]
+    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
 
 EXAMPLES:
     perf-monitor split-lock -T 1000 -C 1-21,25-46 -g  # Monitor split-lock
     perf-monitor irq-off -L 10000 -C 1-21,25-46  # Monitor irq-off
 
+      --alloc=tp             memory alloc tracepoint/kprobe
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
   -D, --uninterruptible      TASK_UNINTERRUPTIBLE
   -e, --event=event          event selector. use 'perf list tracepoint' to list
@@ -36,11 +38,14 @@ EXAMPLES:
       --exclude-kernel       exclude kernel
       --exclude-user         exclude user
       --filter=filter        event filter/comm filter
+      --free=tp              memory free tracepoint/kprobe
   -F, --freq=n               profile at this frequency, Dflt: 10
   -g, --call-graph           Enable call-graph recording
   -G, --guest                Monitor GUEST, Dflt: false
   -i, --interval=INT         Interval, ms
   -L, --latency=LAT          Interrupt off latency, unit: us, Dflt: 20ms
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing
+                             mmap pages
       --precise              Generate precise interrupt
   -S, --interruptible        TASK_INTERRUPTIBLE
       --test                 Test verification
@@ -50,7 +55,7 @@ EXAMPLES:
   -?, --help                 Give this help list
       --usage                Give a short usage message
 
-andatory or optional arguments to long options are also mandatory or optional
+Mandatory or optional arguments to long options are also mandatory or optional
 for any corresponding short options.
 ```
 
@@ -63,7 +68,8 @@ for any corresponding short options.
 - signal，监控给特定进程发送的信号。
 - task-state，监控进程处于D、S状态的时间，超过指定时间可以打印栈。
 - watchdog，监控hard、soft lockup的情况，在将要发生时，预先打印出内核栈。
-- 可行的扩展：监控kvm-exit，采样内存分配释放来判定内存泄露等。
+- kmemleak，监控alloc、free的情况，判断可能的内存泄露。
+- 可行的扩展：监控kvm-exit等。
 
 每个监控模块都需要定义一个`struct monitor `结构，来指定如何初始化、过滤、释放监控事件，以及如何处理采样到的监控事件。
 
@@ -290,5 +296,65 @@ TRACEEVENT_PLUGIN_DIR
       --exclude-user         过滤掉用户态的采样，只采样内核态，可以减少采样点。降低cpu压力。
       --exclude-kernel       过滤掉内核态采样，只采样用户态。
       --than=PCT             百分比，指定采样的用户态或者内核态超过一定百分比才输出信息，包括栈信息。可以抓取偶发内核态占比高的问题。
+```
+
+### 6.3 task-state
+
+分析进程状态（睡眠状态，不可中断状态），在指定状态停留超过一定时间打印出内核栈。
+
+共监控2个事件：
+
+- **sched:sched_switch**，获取进程切换出去时的状态，及进程切换的时间。
+- **sched:sched_wakeup**，获取进程唤醒时刻，用于计算在指定状态停留的时间。
+
+还需要利用ftrace提供的filter功能，过滤特定的进程名，特定的进程状态。
+
+```
+用法:
+    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]
+例子:
+    perf-monitor task-state -D --than 100 --filter nginx -g # 打印nginx进程D住超过100ms的栈。
+
+  -S, --interruptible        TASK_INTERRUPTIBLE    S状态进程
+  -D, --uninterruptible      TASK_UNINTERRUPTIBLE  D状态进程
+      --than=ms              Greater than specified time, ms  在特定状态停留超过指定时间，ms单位。
+      --filter=filter        event filter/comm filter  过滤进程名字
+  -g, --call-graph           Enable call-graph recording  抓取栈
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
+  -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
+```
+
+### 6.4 kmemleak
+
+分析内存泄露，一般内存分配都对应alloc和free两个点。内存泄露，alloc之后永远不会释放。
+
+工具原理：
+
+- 在alloc点抓到对应的内存分配信息，进程id、comm、内核栈、分配时间。并存到alloc链表里。
+- 在free点，从alloc链表查找alloc信息。能找到，说明正确的分配和释放，删除alloc链表的记录。找不到说明在工具启动前分配的，直接丢弃。
+- alloc和free之间通过`ptr`指针关联起来。动态增加的alloc/free tracepoint点需要ptr指针。
+- 在工具结束时，打印所有alloc链表的信息。即为，<u>最可能的内存泄露点</u>。工具执行时间越久，越能得到最准确的信息。
+
+可以解决内核[kmemleak](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst)工具不支持percpu内存泄露问题。
+
+共监控2个事件：
+
+- **alloc**，需要自己指定，可以是`kmem:kmalloc、pcpu_alloc`等分配内存点。alloc点需要获取内核栈。
+- **free**，需要自己指定，与alloc相对应。可以是`kmem:kfree、free_percpu`等释放内存点。free点不需要栈信息。
+
+```
+用法:
+    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
+例子:
+    echo 'r:alloc_percpu pcpu_alloc ptr=$retval' >> /sys/kernel/debug/tracing/kprobe_events #ptr指向分配的内存地址
+    echo 'p:free_percpu free_percpu ptr=%di' >> /sys/kernel/debug/tracing/kprobe_events
+    perf-monitor kmemleak --alloc kprobes:alloc_percpu --free kprobes:free_percpu -m 8 -g
+
+      --alloc=tp             memory alloc tracepoint/kprobe
+      --free=tp              memory free tracepoint/kprobe
+  -g, --call-graph           Enable call-graph recording
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing
+                             mmap pages
+  -v, --verbose              Verbose debug output
 ```
 
