@@ -63,7 +63,7 @@ const char argp_program_doc[] =
 "    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
-"    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-v]\n"
+"    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "\n"
 "EXAMPLES:\n"
 "    perf-monitor split-lock -T 1000 -C 1-21,25-46 -g  # Monitor split-lock\n"
