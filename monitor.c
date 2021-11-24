@@ -444,6 +444,8 @@ reinit:
     perf_evlist__enable(evlist);
 
     signal(SIGINT, sig_handler);
+    if (monitor->sigusr1)
+        signal(SIGUSR1, monitor->sigusr1);
 
     while (!exiting && !monitor->reinit) {
         struct perf_mmap *map;
