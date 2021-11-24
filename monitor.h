@@ -39,6 +39,8 @@ struct env {
     int mmap_pages;
     bool exclude_user;
     bool exclude_kernel;
+    char *tp_alloc;
+    char *tp_free;
     bool test;
     bool precise;
     int verbose;

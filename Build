@@ -7,6 +7,7 @@ perf-monitor-y += trace.o
 perf-monitor-y += signal.o
 perf-monitor-y += task-state.o
 perf-monitor-y += watchdog.o
+perf-monitor-y += kmemleak.o
 
 bin-y += perf-monitor
 perf-monitor-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
