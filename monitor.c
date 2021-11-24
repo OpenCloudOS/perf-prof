@@ -63,30 +63,42 @@ const char argp_program_doc[] =
 "    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
+"    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-v]\n"
 "\n"
 "EXAMPLES:\n"
 "    perf-monitor split-lock -T 1000 -C 1-21,25-46 -g  # Monitor split-lock\n"
 "    perf-monitor irq-off -L 10000 -C 1-21,25-46  # Monitor irq-off\n";
 
-
+enum {
+    LONG_OPT_test = 500,
+    LONG_OPT_precise,
+    LONG_OPT_filter,
+    LONG_OPT_exclude_user,
+    LONG_OPT_exclude_kernel,
+    LONG_OPT_than,
+    LONG_OPT_alloc,
+    LONG_OPT_free,
+};
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000" },
     { "cpu", 'C', "CPU", 0, "Monitor the specified CPU, Dflt: all cpu" },
     { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
     { "interval", 'i', "INT", 0, "Interval, ms" },
-    { "test", 500, NULL, 0, "Test verification" },
+    { "test", LONG_OPT_test, NULL, 0, "Test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 10" },
     { "event", 'e', "event", 0, "event selector. use 'perf list tracepoint' to list available tp events" },
-    { "filter", 502, "filter", 0, "event filter/comm filter" },
+    { "filter", LONG_OPT_filter, "filter", 0, "event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
-    { "exclude-user", 504, NULL, 0, "exclude user" },
-    { "exclude-kernel", 505, NULL, 0, "exclude kernel" },
-    { "than", 503, "ms", 0, "Greater than specified time, ms/percent" },
+    { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
+    { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
+    { "than", LONG_OPT_than, "ms", 0, "Greater than specified time, ms/percent" },
+    { "alloc", LONG_OPT_alloc, "tp", 0, "memory alloc tracepoint/kprobe" },
+    { "free", LONG_OPT_free, "tp", 0, "memory free tracepoint/kprobe" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
     { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
-    { "precise", 501, NULL, 0, "Generate precise interrupt" },
+    { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
@@ -112,7 +124,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case 'i':
         env.interval = strtol(arg, NULL, 10);
         break;
-    case 500:
+    case LONG_OPT_test:
         env.test = 1;
         break;
     case 'L':
@@ -126,7 +138,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case 'e':
         env.event = strdup(arg);
         break;
-    case 502:
+    case LONG_OPT_filter:
         env.filter = strdup(arg);
         break;
     case 'S':
@@ -135,14 +147,20 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case 'D':
         env.uninterruptible = 1;
         break;
-    case 504:
+    case LONG_OPT_exclude_user:
         env.exclude_user = 1;
         break;
-    case 505:
+    case LONG_OPT_exclude_kernel:
         env.exclude_kernel = 1;
         break;
-    case 503:
+    case LONG_OPT_than:
         env.greater_than = strtol(arg, NULL, 10);
+        break;
+    case LONG_OPT_alloc:
+        env.tp_alloc = strdup(arg);
+        break;
+    case LONG_OPT_free:
+        env.tp_free = strdup(arg);
         break;
     case 'g':
         env.callchain = 1;
@@ -150,7 +168,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case 'm':
         env.mmap_pages = strtol(arg, NULL, 10);
         break;
-    case 501:
+    case LONG_OPT_precise:
         env.precise = 1;
         break;
     case 'v':

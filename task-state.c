@@ -148,7 +148,7 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
                             env->filter, env->interruptible ? TASK_INTERRUPTIBLE:TASK_UNINTERRUPTIBLE);
                 else
                     return -1;
-                printf("[%s]\n", filter);
+                //printf("[%s]\n", filter);
                 err = perf_evsel__apply_filter(evsel, filter);
                 if (err < 0)
                     return err;
