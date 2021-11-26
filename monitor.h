@@ -21,6 +21,7 @@ int get_tsc_khz(void);
 #define X86_VENDOR_AMD		1
 #define X86_VENDOR_HYGON	2
 int get_cpu_vendor(void);
+int in_guest(void);
 
 #define MONITOR_REGISTER(m) \
 __attribute__((constructor)) static void __monitor_register_##m(void) \
