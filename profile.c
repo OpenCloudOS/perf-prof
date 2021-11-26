@@ -47,7 +47,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_HARDWARE,
-        .config        = PERF_COUNT_HW_REF_CPU_CYCLES,
+        .config        = get_cpu_vendor() == X86_VENDOR_INTEL ? PERF_COUNT_HW_REF_CPU_CYCLES : PERF_COUNT_HW_CPU_CYCLES,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = env->freq,
         .freq          = 1,
