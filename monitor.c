@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
+#include <cpuid.h>
 
 #include <monitor.h>
 #include <tep.h>
@@ -255,6 +256,23 @@ int get_tsc_khz(void)
     return tsc_khz;
 }
 
+int get_cpu_vendor(void)
+{
+    __u32 eax, ebx, ecx, edx;
+
+	eax = ebx = ecx = edx = 0;
+
+	__get_cpuid(0, &eax, &ebx, &ecx, &edx);
+
+	if (ebx == 0x756e6547 && ecx == 0x6c65746e && edx == 0x49656e69)
+		return X86_VENDOR_INTEL;
+	else if (ebx == 0x68747541 && ecx == 0x444d4163 && edx == 0x69746e65)
+		return X86_VENDOR_AMD;
+	else if (ebx == 0x6f677948 && ecx == 0x656e6975 && edx == 0x6e65476e)
+		return X86_VENDOR_HYGON;
+    else
+        return -1;
+}
 
 void print_time(FILE *fp)
 {
