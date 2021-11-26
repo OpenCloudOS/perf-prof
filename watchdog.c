@@ -14,7 +14,6 @@
 #include <tep.h>
 #include "trace_helpers.h"
 
-#define CPUID_EXT_HYPERVISOR  (1U << 31)
 
 struct monitor watchdog;
 static void watchdog_sample(union perf_event *event);
@@ -37,7 +36,7 @@ static struct monitor_ctx {
     struct perf_evlist *evlist;
     struct perf_evsel *perf_evsel_hrtimer_expire_entry;
     struct ksyms *ksyms;
-    int hypervisor;
+    int in_guest;
     int comm;
     int nr_cpus;
     struct watchdog_ctx *watchdog;
@@ -73,15 +72,13 @@ static char *path_read(const char *path)
 static int monitor_ctx_init(struct env *env)
 {
     char *str;
-    __u32 eax, ebx, ecx, edx;
 
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
         watchdog.pages *= 2;
     }
-    __get_cpuid(1, &eax, &ebx, &ecx, &edx);
-    ctx.hypervisor = !!(ecx & CPUID_EXT_HYPERVISOR);
+    ctx.in_guest = in_guest();
     ctx.comm = 1;
 
     ctx.nr_cpus = get_possible_cpus();
@@ -151,8 +148,8 @@ static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *
 static int watchdog_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
-        .type          = ctx.hypervisor ? PERF_TYPE_SOFTWARE : PERF_TYPE_HARDWARE,
-        .config        = ctx.hypervisor ? PERF_COUNT_SW_CPU_CLOCK : PERF_COUNT_HW_CPU_CYCLES,
+        .type          = ctx.in_guest ? PERF_TYPE_SOFTWARE : PERF_TYPE_HARDWARE,
+        .config        = ctx.in_guest ? PERF_COUNT_SW_CPU_CLOCK : PERF_COUNT_HW_CPU_CYCLES,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = env->freq,
         .freq          = 1,

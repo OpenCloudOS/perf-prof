@@ -261,7 +261,6 @@ int get_cpu_vendor(void)
     __u32 eax, ebx, ecx, edx;
 
 	eax = ebx = ecx = edx = 0;
-
 	__get_cpuid(0, &eax, &ebx, &ecx, &edx);
 
 	if (ebx == 0x756e6547 && ecx == 0x6c65746e && edx == 0x49656e69)
@@ -272,6 +271,16 @@ int get_cpu_vendor(void)
 		return X86_VENDOR_HYGON;
     else
         return -1;
+}
+#define CPUID_EXT_HYPERVISOR  (1U << 31)
+int in_guest(void)
+{
+    __u32 eax, ebx, ecx, edx;
+
+    eax = ebx = ecx = edx = 0;
+    __get_cpuid(1, &eax, &ebx, &ecx, &edx);
+
+    return !!(ecx & CPUID_EXT_HYPERVISOR);
 }
 
 void print_time(FILE *fp)
