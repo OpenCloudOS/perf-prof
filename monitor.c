@@ -66,7 +66,7 @@ const char argp_program_doc[] =
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "\n"
 "EXAMPLES:\n"
-"    perf-monitor split-lock -T 1000 -C 1-21,25-46 -g  # Monitor split-lock\n"
+"    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock\n"
 "    perf-monitor irq-off -L 10000 -C 1-21,25-46  # Monitor irq-off\n";
 
 enum {
@@ -75,6 +75,7 @@ enum {
     LONG_OPT_filter,
     LONG_OPT_exclude_user,
     LONG_OPT_exclude_kernel,
+    LONG_OPT_exclude_guest,
     LONG_OPT_than,
     LONG_OPT_alloc,
     LONG_OPT_free,
@@ -93,6 +94,7 @@ static const struct argp_option opts[] = {
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
     { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
+    { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
     { "than", LONG_OPT_than, "ms", 0, "Greater than specified time, ms/percent" },
     { "alloc", LONG_OPT_alloc, "tp", 0, "memory alloc tracepoint/kprobe" },
     { "free", LONG_OPT_free, "tp", 0, "memory free tracepoint/kprobe" },
@@ -152,6 +154,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_exclude_kernel:
         env.exclude_kernel = 1;
+        break;
+    case LONG_OPT_exclude_guest:
+        env.exclude_guest = 1;
         break;
     case LONG_OPT_than:
         env.greater_than = strtol(arg, NULL, 10);

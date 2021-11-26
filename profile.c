@@ -59,6 +59,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .exclude_callchain_user = 1,
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
+        .exclude_guest = env->exclude_guest,
         .wakeup_events = 1, //1个事件
     };
     struct perf_evsel *evsel;
