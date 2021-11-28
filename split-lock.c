@@ -34,13 +34,15 @@ split-lock ctx
 struct monitor_ctx {
     int nr_cpus;
     uint64_t *counter;
+    uint64_t *polling;
 } ctx;
 
 static int monitor_ctx_init(void)
 {
     ctx.nr_cpus = get_possible_cpus();
     ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
-    return ctx.counter ? 0 : -1;
+    ctx.polling = calloc(ctx.nr_cpus, sizeof(uint64_t));
+    return ctx.counter && ctx.polling ? 0 : -1;
 }
 
 static void monitor_ctx_exit(void)
@@ -48,6 +50,10 @@ static void monitor_ctx_exit(void)
     if (ctx.counter) {
         free(ctx.counter);
         ctx.counter = NULL;
+    }
+    if (ctx.polling) {
+        free(ctx.polling);
+        ctx.polling = NULL;
     }
 }
 
@@ -95,9 +101,9 @@ static void split_lock_read(struct perf_counts_values *count, int cpu)
 {
     uint64_t counter = 0;
 
-    if (count->val > ctx.counter[cpu]) {
-        counter = count->val - ctx.counter[cpu];
-        ctx.counter[cpu] = count->val;
+    if (count->val > ctx.polling[cpu]) {
+        counter = count->val - ctx.polling[cpu];
+        ctx.polling[cpu] = count->val;
     }
     if (counter) {
         print_time(stdout);
