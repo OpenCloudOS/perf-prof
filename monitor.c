@@ -82,13 +82,13 @@ enum {
     LONG_OPT_free,
 };
 static const struct argp_option opts[] = {
-    { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000" },
+    { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
     { "cpu", 'C', "CPU", 0, "Monitor the specified CPU, Dflt: all cpu" },
     { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
     { "interval", 'i', "INT", 0, "Interval, ms" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
-    { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 100. 0: No profile" },
+    { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 100, No profile: 0" },
     { "event", 'e', "event", 0, "event selector. use 'perf list tracepoint' to list available tp events" },
     { "filter", LONG_OPT_filter, "filter", 0, "event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
