@@ -292,6 +292,13 @@ void print_time(FILE *fp)
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
 }
 
+static uint64_t time_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000LL + tv.tv_usec / 1000;
+}
+
 static void print_lost_fn(union perf_event *event, int cpu)
 {
     print_time(stderr);
@@ -412,6 +419,8 @@ int main(int argc, char *argv[])
     int err;
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
+    uint64_t time_end;
+    int time_left;
 
     err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
     if (err)
@@ -479,12 +488,14 @@ reinit:
     if (monitor->sigusr1)
         signal(SIGUSR1, monitor->sigusr1);
 
+    time_end = env.interval ? time_ms() + env.interval : -1;
+    time_left = env.interval ? : -1;
     while (!exiting && !monitor->reinit) {
         struct perf_mmap *map;
         union perf_event *event;
         int fds;
 
-        fds = perf_evlist__poll(evlist, env.interval ? : 1000);
+        fds = perf_evlist__poll(evlist, time_left);
 
         if (fds)
         perf_evlist__for_each_mmap(evlist, map, false) {
@@ -498,7 +509,7 @@ reinit:
             perf_mmap__read_done(map);
         }
 
-        if (monitor->read) {
+        if (monitor->read && time_left == 0) {
             struct perf_evsel *evsel;
             perf_evlist__for_each_evsel(evlist, evsel) {
                 int cpu, idx;
@@ -508,6 +519,14 @@ reinit:
                     if (perf_evsel__read(evsel, idx, 0, &count) == 0)
                         monitor->read(&count, cpu);
                 }
+            }
+        }
+
+        if (env.interval) {
+            time_left = time_end - time_ms();
+            if (time_left <= 0) {
+                time_end = time_ms() + env.interval + time_left;
+                time_left = 0;
             }
         }
     }
