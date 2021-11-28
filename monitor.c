@@ -59,7 +59,7 @@ const char argp_program_doc[] =
 "USAGE:\n"
 "    perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]\n"
 "    perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]\n"
-"    perf-monitor profile [-F freq] [-C cpu] [-g] [-m pages] [--exclude-*] [--than PCT]\n"
+"    perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
 "    perf-monitor trace -e event [--filter filter] [-C cpu]\n"
 "    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]\n"

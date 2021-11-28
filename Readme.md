@@ -19,7 +19,7 @@ Monitor based on perf_event
 USAGE:
     perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]
     perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]
-    perf-monitor profile [-F freq] [-C cpu] [-g] [-m pages] [--exclude-*] [--than PCT]
+    perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [-G] [--than PCT]
     perf-monitor trace -e event [--filter filter] [-C cpu]
     perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]
     perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]
@@ -27,30 +27,29 @@ USAGE:
     perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
 
 EXAMPLES:
-    perf-monitor split-lock -T 1000 -C 1-21,25-46 -g  # Monitor split-lock
+    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock
     perf-monitor irq-off -L 10000 -C 1-21,25-46  # Monitor irq-off
 
       --alloc=tp             memory alloc tracepoint/kprobe
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
   -D, --uninterruptible      TASK_UNINTERRUPTIBLE
-  -e, --event=event          event selector. use 'perf list tracepoint' to list
-                             available tp events
+  -e, --event=event          event selector. use 'perf list tracepoint' to list available tp events
+      --exclude-guest        exclude guest
       --exclude-kernel       exclude kernel
       --exclude-user         exclude user
       --filter=filter        event filter/comm filter
       --free=tp              memory free tracepoint/kprobe
-  -F, --freq=n               profile at this frequency, Dflt: 10
+  -F, --freq=n               profile at this frequency, Dflt: 100, No profile: 0
   -g, --call-graph           Enable call-graph recording
   -G, --guest                Monitor GUEST, Dflt: false
   -i, --interval=INT         Interval, ms
   -L, --latency=LAT          Interrupt off latency, unit: us, Dflt: 20ms
-  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing
-                             mmap pages
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
       --precise              Generate precise interrupt
   -S, --interruptible        TASK_INTERRUPTIBLE
-      --test                 Test verification
+      --test                 Split-lock test verification
       --than=ms              Greater than specified time, ms/percent
-  -T, --trigger=T            Trigger Threshold, Dflt: 1000
+  -T, --trigger=T            Trigger Threshold, Dflt: 1000, No trigger: 0
   -v, --verbose              Verbose debug output
   -?, --help                 Give this help list
       --usage                Give a short usage message
@@ -280,21 +279,27 @@ TRACEEVENT_PLUGIN_DIR
 
 分析采样栈，可以分析内核态CPU利用率超过一定百分比抓取内核态栈。
 
+统计cpu利用率，利用
+
 共监控1个事件。
 
 - **pmu:ref-cycles**，参数时钟默认以固定频率运行，以tsc的频率运行。会先从内核获取tsc_khz的频率，然后固定间隔采样。
 
 ```
 用法:
-	perf-monitor profile [-F freq] [-C cpu] [-g] [--exclude-user] [--exclude-kernel] [--than PCT]
+	perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [--than PCT]
 例子:
 	perf-monitor profile -F 100 -C 0 -g --exclude-user --than 30  #对cpu0采样，在内核态利用率超过30%打印内核栈。
+	perf-monitor profile -F 0 -i 1000 -C 0 --exclude-user --exclude-guest  #禁用cpu0采样，但以1000ms间隔输出%sys利用率。
 
   -F, --freq=n               以固定频率采样。
+  -i, --interval=INT         以固定间隔输出cpu利用率统计信息。单位ms
   -C, --cpu=CPU              指定在哪些cpu上采样栈。
   -g, --call-graph           抓取采样点的栈。
       --exclude-user         过滤掉用户态的采样，只采样内核态，可以减少采样点。降低cpu压力。
       --exclude-kernel       过滤掉内核态采样，只采样用户态。
+      --exclude-guest        过滤掉guest，保留host。
+  -G, --guest                过滤掉host，保留guest。
       --than=PCT             百分比，指定采样的用户态或者内核态超过一定百分比才输出信息，包括栈信息。可以抓取偶发内核态占比高的问题。
 ```
 
