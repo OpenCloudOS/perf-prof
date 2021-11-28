@@ -8,14 +8,17 @@ struct monitor profile;
 struct monitor_ctx {
     int nr_cpus;
     uint64_t *counter;
+    uint64_t *cycles;
     struct {
         uint64_t start_time;
         uint64_t num;
     }*stat;
     struct ksyms *ksyms;
     int tsc_khz;
+    int vendor;
     struct env *env;
 } ctx;
+
 static int monitor_ctx_init(struct env *env)
 {
     ctx.nr_cpus = get_possible_cpus();
@@ -23,15 +26,22 @@ static int monitor_ctx_init(struct env *env)
     if (!ctx.counter) {
         return -1;
     }
+    ctx.cycles = calloc(ctx.nr_cpus, sizeof(uint64_t));
+    if (!ctx.cycles) {
+        free(ctx.counter);
+        return -1;
+    }
     ctx.stat = calloc(ctx.nr_cpus, sizeof(*ctx.stat));
     if (!ctx.stat) {
         free(ctx.counter);
+        free(ctx.cycles);
         return -1;
     }
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
     }
     ctx.tsc_khz = get_tsc_khz();
+    ctx.vendor = get_cpu_vendor();
     ctx.env = env;
     return 0;
 }
@@ -39,6 +49,7 @@ static int monitor_ctx_init(struct env *env)
 static void monitor_ctx_exit(void)
 {
     free(ctx.counter);
+    free(ctx.cycles);
     free(ctx.stat);
     ksyms__free(ctx.ksyms);
 }
@@ -47,10 +58,10 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_HARDWARE,
-        .config        = get_cpu_vendor() == X86_VENDOR_INTEL ? PERF_COUNT_HW_REF_CPU_CYCLES : PERF_COUNT_HW_CPU_CYCLES,
+        .config        = PERF_COUNT_HW_CPU_CYCLES,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = env->freq,
-        .freq          = 1,
+        .freq          = env->freq ? 1 : 0,
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ |
                          (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = 0,
@@ -60,20 +71,31 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
+        .exclude_host = env->guest,
         .wakeup_events = 1, //1个事件
     };
     struct perf_evsel *evsel;
 
+    if (env->exclude_guest && env->guest)
+        return -1;
+    if (env->exclude_user && env->exclude_kernel)
+        return -1;
+
     if (monitor_ctx_init(env) < 0)
         return -1;
 
-    if (ctx.tsc_khz > 0) {
+    if (ctx.tsc_khz > 0 && env->freq > 0) {
         attr.freq = 0;
         attr.sample_period = ctx.tsc_khz * 1000ULL / env->freq;
     }
+    if (ctx.vendor == X86_VENDOR_INTEL)
+        attr.config = PERF_COUNT_HW_REF_CPU_CYCLES;
 
     if (env->callchain)
         profile.pages *= 2;
+
+    if (!env->interval)
+        profile.read = NULL;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -86,6 +108,30 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
 static void profile_exit(struct perf_evlist *evlist)
 {
     monitor_ctx_exit();
+}
+
+static void profile_read(struct perf_counts_values *count, int cpu)
+{
+    uint64_t cycles = 0;
+    const char *str_in[] = {"host,guest", "host", "guest", "error"};
+    const char *str_mode[] = {"all", "usr", "sys", "error"};
+    int in, mode;
+
+    if (count->val > ctx.cycles[cpu]) {
+        cycles = count->val - ctx.cycles[cpu];
+        ctx.cycles[cpu] = count->val;
+    }
+    if (cycles) {
+        in = (ctx.env->guest << 1) | ctx.env->exclude_guest;
+        mode = (ctx.env->exclude_user << 1) | ctx.env->exclude_kernel;
+        print_time(stdout);
+        if (ctx.tsc_khz > 0 && ctx.vendor == X86_VENDOR_INTEL)
+            printf("cpu %d [%s] %.2f%% [%s] %lu cycles\n", cpu, str_in[in],
+                    (float)cycles * 100 / (ctx.tsc_khz * (__u64)ctx.env->interval),
+                    str_mode[mode], cycles);
+        else
+            printf("cpu %d [%s] [%s] %lu cycles\n", cpu, str_in[in], str_mode[mode], cycles);
+    }
 }
 
 static void profile_sample(union perf_event *event)
@@ -158,6 +204,7 @@ struct monitor profile = {
     .pages = 2,
     .init = profile_init,
     .deinit = profile_exit,
+    .read   = profile_read,
     .sample = profile_sample,
 };
 MONITOR_REGISTER(profile)
