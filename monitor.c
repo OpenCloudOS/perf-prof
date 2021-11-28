@@ -45,7 +45,7 @@ struct env env = {
     .trigger_freq = 1000,
     .guest = 0,
     .latency = 20000,
-    .freq = 10,
+    .freq = 100,
     .verbose = 0,
 };
 
@@ -88,7 +88,7 @@ static const struct argp_option opts[] = {
     { "interval", 'i', "INT", 0, "Interval, ms" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
-    { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 10" },
+    { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 100. 0: No profile" },
     { "event", 'e', "event", 0, "event selector. use 'perf list tracepoint' to list available tp events" },
     { "filter", LONG_OPT_filter, "filter", 0, "event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
