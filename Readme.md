@@ -279,7 +279,7 @@ TRACEEVENT_PLUGIN_DIR
 
 分析采样栈，可以分析内核态CPU利用率超过一定百分比抓取内核态栈。
 
-统计cpu利用率，利用
+统计cpu利用率，利用pmu可以过滤用户态和内核态的功能，统计1秒内内核态的cycle数，除以tsc频率，就能计算出%sys占比。
 
 共监控1个事件。
 
@@ -338,7 +338,7 @@ TRACEEVENT_PLUGIN_DIR
 - 在alloc点抓到对应的内存分配信息，进程id、comm、内核栈、分配时间。并存到alloc链表里。
 - 在free点，从alloc链表查找alloc信息。能找到，说明正确的分配和释放，删除alloc链表的记录。找不到说明在工具启动前分配的，直接丢弃。
 - alloc和free之间通过`ptr`指针关联起来。动态增加的alloc/free tracepoint点需要ptr指针。
-- 在工具结束时，打印所有alloc链表的信息。即为，<u>最可能的内存泄露点</u>。工具执行时间越久，越能得到最准确的信息。
+- 在工具结束时，打印所有alloc链表的信息。即为，*最可能的内存泄露点*。工具执行时间越久，越能得到最准确的信息。
 
 可以解决内核[kmemleak](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst)工具不支持percpu内存泄露问题。
 
