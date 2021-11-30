@@ -28,6 +28,7 @@ INCLUDES = \
 -I$(srctree)/lib/traceevent \
 -I$(srctree)/lib/ \
 -I$(srctree)/include \
+-I$(srctree)/include/uapi \
 -I$(srctree)/
 
 # Append required CFLAGS
