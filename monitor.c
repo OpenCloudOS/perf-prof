@@ -517,7 +517,7 @@ reinit:
                 perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
                     struct perf_counts_values count;
                     if (perf_evsel__read(evsel, idx, 0, &count) == 0)
-                        monitor->read(&count, cpu);
+                        monitor->read(evsel, &count, cpu);
                 }
             }
         }
