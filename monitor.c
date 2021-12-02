@@ -476,7 +476,8 @@ reinit:
         goto out_close;
     }
 
-    err = perf_evlist__mmap(evlist, monitor->pages);
+    if (monitor->pages)
+        err = perf_evlist__mmap(evlist, monitor->pages);
     if (err) {
         fprintf(stderr, "failed to mmap evlist\n");
         goto out_close;
@@ -511,10 +512,9 @@ reinit:
 
         if (monitor->read && time_left == 0) {
             struct perf_evsel *evsel;
-            perf_evlist__for_each_evsel(evlist, evsel) {
-                int cpu, idx;
-                struct perf_cpu_map *cpus = perf_evsel__cpus(evsel);
-                perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
+            int cpu, idx;
+            perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
+                perf_evlist__for_each_evsel(evlist, evsel) {
                     struct perf_counts_values count;
                     if (perf_evsel__read(evsel, idx, 0, &count) == 0)
                         monitor->read(evsel, &count, cpu);
