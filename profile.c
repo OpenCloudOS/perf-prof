@@ -110,7 +110,7 @@ static void profile_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void profile_read(struct perf_counts_values *count, int cpu)
+static void profile_read(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu)
 {
     uint64_t cycles = 0;
     const char *str_in[] = {"host,guest", "host", "guest", "error"};

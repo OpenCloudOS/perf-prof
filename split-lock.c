@@ -97,7 +97,7 @@ static void split_lock_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void split_lock_read(struct perf_counts_values *count, int cpu)
+static void split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu)
 {
     uint64_t counter = 0;
 

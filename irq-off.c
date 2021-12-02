@@ -4,7 +4,7 @@
 #include "trace_helpers.h"
 
 struct monitor irq_off;
-static void irq_off_read(struct perf_counts_values *count, int cpu);
+static void irq_off_read(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu);
 
 struct monitor_ctx {
     int nr_cpus;
@@ -83,7 +83,7 @@ static void irq_off_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void irq_off_read(struct perf_counts_values *count, int cpu)
+static void irq_off_read(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu)
 {
     uint64_t counter;
     uint64_t bound = ctx.env->latency / 2 * 1000UL;

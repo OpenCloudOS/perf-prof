@@ -62,7 +62,7 @@ struct monitor {
     int (*filter)(struct perf_evlist *evlist, struct env *env);
     void (*deinit)(struct perf_evlist *evlist);
     void (*sigusr1)(int signum);
-    void (*read)(struct perf_counts_values *count, int cpu);
+    void (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu);
 
     /* PERF_RECORD_* */
 
