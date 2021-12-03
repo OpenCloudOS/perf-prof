@@ -14,8 +14,11 @@ struct swevent_stat {
 struct monitor_ctx {
     int nr_cpus;
     struct swevent_stat *stats;
-    struct perf_evsel *evsels[PERCPU_COUNTER_MAX];
-    const char *name[PERCPU_COUNTER_MAX];
+    struct {
+        struct perf_evsel *evsel;
+        const char *name;
+        int name_len;
+    } evsels[PERCPU_COUNTER_MAX];
     int nr_evsels;
     int n;
     uint64_t num;
@@ -103,8 +106,9 @@ static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
 static void evsel_name(struct perf_evsel *evsel, const char *name)
 {
     if (evsel && ctx.nr_evsels < PERCPU_COUNTER_MAX) {
-        ctx.evsels[ctx.nr_evsels] = evsel;
-        ctx.name[ctx.nr_evsels] = name;
+        ctx.evsels[ctx.nr_evsels].evsel = evsel;
+        ctx.evsels[ctx.nr_evsels].name = name;
+        ctx.evsels[ctx.nr_evsels].name_len = (int)strlen(name);
         ctx.nr_evsels ++;
     }
 }
@@ -114,11 +118,17 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
     if (monitor_ctx_init(env) < 0)
         return -1;
 
+    if (env->interval == 0)
+        env->interval = 1000;
+
     //software event
     evsel_name(perf_sw_event(evlist, PERF_COUNT_SW_CONTEXT_SWITCHES), " SOFT csw");
     evsel_name(perf_sw_event(evlist, PERF_COUNT_SW_CPU_MIGRATIONS), "cpu-mig");
     evsel_name(perf_sw_event(evlist, PERF_COUNT_SW_PAGE_FAULTS_MIN), "minflt");
     evsel_name(perf_sw_event(evlist, PERF_COUNT_SW_PAGE_FAULTS_MAJ), "majflt");
+    //syscalls
+    if (env->syscalls)
+        evsel_name(perf_tp_event(evlist, "raw_syscalls", "sys_enter"), " syscalls");
     //irq, softirq, workqueue
     evsel_name(perf_tp_event(evlist, "irq", "irq_handler_entry"), " hardirq");
     evsel_name(perf_tp_event(evlist, "irq", "softirq_entry"), "softirq");
@@ -151,11 +161,11 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
     int n;
 
     for (n = ctx.n; n < ctx.nr_evsels; n++)
-        if (evsel == ctx.evsels[n])
+        if (evsel == ctx.evsels[n].evsel)
             break;
     if (n == ctx.nr_evsels) {
         for (n = 0; n < ctx.n; n++)
-            if (evsel == ctx.evsels[n])
+            if (evsel == ctx.evsels[n].evsel)
                 break;
         if (n == ctx.n)
             return ;
@@ -168,12 +178,12 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
         ctx.stats[cpu].count[n] = count->val;
     }
 
-    if (evsel == ctx.evsels[ctx.nr_evsels-1]) {
+    if (evsel == ctx.evsels[ctx.nr_evsels-1].evsel) {
         if ((ctx.num % 60) == 0 && (ctx.min_cpu == cpu || ctx.min_cpu == -1)) {
             print_time(stdout);
             printf(" %3s ", "CPU");
             for (n = 0; n < ctx.nr_evsels; n++)
-                printf("%s ", ctx.name[n]);
+                printf("%s ", ctx.evsels[n].name);
             printf("\n");
         }
         if (ctx.min_cpu == -1 || cpu < ctx.min_cpu)
@@ -183,7 +193,7 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
         print_time(stdout);
         printf(" %3d ", cpu);
         for (n = 0; n < ctx.nr_evsels; n++)
-            printf("%*lu ", (int)strlen(ctx.name[n]), ctx.stats[cpu].diff[n]);
+            printf("%*lu ", ctx.evsels[n].name_len, ctx.stats[cpu].diff[n]);
         printf("\n");
     }
 }

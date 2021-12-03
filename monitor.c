@@ -81,6 +81,7 @@ enum {
     LONG_OPT_than,
     LONG_OPT_alloc,
     LONG_OPT_free,
+    LONG_OPT_syscalls,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -100,6 +101,7 @@ static const struct argp_option opts[] = {
     { "than", LONG_OPT_than, "ms", 0, "Greater than specified time, ms/percent" },
     { "alloc", LONG_OPT_alloc, "tp", 0, "memory alloc tracepoint/kprobe" },
     { "free", LONG_OPT_free, "tp", 0, "memory free tracepoint/kprobe" },
+    { "syscalls", LONG_OPT_syscalls, NULL, 0, "trace syscalls" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
     { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
@@ -168,6 +170,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_free:
         env.tp_free = strdup(arg);
+        break;
+    case LONG_OPT_syscalls:
+        env.syscalls = 1;
         break;
     case 'g':
         env.callchain = 1;
