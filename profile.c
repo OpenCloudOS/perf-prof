@@ -207,5 +207,26 @@ struct monitor profile = {
     .read   = profile_read,
     .sample = profile_sample,
 };
-MONITOR_REGISTER(profile)
+MONITOR_REGISTER(profile);
+
+static int cpu_util_init(struct perf_evlist *evlist, struct env *env)
+{
+    env->freq = 0;
+    env->interval = 1000;
+    return profile_init(evlist, env);
+}
+
+static void cpu_util_sample(union perf_event *event)
+{
+}
+
+struct monitor cpu_util = {
+    .name = "cpu-util",
+    .pages = 0,
+    .init = cpu_util_init,
+    .deinit = profile_exit,
+    .read   = profile_read,
+    .sample = cpu_util_sample,
+};
+MONITOR_REGISTER(cpu_util)
 
