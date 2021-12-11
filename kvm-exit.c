@@ -23,6 +23,7 @@ struct monitor_ctx {
     __u64 kvm_exit;
     __u64 kvm_entry;
     struct hist hist;
+    struct hist *pcpu_hist;
     struct env *env;
 } ctx;
 
@@ -100,6 +101,11 @@ static int monitor_ctx_init(struct env *env)
     ctx.pcpu_kvm_exit = calloc(ctx.nr_cpus, sizeof(struct sample_type_raw));
     ctx.pcpu_kvm_exit_valid = calloc(ctx.nr_cpus, sizeof(int));
     memset(&ctx.hist, 0, sizeof(ctx.hist));
+    if (env->percpu) {
+        ctx.pcpu_hist = calloc(ctx.nr_cpus, sizeof(struct hist));
+        if (!ctx.pcpu_hist)
+            return -1;
+    }
     ctx.env = env;
     return ctx.pcpu_kvm_exit && ctx.pcpu_kvm_exit_valid ? 0 : -1;
 }
@@ -151,18 +157,28 @@ static int kvm_exit_init(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void kvm_exit_exit(struct perf_evlist *evlist)
-{
-    monitor_ctx_exit();
-    print_log2_hist(ctx.hist.slots, MAX_SLOTS, "kvm-exit latency(ns)");
-}
-
-static void kvm_exit_interval(void)
+static void kvm_exit_interval(struct perf_cpu_map *cpus)
 {
     print_time(stdout);
     printf("\n");
-    print_log2_hist(ctx.hist.slots, MAX_SLOTS, "kvm-exit latency(ns)");
-    memset(&ctx.hist, 0, sizeof(ctx.hist));
+    if (!ctx.env->percpu) {
+        print_log2_hist(ctx.hist.slots, MAX_SLOTS, "kvm-exit latency(ns)");
+        memset(&ctx.hist, 0, sizeof(ctx.hist));
+    } else {
+        int cpu, idx;
+        char buff[128];
+        perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
+            snprintf(buff, sizeof(buff), "[%03d] latency(ns)", cpu);
+            print_log2_hist(ctx.pcpu_hist[cpu].slots, MAX_SLOTS, buff);
+            memset(&ctx.pcpu_hist[cpu], 0, sizeof(struct hist));
+        }
+    }
+}
+
+static void kvm_exit_deinit(struct perf_evlist *evlist)
+{
+    monitor_ctx_exit();
+    kvm_exit_interval(perf_evsel__cpus(perf_evlist__next(evlist, NULL)));
 }
 
 static __always_inline u64 __log2(u32 v)
@@ -238,7 +254,10 @@ static void kvm_exit_sample(union perf_event *event)
                 int slot = (int)__log2l(delta);
                 if (slot > MAX_SLOTS)
                     slot = MAX_SLOTS;
-                ctx.hist.slots[slot] ++;
+                if (!ctx.env->percpu)
+                    ctx.hist.slots[slot] ++;
+                else
+                    ctx.pcpu_hist[cpu].slots[slot] ++;
             }
         }
     }
@@ -248,7 +267,7 @@ struct monitor kvm_exit = {
     .name = "kvm-exit",
     .pages = 64,
     .init = kvm_exit_init,
-    .deinit = kvm_exit_exit,
+    .deinit = kvm_exit_deinit,
     .interval = kvm_exit_interval,
     .sample = kvm_exit_sample,
 };
