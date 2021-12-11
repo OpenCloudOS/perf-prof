@@ -120,7 +120,7 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
     e = tep_find_event_by_record(tep, &record);
 
     trace_seq_init(&s);
-    tep_print_event(tep, &s, &record, "%16s %s [%03d] %6d: ", TEP_PRINT_COMM,
+    tep_print_event(tep, &s, &record, "%16s %6u %s [%03d] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
                 TEP_PRINT_LATENCY, TEP_PRINT_CPU, TEP_PRINT_TIME);
     if (e) trace_seq_printf(&s, "%s:", e->system);
     tep_print_event(tep, &s, &record, "%s: %s\n", TEP_PRINT_NAME, TEP_PRINT_INFO);
