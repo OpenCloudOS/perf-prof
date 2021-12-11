@@ -157,6 +157,14 @@ static void kvm_exit_exit(struct perf_evlist *evlist)
     print_log2_hist(ctx.hist.slots, MAX_SLOTS, "kvm-exit latency(ns)");
 }
 
+static void kvm_exit_interval(void)
+{
+    print_time(stdout);
+    printf("\n");
+    print_log2_hist(ctx.hist.slots, MAX_SLOTS, "kvm-exit latency(ns)");
+    memset(&ctx.hist, 0, sizeof(ctx.hist));
+}
+
 static __always_inline u64 __log2(u32 v)
 {
 	u32 shift, r;
@@ -241,6 +249,7 @@ struct monitor kvm_exit = {
     .pages = 64,
     .init = kvm_exit_init,
     .deinit = kvm_exit_exit,
+    .interval = kvm_exit_interval,
     .sample = kvm_exit_sample,
 };
 MONITOR_REGISTER(kvm_exit)
