@@ -530,6 +530,9 @@ reinit:
             }
         }
 
+        if (monitor->interval && time_left == 0)
+            monitor->interval();
+
         if (env.interval) {
             time_left = time_end - time_ms();
             if (time_left <= 0) {
