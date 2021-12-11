@@ -67,7 +67,7 @@ const char argp_program_doc[] =
 "    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
-"    perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu]\n"
+"    perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu] [--than us]\n"
 "\n"
 "EXAMPLES:\n"
 "    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock\n"
@@ -101,7 +101,7 @@ static const struct argp_option opts[] = {
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
     { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
     { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
-    { "than", LONG_OPT_than, "ms", 0, "Greater than specified time, ms/percent" },
+    { "than", LONG_OPT_than, "ge", 0, "Greater than specified time, ms/us/percent" },
     { "alloc", LONG_OPT_alloc, "tp", 0, "memory alloc tracepoint/kprobe" },
     { "free", LONG_OPT_free, "tp", 0, "memory free tracepoint/kprobe" },
     { "syscalls", LONG_OPT_syscalls, NULL, 0, "trace syscalls" },

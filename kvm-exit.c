@@ -258,6 +258,14 @@ static void kvm_exit_sample(union perf_event *event)
                     ctx.hist.slots[slot] ++;
                 else
                     ctx.pcpu_hist[cpu].slots[slot] ++;
+
+                if (ctx.env->greater_than &&
+                    delta > ctx.env->greater_than * 1000UL) {
+                    print_time(stdout);
+                    tep__print_event(raw_kvm_exit->time/1000, raw_kvm_exit->cpu_entry.cpu, raw_kvm_exit->raw.data, raw_kvm_exit->raw.size);
+                    print_time(stdout);
+                    tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+                }
             }
         }
     }
