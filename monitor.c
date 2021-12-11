@@ -505,7 +505,7 @@ reinit:
 
         fds = perf_evlist__poll(evlist, time_left);
 
-        if (fds)
+        if (monitor->pages && (fds || exiting || time_left == 0))
         perf_evlist__for_each_mmap(evlist, map, false) {
             if (perf_mmap__read_init(map) < 0)
                 continue;
