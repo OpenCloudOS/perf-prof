@@ -29,6 +29,11 @@ __attribute__((constructor)) static void __monitor_register_##m(void) \
     monitor_register(&m); \
 }
 
+#define MAX_SLOTS 26
+struct hist {
+    unsigned int slots[MAX_SLOTS];
+};
+
 struct env {
     int trigger_freq;
     bool guest;
