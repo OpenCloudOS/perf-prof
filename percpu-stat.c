@@ -147,6 +147,8 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
     //page cache
     evsel_name(perf_tp_event(evlist, "filemap", "mm_filemap_add_to_page_cache"), " PAGE cache");
     evsel_name(perf_tp_event(evlist, "writeback", "wbc_writepage"), " WB pages");
+    //cpu_idle, must be last
+    evsel_name(perf_tp_event(evlist, "power", "cpu_idle"), " idle");
 
     return 0;
 }
@@ -176,6 +178,10 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
     if (count->val > ctx.stats[cpu].count[n]) {
         ctx.stats[cpu].diff[n] = count->val - ctx.stats[cpu].count[n];
         ctx.stats[cpu].count[n] = count->val;
+        if (n == ctx.nr_evsels-1) {
+            //cpu_idle, contains enter and exit, must be divided by 2
+            ctx.stats[cpu].diff[n] /= 2;
+        }
     }
 
     if (evsel == ctx.evsels[ctx.nr_evsels-1].evsel) {
