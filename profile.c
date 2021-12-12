@@ -97,6 +97,10 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
     if (!env->interval)
         profile.read = NULL;
 
+    if (env->verbose) {
+        printf("tsc_khz = %d\n", ctx.tsc_khz);
+    }
+
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         return -1;
