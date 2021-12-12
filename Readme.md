@@ -20,11 +20,14 @@ USAGE:
     perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]
     perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]
     perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [-G] [--than PCT]
-    perf-monitor trace -e event [--filter filter] [-C cpu]
+    perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]
+    perf-monitor trace -e event [--filter filter] [-C cpu] [-g]
     perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]
     perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]
     perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]
     perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
+    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]
+    perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu] [--than us]
 
 EXAMPLES:
     perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock
@@ -45,10 +48,12 @@ EXAMPLES:
   -i, --interval=INT         Interval, ms
   -L, --latency=LAT          Interrupt off latency, unit: us, Dflt: 20ms
   -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
+      --percpu               print percpu stat
       --precise              Generate precise interrupt
+      --syscalls             trace syscalls
   -S, --interruptible        TASK_INTERRUPTIBLE
       --test                 Split-lock test verification
-      --than=ms              Greater than specified time, ms/percent
+      --than=ge              Greater than specified time, ms/us/percent
   -T, --trigger=T            Trigger Threshold, Dflt: 1000, No trigger: 0
   -v, --verbose              Verbose debug output
   -?, --help                 Give this help list
@@ -63,12 +68,13 @@ for any corresponding short options.
 - split-lock，监控硬件pmu，发生split-lock的次数，以及触发情况。
 - irq-off，监控中断关闭的情况。
 - profile，分析采样栈，可以分析内核态CPU利用率超过一定百分比抓取内核态栈。
+- cpu-util，cpu利用率监控，可以监控到guest模式的CPU利用率。派生自profile。
 - trace，读取某个tracepoint事件。
 - signal，监控给特定进程发送的信号。
 - task-state，监控进程处于D、S状态的时间，超过指定时间可以打印栈。
 - watchdog，监控hard、soft lockup的情况，在将要发生时，预先打印出内核栈。
 - kmemleak，监控alloc、free的情况，判断可能的内存泄露。
-- 可行的扩展：监控kvm-exit等。
+- kvm-exit，监控虚拟化指令的延迟。
 
 每个监控模块都需要定义一个`struct monitor `结构，来指定如何初始化、过滤、释放监控事件，以及如何处理采样到的监控事件。
 
@@ -358,8 +364,72 @@ TRACEEVENT_PLUGIN_DIR
       --alloc=tp             memory alloc tracepoint/kprobe
       --free=tp              memory free tracepoint/kprobe
   -g, --call-graph           Enable call-graph recording
-  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing
-                             mmap pages
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
   -v, --verbose              Verbose debug output
 ```
 
+### 6.5 kvm-exit
+
+在虚拟化场景，大部分指令都不需要退出到kvm模块，但少量特权指令需要退出，由kvm模块拦截并模拟执行指令。该工具可以监控指令执行的耗时分布。
+
+类似`perf trace -s`可以统计系统调用耗时分布一样，`perf-monitor kvm-exit`可以统计特权指令的耗时分布。
+
+共监控2个tracepoint点：
+
+- kvm:kvm_exit，特权指令退出到kvm模块。
+- kvm:kvm_entry，特权指令执行完成，进入guest。
+
+```
+用法:
+	perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu] [--than us] [-v]
+例子:
+	perf-monitor kvm-exit -C 5-20,53-68 -i 1000 --than 1000 #统计CPU上的特权指令耗时,每1000ms输出一次,并打印耗时超过1000us的日志
+
+
+  -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
+  -i, --interval=INT         Interval, ms
+      --percpu               print percpu stat 打印每个cpu的统计信息
+      --than=ge              Greater than specified time, us 微妙单位
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
+  -v, --verbose              Verbose debug output
+```
+
+例子输出
+
+```
+$ ./perf-monitor kvm-exit -C 5-20,53-68 -i 1000 --than 1000
+2021-12-12 16:11:10.214139            <...> 206966 .N.. [017] 15504452.408994: kvm:kvm_exit: reason EXTERNAL_INTERRUPT rip 0xffffffff81c01f58 info 0 800000fd
+2021-12-12 16:11:10.214203            <...> 206966 d... [017] 15504452.412981: kvm:kvm_entry: vcpu 20
+2021-12-12 16:11:10.287391            <...> 206966 .N.. [017] 15504452.473318: kvm:kvm_exit: reason EXTERNAL_INTERRUPT rip 0xffffffff81063be2 info 0 800000fd
+2021-12-12 16:11:10.287441            <...> 206966 d... [017] 15504452.485435: kvm:kvm_entry: vcpu 20
+2021-12-12 16:11:10.437325 
+     kvm-exit latency(ns) : count    distribution
+         0 -> 255        : 0        |                                        |
+       256 -> 511        : 2728     |**                                      |
+       512 -> 1023       : 53994    |****************************************|
+      1024 -> 2047       : 12247    |*********                               |
+      2048 -> 4095       : 718      |                                        |
+      4096 -> 8191       : 82       |                                        |
+      8192 -> 16383      : 10       |                                        |
+     16384 -> 32767      : 1        |                                        |
+     32768 -> 65535      : 1        |                                        |
+     65536 -> 131071     : 0        |                                        |
+    131072 -> 262143     : 0        |                                        |
+    262144 -> 524287     : 0        |                                        |
+    524288 -> 1048575    : 0        |                                        |
+   1048576 -> 2097151    : 0        |                                        |
+   2097152 -> 4194303    : 1        |                                        |
+   4194304 -> 8388607    : 0        |                                        |
+   8388608 -> 16777215   : 1        |                                        |
+exit_reason             calls        total(us)   min(us)   avg(us)      max(us)
+-------------------- -------- ---------------- --------- --------- ------------
+HLT                     40619     24054882.841     0.690   592.207    15776.440
+MSR_WRITE               65240        56540.696     0.450     0.866        9.316
+EXTERNAL_INTERRUPT       2035        17504.350     0.465     8.601    12116.764
+VMCALL                   2173         4309.715     0.865     1.983        8.601
+PAUSE_INSTRUCTION         202          226.786     0.546     1.122        3.497
+IO_INSTRUCTION             37          217.492     1.703     5.878       34.496
+CPUID                      96           82.303     0.611     0.857        2.506
+```
+
+可以看的有2次EXTERNAL_INTERRUPT退出，处理超过1000us，并输出对应的tracepoint点信息。
