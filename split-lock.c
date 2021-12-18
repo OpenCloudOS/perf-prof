@@ -97,8 +97,9 @@ static void split_lock_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu)
+static void split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
+    int cpu = monitor_instance_cpu(instance);
     uint64_t counter = 0;
 
     if (count->val > ctx.polling[cpu]) {

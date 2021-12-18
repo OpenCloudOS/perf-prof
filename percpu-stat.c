@@ -158,8 +158,9 @@ static void percpu_stat_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu)
+static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
+    int cpu = monitor_instance_cpu(instance);
     int n;
 
     for (n = ctx.n; n < ctx.nr_evsels; n++)
