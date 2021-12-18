@@ -60,7 +60,7 @@ struct env {
     char *tp_alloc;
     char *tp_free;
     bool syscalls;
-    bool percpu;
+    bool perins;
     bool test;
     bool precise;
     int verbose;
@@ -78,7 +78,7 @@ struct monitor {
     int (*filter)(struct perf_evlist *evlist, struct env *env);
     void (*deinit)(struct perf_evlist *evlist);
     void (*sigusr1)(int signum);
-    void (*interval)(struct perf_cpu_map *cpus);
+    void (*interval)(void);
     void (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
 
     /* PERF_RECORD_* */
