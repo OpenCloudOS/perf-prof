@@ -94,7 +94,7 @@ const char argp_program_doc[] =
 "    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
-"    perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu] [--than us]\n"
+"    perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
 "\n"
 "EXAMPLES:\n"
 "    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock\n"
@@ -111,7 +111,7 @@ enum {
     LONG_OPT_alloc,
     LONG_OPT_free,
     LONG_OPT_syscalls,
-    LONG_OPT_percpu,
+    LONG_OPT_perins,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -133,7 +133,7 @@ static const struct argp_option opts[] = {
     { "alloc", LONG_OPT_alloc, "tp", 0, "memory alloc tracepoint/kprobe" },
     { "free", LONG_OPT_free, "tp", 0, "memory free tracepoint/kprobe" },
     { "syscalls", LONG_OPT_syscalls, NULL, 0, "trace syscalls" },
-    { "percpu", LONG_OPT_percpu, NULL, 0, "print percpu stat" },
+    { "perins", LONG_OPT_perins, NULL, 0, "print per instance stat" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
     { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
@@ -209,8 +209,8 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case LONG_OPT_syscalls:
         env.syscalls = 1;
         break;
-    case LONG_OPT_percpu:
-        env.percpu = 1;
+    case LONG_OPT_perins:
+        env.perins = 1;
         break;
     case 'g':
         env.callchain = 1;
@@ -595,7 +595,7 @@ reinit:
         }
 
         if (monitor->interval && time_left == 0)
-            monitor->interval(cpus);
+            monitor->interval();
 
         if (env.interval) {
             time_left = time_end - time_ms();
