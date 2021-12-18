@@ -38,6 +38,28 @@ struct monitor * monitor_find(char *name)
     return NULL;
 }
 
+int monitor_nr_instance(void)
+{
+    int nr_ins;
+
+    nr_ins = perf_cpu_map__nr(monitor->cpus);
+    if (perf_cpu_map__empty(monitor->cpus))
+        nr_ins = perf_thread_map__nr(monitor->threads);
+
+	return nr_ins;
+}
+
+int monitor_instance_cpu(int ins)
+{
+	return perf_cpu_map__cpu(monitor->cpus, ins);
+}
+
+int monitor_instance_thread(int ins)
+{
+	return perf_thread_map__pid(monitor->threads, ins);
+}
+
+
 /******************************************************
 perf-monitor argc argv
 ******************************************************/
@@ -544,13 +566,13 @@ reinit:
 
         if (monitor->read && time_left == 0) {
             struct perf_evsel *evsel;
-            int cpu, idx, thread, tidx;
-            perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
-                perf_thread_map__for_each_thread(thread, tidx, threads) {
+            int cpu, ins, tins;
+            perf_cpu_map__for_each_cpu(cpu, ins, cpus) {
+                for (tins = 0; tins < perf_thread_map__nr(threads); tins++) {
                     perf_evlist__for_each_evsel(evlist, evsel) {
                         struct perf_counts_values count;
-                        if (perf_evsel__read(evsel, idx, tidx, &count) == 0)
-                            monitor->read(evsel, &count, cpu != -1 ? cpu : thread);
+                        if (perf_evsel__read(evsel, ins, tins, &count) == 0)
+                            monitor->read(evsel, &count, cpu != -1 ? ins : tins);
                     }
                 }
             }

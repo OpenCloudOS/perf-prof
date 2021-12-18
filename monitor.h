@@ -13,6 +13,10 @@
 struct monitor;
 void monitor_register(struct monitor *m);
 struct monitor * monitor_find(char *name);
+int monitor_nr_instance(void);
+int monitor_instance_cpu(int ins);
+int monitor_instance_thread(int ins);
+
 int get_possible_cpus(void);
 void print_time(FILE *fp);
 int get_tsc_khz(void);
@@ -74,7 +78,7 @@ struct monitor {
     void (*deinit)(struct perf_evlist *evlist);
     void (*sigusr1)(int signum);
     void (*interval)(struct perf_cpu_map *cpus);
-    void (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int cpu);
+    void (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
 
     /* PERF_RECORD_* */
 
