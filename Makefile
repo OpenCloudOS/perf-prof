@@ -22,6 +22,7 @@ MAKEFLAGS += --no-print-directory
 all: __build
 include $(srctree)/scripts/Makefile.include
 include $(srctree)/build/Makefile.include
+include $(srctree)/scripts/Makefile.arch
 
 INCLUDES = \
 -I$(srctree)/lib/perf/include \
@@ -29,6 +30,7 @@ INCLUDES = \
 -I$(srctree)/lib/ \
 -I$(srctree)/include \
 -I$(srctree)/include/uapi \
+-I$(srctree)/arch/$(SRCARCH)/include \
 -I$(srctree)/
 
 # Append required CFLAGS
