@@ -25,6 +25,7 @@ struct perf_mmap {
 	int			 mask;
 	int			 fd;
 	int			 cpu;
+	int			 idx;
 	refcount_t		 refcnt;
 	u64			 prev;
 	u64			 start;

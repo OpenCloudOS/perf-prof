@@ -7,7 +7,7 @@
 struct perf_mmap;
 union perf_event;
 
-LIBPERF_API int perf_mmap__cpu(struct perf_mmap *map);
+LIBPERF_API int perf_mmap__idx(struct perf_mmap *map);
 LIBPERF_API void perf_mmap__consume(struct perf_mmap *map);
 LIBPERF_API int perf_mmap__read_init(struct perf_mmap *map);
 LIBPERF_API void perf_mmap__read_done(struct perf_mmap *map);

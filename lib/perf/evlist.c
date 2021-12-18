@@ -385,6 +385,7 @@ static struct perf_mmap* perf_evlist__alloc_mmap(struct perf_evlist *evlist, boo
 		 * thus does perf_mmap__get() on it.
 		 */
 		perf_mmap__init(&map[i], prev, overwrite, NULL);
+		map[i].idx = i;
 	}
 
 	return map;
