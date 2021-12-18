@@ -16,7 +16,7 @@
 
 
 struct monitor watchdog;
-static void watchdog_sample(union perf_event *event);
+static void watchdog_sample(union perf_event *event, int instance);
 #define STAGE_INIT 0
 #define STAGE_MONITOR 1
 
@@ -286,7 +286,7 @@ struct sample_type_raw {
     } raw;
 };
 
-static void watchdog_sample_stage_init(union perf_event *event)
+static void watchdog_sample_stage_init(union perf_event *event, int instance)
 {
     struct sample_type_raw *data = (void *)event->sample.array;
 
@@ -413,7 +413,7 @@ static void __print_callchain(union perf_event *event)
     }
 }
 
-static void watchdog_sample(union perf_event *event)
+static void watchdog_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *data = (void *)event->sample.array;
     struct perf_evsel *evsel;
@@ -480,7 +480,7 @@ static void watchdog_sample(union perf_event *event)
     }
 }
 
-static void watchdog_throttle(union perf_event *event)
+static void watchdog_throttle(union perf_event *event, int instance)
 {
     struct perf_evsel *evsel;
     int cpu;

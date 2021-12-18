@@ -406,49 +406,49 @@ static int perf_event_process_record(union perf_event *event, int instance)
     switch (event->header.type) {
     case PERF_RECORD_LOST:
         if (monitor->lost)
-            monitor->lost(event);
+            monitor->lost(event, instance);
         else
             print_lost_fn(event, instance);
         break;
     case PERF_RECORD_FORK:
         if (monitor->fork)
-            monitor->fork(event);
+            monitor->fork(event, instance);
         else
             print_fork_exit_fn(event, instance, 0);
         break;
     case PERF_RECORD_COMM:
         if (monitor->comm)
-            monitor->comm(event);
+            monitor->comm(event, instance);
         else
             print_comm_fn(event, instance);
         break;
     case PERF_RECORD_EXIT:
         if (monitor->exit)
-            monitor->exit(event);
+            monitor->exit(event, instance);
         else
             print_fork_exit_fn(event, instance, 1);
         break;
     case PERF_RECORD_THROTTLE:
         if (monitor->throttle)
-            monitor->throttle(event);
+            monitor->throttle(event, instance);
         break;
     case PERF_RECORD_UNTHROTTLE:
         if (monitor->unthrottle)
-            monitor->unthrottle(event);
+            monitor->unthrottle(event, instance);
         break;
     case PERF_RECORD_SAMPLE:
         if (monitor->sample)
-            monitor->sample(event);
+            monitor->sample(event, instance);
         break;
     case PERF_RECORD_SWITCH:
         if (monitor->context_switch)
-            monitor->context_switch(event);
+            monitor->context_switch(event, instance);
         else
             print_context_switch_fn(event, instance);
         break;
     case PERF_RECORD_SWITCH_CPU_WIDE:
         if (monitor->context_switch_cpu)
-            monitor->context_switch_cpu(event);
+            monitor->context_switch_cpu(event, instance);
         else
             print_context_switch_cpu_fn(event, instance);
         break;

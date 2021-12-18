@@ -11,7 +11,7 @@ const char *tep__pid_to_comm(int pid);
 void tep__print_event(unsigned long long ts, int cpu, void *data, int size);
 
 
-void monitor_tep__comm(union perf_event *event);
+void monitor_tep__comm(union perf_event *event, int instance);
 
 
 #endif

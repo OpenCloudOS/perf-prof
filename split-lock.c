@@ -112,7 +112,7 @@ static void split_lock_read(struct perf_evsel *evsel, struct perf_counts_values 
     }
 }
 
-static void split_lock_sample(union perf_event *event)
+static void split_lock_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ

@@ -10,7 +10,7 @@
 #include <trace_helpers.h>
 
 struct monitor monitor_signal;
-static void signal_sample_callchain(union perf_event *event);
+static void signal_sample_callchain(union perf_event *event, int instance);
 struct monitor_ctx {
     struct ksyms *ksyms;
     struct env *env;
@@ -87,7 +87,7 @@ static void signal_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void signal_sample(union perf_event *event)
+static void signal_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
@@ -112,7 +112,7 @@ static void signal_sample(union perf_event *event)
     tep__print_event(data->time/1000, data->cpu_entry.cpu, data->raw.data, data->raw.size);
 }
 
-static void signal_sample_callchain(union perf_event *event)
+static void signal_sample_callchain(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW

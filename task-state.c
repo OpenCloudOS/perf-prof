@@ -227,7 +227,7 @@ static void __print_callchain(union perf_event *event)
     }
 }
 
-static void task_state_sample(union perf_event *event)
+static void task_state_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW

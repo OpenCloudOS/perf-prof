@@ -84,32 +84,32 @@ struct monitor {
     /* PERF_RECORD_* */
 
     //PERF_RECORD_LOST			= 2,
-    void (*lost)(union perf_event *event);
+    void (*lost)(union perf_event *event, int instance);
 
     //PERF_RECORD_COMM			= 3,
-    void (*comm)(union perf_event *event);
+    void (*comm)(union perf_event *event, int instance);
 
     //PERF_RECORD_EXIT			= 4,
-    void (*exit)(union perf_event *event);
+    void (*exit)(union perf_event *event, int instance);
 
     //PERF_RECORD_THROTTLE			= 5,
 	//PERF_RECORD_UNTHROTTLE			= 6,
-    void (*throttle)(union perf_event *event);
-    void (*unthrottle)(union perf_event *event);
+    void (*throttle)(union perf_event *event, int instance);
+    void (*unthrottle)(union perf_event *event, int instance);
 
     //PERF_RECORD_FORK			= 7,
-    void (*fork)(union perf_event *event);
+    void (*fork)(union perf_event *event, int instance);
 
     //PERF_RECORD_SAMPLE			= 9,
-    void (*sample)(union perf_event *event);
+    void (*sample)(union perf_event *event, int instance);
 
     //PERF_RECORD_SWITCH			= 14,
     //PERF_RECORD_SWITCH_CPU_WIDE		= 15,
-    void (*context_switch)(union perf_event *event);
-    void (*context_switch_cpu)(union perf_event *event);
+    void (*context_switch)(union perf_event *event, int instance);
+    void (*context_switch_cpu)(union perf_event *event, int instance);
 
     //PERF_RECORD_NAMESPACES			= 16,
-    void (*namespace)(union perf_event *event);
+    void (*namespace)(union perf_event *event, int instance);
 };
 
 #endif
