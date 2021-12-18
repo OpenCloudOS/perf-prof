@@ -75,6 +75,16 @@ union trace_kvm_exit {
     struct trace_kvm_exit2 e2;
     struct trace_kvm_exit3 e3;
 };
+
+struct trace_kvm_entry {
+    unsigned short common_type;//      offset:0;       size:2; signed:0;
+    unsigned char common_flags;//      offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count;//      offset:3;       size:1; signed:0;
+    int common_pid;//  offset:4;       size:4; signed:1;
+
+    unsigned int vcpu_id;//    offset:8;       size:4; signed:0;
+};
+
 // in linux/perf_event.h
 // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
 struct sample_type_raw {
@@ -93,6 +103,7 @@ struct sample_type_raw {
             __u8    data[0];
             unsigned short common_type;
             union trace_kvm_exit kvm_exit;
+            struct trace_kvm_entry kvm_entry;
         } __packed;
     } raw;
 };
@@ -108,7 +119,7 @@ struct exit_reason_stat {
     __u64 sum;
 };
 
-static int node_cmp(struct rb_node *rbn, const void *entry)
+static int exit_reason_stat__node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct exit_reason_stat *a = container_of(rbn, struct exit_reason_stat, rbnode);
     const struct exit_reason_stat *b = entry;
@@ -121,7 +132,7 @@ static int node_cmp(struct rb_node *rbn, const void *entry)
         return 0;
 }
 
-static struct rb_node *node_new(struct rblist *rlist, const void *new_entry)
+static struct rb_node *exit_reason_stat__node_new(struct rblist *rlist, const void *new_entry)
 {
     const struct exit_reason_stat *e = new_entry;
     struct exit_reason_stat *b = malloc(sizeof(struct exit_reason_stat));
@@ -139,17 +150,17 @@ static struct rb_node *node_new(struct rblist *rlist, const void *new_entry)
         return NULL;
 }
 
-static void node_delete(struct rblist *rblist, struct rb_node *rb_node)
+static void exit_reason_stat__node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct exit_reason_stat *b = container_of(rb_node, struct exit_reason_stat, rbnode);
     free(b);
 }
 
-static void node_delete_empty(struct rblist *rblist, struct rb_node *rb_node)
+static void exit_reason_stat__node_delete_empty(struct rblist *rblist, struct rb_node *rb_node)
 {
 }
 
-static int sorted_node_cmp(struct rb_node *rbn, const void *entry)
+static int exit_reason_stat__sorted_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct exit_reason_stat *a = container_of(rbn, struct exit_reason_stat, rbnode);
     const struct exit_reason_stat *b = entry;
@@ -162,7 +173,7 @@ static int sorted_node_cmp(struct rb_node *rbn, const void *entry)
         return 0;
 }
 
-static struct rb_node *sorted_node_new(struct rblist *rlist, const void *new_entry)
+static struct rb_node *exit_reason_stat__sorted_node_new(struct rblist *rlist, const void *new_entry)
 {
     struct exit_reason_stat *b = (void *)new_entry;
     RB_CLEAR_NODE(&b->rbnode);
@@ -184,9 +195,9 @@ static int monitor_ctx_init(struct env *env)
             return -1;
     }
     rblist__init(&ctx.exit_reason_stat);
-    ctx.exit_reason_stat.node_cmp = node_cmp;
-    ctx.exit_reason_stat.node_new = node_new;
-    ctx.exit_reason_stat.node_delete = node_delete;
+    ctx.exit_reason_stat.node_cmp = exit_reason_stat__node_cmp;
+    ctx.exit_reason_stat.node_new = exit_reason_stat__node_new;
+    ctx.exit_reason_stat.node_delete = exit_reason_stat__node_delete;
     ctx.env = env;
     return 0;
 }
@@ -272,10 +283,10 @@ static void kvm_exit_interval(void)
         return;
 
     rblist__init(&sorted);
-    sorted.node_cmp = sorted_node_cmp;
-    sorted.node_new = sorted_node_new;
+    sorted.node_cmp = exit_reason_stat__sorted_node_cmp;
+    sorted.node_new = exit_reason_stat__sorted_node_new;
     sorted.node_delete = ctx.exit_reason_stat.node_delete;
-    ctx.exit_reason_stat.node_delete = node_delete_empty; //empty, not really delete
+    ctx.exit_reason_stat.node_delete = exit_reason_stat__node_delete_empty; //empty, not really delete
 
     /* sort, remove from `ctx.exit_reason_stat', add to `sorted'. */
     do {
@@ -360,16 +371,70 @@ static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason,
     return 0;
 }
 
+static void __print_raw(struct sample_type_raw *raw, const char *str)
+{
+    print_time(stdout);
+    if (str)
+        printf("%s", str);
+    tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+}
+
+static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type_raw *rkvm_entry, int instance)
+{
+    unsigned int exit_reason, hlt = EXIT_REASON_HLT;
+    u32 isa;
+    struct exit_reason_stat stat, *pstat;
+    struct rb_node *rbn;
+    __u64 delta = rkvm_entry->time - rkvm_exit->time;
+    int slot;
+
+    __exit_reason(rkvm_exit, &exit_reason, &isa);
+
+    if (isa == KVM_ISA_SVM) {
+        hlt = SVM_EXIT_HLT;
+    }
+
+    if (exit_reason != hlt) {
+        slot = (int)__log2l(delta);
+        if (slot > MAX_SLOTS)
+            slot = MAX_SLOTS;
+        if (!ctx.env->perins)
+            ctx.hist.slots[slot] ++;
+        else
+            ctx.perins_hist[instance].slots[slot] ++;
+    }
+
+    stat.isa = isa;
+    stat.exit_reason = exit_reason;
+    rbn = rblist__findnew(&ctx.exit_reason_stat, &stat);
+    if (rbn) {
+        pstat = container_of(rbn, struct exit_reason_stat, rbnode);
+        if (delta < pstat->min)
+            pstat->min = delta;
+        if (delta > pstat->max)
+            pstat->max = delta;
+        pstat->n ++;
+        pstat->sum += delta;
+    }
+
+    if (ctx.env->greater_than &&
+        exit_reason != hlt &&
+        delta > ctx.env->greater_than * 1000UL) {
+        __print_raw(rkvm_exit, NULL);
+        __print_raw(rkvm_entry, NULL);
+    }
+}
+
 static void kvm_exit_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
     struct sample_type_raw *raw = (void *)event->sample.array;
     unsigned short common_type = raw->raw.common_type;
-    unsigned int exit_reason, hlt = EXIT_REASON_HLT;
+    unsigned int exit_reason;
     u32 isa;
 
-    if (ctx.env->verbose) {
+    if (ctx.env->verbose >= 2) {
         print_time(stdout);
         tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
     }
@@ -384,49 +449,15 @@ static void kvm_exit_sample(union perf_event *event, int instance)
             struct sample_type_raw *raw_kvm_exit = &ctx.perins_kvm_exit[instance];
             if (raw->tid_entry.tid == raw_kvm_exit->tid_entry.tid &&
                 raw->time > raw_kvm_exit->time) {
-                struct exit_reason_stat stat, *pstat;
-                struct rb_node *rbn;
-                __u64 delta = raw->time - raw_kvm_exit->time;
-                int slot;
-
-                __exit_reason(raw_kvm_exit, &exit_reason, &isa);
-
-                if (isa == KVM_ISA_SVM) {
-                    hlt = SVM_EXIT_HLT;
-                }
-
-                if (exit_reason != hlt) {
-                    slot = (int)__log2l(delta);
-                    if (slot > MAX_SLOTS)
-                        slot = MAX_SLOTS;
-                    if (!ctx.env->perins)
-                        ctx.hist.slots[slot] ++;
-                    else
-                        ctx.perins_hist[instance].slots[slot] ++;
-                }
-
-                stat.isa = isa;
-                stat.exit_reason = exit_reason;
-                rbn = rblist__findnew(&ctx.exit_reason_stat, &stat);
-                if (rbn) {
-                    pstat = container_of(rbn, struct exit_reason_stat, rbnode);
-                    if (delta < pstat->min)
-                        pstat->min = delta;
-                    if (delta > pstat->max)
-                        pstat->max = delta;
-                    pstat->n ++;
-                    pstat->sum += delta;
-                }
-
-                if (ctx.env->greater_than &&
-                    exit_reason != hlt &&
-                    delta > ctx.env->greater_than * 1000UL) {
-                    print_time(stdout);
-                    tep__print_event(raw_kvm_exit->time/1000, raw_kvm_exit->cpu_entry.cpu, raw_kvm_exit->raw.data, raw_kvm_exit->raw.size);
-                    print_time(stdout);
-                    tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
-                }
+                __process_fast(raw_kvm_exit, raw, instance);
                 ctx.perins_kvm_exit_valid[instance] = 0;
+            } else {
+                if (raw->tid_entry.tid != raw_kvm_exit->tid_entry.tid) {
+                    if (ctx.env->verbose >= 1) {
+                        __print_raw(raw_kvm_exit, "WARN");
+                        __print_raw(raw, "WARN");
+                    }
+                }
             }
         }
     }
