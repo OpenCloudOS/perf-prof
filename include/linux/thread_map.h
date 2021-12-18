@@ -5,10 +5,9 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <linux/refcount.h>
-#include <internal/threadmap.h>
 #include <perf/threadmap.h>
 #include <perf/event.h>
-#include <perf/internal.h>
+
 
 struct perf_record_thread_map;
 
