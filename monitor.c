@@ -460,18 +460,13 @@ reinit:
         return -1;
     }
 
-    if(monitor->init(evlist, &env) < 0) {
-        fprintf(stderr, "monitor(%s) init failed\n", monitor->name);
-        goto out_delete;
-    }
-
     if (env.pids) {
         // attach to processes
         threads = thread_map__new_str(env.pids, NULL, 0, 0);
         cpus = perf_cpu_map__dummy_new();
         if (!threads || !cpus) {
             fprintf(stderr, "failed to create pids\n");
-            goto out_exit;
+            goto out_delete;
         }
     } else {
         // attach to cpus
@@ -479,21 +474,28 @@ reinit:
         threads = perf_thread_map__new_dummy();
         if (!cpus || !threads) {
             fprintf(stderr, "failed to create cpus\n");
-            goto out_exit;
+            goto out_delete;
         }
         online = perf_cpu_map__new(NULL);
         if (!online) {
             fprintf(stderr, "failed to create online\n");
-            goto out_exit;
+            goto out_delete;
         }
         cpus = perf_cpu_map__and(cpus, online);
         if (!cpus) {
             fprintf(stderr, "failed to create cpus\n");
-            goto out_exit;
+            goto out_delete;
         }
         perf_cpu_map__put(online);
     }
     perf_evlist__set_maps(evlist, cpus, threads);
+    monitor->cpus = cpus;
+    monitor->threads = threads;
+
+    if(monitor->init(evlist, &env) < 0) {
+        fprintf(stderr, "monitor(%s) init failed\n", monitor->name);
+        goto out_delete;
+    }
 
     err = perf_evlist__open(evlist);
     if (err) {

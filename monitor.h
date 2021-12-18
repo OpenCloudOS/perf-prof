@@ -66,6 +66,9 @@ struct monitor {
     const char *name;
     int pages;
     int reinit;
+    struct perf_cpu_map *cpus;
+    struct perf_thread_map *threads;
+
     int (*init)(struct perf_evlist *evlist, struct env *env);
     int (*filter)(struct perf_evlist *evlist, struct env *env);
     void (*deinit)(struct perf_evlist *evlist);
