@@ -205,7 +205,7 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
     }
 }
 
-static void percpu_stat_sample(union perf_event *event)
+static void percpu_stat_sample(union perf_event *event, int instance)
 {
 }
 

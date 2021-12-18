@@ -98,7 +98,7 @@ static void irq_off_read(struct perf_evsel *evsel, struct perf_counts_values *co
     ctx.temp[cpu] = count->val;
 }
 
-static void irq_off_sample(union perf_event *event)
+static void irq_off_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN

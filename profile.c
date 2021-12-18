@@ -139,7 +139,7 @@ static void profile_read(struct perf_evsel *evsel, struct perf_counts_values *co
     }
 }
 
-static void profile_sample(union perf_event *event)
+static void profile_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
@@ -221,7 +221,7 @@ static int cpu_util_init(struct perf_evlist *evlist, struct env *env)
     return profile_init(evlist, env);
 }
 
-static void cpu_util_sample(union perf_event *event)
+static void cpu_util_sample(union perf_event *event, int instance)
 {
 }
 

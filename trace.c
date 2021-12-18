@@ -148,7 +148,7 @@ static void __print_callchain(union perf_event *event)
     }
 }
 
-static void trace_sample(union perf_event *event)
+static void trace_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *data = (void *)event->sample.array;
     void *raw;

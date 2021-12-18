@@ -410,7 +410,7 @@ static void report_kmemleak(void)
     } while (!rblist__empty(&sorted));
 }
 
-static void kmemleak_sample(union perf_event *event)
+static void kmemleak_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW

@@ -352,7 +352,7 @@ static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason,
     return 0;
 }
 
-static void kvm_exit_sample(union perf_event *event)
+static void kvm_exit_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
