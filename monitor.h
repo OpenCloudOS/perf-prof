@@ -41,6 +41,7 @@ struct env {
     int interval;
     int latency;  // unit: us
     int freq;
+    char *pids;
     char *event;
     char *filter;
     bool interruptible;

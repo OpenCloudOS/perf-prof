@@ -13,6 +13,7 @@
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
 #include <cpuid.h>
+#include <linux/thread_map.h>
 
 #include <monitor.h>
 #include <tep.h>
@@ -91,6 +92,7 @@ static const struct argp_option opts[] = {
     { "cpu", 'C', "CPU", 0, "Monitor the specified CPU, Dflt: all cpu" },
     { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
     { "interval", 'i', "INT", 0, "Interval, ms" },
+    { "pids", 'p', "PID,PID", 0, "Attach to processes" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 100, No profile: 0" },
@@ -133,6 +135,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'i':
         env.interval = strtol(arg, NULL, 10);
+        break;
+    case 'p':
+        env.pids = strdup(arg);
         break;
     case LONG_OPT_test:
         env.test = 1;
@@ -432,6 +437,7 @@ int main(int argc, char *argv[])
     int err;
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
+    struct perf_thread_map *threads = NULL;
     uint64_t time_end;
     int time_left;
 
@@ -459,24 +465,35 @@ reinit:
         goto out_delete;
     }
 
-    cpus = perf_cpu_map__new(env.cpumask);
-    if (!cpus) {
-        fprintf(stderr, "failed to create cpus\n");
-        goto out_exit;
+    if (env.pids) {
+        // attach to processes
+        threads = thread_map__new_str(env.pids, NULL, 0, 0);
+        cpus = perf_cpu_map__dummy_new();
+        if (!threads || !cpus) {
+            fprintf(stderr, "failed to create pids\n");
+            goto out_exit;
+        }
+    } else {
+        // attach to cpus
+        cpus = perf_cpu_map__new(env.cpumask);
+        threads = perf_thread_map__new_dummy();
+        if (!cpus || !threads) {
+            fprintf(stderr, "failed to create cpus\n");
+            goto out_exit;
+        }
+        online = perf_cpu_map__new(NULL);
+        if (!online) {
+            fprintf(stderr, "failed to create online\n");
+            goto out_exit;
+        }
+        cpus = perf_cpu_map__and(cpus, online);
+        if (!cpus) {
+            fprintf(stderr, "failed to create cpus\n");
+            goto out_exit;
+        }
+        perf_cpu_map__put(online);
     }
-    online = perf_cpu_map__new(NULL);
-    if (!online) {
-        fprintf(stderr, "failed to create online\n");
-        goto out_exit;
-    }
-    cpus = perf_cpu_map__and(cpus, online);
-    if (!cpus) {
-        fprintf(stderr, "failed to create cpus\n");
-        goto out_exit;
-    }
-    perf_cpu_map__put(online);
-
-    perf_evlist__set_maps(evlist, cpus, NULL);
+    perf_evlist__set_maps(evlist, cpus, threads);
 
     err = perf_evlist__open(evlist);
     if (err) {
@@ -525,12 +542,14 @@ reinit:
 
         if (monitor->read && time_left == 0) {
             struct perf_evsel *evsel;
-            int cpu, idx;
+            int cpu, idx, thread, tidx;
             perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
-                perf_evlist__for_each_evsel(evlist, evsel) {
-                    struct perf_counts_values count;
-                    if (perf_evsel__read(evsel, idx, 0, &count) == 0)
-                        monitor->read(evsel, &count, cpu);
+                perf_thread_map__for_each_thread(thread, tidx, threads) {
+                    perf_evlist__for_each_evsel(evlist, evsel) {
+                        struct perf_counts_values count;
+                        if (perf_evsel__read(evsel, idx, tidx, &count) == 0)
+                            monitor->read(evsel, &count, cpu != -1 ? cpu : thread);
+                    }
                 }
             }
         }
@@ -556,6 +575,7 @@ out_exit:
 out_delete:
     perf_evlist__delete(evlist);
     perf_cpu_map__put(cpus);
+    perf_thread_map__put(threads);
 
     if (monitor->reinit)
         goto reinit;

@@ -16,6 +16,9 @@
 #include <linux/zalloc.h>
 #include <asm/bug.h>
 #include <linux/thread_map.h>
+#include <internal/threadmap.h>
+#include <perf/internal.h>
+
 
 /* Skip "." and ".." directories */
 static int filter(const struct dirent *dir)
