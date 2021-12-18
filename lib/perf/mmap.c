@@ -73,9 +73,9 @@ void perf_mmap__put(struct perf_mmap *map)
 		perf_mmap__munmap(map);
 }
 
-int perf_mmap__cpu(struct perf_mmap *map)
+int perf_mmap__idx(struct perf_mmap *map)
 {
-    return map->cpu;
+    return map->idx;
 }
 
 static inline void perf_mmap__write_tail(struct perf_mmap *md, u64 tail)

@@ -16,6 +16,7 @@ struct monitor * monitor_find(char *name);
 int monitor_nr_instance(void);
 int monitor_instance_cpu(int ins);
 int monitor_instance_thread(int ins);
+int monitor_instance_oncpu(void);
 
 int get_possible_cpus(void);
 void print_time(FILE *fp);

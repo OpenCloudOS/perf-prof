@@ -59,6 +59,10 @@ int monitor_instance_thread(int ins)
 	return perf_thread_map__pid(monitor->threads, ins);
 }
 
+int monitor_instance_oncpu(void)
+{
+	return !perf_cpu_map__empty(monitor->cpus);
+}
 
 /******************************************************
 perf-monitor argc argv
@@ -339,78 +343,90 @@ static uint64_t time_ms(void)
     return tv.tv_sec * 1000LL + tv.tv_usec / 1000;
 }
 
-static void print_lost_fn(union perf_event *event, int cpu)
+static void print_lost_fn(union perf_event *event, int ins)
 {
+    int oncpu = monitor_instance_oncpu();
     print_time(stderr);
-    fprintf(stderr, "lost %llu events on CPU #%d\n", event->lost.lost, cpu);
+    fprintf(stderr, "lost %llu events on %s #%d\n", event->lost.lost,
+                    oncpu ? "CPU" : "thread",
+                    oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
 }
 
-static void print_fork_exit_fn(union perf_event *event, int cpu, int exit)
+static void print_fork_exit_fn(union perf_event *event, int ins, int exit)
 {
     if (env.verbose >= 2) {
+        int oncpu = monitor_instance_oncpu();
         print_time(stderr);
-        fprintf(stderr, "%s ppid %u ptid %u pid %u tid %u on CPU #%d - %d\n",
+        fprintf(stderr, "%s ppid %u ptid %u pid %u tid %u on %s #%d\n",
                         exit ? "exit" : "fork",
                         event->fork.ppid, event->fork.ptid,
                         event->fork.pid,  event->fork.tid,
-                        cpu, env.verbose);
+                        oncpu ? "CPU" : "thread",
+                        oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
     }
 }
 
-static void print_comm_fn(union perf_event *event, int cpu)
+static void print_comm_fn(union perf_event *event, int ins)
 {
     if (env.verbose >= 2) {
+        int oncpu = monitor_instance_oncpu();
         print_time(stderr);
-        fprintf(stderr, "comm pid %u tid %u %s on CPU #%d\n",
+        fprintf(stderr, "comm pid %u tid %u %s on %s #%d\n",
                         event->comm.pid,  event->comm.tid,
-                        event->comm.comm, cpu);
+                        event->comm.comm,
+                        oncpu ? "CPU" : "thread",
+                        oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
     }
 }
 
-static void print_context_switch_fn(union perf_event *event, int cpu)
+static void print_context_switch_fn(union perf_event *event, int ins)
 {
     if (env.verbose >= 2) {
+        int oncpu = monitor_instance_oncpu();
         print_time(stderr);
-        fprintf(stderr, "switch on CPU #%d\n", cpu);
+        fprintf(stderr, "switch on %s #%d\n", oncpu ? "CPU" : "thread",
+                        oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
     }
 }
 
-static void print_context_switch_cpu_fn(union perf_event *event, int cpu)
+static void print_context_switch_cpu_fn(union perf_event *event, int ins)
 {
     if (env.verbose >= 2) {
+        int oncpu = monitor_instance_oncpu();
         print_time(stderr);
-        fprintf(stderr, "switch next pid %u tid %u on CPU #%d\n",
+        fprintf(stderr, "switch next pid %u tid %u on %s #%d\n",
                         event->context_switch.next_prev_pid, event->context_switch.next_prev_tid,
-                        cpu);
+                        oncpu ? "CPU" : "thread",
+                        oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
     }
 }
 
-static int perf_event_process_record(union perf_event *event, int cpu)
+static int perf_event_process_record(union perf_event *event, int instance)
 {
     switch (event->header.type) {
     case PERF_RECORD_LOST:
         if (monitor->lost)
             monitor->lost(event);
         else
-            print_lost_fn(event, cpu);
+            print_lost_fn(event, instance);
         break;
     case PERF_RECORD_FORK:
         if (monitor->fork)
             monitor->fork(event);
         else
-            print_fork_exit_fn(event, cpu, 0);
+            print_fork_exit_fn(event, instance, 0);
         break;
     case PERF_RECORD_COMM:
         if (monitor->comm)
             monitor->comm(event);
         else
-            print_comm_fn(event, cpu);
+            print_comm_fn(event, instance);
         break;
     case PERF_RECORD_EXIT:
         if (monitor->exit)
             monitor->exit(event);
         else
-            print_fork_exit_fn(event, cpu, 1);
+            print_fork_exit_fn(event, instance, 1);
         break;
     case PERF_RECORD_THROTTLE:
         if (monitor->throttle)
@@ -428,13 +444,13 @@ static int perf_event_process_record(union perf_event *event, int cpu)
         if (monitor->context_switch)
             monitor->context_switch(event);
         else
-            print_context_switch_fn(event, cpu);
+            print_context_switch_fn(event, instance);
         break;
     case PERF_RECORD_SWITCH_CPU_WIDE:
         if (monitor->context_switch_cpu)
             monitor->context_switch_cpu(event);
         else
-            print_context_switch_cpu_fn(event, cpu);
+            print_context_switch_cpu_fn(event, instance);
         break;
     default:
         fprintf(stderr, "unknown perf sample type %d\n", event->header.type);
@@ -558,7 +574,7 @@ reinit:
                 continue;
             while ((event = perf_mmap__read_event(map)) != NULL) {
                 /* process event */
-                perf_event_process_record(event, perf_mmap__cpu(map));
+                perf_event_process_record(event, perf_mmap__idx(map));
                 perf_mmap__consume(map);
             }
             perf_mmap__read_done(map);

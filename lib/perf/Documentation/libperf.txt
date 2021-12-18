@@ -160,7 +160,7 @@ SYNOPSIS
 
   struct perf_mmap;
 
-  int perf_mmap__cpu(struct perf_mmap *map);
+  int perf_mmap__idx(struct perf_mmap *map);
   void perf_mmap__consume(struct perf_mmap *map);
   int perf_mmap__read_init(struct perf_mmap *map);
   void perf_mmap__read_done(struct perf_mmap *map);
