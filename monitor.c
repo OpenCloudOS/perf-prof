@@ -95,6 +95,7 @@ const char argp_program_doc[] =
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
 "    perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
+"    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-i INT] [--perins]\n"
 "\n"
 "EXAMPLES:\n"
 "    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock\n"
@@ -122,7 +123,7 @@ static const struct argp_option opts[] = {
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 100, No profile: 0" },
-    { "event", 'e', "event", 0, "event selector. use 'perf list tracepoint' to list available tp events" },
+    { "event", 'e', "evt[,evt]", 0, "event selector. use 'perf list tracepoint' to list available tp events" },
     { "filter", LONG_OPT_filter, "filter", 0, "event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
