@@ -272,7 +272,7 @@ static int mpdelay_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void __print_instance(int i)
+static void __print_instance(int i, int oncpu)
 {
     struct mpdelay_stat *mp_stat;
     struct delay_stat *stat;
@@ -286,8 +286,12 @@ static void __print_instance(int i)
         stat = &mp_stat->stat[j];
 
         if (stat->n) {
-            if (ctx.env->perins)
-                printf("[%03d] ", monitor_instance_cpu(i));
+            if (ctx.env->perins) {
+                if (oncpu)
+                    printf("[%03d] ", monitor_instance_cpu(i));
+                else
+                    printf("%-8d ", monitor_instance_thread(i));
+            }
             printf("%*s => %-*s %8llu %16.3f %9.3f %9.3f %12.3f\n", ctx.max_len, tp1->name, ctx.max_len, tp2->name,
                 stat->n, stat->sum/1000.0, stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0);
         }
@@ -296,26 +300,27 @@ static void __print_instance(int i)
 
 static void mpdelay_interval(void)
 {
+    int oncpu = monitor_instance_oncpu();
     int i;
 
     print_time(stdout);
     printf("\n");
     if (ctx.env->perins)
-        printf("[CPU] ");
+        printf(oncpu ? "[CPU] " : "[THREAD] ");
     printf("%*s => %-*s %8s %16s %9s %9s %12s\n", ctx.max_len, "start", ctx.max_len, "end",
                     "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
     if (ctx.env->perins)
-        printf("----- ");
+        printf(oncpu ? "----- " : "-------- ");
     for (i=0; i<ctx.max_len*2+4; i++) printf("-");
     printf(" %8s %16s %9s %9s %12s\n",
                     "--------", "----------------", "---------", "---------", "------------");
 
     if (ctx.env->perins)
         for (i = 0; i < ctx.nr_ins; i++) {
-            __print_instance(i);
+            __print_instance(i, oncpu);
         }
     else
-        __print_instance(ctx.nr_ins);
+        __print_instance(ctx.nr_ins, oncpu);
 
     perins_stat_reset();
 }
