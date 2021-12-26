@@ -139,6 +139,7 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
     //net
     evsel_name(perf_tp_event(evlist, "net", "netif_receive_skb"), " NET recv");
     evsel_name(perf_tp_event(evlist, "net", "net_dev_xmit"), " xmit");
+    evsel_name(perf_tp_event(evlist, "net", "napi_gro_receive_entry"), "gro");
     //page alloc
     evsel_name(perf_tp_event(evlist, "kmem", "mm_page_alloc"), " MM alloc");
     evsel_name(perf_tp_event(evlist, "compaction", "mm_compaction_migratepages"), "compact");

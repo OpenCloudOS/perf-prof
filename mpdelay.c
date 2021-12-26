@@ -311,7 +311,9 @@ static void mpdelay_interval(void)
                     "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
     if (ctx.env->perins)
         printf(oncpu ? "----- " : "-------- ");
-    for (i=0; i<ctx.max_len*2+4; i++) printf("-");
+    for (i=0; i<ctx.max_len; i++) printf("-");
+    printf("    ");
+    for (i=0; i<ctx.max_len; i++) printf("-");
     printf(" %8s %16s %9s %9s %12s\n",
                     "--------", "----------------", "---------", "---------", "------------");
 
@@ -375,7 +377,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
     unsigned short common_type;
     struct mpdelay_stat *mp_stat;
     struct delay_stat *stat;
-    struct tp_list *tp;
+    struct tp_list *tp_prev;
     struct perf_evsel *evsel;
     int i;
     void *raw;
@@ -406,8 +408,8 @@ static void mpdelay_sample(union perf_event *event, int instance)
     }
 
     stat = &mp_stat->stat[i-1];
-    tp = &ctx.tp_list[i-1];
-    if (mp_stat->common_type == tp->id &&
+    tp_prev = &ctx.tp_list[i-1];
+    if (mp_stat->common_type == tp_prev->id &&
         hdr->time > mp_stat->time) {
         __u64 delta = hdr->time - mp_stat->time;
         if (delta < stat->min)
@@ -433,7 +435,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
             __print_callchain(event, i);
         }
     } else {
-        if (mp_stat->common_type != tp->id ||
+        if (mp_stat->common_type != tp_prev->id ||
             hdr->time <= mp_stat->time) {
             //TODO
         }
