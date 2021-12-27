@@ -1,5 +1,3 @@
-#define _STRUCT_TIMESPEC
-#define _STRUCT_TIMEVAL
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +8,6 @@
 #include <cpuid.h>
 
 #include <monitor.h>
-#include <linux/time.h>
 #include <tep.h>
 #include "trace_helpers.h"
 
