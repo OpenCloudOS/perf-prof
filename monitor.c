@@ -46,7 +46,7 @@ int monitor_nr_instance(void)
     if (perf_cpu_map__empty(monitor->cpus))
         nr_ins = perf_thread_map__nr(monitor->threads);
 
-	return nr_ins;
+    return nr_ins;
 }
 
 int monitor_instance_cpu(int ins)
