@@ -356,10 +356,10 @@ static void __raw_size(union perf_event *event, void **praw, int *psize, unsigne
     }
 }
 
-static void __print_callchain(union perf_event *event, int i)
+static void __print_callchain(union perf_event *event, int t)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
-    struct tp_list *tp = &ctx.tp_list[i];
+    struct tp_list *tp = &ctx.tp_list[t];
 
     if (tp->stack && ctx.ksyms) {
         __u64 i;
