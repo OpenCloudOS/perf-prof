@@ -27,7 +27,8 @@ USAGE:
     perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]
     perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
     perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]
-    perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu] [--than us]
+    perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
+    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-i INT] [--perins] [--than us]
 
 EXAMPLES:
     perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock
@@ -36,7 +37,7 @@ EXAMPLES:
       --alloc=tp             memory alloc tracepoint/kprobe
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
   -D, --uninterruptible      TASK_UNINTERRUPTIBLE
-  -e, --event=event          event selector. use 'perf list tracepoint' to list available tp events
+  -e, --event=evt[,evt]      event selector. use 'perf list tracepoint' to list available tp events
       --exclude-guest        exclude guest
       --exclude-kernel       exclude kernel
       --exclude-user         exclude user
@@ -48,7 +49,8 @@ EXAMPLES:
   -i, --interval=INT         Interval, ms
   -L, --latency=LAT          Interrupt off latency, unit: us, Dflt: 20ms
   -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
-      --percpu               print percpu stat
+  -p, --pids=PID,PID         Attach to processes
+      --perins               print per instance stat
       --precise              Generate precise interrupt
       --syscalls             trace syscalls
   -S, --interruptible        TASK_INTERRUPTIBLE
@@ -381,14 +383,14 @@ TRACEEVENT_PLUGIN_DIR
 
 ```
 用法:
-	perf-monitor kvm-exit [-C cpu] [-i INT] [--percpu] [--than us] [-v]
+	perf-monitor kvm-exit [-C cpu] [-i INT] [--perins] [--than us] [-v]
 例子:
 	perf-monitor kvm-exit -C 5-20,53-68 -i 1000 --than 1000 #统计CPU上的特权指令耗时,每1000ms输出一次,并打印耗时超过1000us的日志
 
 
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
   -i, --interval=INT         Interval, ms
-      --percpu               print percpu stat 打印每个cpu的统计信息
+      --perins               print per instance stat 打印每个实例的统计信息
       --than=ge              Greater than specified time, us 微妙单位
   -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
   -v, --verbose              Verbose debug output
@@ -433,3 +435,63 @@ CPUID                      96           82.303     0.611     0.857        2.506
 ```
 
 可以看的有2次EXTERNAL_INTERRUPT退出，处理超过1000us，并输出对应的tracepoint点信息。
+
+### 6.6 mpdelay
+
+多点延迟（Multipoint delay）是指进程或cpu执行流经过多个点，每两个相邻点之间的延迟。
+
+实际的场景有很多，如系统调用从进入到退出，中间可能会经过很多点。虚拟机vmexit到vmentry，中间会经过很多点。收包中断，到包走完协议栈的路径。
+
+多个点，可以是静态的tracepoint点，也可以是通过kprobe动态增加的tracepoint点。最少需要定义2个点。
+
+多个点的定义：
+
+```
+Event syntax:
+   EVENT,EVENT,...
+EVENT:
+   sys:name/filter/ATTR/ATTR/.../
+ATTR:
+   stack : sample_type PERF_SAMPLE_CALLCHAIN
+   ...
+```
+
+- sys，tracepoint点对应的system。
+- name，tracepoint点的name。
+- filter，过滤器。有些点需要特定的过滤，只输出我们需要的。
+- ATTR，属性。目前只定义了stack，获取tracepoint点的栈。
+
+```
+用法：
+	perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-i INT] [--perins] [--than us]
+例子：
+	./perf-monitor mpdelay -e 'syscalls:sys_enter_nanosleep,syscalls:sys_exit_nanosleep' -p 16023 -i 1000 --than 600 --perins
+	# 监控进程16023的nanosleep系统调用，输出超过600us的情况。
+	./perf-monitor mpdelay -e timer:hrtimer_start/function==0xffffffffc0537050/,timer:hrtimer_expire_entry/function==0xffffffffc0537050/,timer:hrtimer_expire_exit -C 1-21,25-45,49-69,73-93 -i 1000
+	# 监控指定cpu上hrtimer的启动到执行完成的路径。
+
+  -e, --event=evt[,evt]      event selector. use 'perf list tracepoint' to list available tp events
+  -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
+  -i, --interval=INT         Interval, ms
+      --perins               print per instance stat 打印每个实例的统计信息，cpu或者线程
+      --than=ge              Greater than specified time, us 微妙单位
+  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
+  -v, --verbose              Verbose debug output
+```
+
+例子输出
+
+```
+$ ./perf-monitor mpdelay -e timer:hrtimer_start/function==0xffffffffc0537050/,timer:hrtimer_expire_entry/function==0xffffffffc0537050/,timer:hrtimer_expire_exit -C 1-21,25-45,49-69,73-93 -i 1000 --than 2000
+2021-12-29 10:51:35.025780 
+                     start => end                           calls        total(us)   min(us)   avg(us)      max(us)
+--------------------------    -------------------------- -------- ---------------- --------- --------- ------------
+       timer:hrtimer_start => timer:hrtimer_expire_entry    83485     83372310.556     2.440   998.650     1005.681
+timer:hrtimer_expire_entry => timer:hrtimer_expire_exit     83620        41499.929     0.320     0.496        2.131
+2021-12-29 10:51:36.028619 
+                     start => end                           calls        total(us)   min(us)   avg(us)      max(us)
+--------------------------    -------------------------- -------- ---------------- --------- --------- ------------
+       timer:hrtimer_start => timer:hrtimer_expire_entry    83404     83248724.665     2.173   998.138     1003.088
+timer:hrtimer_expire_entry => timer:hrtimer_expire_exit     83603        41795.723     0.310     0.499        2.085
+```
+
