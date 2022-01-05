@@ -356,7 +356,7 @@ static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 	return 0;
 }
 
-static struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
+struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
 				  uint64_t *offset)
 {
 	struct load_range *range;
@@ -616,11 +616,13 @@ static int dso__load_sym_table(struct dso *dso)
 	return -1;
 }
 
-static struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
+const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 {
 	unsigned long sym_addr;
 	int start, end, mid;
 
+    if (!dso)
+        return NULL;
 	if (!dso->syms && dso__load_sym_table(dso))
 		return NULL;
 
@@ -641,6 +643,11 @@ static struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 	if (start == end && dso->syms[start].start <= offset)
 		return &dso->syms[start];
 	return NULL;
+}
+
+const char *dso__name(struct dso *dso)
+{
+    return dso ? dso->name : NULL;
 }
 
 struct syms *syms__load_file(const char *fname)

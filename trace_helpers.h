@@ -27,11 +27,16 @@ struct sym {
 };
 
 struct syms;
+struct dso;
 
 struct syms *syms__load_pid(int tgid);
 struct syms *syms__load_file(const char *fname);
 void syms__free(struct syms *syms);
 const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr);
+struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
+				  uint64_t *offset);
+const struct sym *dso__find_sym(struct dso *dso, uint64_t offset);
+const char *dso__name(struct dso *dso);
 
 struct syms_cache;
 
