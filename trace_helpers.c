@@ -897,7 +897,7 @@ static void print_stars(unsigned int val, unsigned int val_max, int width)
 
 void print_log2_hist(unsigned int *vals, int vals_size, const char *val_type)
 {
-	int stars_max = 40, idx_max = -1;
+	int stars_max = 40, idx_max = -1, idx0_max = -1;
 	unsigned int val, val_max = 0;
 	unsigned long long low, high;
 	int stars, width, i;
@@ -908,6 +908,8 @@ void print_log2_hist(unsigned int *vals, int vals_size, const char *val_type)
 			idx_max = i;
 		if (val > val_max)
 			val_max = val;
+		if (idx_max < 0)
+			idx0_max = i;
 	}
 
 	if (idx_max < 0)
@@ -926,6 +928,10 @@ void print_log2_hist(unsigned int *vals, int vals_size, const char *val_type)
 		high = (1ULL << (i + 1)) - 1;
 		if (low == high)
 			low -= 1;
+		if (idx0_max > i) {
+			i = idx0_max;
+			high = (1ULL << (i + 1)) - 1;
+		}
 		val = vals[i];
 		width = idx_max <= 32 ? 10 : 20;
 		printf("%*lld -> %-*lld : %-8d |", width, low, width, high, val);
