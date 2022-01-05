@@ -208,12 +208,9 @@ struct dso {
 	int syms_sz;
 	int syms_cap;
 
-	/*
-	 * libbpf's struct btf is actually a pretty efficient
-	 * "set of strings" data structure, so we create an
-	 * empty one and use it to store symbol names.
-	 */
-	struct btf *btf;
+	char *strs;
+	int strs_sz;
+	int strs_cap;
 };
 
 struct map {
@@ -332,7 +329,6 @@ static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 		dso = &syms->dsos[syms->dso_sz++];
 		memset(dso, 0, sizeof(*dso));
 		dso->name = strdup(name);
-		dso->btf = btf__new_empty();
 	}
 
 	tmp = realloc(dso->ranges, (dso->range_sz + 1) * sizeof(*dso->ranges));
@@ -398,13 +394,21 @@ static int dso__add_sym(struct dso *dso, const char *name, uint64_t start,
 			uint64_t size)
 {
 	struct sym *sym;
-	size_t new_cap;
+	size_t new_cap, name_len = strlen(name) + 1;
 	void *tmp;
-	int off;
 
-	off = btf__add_str(dso->btf, name);
-	if (off < 0)
-		return off;
+	if (dso->strs_sz + name_len > dso->strs_cap) {
+		new_cap = dso->strs_cap * 4 / 3;
+		if (new_cap < dso->strs_sz + name_len)
+			new_cap = dso->strs_sz + name_len;
+		if (new_cap < 1024)
+			new_cap = 1024;
+		tmp = realloc(dso->strs, new_cap);
+		if (!tmp)
+			return -1;
+		dso->strs = tmp;
+		dso->strs_cap = new_cap;
+	}
 
 	if (dso->syms_sz + 1 > dso->syms_cap) {
 		new_cap = dso->syms_cap * 4 / 3;
@@ -419,10 +423,12 @@ static int dso__add_sym(struct dso *dso, const char *name, uint64_t start,
 
 	sym = &dso->syms[dso->syms_sz++];
 	/* while constructing, re-use pointer as just a plain offset */
-	sym->name = (void*)(unsigned long)off;
+	sym->name = (void *)(unsigned long)dso->strs_sz;
 	sym->start = start;
 	sym->size = size;
 
+	memcpy(dso->strs + dso->strs_sz, name, name_len);
+	dso->strs_sz += name_len;
 	return 0;
 }
 
@@ -479,7 +485,7 @@ static void dso__free_fields(struct dso *dso)
 	free(dso->name);
 	free(dso->ranges);
 	free(dso->syms);
-	btf__free(dso->btf);
+	free(dso->strs);
 }
 
 static int dso__load_sym_table_from_elf(struct dso *dso, int fd)
@@ -509,9 +515,7 @@ static int dso__load_sym_table_from_elf(struct dso *dso, int fd)
 
 	/* now when strings are finalized, adjust pointers properly */
 	for (i = 0; i < dso->syms_sz; i++)
-		dso->syms[i].name =
-			btf__name_by_offset(dso->btf,
-					    (unsigned long)dso->syms[i].name);
+		dso->syms[i].name += (unsigned long)dso->strs;
 
 	qsort(dso->syms, dso->syms_sz, sizeof(*dso->syms), sym_cmp);
 
@@ -988,61 +992,6 @@ bool is_kernel_module(const char *name)
 
 	fclose(f);
 	return found;
-}
-
-bool fentry_exists(const char *name, const char *mod)
-{
-	const char sysfs_vmlinux[] = "/sys/kernel/btf/vmlinux";
-	struct btf *base, *btf = NULL;
-	const struct btf_type *type;
-	const struct btf_enum *e;
-	char sysfs_mod[80];
-	int id = -1, i, err;
-
-	base = btf__parse(sysfs_vmlinux, NULL);
-	if (!base) {
-		err = -errno;
-		fprintf(stderr, "failed to parse vmlinux BTF at '%s': %s\n",
-			sysfs_vmlinux, strerror(-err));
-		goto err_out;
-	}
-	if (mod && module_btf_exists(mod)) {
-		snprintf(sysfs_mod, sizeof(sysfs_mod), "/sys/kernel/btf/%s", mod);
-		btf = btf__parse_split(sysfs_mod, base);
-		if (!btf) {
-			err = -errno;
-			fprintf(stderr, "failed to load BTF from %s: %s\n",
-				sysfs_mod, strerror(-err));
-			btf = base;
-			base = NULL;
-		}
-	} else {
-		btf = base;
-		base = NULL;
-	}
-
-	id = btf__find_by_name_kind(btf, "bpf_attach_type", BTF_KIND_ENUM);
-	if (id < 0)
-		goto err_out;
-	type = btf__type_by_id(btf, id);
-
-	/*
-         * As kernel BTF is exposed starting from 5.4 kernel, but fentry/fexit
-         * is actually supported starting from 5.5, so that's check this gap
-         * first, then check if target func has btf type.
-	 */
-	for (id = -1, i = 0, e = btf_enum(type); i < btf_vlen(type); i++, e++) {
-		if (!strcmp(btf__name_by_offset(btf, e->name_off),
-			    "BPF_TRACE_FENTRY")) {
-			id = btf__find_by_name_kind(btf, name, BTF_KIND_FUNC);
-			break;
-		}
-	}
-
-err_out:
-	btf__free(btf);
-	btf__free(base);
-	return id > 0;
 }
 
 bool kprobe_exists(const char *name)

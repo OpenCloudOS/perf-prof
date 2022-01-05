@@ -61,23 +61,6 @@ unsigned long long get_ktime_ns(void);
 
 bool is_kernel_module(const char *name);
 
-/*
- * When attempting to use kprobe/kretprobe, please check out new fentry/fexit
- * probes, as they provide better performance and usability. But in some
- * situations we have to fallback to kprobe/kretprobe probes. This helper
- * is used to detect fentry/fexit support for the specified kernel function.
- *
- *	1. A gap between kernel versions, kernel BTF is exposed
- * 	   starting from 5.4 kernel. but fentry/fexit is actually
- * 	   supported starting from 5.5.
- *	2. Whether kernel supports module BTF or not
- *
- * *name* is the name of a kernel function to be attached to, which can be
- * from vmlinux or a kernel module.
- * *mod* is a hint that indicates the *name* may reside in module BTF,
- * if NULL, it means *name* belongs to vmlinux.
- */
-bool fentry_exists(const char *name, const char *mod);
 
 /*
  * The name of a kernel function to be attached to may be changed between
