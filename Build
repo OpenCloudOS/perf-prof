@@ -1,4 +1,4 @@
-perf-monitor-y += trace_helpers.o lib/
+perf-monitor-y += trace_helpers.o uprobe_helpers.o lib/
 perf-monitor-y += monitor.o tep.o
 perf-monitor-y += split-lock.o
 perf-monitor-y += irq-off.o
@@ -14,5 +14,5 @@ perf-monitor-y += mpdelay.o
 
 bin-y += perf-monitor
 perf-monitor-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
-LDFLAGS_perf-monitor += -lpthread -ldl -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list
+LDFLAGS_perf-monitor += -lpthread -ldl -lelf -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list
 
