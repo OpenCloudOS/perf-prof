@@ -15,6 +15,8 @@
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <time.h>
+#include <linux/refcount.h>
+#include <linux/rblist.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <limits.h>
@@ -180,6 +182,11 @@ const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
 	return NULL;
 }
 
+/*
+ * syms_cache --> syms --> dso --> object --> sym
+ *            pid      maps    file       sym
+**/
+
 struct load_range {
 	uint64_t start;
 	uint64_t end;
@@ -194,10 +201,10 @@ enum elf_type {
 	UNKNOWN,
 };
 
-struct dso {
-	char *name;
-	struct load_range *ranges;
-	int range_sz;
+struct object {
+    struct rb_node rbnode;
+    refcount_t refcnt;
+    char *name;
 	/* Dyn's first text section virtual addr at execution */
 	uint64_t sh_addr;
 	/* Dyn's first text section file offset */
@@ -211,6 +218,12 @@ struct dso {
 	char *strs;
 	int strs_sz;
 	int strs_cap;
+};
+
+struct dso {
+	struct load_range *ranges;
+	int range_sz;
+	struct object *obj;
 };
 
 struct map {
@@ -307,14 +320,92 @@ err_out:
 	return err;
 }
 
+static int object_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct object *obj = container_of(rbn, struct object, rbnode);
+    const char *name = entry;
+
+    return strcmp(obj->name, name);
+}
+
+static struct rb_node *object_node_new(struct rblist *rlist, const void *new_entry)
+{
+    const char *name = new_entry;
+    struct object *obj = malloc(sizeof(*obj));
+    int type;
+
+    if (obj) {
+        memset(obj, 0, sizeof(*obj));
+        RB_CLEAR_NODE(&obj->rbnode);
+        obj->name = strdup(name);
+        refcount_set(&obj->refcnt, 0);
+
+        type = get_elf_type(name);
+        if (type == ET_EXEC) {
+            obj->type = EXEC;
+        } else if (type == ET_DYN) {
+            obj->type = DYN;
+            if (get_elf_text_scn_info(name, &obj->sh_addr, &obj->sh_offset) < 0)
+                return NULL;
+        } else if (is_perf_map(name)) {
+            obj->type = PERF_MAP;
+        } else if (is_vdso(name)) {
+            obj->type = VDSO;
+        } else {
+            obj->type = UNKNOWN;
+        }
+        return &obj->rbnode;
+    } else
+        return NULL;
+}
+
+static void object_node_delete(struct rblist *rblist, struct rb_node *rbn)
+{
+    struct object *obj = container_of(rbn, struct object, rbnode);
+
+    free(obj->name);
+    free(obj->syms);
+    free(obj->strs);
+}
+
+static struct rblist objects = {
+    .entries = RB_ROOT_CACHED,
+    .nr_entries = 0,
+    .node_cmp = object_node_cmp,
+    .node_new = object_node_new,
+    .node_delete = object_node_delete,
+};
+
+static struct object *obj__get(const char *name)
+{
+    struct rb_node *rbnode;
+    struct object *obj = NULL;
+
+    rbnode = rblist__findnew(&objects, name);
+    if (rbnode) {
+        obj = container_of(rbnode, struct object, rbnode);
+        if (refcount_read(&obj->refcnt) == 0)
+            refcount_set(&obj->refcnt, 1);
+        else
+            refcount_inc(&obj->refcnt);
+    }
+    return obj;
+}
+
+static void obj__put(struct object *obj)
+{
+    if (obj && refcount_dec_and_test(&obj->refcnt))
+        rblist__remove_node(&objects, &obj->rbnode);
+}
+
 static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 {
 	struct dso *dso = NULL;
-	int i, type;
+	int i;
 	void *tmp;
 
 	for (i = 0; i < syms->dso_sz; i++) {
-		if (!strcmp(syms->dsos[i].name, name)) {
+		if (!strcmp(syms->dsos[i].obj->name, name)) {
 			dso = &syms->dsos[i];
 			break;
 		}
@@ -328,7 +419,10 @@ static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 		syms->dsos = tmp;
 		dso = &syms->dsos[syms->dso_sz++];
 		memset(dso, 0, sizeof(*dso));
-		dso->name = strdup(name);
+
+        dso->obj = obj__get(name);
+        if (!dso->obj)
+            return -1;
 	}
 
 	tmp = realloc(dso->ranges, (dso->range_sz + 1) * sizeof(*dso->ranges));
@@ -339,21 +433,17 @@ static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 	dso->ranges[dso->range_sz].end = map->end_addr;
 	dso->ranges[dso->range_sz].file_off = map->file_off;
 	dso->range_sz++;
-	type = get_elf_type(name);
-	if (type == ET_EXEC) {
-		dso->type = EXEC;
-	} else if (type == ET_DYN) {
-		dso->type = DYN;
-		if (get_elf_text_scn_info(name, &dso->sh_addr, &dso->sh_offset) < 0)
-			return -1;
-	} else if (is_perf_map(name)) {
-		dso->type = PERF_MAP;
-	} else if (is_vdso(name)) {
-		dso->type = VDSO;
-	} else {
-		dso->type = UNKNOWN;
-	}
+
 	return 0;
+}
+
+static void dso__free_fields(struct dso *dso)
+{
+	if (!dso)
+		return;
+
+	obj__put(dso->obj);
+	free(dso->ranges);
 }
 
 struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
@@ -369,11 +459,11 @@ struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
 			range = &dso->ranges[j];
 			if (addr <= range->start || addr >= range->end)
 				continue;
-			if (dso->type == DYN || dso->type == VDSO) {
+			if (dso->obj->type == DYN || dso->obj->type == VDSO) {
 				/* Offset within the mmap */
 				*offset = addr - range->start + range->file_off;
 				/* Offset within the ELF for dyn symbol lookup */
-				*offset += dso->sh_addr - dso->sh_offset;
+				*offset += dso->obj->sh_addr - dso->obj->sh_offset;
 			} else {
 				*offset = addr;
 			}
@@ -385,50 +475,50 @@ struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
 	return NULL;
 }
 
-static int dso__load_sym_table_from_perf_map(struct dso *dso)
+static int obj__load_sym_table_from_perf_map(struct object *obj)
 {
 	return -1;
 }
 
-static int dso__add_sym(struct dso *dso, const char *name, uint64_t start,
+static int obj__add_sym(struct object *obj, const char *name, uint64_t start,
 			uint64_t size)
 {
 	struct sym *sym;
 	size_t new_cap, name_len = strlen(name) + 1;
 	void *tmp;
 
-	if (dso->strs_sz + name_len > dso->strs_cap) {
-		new_cap = dso->strs_cap * 4 / 3;
-		if (new_cap < dso->strs_sz + name_len)
-			new_cap = dso->strs_sz + name_len;
+	if (obj->strs_sz + name_len > obj->strs_cap) {
+		new_cap = obj->strs_cap * 4 / 3;
+		if (new_cap < obj->strs_sz + name_len)
+			new_cap = obj->strs_sz + name_len;
 		if (new_cap < 1024)
 			new_cap = 1024;
-		tmp = realloc(dso->strs, new_cap);
+		tmp = realloc(obj->strs, new_cap);
 		if (!tmp)
 			return -1;
-		dso->strs = tmp;
-		dso->strs_cap = new_cap;
+		obj->strs = tmp;
+		obj->strs_cap = new_cap;
 	}
 
-	if (dso->syms_sz + 1 > dso->syms_cap) {
-		new_cap = dso->syms_cap * 4 / 3;
+	if (obj->syms_sz + 1 > obj->syms_cap) {
+		new_cap = obj->syms_cap * 4 / 3;
 		if (new_cap < 1024)
 			new_cap = 1024;
-		tmp = realloc(dso->syms, sizeof(*dso->syms) * new_cap);
+		tmp = realloc(obj->syms, sizeof(*obj->syms) * new_cap);
 		if (!tmp)
 			return -1;
-		dso->syms = tmp;
-		dso->syms_cap = new_cap;
+		obj->syms = tmp;
+		obj->syms_cap = new_cap;
 	}
 
-	sym = &dso->syms[dso->syms_sz++];
+	sym = &obj->syms[obj->syms_sz++];
 	/* while constructing, re-use pointer as just a plain offset */
-	sym->name = (void *)(unsigned long)dso->strs_sz;
+	sym->name = (void *)(unsigned long)obj->strs_sz;
 	sym->start = start;
 	sym->size = size;
 
-	memcpy(dso->strs + dso->strs_sz, name, name_len);
-	dso->strs_sz += name_len;
+	memcpy(obj->strs + obj->strs_sz, name, name_len);
+	obj->strs_sz += name_len;
 	return 0;
 }
 
@@ -441,7 +531,7 @@ static int sym_cmp(const void *p1, const void *p2)
 	return s1->start < s2->start ? -1 : 1;
 }
 
-static int dso__add_syms(struct dso *dso, Elf *e, Elf_Scn *section,
+static int obj__add_syms(struct object *obj, Elf *e, Elf_Scn *section,
 			 size_t stridx, size_t symsize)
 {
 	Elf_Data *data = NULL;
@@ -466,7 +556,7 @@ static int dso__add_syms(struct dso *dso, Elf *e, Elf_Scn *section,
 			if (sym.st_value == 0)
 				continue;
 
-			if (dso__add_sym(dso, name, sym.st_value, sym.st_size))
+			if (obj__add_sym(obj, name, sym.st_value, sym.st_size))
 				goto err_out;
 		}
 	}
@@ -477,24 +567,23 @@ err_out:
 	return -1;
 }
 
-static void dso__free_fields(struct dso *dso)
+static void obj__free_fields(struct object *obj)
 {
-	if (!dso)
-		return;
-
-	free(dso->name);
-	free(dso->ranges);
-	free(dso->syms);
-	free(dso->strs);
+    free(obj->syms);
+    free(obj->strs);
+    obj->syms_sz = 0;
+    obj->syms_cap = 0;
+    obj->strs_sz = 0;
+    obj->syms_cap = 0;
 }
 
-static int dso__load_sym_table_from_elf(struct dso *dso, int fd)
+static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 {
 	Elf_Scn *section = NULL;
 	Elf *e;
 	int i;
 
-	e = fd > 0 ? open_elf_by_fd(fd) : open_elf(dso->name, &fd);
+	e = fd > 0 ? open_elf_by_fd(fd) : open_elf(obj->name, &fd);
 	if (!e)
 		return -1;
 
@@ -508,27 +597,27 @@ static int dso__load_sym_table_from_elf(struct dso *dso, int fd)
 		    header.sh_type != SHT_DYNSYM)
 			continue;
 
-		if (dso__add_syms(dso, e, section, header.sh_link,
+		if (obj__add_syms(obj, e, section, header.sh_link,
 				  header.sh_entsize))
 			goto err_out;
 	}
 
 	/* now when strings are finalized, adjust pointers properly */
-	for (i = 0; i < dso->syms_sz; i++)
-		dso->syms[i].name += (unsigned long)dso->strs;
+	for (i = 0; i < obj->syms_sz; i++)
+		obj->syms[i].name += (unsigned long)obj->strs;
 
-	qsort(dso->syms, dso->syms_sz, sizeof(*dso->syms), sym_cmp);
+	qsort(obj->syms, obj->syms_sz, sizeof(*obj->syms), sym_cmp);
 
 	close_elf(e, fd);
 	return 0;
 
 err_out:
-	dso__free_fields(dso);
+	obj__free_fields(obj);
 	close_elf(e, fd);
 	return -1;
 }
 
-static int create_tmp_vdso_image(struct dso *dso)
+static int create_tmp_vdso_image(struct object *obj)
 {
 	uint64_t start_addr, end_addr;
 	long pid = getpid();
@@ -594,45 +683,45 @@ err_out:
 	return fd;
 }
 
-static int dso__load_sym_table_from_vdso_image(struct dso *dso)
+static int obj__load_sym_table_from_vdso_image(struct object *obj)
 {
-	int fd = create_tmp_vdso_image(dso);
+	int fd = create_tmp_vdso_image(obj);
 
 	if (fd < 0)
 		return -1;
-	return dso__load_sym_table_from_elf(dso, fd);
+	return obj__load_sym_table_from_elf(obj, fd);
 }
 
-static int dso__load_sym_table(struct dso *dso)
+static int obj__load_sym_table(struct object *obj)
 {
-	if (dso->type == UNKNOWN)
+	if (obj->type == UNKNOWN)
 		return -1;
-	if (dso->type == PERF_MAP)
-		return dso__load_sym_table_from_perf_map(dso);
-	if (dso->type == EXEC || dso->type == DYN)
-		return dso__load_sym_table_from_elf(dso, 0);
-	if (dso->type == VDSO)
-		return dso__load_sym_table_from_vdso_image(dso);
+	if (obj->type == PERF_MAP)
+		return obj__load_sym_table_from_perf_map(obj);
+	if (obj->type == EXEC || obj->type == DYN)
+		return obj__load_sym_table_from_elf(obj, 0);
+	if (obj->type == VDSO)
+		return obj__load_sym_table_from_vdso_image(obj);
 	return -1;
 }
 
-const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
+static const struct sym *obj__find_sym(struct object *obj, uint64_t offset)
 {
 	unsigned long sym_addr;
 	int start, end, mid;
 
-    if (!dso)
+    if (!obj)
         return NULL;
-	if (!dso->syms && dso__load_sym_table(dso))
+	if (!obj->syms && obj__load_sym_table(obj))
 		return NULL;
 
 	start = 0;
-	end = dso->syms_sz - 1;
+	end = obj->syms_sz - 1;
 
 	/* find largest sym_addr <= addr using binary search */
 	while (start < end) {
 		mid = start + (end - start + 1) / 2;
-		sym_addr = dso->syms[mid].start;
+		sym_addr = obj->syms[mid].start;
 
 		if (sym_addr <= offset)
 			start = mid;
@@ -640,14 +729,19 @@ const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 			end = mid - 1;
 	}
 
-	if (start == end && dso->syms[start].start <= offset)
-		return &dso->syms[start];
+	if (start == end && obj->syms[start].start <= offset)
+		return &obj->syms[start];
 	return NULL;
+}
+
+const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
+{
+    return obj__find_sym(dso->obj, offset);
 }
 
 const char *dso__name(struct dso *dso)
 {
-    return dso ? dso->name : NULL;
+    return dso ? dso->obj->name : NULL;
 }
 
 struct syms *syms__load_file(const char *fname)
