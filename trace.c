@@ -171,8 +171,10 @@ static void __print_callchain(union perf_event *event)
                 dso = syms__find_dso(syms, ip, &offset);
                 if (dso) {
                     const struct sym *sym = dso__find_sym(dso, offset);
-                    printf("    %016llx %s+0x%lx (%s)\n", ip, sym ? sym->name : "Unknown", offset - sym->start, dso__name(dso));
-                }
+                    printf("    %016llx %s+0x%lx (%s)\n", ip, sym ? sym->name : "Unknown", sym ? offset - sym->start : 0L,
+                                        dso__name(dso)?:"Unknown");
+                } else
+                    printf("    %016llx %s (%s)\n", ip, "Unknown", "Unknown");
             }
         }
     }
