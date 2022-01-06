@@ -136,23 +136,32 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
     char filter[128];
     struct perf_evsel *evsel;
     int err;
-    if (env->filter) {
-        perf_evlist__for_each_evsel(evlist, evsel) {
-            struct perf_event_attr *attr = perf_evsel__attr(evsel);
-            if (attr->config == ctx.sched_switch) {
-                if (env->interruptible && env->uninterruptible)
-                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d)", 
+
+    perf_evlist__for_each_evsel(evlist, evsel) {
+        struct perf_event_attr *attr = perf_evsel__attr(evsel);
+        if (attr->config == ctx.sched_switch) {
+            if (env->interruptible && env->uninterruptible) {
+                if (env->filter)
+                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d)",
                             env->filter, TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE);
-                else if (env->interruptible || env->uninterruptible)
-                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && prev_state==%d", 
+                else
+                    snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d",
+                            TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE);
+            } else if (env->interruptible || env->uninterruptible) {
+                if (env->filter)
+                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && prev_state==%d",
                             env->filter, env->interruptible ? TASK_INTERRUPTIBLE:TASK_UNINTERRUPTIBLE);
                 else
-                    return -1;
-                //printf("[%s]\n", filter);
-                err = perf_evsel__apply_filter(evsel, filter);
-                if (err < 0)
-                    return err;
-            } else if (attr->config == ctx.sched_wakeup) {
+                    snprintf(filter, sizeof(filter), "prev_state==%d",
+                            env->interruptible ? TASK_INTERRUPTIBLE:TASK_UNINTERRUPTIBLE);
+            } else
+                return -1;
+
+            err = perf_evsel__apply_filter(evsel, filter);
+            if (err < 0)
+                return err;
+        } else if (attr->config == ctx.sched_wakeup) {
+            if (env->filter) {
                 snprintf(filter, sizeof(filter), "comm~\"%s\"", env->filter);
                 err = perf_evsel__apply_filter(evsel, filter);
                 if (err < 0)
