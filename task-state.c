@@ -18,6 +18,7 @@
 struct monitor task_state;
 struct monitor_ctx {
     struct ksyms *ksyms;
+    struct syms_cache *syms_cache;
     __u64 sched_switch;
     __u64 sched_wakeup;
     struct rblist backup;
@@ -68,6 +69,7 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
+        ctx.syms_cache = syms_cache__new(0);
         task_state.pages *= 2;
     }
     rblist__init(&ctx.backup);
@@ -83,6 +85,7 @@ static void monitor_ctx_exit(void)
     rblist__exit(&ctx.backup);
     if (ctx.env->callchain) {
         ksyms__free(ctx.ksyms);
+        syms_cache__free(ctx.syms_cache);
     }
     tep__unref();
 }
@@ -99,7 +102,7 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        //.exclude_callchain_user = 1,
         .wakeup_events = 1, //1个事件
     };
     struct perf_evsel *evsel;
@@ -228,10 +231,39 @@ static void __print_callchain(union perf_event *event)
 
     if (ctx.env->callchain && ctx.ksyms) {
         __u64 i;
+        bool kernel, user;
+        struct syms *syms;
         for (i = 0; i < data->callchain.nr; i++) {
             __u64 ip = data->callchain.ips[i];
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-            printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
+            if (ip == PERF_CONTEXT_KERNEL) {
+                kernel = true;
+                user = false;
+                continue;
+            } else if (ip == PERF_CONTEXT_USER) {
+                __u32 pid = data->h.tid_entry.pid;
+                kernel = false;
+                user = false;
+                if (ctx.syms_cache) {
+                    syms = syms_cache__get_syms(ctx.syms_cache, pid);
+                    if (syms)
+                        user = true;
+                }
+                continue;
+            }
+            if (kernel) {
+                const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
+                printf("    %016llx %s+0x%llx ([kernel.kallsyms])\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
+            } else if (user) {
+                struct dso *dso;
+                uint64_t offset;
+                dso = syms__find_dso(syms, ip, &offset);
+                if (dso) {
+                    const struct sym *sym = dso__find_sym(dso, offset);
+                    printf("    %016llx %s+0x%lx (%s)\n", ip, sym ? sym->name : "Unknown", sym ? offset - sym->start : 0L,
+                                        dso__name(dso)?:"Unknown");
+                } else
+                    printf("    %016llx %s (%s)\n", ip, "Unknown", "Unknown");
+            }
         }
     }
 }
