@@ -380,12 +380,18 @@ static void task_state_exit(union perf_event *event, int instance)
     }
 }
 
+static void task_state_sigusr1(int signum)
+{
+    obj__stat(stderr);
+}
+
 struct monitor task_state = {
     .name = "task-state",
     .pages = 8,
     .init = task_state_init,
     .filter = task_state_filter,
     .deinit = task_state_deinit,
+    .sigusr1 = task_state_sigusr1,
     .comm   = monitor_tep__comm,
     .exit   = task_state_exit,
     .sample = task_state_sample,
