@@ -264,7 +264,7 @@ static int mpdelay_filter(struct perf_evlist *evlist, struct env *env)
 
     for (i = 0; i < ctx.nr_points; i++) {
         struct tp_list *tp = &ctx.tp_list[i];
-        if (tp->filter) {
+        if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
                 return err;
