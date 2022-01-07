@@ -249,6 +249,7 @@ static bool is_file_backed(const char *mapname)
 		STARTS_WITH(mapname, "//anon") ||
 		STARTS_WITH(mapname, "/dev/zero") ||
 		STARTS_WITH(mapname, "/anon_hugepage") ||
+		STARTS_WITH(mapname, "socket:") ||
 		STARTS_WITH(mapname, "[stack") ||
 		STARTS_WITH(mapname, "/SYSV") ||
 		STARTS_WITH(mapname, "[heap]") ||
