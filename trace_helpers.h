@@ -29,6 +29,8 @@ struct sym {
 struct syms;
 struct dso;
 
+void obj__stat(FILE *fp);
+
 struct syms *syms__load_pid(int tgid);
 struct syms *syms__load_file(const char *fname);
 void syms__free(struct syms *syms);

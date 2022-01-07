@@ -399,6 +399,28 @@ static void obj__put(struct object *obj)
         rblist__remove_node(&objects, &obj->rbnode);
 }
 
+void obj__stat(FILE *fp)
+{
+    static const char *str_type[] = {"EXEC", "DYN", "PERF_MAP", "VDSO", "UNKNOWN"};
+    struct rb_node *node;
+    struct object *obj;
+    long used, size;
+
+    if (rblist__nr_entries(&objects) == 0)
+        return;
+
+    fprintf(fp, "OBJECTS %u\n", rblist__nr_entries(&objects));
+    fprintf(fp, "%-4s %-8s %-8s %-12s %-12s %s\n", "REF", "TYPE", "SYMS", "USED", "MEMS", "OBJECT");
+    for (node = rb_first_cached(&objects.entries); node;
+         node = rb_next(node)) {
+        obj = container_of(node, struct object, rbnode);
+        used = obj->syms_sz * sizeof(*obj->syms) + obj->strs_sz;
+        size = obj->syms_cap * sizeof(*obj->syms) + obj->strs_cap;
+        fprintf(fp, "%-4u %-8s %-8d %-12ld %-12ld %s\n", refcount_read(&obj->refcnt),
+                str_type[obj->type], obj->syms_sz, used, size, obj->name);
+    }
+}
+
 static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 {
 	struct dso *dso = NULL;
