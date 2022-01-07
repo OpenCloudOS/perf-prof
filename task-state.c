@@ -319,10 +319,14 @@ static void task_state_sample(union perf_event *event, int instance)
         entry.event = event;
         rc = rblist__add_node(&ctx.backup, &entry);
         if (rc == -EEXIST) {
-            //fprintf(stderr, "pid %d EEXIST\n", (int)pid);
             rbn = rblist__find(&ctx.backup, &entry);
-            rblist__remove_node(&ctx.backup, rbn);
-            rblist__add_node(&ctx.backup, &entry);
+            sched_switch = container_of(rbn, struct perf_event_backup, rbnode);
+            if (sched_switch->event.header.size == event->header.size) {
+                memmove(&sched_switch->event, event, event->header.size);
+            } else {
+                rblist__remove_node(&ctx.backup, rbn);
+                rblist__add_node(&ctx.backup, &entry);
+            }
         }
     } else if (type == ctx.sched_wakeup) {
         if (tep_get_field_val(&s, e, "pid", &record, &pid, 1) < 0) {
@@ -372,7 +376,7 @@ static void task_state_exit(union perf_event *event, int instance)
 
 struct monitor task_state = {
     .name = "task-state",
-    .pages = 2,
+    .pages = 8,
     .init = task_state_init,
     .filter = task_state_filter,
     .deinit = task_state_deinit,
