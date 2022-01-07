@@ -69,7 +69,7 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
-        ctx.syms_cache = syms_cache__new(0);
+        ctx.syms_cache = syms_cache__new();
         task_state.pages *= 2;
     }
     rblist__init(&ctx.backup);

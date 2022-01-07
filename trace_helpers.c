@@ -366,6 +366,7 @@ static void object_node_delete(struct rblist *rblist, struct rb_node *rbn)
     free(obj->name);
     free(obj->syms);
     free(obj->strs);
+    free(obj);
 }
 
 static struct rblist objects = {
@@ -825,57 +826,101 @@ const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr)
 	return dso__find_sym(dso, offset);
 }
 
+struct syms_cache_node {
+    struct rb_node rbnode;
+    struct syms *syms;
+    int tgid;
+};
 struct syms_cache {
-	struct {
-		struct syms *syms;
-		int tgid;
-	} *data;
-	int nr;
+	struct rblist cache;
 };
 
-struct syms_cache *syms_cache__new(int nr)
+static int syms_cache_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct syms_cache_node *node = container_of(rbn, struct syms_cache_node, rbnode);
+    int tgid = *(const int *)entry;
+
+    if (node->tgid > tgid)
+        return 1;
+    else if (node->tgid < tgid)
+        return -1;
+    else
+        return 0;
+}
+
+static struct rb_node *syms_cache_node_new(struct rblist *rlist, const void *new_entry)
+{
+    int tgid = *(const int *)new_entry;
+    struct syms_cache_node *node = malloc(sizeof(*node));
+
+    if (node) {
+        memset(node, 0, sizeof(*node));
+        RB_CLEAR_NODE(&node->rbnode);
+        node->tgid = tgid;
+        node->syms = syms__load_pid(tgid);
+        if (!node->syms) {
+            free(node);
+            return NULL;
+        }
+        return &node->rbnode;
+    } else
+        return NULL;
+}
+
+static void syms_cache_node_delete(struct rblist *rblist, struct rb_node *rbn)
+{
+    struct syms_cache_node *node = container_of(rbn, struct syms_cache_node, rbnode);
+
+    syms__free(node->syms);
+    free(node);
+}
+
+struct syms_cache *syms_cache__new(void)
 {
 	struct syms_cache *syms_cache;
 
-	syms_cache = calloc(1, sizeof(*syms_cache));
-	if (!syms_cache)
-		return NULL;
-	if (nr > 0)
-		syms_cache->data = calloc(nr, sizeof(*syms_cache->data));
+    syms_cache = calloc(1, sizeof(*syms_cache));
+    if (!syms_cache)
+        return NULL;
+
+    rblist__init(&syms_cache->cache);
+    syms_cache->cache.node_cmp = syms_cache_node_cmp;
+    syms_cache->cache.node_new = syms_cache_node_new;
+    syms_cache->cache.node_delete = syms_cache_node_delete;
 	return syms_cache;
 }
 
 void syms_cache__free(struct syms_cache *syms_cache)
 {
-	int i;
+    if (!syms_cache)
+        return;
 
-	if (!syms_cache)
-		return;
-
-	for (i = 0; i < syms_cache->nr; i++)
-		syms__free(syms_cache->data[i].syms);
-	free(syms_cache->data);
+    rblist__exit(&syms_cache->cache);
 	free(syms_cache);
 }
 
 struct syms *syms_cache__get_syms(struct syms_cache *syms_cache, int tgid)
 {
-	void *tmp;
-	int i;
+    struct rb_node *rbn;
+    struct syms_cache_node *node = NULL;
+    struct syms *syms = NULL;
 
-	for (i = 0; i < syms_cache->nr; i++) {
-		if (syms_cache->data[i].tgid == tgid)
-			return syms_cache->data[i].syms;
-	}
+    rbn = rblist__findnew(&syms_cache->cache, &tgid);
+    if (rbn) {
+        node = container_of(rbn, struct syms_cache_node, rbnode);
+        syms = node->syms;
+    }
+	return syms;
+}
 
-	tmp = realloc(syms_cache->data, (syms_cache->nr + 1) *
-		      sizeof(*syms_cache->data));
-	if (!tmp)
-		return NULL;
-	syms_cache->data = tmp;
-	syms_cache->data[syms_cache->nr].syms = syms__load_pid(tgid);
-	syms_cache->data[syms_cache->nr].tgid = tgid;
-	return syms_cache->data[syms_cache->nr++].syms;
+void syms_cache__free_syms(struct syms_cache *syms_cache, int tgid)
+{
+    struct rb_node *rbn;
+
+    rbn = rblist__find(&syms_cache->cache, &tgid);
+    if (rbn) {
+        rblist__remove_node(&syms_cache->cache, rbn);
+    }
 }
 
 struct partitions {
