@@ -583,6 +583,7 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 	Elf_Scn *section = NULL;
 	Elf *e;
 	int i;
+	void *tmp;
 
 	e = fd > 0 ? open_elf_by_fd(fd) : open_elf(obj->name, &fd);
 	if (!e)
@@ -602,6 +603,18 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 				  header.sh_entsize))
 			goto err_out;
 	}
+
+	tmp = realloc(obj->strs, obj->strs_sz);
+	if (!tmp)
+		goto err_out;
+	obj->strs = tmp;
+	obj->strs_cap = obj->strs_sz;
+
+	tmp = realloc(obj->syms, sizeof(*obj->syms) * obj->syms_sz);
+	if (!tmp)
+		return -1;
+	obj->syms = tmp;
+	obj->syms_cap = obj->syms_sz;
 
 	/* now when strings are finalized, adjust pointers properly */
 	for (i = 0; i < obj->syms_sz; i++)
