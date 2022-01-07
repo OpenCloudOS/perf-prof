@@ -345,10 +345,16 @@ static void task_state_sample(union perf_event *event, int instance)
 
         if (data->time > data0->time &&
             data->time - data0->time > ctx.env->greater_than * 1000000UL) {
+            const char *comm;
+            int len;
+
+            comm = tep_get_field_raw(&s, e, "comm", &record, &len, 0);
+            if (comm) {
+                tep__update_comm(comm, pid);
+            }
+
             print_time(stdout);
             printf(" == %s %d WAIT %llu ms\n", tep__pid_to_comm((int)pid), (int)pid, (data->time - data0->time)/1000000UL);
-
-            //tep__update_comm(NULL, data->tid_entry.tid);
 
             __raw_size(&sched_switch->event, &raw, &size);
             tep__print_event(data0->time/1000, data0->cpu_entry.cpu, raw, size);
