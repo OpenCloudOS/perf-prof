@@ -20,7 +20,7 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.ksyms = ksyms__load();
-        ctx.syms_cache = syms_cache__new(0);
+        ctx.syms_cache = syms_cache__new();
         trace.pages *= 2;
     }
     ctx.env = env;
