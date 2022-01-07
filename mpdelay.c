@@ -226,6 +226,7 @@ static int mpdelay_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_callchain_user = 1,
         .watermark     = 1,
     };
     int i;
@@ -365,8 +366,10 @@ static void __print_callchain(union perf_event *event, int t)
         __u64 i;
         for (i = 0; i < data->callchain.nr; i++) {
             __u64 ip = data->callchain.ips[i];
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-            printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
+            if (ip != PERF_CONTEXT_KERNEL) {
+                const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
+                printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
+            }
         }
     }
 }
