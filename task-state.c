@@ -114,7 +114,6 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
     id = tep__event_id("sched", "sched_switch");
     if (id < 0)
         return -1;
-    attr.comm = 1;
     attr.config = ctx.sched_switch = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -125,6 +124,8 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
     id = tep__event_id("sched", "sched_wakeup");
     if (id < 0)
         return -1;
+    attr.comm = 1;
+    attr.task = 1;
     attr.config = ctx.sched_wakeup = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -175,7 +176,7 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void task_state_exit(struct perf_evlist *evlist)
+static void task_state_deinit(struct perf_evlist *evlist)
 {
     monitor_ctx_exit();
 }
@@ -318,7 +319,7 @@ static void task_state_sample(union perf_event *event, int instance)
         entry.event = event;
         rc = rblist__add_node(&ctx.backup, &entry);
         if (rc == -EEXIST) {
-            fprintf(stderr, "pid %d EEXIST\n", (int)pid);
+            //fprintf(stderr, "pid %d EEXIST\n", (int)pid);
             rbn = rblist__find(&ctx.backup, &entry);
             rblist__remove_node(&ctx.backup, rbn);
             rblist__add_node(&ctx.backup, &entry);
@@ -361,13 +362,22 @@ __return:
     tep__unref();
 }
 
+static void task_state_exit(union perf_event *event, int instance)
+{
+    if (ctx.env->callchain && ctx.ksyms && ctx.syms_cache &&
+        event->fork.pid == event->fork.tid) {
+        syms_cache__free_syms(ctx.syms_cache, event->fork.pid);
+    }
+}
+
 struct monitor task_state = {
     .name = "task-state",
     .pages = 2,
     .init = task_state_init,
     .filter = task_state_filter,
-    .deinit = task_state_exit,
+    .deinit = task_state_deinit,
     .comm   = monitor_tep__comm,
+    .exit   = task_state_exit,
     .sample = task_state_sample,
 };
 MONITOR_REGISTER(task_state)
