@@ -117,7 +117,11 @@ struct exit_reason_stat {
     __u64 max;
     __u64 n;
     __u64 sum;
+    __u64 k;    //in kernel
+    __u64 ksum; //sum in kernel
 };
+
+#define START_OF_KERNEL 0xffff000000000000UL
 
 static int exit_reason_stat__node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -141,9 +145,11 @@ static struct rb_node *exit_reason_stat__node_new(struct rblist *rlist, const vo
         b->exit_reason = e->exit_reason;
         b->name = find_exit_reason(b->isa, b->exit_reason); //TODO
         b->min = ~0UL;
-        b->max = 0;
-        b->n = 0;
-        b->sum = 0;
+        b->max = 0UL;
+        b->n = 0UL;
+        b->sum = 0UL;
+        b->k = 0UL;
+        b->ksum = 0UL;
         RB_CLEAR_NODE(&b->rbnode);
         return &b->rbnode;
     } else
@@ -301,15 +307,16 @@ static void kvm_exit_interval(void)
         stat = container_of(rbn, struct exit_reason_stat, rbnode);
 
         if (print_header) {
-            printf("%-*s %8s %16s %9s %9s %12s\n", stat->isa == KVM_ISA_VMX ? 20 : 32,
-                "exit_reason", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
-            printf("%s %8s %16s %9s %9s %12s\n", stat->isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
-                "--------", "----------------", "---------", "---------", "------------");
+            printf("%-*s %8s %16s %9s %9s %12s %6s\n", stat->isa == KVM_ISA_VMX ? 20 : 32,
+                "exit_reason", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "%gsys");
+            printf("%s %8s %16s %9s %9s %12s %6s\n", stat->isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
+                "--------", "----------------", "---------", "---------", "------------", "------");
             print_header = 0;
         }
-        printf("%-*s %8llu %16.3f %9.3f %9.3f %12.3f\n", stat->isa == KVM_ISA_VMX ? 20 : 32,
+        printf("%-*s %8llu %16.3f %9.3f %9.3f %12.3f %6.2f\n", stat->isa == KVM_ISA_VMX ? 20 : 32,
                 stat->name, stat->n, stat->sum/1000.0,
-                stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0);
+                stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0,
+                stat->ksum*100.0/stat->sum);
 
         rblist__remove_node(&sorted, rbn);
     } while (!rblist__empty(&sorted));
@@ -346,7 +353,7 @@ static __always_inline u64 __log2l(u64 v)
 		return __log2(v);
 }
 
-static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason, u32 *isa)
+static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason, u32 *isa, unsigned long *guest_rip)
 {
     unsigned short common_type = raw->raw.common_type;
 
@@ -355,14 +362,17 @@ static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason,
         case ALIGN(sizeof(struct trace_kvm_exit1)+sizeof(u32), sizeof(u64)) - sizeof(u32):
             *exit_reason = raw->raw.kvm_exit.e1.exit_reason;
             *isa = KVM_ISA_VMX;
+            *guest_rip = raw->raw.kvm_exit.e1.guest_rip;
             break;
         case ALIGN(sizeof(struct trace_kvm_exit2)+sizeof(u32), sizeof(u64)) - sizeof(u32):
             *exit_reason = raw->raw.kvm_exit.e2.exit_reason;
             *isa = raw->raw.kvm_exit.e2.isa;
+            *guest_rip = raw->raw.kvm_exit.e2.guest_rip;
             break;
         case ALIGN(sizeof(struct trace_kvm_exit3)+sizeof(u32), sizeof(u64)) - sizeof(u32):
             *exit_reason = raw->raw.kvm_exit.e3.exit_reason;
             *isa = raw->raw.kvm_exit.e3.isa;
+            *guest_rip = raw->raw.kvm_exit.e3.guest_rip;
             break;
         default:
             return -1;
@@ -383,12 +393,13 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
 {
     unsigned int exit_reason, hlt = EXIT_REASON_HLT;
     u32 isa;
+    unsigned long guest_rip;
     struct exit_reason_stat stat, *pstat;
     struct rb_node *rbn;
     __u64 delta = rkvm_entry->time - rkvm_exit->time;
     int slot;
 
-    __exit_reason(rkvm_exit, &exit_reason, &isa);
+    __exit_reason(rkvm_exit, &exit_reason, &isa, &guest_rip);
 
     if (isa == KVM_ISA_SVM) {
         hlt = SVM_EXIT_HLT;
@@ -415,6 +426,10 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
             pstat->max = delta;
         pstat->n ++;
         pstat->sum += delta;
+        if (guest_rip >= START_OF_KERNEL) {
+            pstat->k ++;
+            pstat->ksum += delta;
+        }
     }
 
     if (ctx.env->greater_than &&
@@ -433,6 +448,7 @@ static void kvm_exit_sample(union perf_event *event, int instance)
     unsigned short common_type = raw->raw.common_type;
     unsigned int exit_reason;
     u32 isa;
+    unsigned long guest_rip;
 
     if (ctx.env->verbose >= 2) {
         print_time(stdout);
@@ -440,7 +456,7 @@ static void kvm_exit_sample(union perf_event *event, int instance)
     }
 
     if (common_type == ctx.kvm_exit) {
-        if (__exit_reason(raw, &exit_reason, &isa) < 0)
+        if (__exit_reason(raw, &exit_reason, &isa, &guest_rip) < 0)
             return;
         ctx.perins_kvm_exit_valid[instance] = 1;
         ctx.perins_kvm_exit[instance] = *raw;
