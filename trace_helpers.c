@@ -781,32 +781,31 @@ const char *dso__name(struct dso *dso)
     return dso ? dso->obj->name : NULL;
 }
 
-struct syms *syms__load_file(const char *fname)
+static struct syms *__syms__load_file(FILE *f, char *line, int size)
 {
 	char buf[PATH_MAX], perm[5];
 	struct syms *syms;
 	struct map map;
+	char *s;
 	char *name;
-	FILE *f;
 	int ret;
-
-	f = fopen(fname, "r");
-	if (!f)
-		return NULL;
 
 	syms = calloc(1, sizeof(*syms));
 	if (!syms)
 		goto err_out;
 
 	while (true) {
-		ret = fscanf(f, "%lx-%lx %4s %lx %lx:%lx %lu%[^\n]",
+		s = fgets(line, size, f);
+		if (!s && feof(f))
+			break;
+
+		ret = sscanf(s, "%lx-%lx %4s %lx %lx:%lx %lu%[^\n]\n",
 			     &map.start_addr, &map.end_addr, perm,
 			     &map.file_off, &map.dev_major,
 			     &map.dev_minor, &map.inode, buf);
-		if (ret == EOF && feof(f))
+
+		if (ret != 8) 	/* perf-<PID>.map */
 			break;
-		if (ret != 8)	/* perf-<PID>.map */
-			goto err_out;
 
 		if (perm[2] != 'x')
 			continue;
@@ -821,13 +820,25 @@ struct syms *syms__load_file(const char *fname)
 			goto err_out;
 	}
 
-	fclose(f);
 	return syms;
 
 err_out:
 	syms__free(syms);
-	fclose(f);
 	return NULL;
+}
+
+struct syms *syms__load_file(const char *fname)
+{
+	FILE *f;
+	struct syms *syms;
+	char line[PATH_MAX];
+
+	f = fopen(fname, "r");
+	if (!f)
+		return NULL;
+	syms = __syms__load_file(f, line, PATH_MAX);
+	fclose(f);
+	return syms;
 }
 
 struct syms *syms__load_pid(pid_t tgid)
@@ -860,6 +871,48 @@ const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr)
 	if (!dso)
 		return NULL;
 	return dso__find_sym(dso, offset);
+}
+
+/*
+ * pprof --symbols <program>
+ *  Maps addresses to symbol names.  In this mode, stdin should be a
+ *  list of library mappings, in the same format as is found in the heap-
+ *  and cpu-profile files (this loosely matches that of /proc/self/maps
+ *  on linux), followed by a list of hex addresses to map, one per line.
+ **/
+void syms__convert(FILE *fin, FILE *fout)
+{
+    struct syms *syms;
+    char line[PATH_MAX];
+    char *s;
+    int ret;
+    unsigned long addr;
+
+    syms = __syms__load_file(fin, line, PATH_MAX);
+    if (!syms)
+        return;
+
+    while (true) {
+        ret = sscanf(line, "0x%lx\n", &addr);
+        if (ret == 1) {
+            struct dso *dso;
+            uint64_t offset;
+            dso = syms__find_dso(syms, addr, &offset);
+            if (dso) {
+                const struct sym *sym = dso__find_sym(dso, offset);
+                if (sym) {
+                    fprintf(fout, "%s+0x%lx\n", sym->name, offset - sym->start);
+                    goto next_line;
+                }
+            }
+        }
+        fprintf(fout, "??\n");
+
+next_line:
+        s = fgets(line, PATH_MAX, fin);
+        if (!s && feof(fin))
+            break;
+    }
 }
 
 struct syms_cache_node {
