@@ -14,7 +14,7 @@
 #include <sys/ioctl.h>
 #include <cpuid.h>
 #include <linux/thread_map.h>
-
+#include <trace_helpers.h>
 #include <monitor.h>
 #include <tep.h>
 
@@ -95,7 +95,8 @@ const char argp_program_doc[] =
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
 "    perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
-"    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-i INT] [--perins] [--than us]\n"
+"    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
+"    perf-monitor --symbols /path/to/bin"
 "\n"
 "EXAMPLES:\n"
 "    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock\n"
@@ -113,6 +114,7 @@ enum {
     LONG_OPT_free,
     LONG_OPT_syscalls,
     LONG_OPT_perins,
+    LONG_OPT_symbols,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -138,6 +140,7 @@ static const struct argp_option opts[] = {
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
     { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
+    { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names. Similar to pprof --symbols" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
@@ -222,6 +225,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case LONG_OPT_precise:
         env.precise = 1;
         break;
+    case LONG_OPT_symbols:
+        env.symbols = strdup(arg);
+        break;
     case 'v':
         env.verbose++;
         break;
@@ -229,15 +235,16 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         switch (state->arg_num) {
             case 0:
                 monitor = monitor_find(arg);
-                if (monitor == NULL)
+                if (monitor == NULL && env.symbols == NULL)
                     argp_usage (state);
                 break;
             default:
                 argp_usage (state);
+                break;
         };
         break;
     case ARGP_KEY_END:
-        if (state->arg_num < 1)
+        if (env.symbols == NULL && state->arg_num < 1)
             argp_usage (state);
         break;
     default:
@@ -483,6 +490,11 @@ int main(int argc, char *argv[])
     err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
     if (err)
         return err;
+
+    if (env.symbols) {
+        syms__convert(stdin, stdout);
+        return 0;
+    }
 
     if (env.mmap_pages)
         monitor->pages = env.mmap_pages;

@@ -59,6 +59,7 @@ struct env {
     bool exclude_guest;
     char *tp_alloc;
     char *tp_free;
+    char *symbols;
     bool syscalls;
     bool perins;
     bool test;
