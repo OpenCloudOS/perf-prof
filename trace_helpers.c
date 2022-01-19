@@ -23,163 +23,163 @@
 #include "trace_helpers.h"
 #include "uprobe_helpers.h"
 
-#define min(x, y) ({				\
-	typeof(x) _min1 = (x);			\
-	typeof(y) _min2 = (y);			\
-	(void) (&_min1 == &_min2);		\
-	_min1 < _min2 ? _min1 : _min2; })
+#define min(x, y) ({                \
+    typeof(x) _min1 = (x);          \
+    typeof(y) _min2 = (y);          \
+    (void) (&_min1 == &_min2);      \
+    _min1 < _min2 ? _min1 : _min2; })
 
-#define DISK_NAME_LEN	32
+#define DISK_NAME_LEN   32
 
-#define MINORBITS	20
-#define MINORMASK	((1U << MINORBITS) - 1)
+#define MINORBITS   20
+#define MINORMASK   ((1U << MINORBITS) - 1)
 
-#define MKDEV(ma, mi)	(((ma) << MINORBITS) | (mi))
+#define MKDEV(ma, mi)   (((ma) << MINORBITS) | (mi))
 
 struct ksyms {
-	struct ksym *syms;
-	int syms_sz;
-	int syms_cap;
-	char *strs;
-	int strs_sz;
-	int strs_cap;
+    struct ksym *syms;
+    int syms_sz;
+    int syms_cap;
+    char *strs;
+    int strs_sz;
+    int strs_cap;
 };
 
 static int ksyms__add_symbol(struct ksyms *ksyms, const char *name, unsigned long addr)
 {
-	size_t new_cap, name_len = strlen(name) + 1;
-	struct ksym *ksym;
-	void *tmp;
+    size_t new_cap, name_len = strlen(name) + 1;
+    struct ksym *ksym;
+    void *tmp;
 
-	if (ksyms->strs_sz + name_len > ksyms->strs_cap) {
-		new_cap = ksyms->strs_cap * 4 / 3;
-		if (new_cap < ksyms->strs_sz + name_len)
-			new_cap = ksyms->strs_sz + name_len;
-		if (new_cap < 1024)
-			new_cap = 1024;
-		tmp = realloc(ksyms->strs, new_cap);
-		if (!tmp)
-			return -1;
-		ksyms->strs = tmp;
-		ksyms->strs_cap = new_cap;
-	}
-	if (ksyms->syms_sz + 1 > ksyms->syms_cap) {
-		new_cap = ksyms->syms_cap * 4 / 3;
-		if (new_cap < 1024)
-			new_cap = 1024;
-		tmp = realloc(ksyms->syms, sizeof(*ksyms->syms) * new_cap);
-		if (!tmp)
-			return -1;
-		ksyms->syms = tmp;
-		ksyms->syms_cap = new_cap;
-	}
+    if (ksyms->strs_sz + name_len > ksyms->strs_cap) {
+        new_cap = ksyms->strs_cap * 4 / 3;
+        if (new_cap < ksyms->strs_sz + name_len)
+            new_cap = ksyms->strs_sz + name_len;
+        if (new_cap < 1024)
+            new_cap = 1024;
+        tmp = realloc(ksyms->strs, new_cap);
+        if (!tmp)
+            return -1;
+        ksyms->strs = tmp;
+        ksyms->strs_cap = new_cap;
+    }
+    if (ksyms->syms_sz + 1 > ksyms->syms_cap) {
+        new_cap = ksyms->syms_cap * 4 / 3;
+        if (new_cap < 1024)
+            new_cap = 1024;
+        tmp = realloc(ksyms->syms, sizeof(*ksyms->syms) * new_cap);
+        if (!tmp)
+            return -1;
+        ksyms->syms = tmp;
+        ksyms->syms_cap = new_cap;
+    }
 
-	ksym = &ksyms->syms[ksyms->syms_sz];
-	/* while constructing, re-use pointer as just a plain offset */
-	ksym->name = (void *)(unsigned long)ksyms->strs_sz;
-	ksym->addr = addr;
+    ksym = &ksyms->syms[ksyms->syms_sz];
+    /* while constructing, re-use pointer as just a plain offset */
+    ksym->name = (void *)(unsigned long)ksyms->strs_sz;
+    ksym->addr = addr;
 
-	memcpy(ksyms->strs + ksyms->strs_sz, name, name_len);
-	ksyms->strs_sz += name_len;
-	ksyms->syms_sz++;
+    memcpy(ksyms->strs + ksyms->strs_sz, name, name_len);
+    ksyms->strs_sz += name_len;
+    ksyms->syms_sz++;
 
-	return 0;
+    return 0;
 }
 
 static int ksym_cmp(const void *p1, const void *p2)
 {
-	const struct ksym *s1 = p1, *s2 = p2;
+    const struct ksym *s1 = p1, *s2 = p2;
 
-	if (s1->addr == s2->addr)
-		return strcmp(s1->name, s2->name);
-	return s1->addr < s2->addr ? -1 : 1;
+    if (s1->addr == s2->addr)
+        return strcmp(s1->name, s2->name);
+    return s1->addr < s2->addr ? -1 : 1;
 }
 
 struct ksyms *ksyms__load(void)
 {
-	char sym_type, sym_name[256];
-	struct ksyms *ksyms;
-	unsigned long sym_addr;
-	int i, ret;
-	FILE *f;
+    char sym_type, sym_name[256];
+    struct ksyms *ksyms;
+    unsigned long sym_addr;
+    int i, ret;
+    FILE *f;
 
-	f = fopen("/proc/kallsyms", "r");
-	if (!f)
-		return NULL;
+    f = fopen("/proc/kallsyms", "r");
+    if (!f)
+        return NULL;
 
-	ksyms = calloc(1, sizeof(*ksyms));
-	if (!ksyms)
-		goto err_out;
+    ksyms = calloc(1, sizeof(*ksyms));
+    if (!ksyms)
+        goto err_out;
 
-	while (true) {
-		ret = fscanf(f, "%lx %c %s%*[^\n]\n",
-			     &sym_addr, &sym_type, sym_name);
-		if (ret == EOF && feof(f))
-			break;
-		if (ret != 3)
-			goto err_out;
-		if (ksyms__add_symbol(ksyms, sym_name, sym_addr))
-			goto err_out;
-	}
+    while (true) {
+        ret = fscanf(f, "%lx %c %s%*[^\n]\n",
+                 &sym_addr, &sym_type, sym_name);
+        if (ret == EOF && feof(f))
+            break;
+        if (ret != 3)
+            goto err_out;
+        if (ksyms__add_symbol(ksyms, sym_name, sym_addr))
+            goto err_out;
+    }
 
-	/* now when strings are finalized, adjust pointers properly */
-	for (i = 0; i < ksyms->syms_sz; i++)
-		ksyms->syms[i].name += (unsigned long)ksyms->strs;
+    /* now when strings are finalized, adjust pointers properly */
+    for (i = 0; i < ksyms->syms_sz; i++)
+        ksyms->syms[i].name += (unsigned long)ksyms->strs;
 
-	qsort(ksyms->syms, ksyms->syms_sz, sizeof(*ksyms->syms), ksym_cmp);
+    qsort(ksyms->syms, ksyms->syms_sz, sizeof(*ksyms->syms), ksym_cmp);
 
-	fclose(f);
-	return ksyms;
+    fclose(f);
+    return ksyms;
 
 err_out:
-	ksyms__free(ksyms);
-	fclose(f);
-	return NULL;
+    ksyms__free(ksyms);
+    fclose(f);
+    return NULL;
 }
 
 void ksyms__free(struct ksyms *ksyms)
 {
-	if (!ksyms)
-		return;
+    if (!ksyms)
+        return;
 
-	free(ksyms->syms);
-	free(ksyms->strs);
-	free(ksyms);
+    free(ksyms->syms);
+    free(ksyms->strs);
+    free(ksyms);
 }
 
 const struct ksym *ksyms__map_addr(const struct ksyms *ksyms,
-				   unsigned long addr)
+                   unsigned long addr)
 {
-	int start = 0, end = ksyms->syms_sz - 1, mid;
-	unsigned long sym_addr;
+    int start = 0, end = ksyms->syms_sz - 1, mid;
+    unsigned long sym_addr;
 
-	/* find largest sym_addr <= addr using binary search */
-	while (start < end) {
-		mid = start + (end - start + 1) / 2;
-		sym_addr = ksyms->syms[mid].addr;
+    /* find largest sym_addr <= addr using binary search */
+    while (start < end) {
+        mid = start + (end - start + 1) / 2;
+        sym_addr = ksyms->syms[mid].addr;
 
-		if (sym_addr <= addr)
-			start = mid;
-		else
-			end = mid - 1;
-	}
+        if (sym_addr <= addr)
+            start = mid;
+        else
+            end = mid - 1;
+    }
 
-	if (start == end && ksyms->syms[start].addr <= addr)
-		return &ksyms->syms[start];
-	return NULL;
+    if (start == end && ksyms->syms[start].addr <= addr)
+        return &ksyms->syms[start];
+    return NULL;
 }
 
 const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
-				     const char *name)
+                     const char *name)
 {
-	int i;
+    int i;
 
-	for (i = 0; i < ksyms->syms_sz; i++) {
-		if (strcmp(ksyms->syms[i].name, name) == 0)
-			return &ksyms->syms[i];
-	}
+    for (i = 0; i < ksyms->syms_sz; i++) {
+        if (strcmp(ksyms->syms[i].name, name) == 0)
+            return &ksyms->syms[i];
+    }
 
-	return NULL;
+    return NULL;
 }
 
 /*
@@ -188,137 +188,137 @@ const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
 **/
 
 struct load_range {
-	uint64_t start;
-	uint64_t end;
-	uint64_t file_off;
+    uint64_t start;
+    uint64_t end;
+    uint64_t file_off;
 };
 
 enum elf_type {
-	EXEC,
-	DYN,
-	PERF_MAP,
-	VDSO,
-	UNKNOWN,
+    EXEC,
+    DYN,
+    PERF_MAP,
+    VDSO,
+    UNKNOWN,
 };
 
 struct object {
     struct rb_node rbnode;
     refcount_t refcnt;
     char *name;
-	/* Dyn's first text section virtual addr at execution */
-	uint64_t sh_addr;
-	/* Dyn's first text section file offset */
-	uint64_t sh_offset;
-	enum elf_type type;
+    /* Dyn's first text section virtual addr at execution */
+    uint64_t sh_addr;
+    /* Dyn's first text section file offset */
+    uint64_t sh_offset;
+    enum elf_type type;
 
-	struct sym *syms;
-	int syms_sz;
-	int syms_cap;
+    struct sym *syms;
+    int syms_sz;
+    int syms_cap;
 
-	char *strs;
-	int strs_sz;
-	int strs_cap;
+    char *strs;
+    int strs_sz;
+    int strs_cap;
 };
 
 struct dso {
-	struct load_range *ranges;
-	int range_sz;
-	struct object *obj;
+    struct load_range *ranges;
+    int range_sz;
+    struct object *obj;
 };
 
 struct map {
-	uint64_t start_addr;
-	uint64_t end_addr;
-	uint64_t file_off;
-	uint64_t dev_major;
-	uint64_t dev_minor;
-	uint64_t inode;
+    uint64_t start_addr;
+    uint64_t end_addr;
+    uint64_t file_off;
+    uint64_t dev_major;
+    uint64_t dev_minor;
+    uint64_t inode;
 };
 
 struct syms {
-	struct dso *dsos;
-	int dso_sz;
+    struct dso *dsos;
+    int dso_sz;
 };
 
 static bool is_file_backed(const char *mapname)
 {
 #define STARTS_WITH(mapname, prefix) \
-	(!strncmp(mapname, prefix, sizeof(prefix) - 1))
+    (!strncmp(mapname, prefix, sizeof(prefix) - 1))
 
-	return mapname[0] && !(
-		STARTS_WITH(mapname, "//anon") ||
-		STARTS_WITH(mapname, "/dev/zero") ||
-		STARTS_WITH(mapname, "/anon_hugepage") ||
-		STARTS_WITH(mapname, "socket:") ||
-		STARTS_WITH(mapname, "[stack") ||
-		STARTS_WITH(mapname, "/SYSV") ||
-		STARTS_WITH(mapname, "[heap]") ||
-		STARTS_WITH(mapname, "[vsyscall]"));
+    return mapname[0] && !(
+        STARTS_WITH(mapname, "//anon") ||
+        STARTS_WITH(mapname, "/dev/zero") ||
+        STARTS_WITH(mapname, "/anon_hugepage") ||
+        STARTS_WITH(mapname, "socket:") ||
+        STARTS_WITH(mapname, "[stack") ||
+        STARTS_WITH(mapname, "/SYSV") ||
+        STARTS_WITH(mapname, "[heap]") ||
+        STARTS_WITH(mapname, "[vsyscall]"));
 }
 
 static bool is_perf_map(const char *path)
 {
-	return false;
+    return false;
 }
 
 static bool is_vdso(const char *path)
 {
-	return !strcmp(path, "[vdso]");
+    return !strcmp(path, "[vdso]");
 }
 
 static int get_elf_type(const char *path)
 {
-	GElf_Ehdr hdr;
-	void *res;
-	Elf *e;
-	int fd;
+    GElf_Ehdr hdr;
+    void *res;
+    Elf *e;
+    int fd;
 
-	if (is_vdso(path))
-		return -1;
-	e = open_elf(path, &fd);
-	if (!e)
-		return -1;
-	res = gelf_getehdr(e, &hdr);
-	close_elf(e, fd);
-	if (!res)
-		return -1;
-	return hdr.e_type;
+    if (is_vdso(path))
+        return -1;
+    e = open_elf(path, &fd);
+    if (!e)
+        return -1;
+    res = gelf_getehdr(e, &hdr);
+    close_elf(e, fd);
+    if (!res)
+        return -1;
+    return hdr.e_type;
 }
 
 static int get_elf_text_scn_info(const char *path, uint64_t *addr,
-				 uint64_t *offset)
+                 uint64_t *offset)
 {
-	Elf_Scn *section = NULL;
-	int fd = -1, err = -1;
-	GElf_Shdr header;
-	size_t stridx;
-	Elf *e = NULL;
-	char *name;
+    Elf_Scn *section = NULL;
+    int fd = -1, err = -1;
+    GElf_Shdr header;
+    size_t stridx;
+    Elf *e = NULL;
+    char *name;
 
-	e = open_elf(path, &fd);
-	if (!e)
-		goto err_out;
-	err = elf_getshdrstrndx(e, &stridx);
-	if (err < 0)
-		goto err_out;
+    e = open_elf(path, &fd);
+    if (!e)
+        goto err_out;
+    err = elf_getshdrstrndx(e, &stridx);
+    if (err < 0)
+        goto err_out;
 
-	err = -1;
-	while ((section = elf_nextscn(e, section)) != 0) {
-		if (!gelf_getshdr(section, &header))
-			continue;
+    err = -1;
+    while ((section = elf_nextscn(e, section)) != 0) {
+        if (!gelf_getshdr(section, &header))
+            continue;
 
-		name = elf_strptr(e, stridx, header.sh_name);
-		if (name && !strcmp(name, ".text")) {
-			*addr = (uint64_t)header.sh_addr;
-			*offset = (uint64_t)header.sh_offset;
-			err = 0;
-			break;
-		}
-	}
+        name = elf_strptr(e, stridx, header.sh_name);
+        if (name && !strcmp(name, ".text")) {
+            *addr = (uint64_t)header.sh_addr;
+            *offset = (uint64_t)header.sh_offset;
+            err = 0;
+            break;
+        }
+    }
 
 err_out:
-	close_elf(e, fd);
-	return err;
+    close_elf(e, fd);
+    return err;
 }
 
 static int object_node_cmp(struct rb_node *rbn, const void *entry)
@@ -424,171 +424,171 @@ void obj__stat(FILE *fp)
 
 static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
 {
-	struct dso *dso = NULL;
-	int i;
-	void *tmp;
+    struct dso *dso = NULL;
+    int i;
+    void *tmp;
 
-	for (i = 0; i < syms->dso_sz; i++) {
-		if (!strcmp(syms->dsos[i].obj->name, name)) {
-			dso = &syms->dsos[i];
-			break;
-		}
-	}
+    for (i = 0; i < syms->dso_sz; i++) {
+        if (!strcmp(syms->dsos[i].obj->name, name)) {
+            dso = &syms->dsos[i];
+            break;
+        }
+    }
 
-	if (!dso) {
-		tmp = realloc(syms->dsos, (syms->dso_sz + 1) *
-			      sizeof(*syms->dsos));
-		if (!tmp)
-			return -1;
-		syms->dsos = tmp;
-		dso = &syms->dsos[syms->dso_sz++];
-		memset(dso, 0, sizeof(*dso));
+    if (!dso) {
+        tmp = realloc(syms->dsos, (syms->dso_sz + 1) *
+                  sizeof(*syms->dsos));
+        if (!tmp)
+            return -1;
+        syms->dsos = tmp;
+        dso = &syms->dsos[syms->dso_sz++];
+        memset(dso, 0, sizeof(*dso));
 
         dso->obj = obj__get(name);
         if (!dso->obj)
             return -1;
-	}
+    }
 
-	tmp = realloc(dso->ranges, (dso->range_sz + 1) * sizeof(*dso->ranges));
-	if (!tmp)
-		return -1;
-	dso->ranges = tmp;
-	dso->ranges[dso->range_sz].start = map->start_addr;
-	dso->ranges[dso->range_sz].end = map->end_addr;
-	dso->ranges[dso->range_sz].file_off = map->file_off;
-	dso->range_sz++;
+    tmp = realloc(dso->ranges, (dso->range_sz + 1) * sizeof(*dso->ranges));
+    if (!tmp)
+        return -1;
+    dso->ranges = tmp;
+    dso->ranges[dso->range_sz].start = map->start_addr;
+    dso->ranges[dso->range_sz].end = map->end_addr;
+    dso->ranges[dso->range_sz].file_off = map->file_off;
+    dso->range_sz++;
 
-	return 0;
+    return 0;
 }
 
 static void dso__free_fields(struct dso *dso)
 {
-	if (!dso)
-		return;
+    if (!dso)
+        return;
 
-	obj__put(dso->obj);
-	free(dso->ranges);
+    obj__put(dso->obj);
+    free(dso->ranges);
 }
 
 struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
-				  uint64_t *offset)
+                  uint64_t *offset)
 {
-	struct load_range *range;
-	struct dso *dso;
-	int i, j;
+    struct load_range *range;
+    struct dso *dso;
+    int i, j;
 
-	for (i = 0; i < syms->dso_sz; i++) {
-		dso = &syms->dsos[i];
-		for (j = 0; j < dso->range_sz; j++) {
-			range = &dso->ranges[j];
-			if (addr <= range->start || addr >= range->end)
-				continue;
-			if (dso->obj->type == DYN || dso->obj->type == VDSO) {
-				/* Offset within the mmap */
-				*offset = addr - range->start + range->file_off;
-				/* Offset within the ELF for dyn symbol lookup */
-				*offset += dso->obj->sh_addr - dso->obj->sh_offset;
-			} else {
-				*offset = addr;
-			}
+    for (i = 0; i < syms->dso_sz; i++) {
+        dso = &syms->dsos[i];
+        for (j = 0; j < dso->range_sz; j++) {
+            range = &dso->ranges[j];
+            if (addr <= range->start || addr >= range->end)
+                continue;
+            if (dso->obj->type == DYN || dso->obj->type == VDSO) {
+                /* Offset within the mmap */
+                *offset = addr - range->start + range->file_off;
+                /* Offset within the ELF for dyn symbol lookup */
+                *offset += dso->obj->sh_addr - dso->obj->sh_offset;
+            } else {
+                *offset = addr;
+            }
 
-			return dso;
-		}
-	}
+            return dso;
+        }
+    }
 
-	return NULL;
+    return NULL;
 }
 
 static int obj__load_sym_table_from_perf_map(struct object *obj)
 {
-	return -1;
+    return -1;
 }
 
 static int obj__add_sym(struct object *obj, const char *name, uint64_t start,
-			uint64_t size)
+            uint64_t size)
 {
-	struct sym *sym;
-	size_t new_cap, name_len = strlen(name) + 1;
-	void *tmp;
+    struct sym *sym;
+    size_t new_cap, name_len = strlen(name) + 1;
+    void *tmp;
 
-	if (obj->strs_sz + name_len > obj->strs_cap) {
-		new_cap = obj->strs_cap * 4 / 3;
-		if (new_cap < obj->strs_sz + name_len)
-			new_cap = obj->strs_sz + name_len;
-		if (new_cap < 1024)
-			new_cap = 1024;
-		tmp = realloc(obj->strs, new_cap);
-		if (!tmp)
-			return -1;
-		obj->strs = tmp;
-		obj->strs_cap = new_cap;
-	}
+    if (obj->strs_sz + name_len > obj->strs_cap) {
+        new_cap = obj->strs_cap * 4 / 3;
+        if (new_cap < obj->strs_sz + name_len)
+            new_cap = obj->strs_sz + name_len;
+        if (new_cap < 1024)
+            new_cap = 1024;
+        tmp = realloc(obj->strs, new_cap);
+        if (!tmp)
+            return -1;
+        obj->strs = tmp;
+        obj->strs_cap = new_cap;
+    }
 
-	if (obj->syms_sz + 1 > obj->syms_cap) {
-		new_cap = obj->syms_cap * 4 / 3;
-		if (new_cap < 1024)
-			new_cap = 1024;
-		tmp = realloc(obj->syms, sizeof(*obj->syms) * new_cap);
-		if (!tmp)
-			return -1;
-		obj->syms = tmp;
-		obj->syms_cap = new_cap;
-	}
+    if (obj->syms_sz + 1 > obj->syms_cap) {
+        new_cap = obj->syms_cap * 4 / 3;
+        if (new_cap < 1024)
+            new_cap = 1024;
+        tmp = realloc(obj->syms, sizeof(*obj->syms) * new_cap);
+        if (!tmp)
+            return -1;
+        obj->syms = tmp;
+        obj->syms_cap = new_cap;
+    }
 
-	sym = &obj->syms[obj->syms_sz++];
-	/* while constructing, re-use pointer as just a plain offset */
-	sym->name = (void *)(unsigned long)obj->strs_sz;
-	sym->start = start;
-	sym->size = size;
+    sym = &obj->syms[obj->syms_sz++];
+    /* while constructing, re-use pointer as just a plain offset */
+    sym->name = (void *)(unsigned long)obj->strs_sz;
+    sym->start = start;
+    sym->size = size;
 
-	memcpy(obj->strs + obj->strs_sz, name, name_len);
-	obj->strs_sz += name_len;
-	return 0;
+    memcpy(obj->strs + obj->strs_sz, name, name_len);
+    obj->strs_sz += name_len;
+    return 0;
 }
 
 static int sym_cmp(const void *p1, const void *p2)
 {
-	const struct sym *s1 = p1, *s2 = p2;
+    const struct sym *s1 = p1, *s2 = p2;
 
-	if (s1->start == s2->start)
-		return strcmp(s1->name, s2->name);
-	return s1->start < s2->start ? -1 : 1;
+    if (s1->start == s2->start)
+        return strcmp(s1->name, s2->name);
+    return s1->start < s2->start ? -1 : 1;
 }
 
 static int obj__add_syms(struct object *obj, Elf *e, Elf_Scn *section,
-			 size_t stridx, size_t symsize)
+             size_t stridx, size_t symsize)
 {
-	Elf_Data *data = NULL;
+    Elf_Data *data = NULL;
 
-	while ((data = elf_getdata(section, data)) != 0) {
-		size_t i, symcount = data->d_size / symsize;
+    while ((data = elf_getdata(section, data)) != 0) {
+        size_t i, symcount = data->d_size / symsize;
 
-		if (data->d_size % symsize)
-			return -1;
+        if (data->d_size % symsize)
+            return -1;
 
-		for (i = 0; i < symcount; ++i) {
-			const char *name;
-			GElf_Sym sym;
+        for (i = 0; i < symcount; ++i) {
+            const char *name;
+            GElf_Sym sym;
 
-			if (!gelf_getsym(data, (int)i, &sym))
-				continue;
-			if (!(name = elf_strptr(e, stridx, sym.st_name)))
-				continue;
-			if (name[0] == '\0')
-				continue;
+            if (!gelf_getsym(data, (int)i, &sym))
+                continue;
+            if (!(name = elf_strptr(e, stridx, sym.st_name)))
+                continue;
+            if (name[0] == '\0')
+                continue;
 
-			if (sym.st_value == 0)
-				continue;
+            if (sym.st_value == 0)
+                continue;
 
-			if (obj__add_sym(obj, name, sym.st_value, sym.st_size))
-				goto err_out;
-		}
-	}
+            if (obj__add_sym(obj, name, sym.st_value, sym.st_size))
+                goto err_out;
+        }
+    }
 
-	return 0;
+    return 0;
 
 err_out:
-	return -1;
+    return -1;
 }
 
 static void obj__free_fields(struct object *obj)
@@ -603,172 +603,172 @@ static void obj__free_fields(struct object *obj)
 
 static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 {
-	Elf_Scn *section = NULL;
-	Elf *e;
-	int i;
-	void *tmp;
+    Elf_Scn *section = NULL;
+    Elf *e;
+    int i;
+    void *tmp;
 
-	e = fd > 0 ? open_elf_by_fd(fd) : open_elf(obj->name, &fd);
-	if (!e)
-		return -1;
+    e = fd > 0 ? open_elf_by_fd(fd) : open_elf(obj->name, &fd);
+    if (!e)
+        return -1;
 
-	while ((section = elf_nextscn(e, section)) != 0) {
-		GElf_Shdr header;
+    while ((section = elf_nextscn(e, section)) != 0) {
+        GElf_Shdr header;
 
-		if (!gelf_getshdr(section, &header))
-			continue;
+        if (!gelf_getshdr(section, &header))
+            continue;
 
-		if (header.sh_type != SHT_SYMTAB &&
-		    header.sh_type != SHT_DYNSYM)
-			continue;
+        if (header.sh_type != SHT_SYMTAB &&
+            header.sh_type != SHT_DYNSYM)
+            continue;
 
-		if (obj__add_syms(obj, e, section, header.sh_link,
-				  header.sh_entsize))
-			goto err_out;
-	}
+        if (obj__add_syms(obj, e, section, header.sh_link,
+                  header.sh_entsize))
+            goto err_out;
+    }
 
-	tmp = realloc(obj->strs, obj->strs_sz);
-	if (!tmp)
-		goto err_out;
-	obj->strs = tmp;
-	obj->strs_cap = obj->strs_sz;
+    tmp = realloc(obj->strs, obj->strs_sz);
+    if (!tmp)
+        goto err_out;
+    obj->strs = tmp;
+    obj->strs_cap = obj->strs_sz;
 
-	tmp = realloc(obj->syms, sizeof(*obj->syms) * obj->syms_sz);
-	if (!tmp)
-		return -1;
-	obj->syms = tmp;
-	obj->syms_cap = obj->syms_sz;
+    tmp = realloc(obj->syms, sizeof(*obj->syms) * obj->syms_sz);
+    if (!tmp)
+        return -1;
+    obj->syms = tmp;
+    obj->syms_cap = obj->syms_sz;
 
-	/* now when strings are finalized, adjust pointers properly */
-	for (i = 0; i < obj->syms_sz; i++)
-		obj->syms[i].name += (unsigned long)obj->strs;
+    /* now when strings are finalized, adjust pointers properly */
+    for (i = 0; i < obj->syms_sz; i++)
+        obj->syms[i].name += (unsigned long)obj->strs;
 
-	qsort(obj->syms, obj->syms_sz, sizeof(*obj->syms), sym_cmp);
+    qsort(obj->syms, obj->syms_sz, sizeof(*obj->syms), sym_cmp);
 
-	close_elf(e, fd);
-	return 0;
+    close_elf(e, fd);
+    return 0;
 
 err_out:
-	obj__free_fields(obj);
-	close_elf(e, fd);
-	return -1;
+    obj__free_fields(obj);
+    close_elf(e, fd);
+    return -1;
 }
 
 static int create_tmp_vdso_image(struct object *obj)
 {
-	uint64_t start_addr, end_addr;
-	long pid = getpid();
-	char buf[PATH_MAX];
-	void *image = NULL;
-	char tmpfile[128];
-	int ret, fd = -1;
-	uint64_t sz;
-	char *name;
-	FILE *f;
+    uint64_t start_addr, end_addr;
+    long pid = getpid();
+    char buf[PATH_MAX];
+    void *image = NULL;
+    char tmpfile[128];
+    int ret, fd = -1;
+    uint64_t sz;
+    char *name;
+    FILE *f;
 
-	snprintf(tmpfile, sizeof(tmpfile), "/proc/%ld/maps", pid);
-	f = fopen(tmpfile, "r");
-	if (!f)
-		return -1;
+    snprintf(tmpfile, sizeof(tmpfile), "/proc/%ld/maps", pid);
+    f = fopen(tmpfile, "r");
+    if (!f)
+        return -1;
 
-	while (true) {
-		ret = fscanf(f, "%lx-%lx %*s %*x %*x:%*x %*u%[^\n]",
-			     &start_addr, &end_addr, buf);
-		if (ret == EOF && feof(f))
-			break;
-		if (ret != 3)
-			goto err_out;
+    while (true) {
+        ret = fscanf(f, "%lx-%lx %*s %*x %*x:%*x %*u%[^\n]",
+                 &start_addr, &end_addr, buf);
+        if (ret == EOF && feof(f))
+            break;
+        if (ret != 3)
+            goto err_out;
 
-		name = buf;
-		while (isspace(*name))
-			name++;
-		if (!is_file_backed(name))
-			continue;
-		if (is_vdso(name))
-			break;
-	}
+        name = buf;
+        while (isspace(*name))
+            name++;
+        if (!is_file_backed(name))
+            continue;
+        if (is_vdso(name))
+            break;
+    }
 
-	sz = end_addr - start_addr;
-	image = malloc(sz);
-	if (!image)
-		goto err_out;
-	memcpy(image, (void *)start_addr, sz);
+    sz = end_addr - start_addr;
+    image = malloc(sz);
+    if (!image)
+        goto err_out;
+    memcpy(image, (void *)start_addr, sz);
 
-	snprintf(tmpfile, sizeof(tmpfile),
-		 "/tmp/libbpf_%ld_vdso_image_XXXXXX", pid);
-	fd = mkostemp(tmpfile, O_CLOEXEC);
-	if (fd < 0) {
-		fprintf(stderr, "failed to create temp file: %s\n",
-			strerror(errno));
-		goto err_out;
-	}
-	/* Unlink the file to avoid leaking */
-	if (unlink(tmpfile) == -1)
-		fprintf(stderr, "failed to unlink %s: %s\n", tmpfile,
-			strerror(errno));
-	if (write(fd, image, sz) == -1) {
-		fprintf(stderr, "failed to write to vDSO image: %s\n",
-			strerror(errno));
-		close(fd);
-		fd = -1;
-		goto err_out;
-	}
+    snprintf(tmpfile, sizeof(tmpfile),
+         "/tmp/libbpf_%ld_vdso_image_XXXXXX", pid);
+    fd = mkostemp(tmpfile, O_CLOEXEC);
+    if (fd < 0) {
+        fprintf(stderr, "failed to create temp file: %s\n",
+            strerror(errno));
+        goto err_out;
+    }
+    /* Unlink the file to avoid leaking */
+    if (unlink(tmpfile) == -1)
+        fprintf(stderr, "failed to unlink %s: %s\n", tmpfile,
+            strerror(errno));
+    if (write(fd, image, sz) == -1) {
+        fprintf(stderr, "failed to write to vDSO image: %s\n",
+            strerror(errno));
+        close(fd);
+        fd = -1;
+        goto err_out;
+    }
 
 err_out:
-	fclose(f);
-	free(image);
-	return fd;
+    fclose(f);
+    free(image);
+    return fd;
 }
 
 static int obj__load_sym_table_from_vdso_image(struct object *obj)
 {
-	int fd = create_tmp_vdso_image(obj);
+    int fd = create_tmp_vdso_image(obj);
 
-	if (fd < 0)
-		return -1;
-	return obj__load_sym_table_from_elf(obj, fd);
+    if (fd < 0)
+        return -1;
+    return obj__load_sym_table_from_elf(obj, fd);
 }
 
 static int obj__load_sym_table(struct object *obj)
 {
-	if (obj->type == UNKNOWN)
-		return -1;
-	if (obj->type == PERF_MAP)
-		return obj__load_sym_table_from_perf_map(obj);
-	if (obj->type == EXEC || obj->type == DYN)
-		return obj__load_sym_table_from_elf(obj, 0);
-	if (obj->type == VDSO)
-		return obj__load_sym_table_from_vdso_image(obj);
-	return -1;
+    if (obj->type == UNKNOWN)
+        return -1;
+    if (obj->type == PERF_MAP)
+        return obj__load_sym_table_from_perf_map(obj);
+    if (obj->type == EXEC || obj->type == DYN)
+        return obj__load_sym_table_from_elf(obj, 0);
+    if (obj->type == VDSO)
+        return obj__load_sym_table_from_vdso_image(obj);
+    return -1;
 }
 
 static const struct sym *obj__find_sym(struct object *obj, uint64_t offset)
 {
-	unsigned long sym_addr;
-	int start, end, mid;
+    unsigned long sym_addr;
+    int start, end, mid;
 
     if (!obj)
         return NULL;
-	if (!obj->syms && obj__load_sym_table(obj))
-		return NULL;
+    if (!obj->syms && obj__load_sym_table(obj))
+        return NULL;
 
-	start = 0;
-	end = obj->syms_sz - 1;
+    start = 0;
+    end = obj->syms_sz - 1;
 
-	/* find largest sym_addr <= addr using binary search */
-	while (start < end) {
-		mid = start + (end - start + 1) / 2;
-		sym_addr = obj->syms[mid].start;
+    /* find largest sym_addr <= addr using binary search */
+    while (start < end) {
+        mid = start + (end - start + 1) / 2;
+        sym_addr = obj->syms[mid].start;
 
-		if (sym_addr <= offset)
-			start = mid;
-		else
-			end = mid - 1;
-	}
+        if (sym_addr <= offset)
+            start = mid;
+        else
+            end = mid - 1;
+    }
 
-	if (start == end && obj->syms[start].start <= offset)
-		return &obj->syms[start];
-	return NULL;
+    if (start == end && obj->syms[start].start <= offset)
+        return &obj->syms[start];
+    return NULL;
 }
 
 const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
@@ -783,94 +783,94 @@ const char *dso__name(struct dso *dso)
 
 static struct syms *__syms__load_file(FILE *f, char *line, int size)
 {
-	char buf[PATH_MAX], perm[5];
-	struct syms *syms;
-	struct map map;
-	char *s;
-	char *name;
-	int ret;
+    char buf[PATH_MAX], perm[5];
+    struct syms *syms;
+    struct map map;
+    char *s;
+    char *name;
+    int ret;
 
-	syms = calloc(1, sizeof(*syms));
-	if (!syms)
-		goto err_out;
+    syms = calloc(1, sizeof(*syms));
+    if (!syms)
+        goto err_out;
 
-	while (true) {
-		s = fgets(line, size, f);
-		if (!s && feof(f))
-			break;
+    while (true) {
+        s = fgets(line, size, f);
+        if (!s && feof(f))
+            break;
 
-		ret = sscanf(s, "%lx-%lx %4s %lx %lx:%lx %lu%[^\n]\n",
-			     &map.start_addr, &map.end_addr, perm,
-			     &map.file_off, &map.dev_major,
-			     &map.dev_minor, &map.inode, buf);
+        ret = sscanf(s, "%lx-%lx %4s %lx %lx:%lx %lu%[^\n]\n",
+                 &map.start_addr, &map.end_addr, perm,
+                 &map.file_off, &map.dev_major,
+                 &map.dev_minor, &map.inode, buf);
 
-		if (ret != 8) 	/* perf-<PID>.map */
-			break;
+        if (ret != 8)   /* perf-<PID>.map */
+            break;
 
-		if (perm[2] != 'x')
-			continue;
+        if (perm[2] != 'x')
+            continue;
 
-		name = buf;
-		while (isspace(*name))
-			name++;
-		if (!is_file_backed(name))
-			continue;
+        name = buf;
+        while (isspace(*name))
+            name++;
+        if (!is_file_backed(name))
+            continue;
 
-		if (syms__add_dso(syms, &map, name))
-			goto err_out;
-	}
+        if (syms__add_dso(syms, &map, name))
+            goto err_out;
+    }
 
-	return syms;
+    return syms;
 
 err_out:
-	syms__free(syms);
-	return NULL;
+    syms__free(syms);
+    return NULL;
 }
 
 struct syms *syms__load_file(const char *fname)
 {
-	FILE *f;
-	struct syms *syms;
-	char line[PATH_MAX];
+    FILE *f;
+    struct syms *syms;
+    char line[PATH_MAX];
 
-	f = fopen(fname, "r");
-	if (!f)
-		return NULL;
-	syms = __syms__load_file(f, line, PATH_MAX);
-	fclose(f);
-	return syms;
+    f = fopen(fname, "r");
+    if (!f)
+        return NULL;
+    syms = __syms__load_file(f, line, PATH_MAX);
+    fclose(f);
+    return syms;
 }
 
 struct syms *syms__load_pid(pid_t tgid)
 {
-	char fname[128];
+    char fname[128];
 
-	snprintf(fname, sizeof(fname), "/proc/%ld/maps", (long)tgid);
-	return syms__load_file(fname);
+    snprintf(fname, sizeof(fname), "/proc/%ld/maps", (long)tgid);
+    return syms__load_file(fname);
 }
 
 void syms__free(struct syms *syms)
 {
-	int i;
+    int i;
 
-	if (!syms)
-		return;
+    if (!syms)
+        return;
 
-	for (i = 0; i < syms->dso_sz; i++)
-		dso__free_fields(&syms->dsos[i]);
-	free(syms->dsos);
-	free(syms);
+    for (i = 0; i < syms->dso_sz; i++)
+        dso__free_fields(&syms->dsos[i]);
+    free(syms->dsos);
+    free(syms);
 }
 
 const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr)
 {
-	struct dso *dso;
-	uint64_t offset;
+    struct dso *dso;
+    uint64_t offset;
 
-	dso = syms__find_dso(syms, addr, &offset);
-	if (!dso)
-		return NULL;
-	return dso__find_sym(dso, offset);
+    dso = syms__find_dso(syms, addr, &offset);
+    if (!dso)
+        return NULL;
+    return dso__find_sym(dso, offset);
 }
 
 /*
@@ -922,7 +922,7 @@ struct syms_cache_node {
     int tgid;
 };
 struct syms_cache {
-	struct rblist cache;
+    struct rblist cache;
 };
 
 static int syms_cache_node_cmp(struct rb_node *rbn, const void *entry)
@@ -967,7 +967,7 @@ static void syms_cache_node_delete(struct rblist *rblist, struct rb_node *rbn)
 
 struct syms_cache *syms_cache__new(void)
 {
-	struct syms_cache *syms_cache;
+    struct syms_cache *syms_cache;
 
     syms_cache = calloc(1, sizeof(*syms_cache));
     if (!syms_cache)
@@ -977,7 +977,7 @@ struct syms_cache *syms_cache__new(void)
     syms_cache->cache.node_cmp = syms_cache_node_cmp;
     syms_cache->cache.node_new = syms_cache_node_new;
     syms_cache->cache.node_delete = syms_cache_node_delete;
-	return syms_cache;
+    return syms_cache;
 }
 
 void syms_cache__free(struct syms_cache *syms_cache)
@@ -986,7 +986,7 @@ void syms_cache__free(struct syms_cache *syms_cache)
         return;
 
     rblist__exit(&syms_cache->cache);
-	free(syms_cache);
+    free(syms_cache);
 }
 
 struct syms *syms_cache__get_syms(struct syms_cache *syms_cache, int tgid)
@@ -1000,7 +1000,7 @@ struct syms *syms_cache__get_syms(struct syms_cache *syms_cache, int tgid)
         node = container_of(rbn, struct syms_cache_node, rbnode);
         syms = node->syms;
     }
-	return syms;
+    return syms;
 }
 
 void syms_cache__free_syms(struct syms_cache *syms_cache, int tgid)
@@ -1014,293 +1014,293 @@ void syms_cache__free_syms(struct syms_cache *syms_cache, int tgid)
 }
 
 struct partitions {
-	struct partition *items;
-	int sz;
+    struct partition *items;
+    int sz;
 };
 
 static int partitions__add_partition(struct partitions *partitions,
-				     const char *name, unsigned int dev)
+                     const char *name, unsigned int dev)
 {
-	struct partition *partition;
-	void *tmp;
+    struct partition *partition;
+    void *tmp;
 
-	tmp = realloc(partitions->items, (partitions->sz + 1) *
-		sizeof(*partitions->items));
-	if (!tmp)
-		return -1;
-	partitions->items = tmp;
-	partition = &partitions->items[partitions->sz];
-	partition->name = strdup(name);
-	partition->dev = dev;
-	partitions->sz++;
+    tmp = realloc(partitions->items, (partitions->sz + 1) *
+        sizeof(*partitions->items));
+    if (!tmp)
+        return -1;
+    partitions->items = tmp;
+    partition = &partitions->items[partitions->sz];
+    partition->name = strdup(name);
+    partition->dev = dev;
+    partitions->sz++;
 
-	return 0;
+    return 0;
 }
 
 struct partitions *partitions__load(void)
 {
-	char part_name[DISK_NAME_LEN];
-	unsigned int devmaj, devmin;
-	unsigned long long nop;
-	struct partitions *partitions;
-	char buf[64];
-	FILE *f;
+    char part_name[DISK_NAME_LEN];
+    unsigned int devmaj, devmin;
+    unsigned long long nop;
+    struct partitions *partitions;
+    char buf[64];
+    FILE *f;
 
-	f = fopen("/proc/partitions", "r");
-	if (!f)
-		return NULL;
+    f = fopen("/proc/partitions", "r");
+    if (!f)
+        return NULL;
 
-	partitions = calloc(1, sizeof(*partitions));
-	if (!partitions)
-		goto err_out;
+    partitions = calloc(1, sizeof(*partitions));
+    if (!partitions)
+        goto err_out;
 
-	while (fgets(buf, sizeof(buf), f) != NULL) {
-		/* skip heading */
-		if (buf[0] != ' ' || buf[0] == '\n')
-			continue;
-		if (sscanf(buf, "%u %u %llu %s", &devmaj, &devmin, &nop,
-				part_name) != 4)
-			goto err_out;
-		if (partitions__add_partition(partitions, part_name,
-						MKDEV(devmaj, devmin)))
-			goto err_out;
-	}
+    while (fgets(buf, sizeof(buf), f) != NULL) {
+        /* skip heading */
+        if (buf[0] != ' ' || buf[0] == '\n')
+            continue;
+        if (sscanf(buf, "%u %u %llu %s", &devmaj, &devmin, &nop,
+                part_name) != 4)
+            goto err_out;
+        if (partitions__add_partition(partitions, part_name,
+                        MKDEV(devmaj, devmin)))
+            goto err_out;
+    }
 
-	fclose(f);
-	return partitions;
+    fclose(f);
+    return partitions;
 
 err_out:
-	partitions__free(partitions);
-	fclose(f);
-	return NULL;
+    partitions__free(partitions);
+    fclose(f);
+    return NULL;
 }
 
 void partitions__free(struct partitions *partitions)
 {
-	int i;
+    int i;
 
-	if (!partitions)
-		return;
+    if (!partitions)
+        return;
 
-	for (i = 0; i < partitions->sz; i++)
-		free(partitions->items[i].name);
-	free(partitions->items);
-	free(partitions);
+    for (i = 0; i < partitions->sz; i++)
+        free(partitions->items[i].name);
+    free(partitions->items);
+    free(partitions);
 }
 
 const struct partition *
 partitions__get_by_dev(const struct partitions *partitions, unsigned int dev)
 {
-	int i;
+    int i;
 
-	for (i = 0; i < partitions->sz; i++) {
-		if (partitions->items[i].dev == dev)
-			return &partitions->items[i];
-	}
+    for (i = 0; i < partitions->sz; i++) {
+        if (partitions->items[i].dev == dev)
+            return &partitions->items[i];
+    }
 
-	return NULL;
+    return NULL;
 }
 
 const struct partition *
 partitions__get_by_name(const struct partitions *partitions, const char *name)
 {
-	int i;
+    int i;
 
-	for (i = 0; i < partitions->sz; i++) {
-		if (strcmp(partitions->items[i].name, name) == 0)
-			return &partitions->items[i];
-	}
+    for (i = 0; i < partitions->sz; i++) {
+        if (strcmp(partitions->items[i].name, name) == 0)
+            return &partitions->items[i];
+    }
 
-	return NULL;
+    return NULL;
 }
 
 static void print_stars(unsigned int val, unsigned int val_max, int width)
 {
-	int num_stars, num_spaces, i;
-	bool need_plus;
+    int num_stars, num_spaces, i;
+    bool need_plus;
 
-	num_stars = min(val, val_max) * width / val_max;
-	num_spaces = width - num_stars;
-	need_plus = val > val_max;
+    num_stars = min(val, val_max) * width / val_max;
+    num_spaces = width - num_stars;
+    need_plus = val > val_max;
 
-	for (i = 0; i < num_stars; i++)
-		printf("*");
-	for (i = 0; i < num_spaces; i++)
-		printf(" ");
-	if (need_plus)
-		printf("+");
+    for (i = 0; i < num_stars; i++)
+        printf("*");
+    for (i = 0; i < num_spaces; i++)
+        printf(" ");
+    if (need_plus)
+        printf("+");
 }
 
 void print_log2_hist(unsigned int *vals, int vals_size, const char *val_type)
 {
-	int stars_max = 40, idx_max = -1, idx0_max = -1;
-	unsigned int val, val_max = 0;
-	unsigned long long low, high;
-	int stars, width, i;
+    int stars_max = 40, idx_max = -1, idx0_max = -1;
+    unsigned int val, val_max = 0;
+    unsigned long long low, high;
+    int stars, width, i;
 
-	for (i = 0; i < vals_size; i++) {
-		val = vals[i];
-		if (val > 0)
-			idx_max = i;
-		if (val > val_max)
-			val_max = val;
-		if (idx_max < 0)
-			idx0_max = i;
-	}
+    for (i = 0; i < vals_size; i++) {
+        val = vals[i];
+        if (val > 0)
+            idx_max = i;
+        if (val > val_max)
+            val_max = val;
+        if (idx_max < 0)
+            idx0_max = i;
+    }
 
-	if (idx_max < 0)
-		return;
+    if (idx_max < 0)
+        return;
 
-	printf("%*s%-*s : count    distribution\n", idx_max <= 32 ? 5 : 15, "",
-		idx_max <= 32 ? 19 : 29, val_type);
+    printf("%*s%-*s : count    distribution\n", idx_max <= 32 ? 5 : 15, "",
+        idx_max <= 32 ? 19 : 29, val_type);
 
-	if (idx_max <= 32)
-		stars = stars_max;
-	else
-		stars = stars_max / 2;
+    if (idx_max <= 32)
+        stars = stars_max;
+    else
+        stars = stars_max / 2;
 
-	for (i = 0; i <= idx_max; i++) {
-		low = (1ULL << (i + 1)) >> 1;
-		high = (1ULL << (i + 1)) - 1;
-		if (low == high)
-			low -= 1;
-		if (idx0_max > i) {
-			i = idx0_max;
-			high = (1ULL << (i + 1)) - 1;
-		}
-		val = vals[i];
-		width = idx_max <= 32 ? 10 : 20;
-		printf("%*lld -> %-*lld : %-8d |", width, low, width, high, val);
-		print_stars(val, val_max, stars);
-		printf("|\n");
-	}
+    for (i = 0; i <= idx_max; i++) {
+        low = (1ULL << (i + 1)) >> 1;
+        high = (1ULL << (i + 1)) - 1;
+        if (low == high)
+            low -= 1;
+        if (idx0_max > i) {
+            i = idx0_max;
+            high = (1ULL << (i + 1)) - 1;
+        }
+        val = vals[i];
+        width = idx_max <= 32 ? 10 : 20;
+        printf("%*lld -> %-*lld : %-8d |", width, low, width, high, val);
+        print_stars(val, val_max, stars);
+        printf("|\n");
+    }
 }
 
 void print_linear_hist(unsigned int *vals, int vals_size, unsigned int base,
-		       unsigned int step, const char *val_type)
+               unsigned int step, const char *val_type)
 {
-	int i, stars_max = 40, idx_min = -1, idx_max = -1;
-	unsigned int val, val_max = 0;
+    int i, stars_max = 40, idx_min = -1, idx_max = -1;
+    unsigned int val, val_max = 0;
 
-	for (i = 0; i < vals_size; i++) {
-		val = vals[i];
-		if (val > 0) {
-			idx_max = i;
-			if (idx_min < 0)
-				idx_min = i;
-		}
-		if (val > val_max)
-			val_max = val;
-	}
+    for (i = 0; i < vals_size; i++) {
+        val = vals[i];
+        if (val > 0) {
+            idx_max = i;
+            if (idx_min < 0)
+                idx_min = i;
+        }
+        if (val > val_max)
+            val_max = val;
+    }
 
-	if (idx_max < 0)
-		return;
+    if (idx_max < 0)
+        return;
 
-	printf("     %-13s : count     distribution\n", val_type);
-	for (i = idx_min; i <= idx_max; i++) {
-		val = vals[i];
-		printf("        %-10d : %-8d |", base + i * step, val);
-		print_stars(val, val_max, stars_max);
-		printf("|\n");
-	}
+    printf("     %-13s : count     distribution\n", val_type);
+    for (i = idx_min; i <= idx_max; i++) {
+        val = vals[i];
+        printf("        %-10d : %-8d |", base + i * step, val);
+        print_stars(val, val_max, stars_max);
+        printf("|\n");
+    }
 }
 
 unsigned long long get_ktime_ns(void)
 {
-	struct timespec ts;
+    struct timespec ts;
 
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 }
 
 bool is_kernel_module(const char *name)
 {
-	bool found = false;
-	char buf[64];
-	FILE *f;
+    bool found = false;
+    char buf[64];
+    FILE *f;
 
-	f = fopen("/proc/modules", "r");
-	if (!f)
-		return false;
+    f = fopen("/proc/modules", "r");
+    if (!f)
+        return false;
 
-	while (fgets(buf, sizeof(buf), f) != NULL) {
-		if (sscanf(buf, "%s %*s\n", buf) != 1)
-			break;
-		if (!strcmp(buf, name)) {
-			found = true;
-			break;
-		}
-	}
+    while (fgets(buf, sizeof(buf), f) != NULL) {
+        if (sscanf(buf, "%s %*s\n", buf) != 1)
+            break;
+        if (!strcmp(buf, name)) {
+            found = true;
+            break;
+        }
+    }
 
-	fclose(f);
-	return found;
+    fclose(f);
+    return found;
 }
 
 bool kprobe_exists(const char *name)
 {
-	char sym_name[256];
-	FILE *f;
-	int ret;
+    char sym_name[256];
+    FILE *f;
+    int ret;
 
-	f = fopen("/sys/kernel/debug/tracing/available_filter_functions", "r");
-	if (!f)
-		goto slow_path;
+    f = fopen("/sys/kernel/debug/tracing/available_filter_functions", "r");
+    if (!f)
+        goto slow_path;
 
-	while (true) {
-		ret = fscanf(f, "%s%*[^\n]\n", sym_name);
-		if (ret == EOF && feof(f))
-			break;
-		if (ret != 1) {
-			fprintf(stderr, "failed to read symbol from available_filter_functions\n");
-			break;
-		}
-		if (!strcmp(name, sym_name)) {
-			fclose(f);
-			return true;
-		}
-	}
+    while (true) {
+        ret = fscanf(f, "%s%*[^\n]\n", sym_name);
+        if (ret == EOF && feof(f))
+            break;
+        if (ret != 1) {
+            fprintf(stderr, "failed to read symbol from available_filter_functions\n");
+            break;
+        }
+        if (!strcmp(name, sym_name)) {
+            fclose(f);
+            return true;
+        }
+    }
 
-	fclose(f);
-	return false;
+    fclose(f);
+    return false;
 
 slow_path:
-	f = fopen("/proc/kallsyms", "r");
-	if (!f)
-		return false;
+    f = fopen("/proc/kallsyms", "r");
+    if (!f)
+        return false;
 
-	while (true) {
-		ret = fscanf(f, "%*x %*c %s%*[^\n]\n", sym_name);
-		if (ret == EOF && feof(f))
-			break;
-		if (ret != 1) {
-			fprintf(stderr, "failed to read symbol from kallsyms\n");
-			break;
-		}
-		if (!strcmp(name, sym_name)) {
-			fclose(f);
-			return true;
-		}
-	}
+    while (true) {
+        ret = fscanf(f, "%*x %*c %s%*[^\n]\n", sym_name);
+        if (ret == EOF && feof(f))
+            break;
+        if (ret != 1) {
+            fprintf(stderr, "failed to read symbol from kallsyms\n");
+            break;
+        }
+        if (!strcmp(name, sym_name)) {
+            fclose(f);
+            return true;
+        }
+    }
 
-	fclose(f);
-	return false;
+    fclose(f);
+    return false;
 }
 
 bool vmlinux_btf_exists(void)
 {
-	if (!access("/sys/kernel/btf/vmlinux", R_OK))
-		return true;
-	return false;
+    if (!access("/sys/kernel/btf/vmlinux", R_OK))
+        return true;
+    return false;
 }
 
 bool module_btf_exists(const char *mod)
 {
-	char sysfs_mod[80];
+    char sysfs_mod[80];
 
-	if (mod) {
-		snprintf(sysfs_mod, sizeof(sysfs_mod), "/sys/kernel/btf/%s", mod);
-		if (!access(sysfs_mod, R_OK))
-			return true;
-	}
-	return false;
+    if (mod) {
+        snprintf(sysfs_mod, sizeof(sysfs_mod), "/sys/kernel/btf/%s", mod);
+        if (!access(sysfs_mod, R_OK))
+            return true;
+    }
+    return false;
 }
