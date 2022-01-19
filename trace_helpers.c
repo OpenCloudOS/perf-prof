@@ -913,6 +913,7 @@ next_line:
         if (!s && feof(fin))
             break;
     }
+    syms__free(syms);
 }
 
 struct syms_cache_node {
