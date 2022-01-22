@@ -28,7 +28,8 @@ USAGE:
     perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
     perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]
     perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
-    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-i INT] [--perins] [--than us]
+    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
+    perf-monitor --symbols /path/to/bin
 
 EXAMPLES:
     perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock
@@ -242,7 +243,9 @@ static void signal_sample(union perf_event *event)
 
 tep__print_event，打印tracepoint事件。
 
-## 5 插件
+## 5 其他功能
+
+### 5.1 traceevent插件
 
 ```
 TRACEEVENT_PLUGIN_DIR
@@ -250,7 +253,41 @@ TRACEEVENT_PLUGIN_DIR
 	可以加载libtraceevent的插件
 ```
 
+### 5.2 trace_helper
 
+- **ksyms**，内核符号表，用于解析内核栈。符号信息来自于`/proc/kallsyms`
+- **syms**，用户态符号表，用于解析用户栈。符号信息来自可执行程序和动态库的符号表。
+- **hist**，直方图，log2，linear。
+
+初始代码来自于bcc项目。
+
+### 5.3 用户态符号表
+
+用户态符号表，使用`syms_cache`结构表示，通过pid找到特定于进程的`syms`符号集合。
+
+syms符号集合由/proc/pid/maps内所有的文件映射组成，每一个文件映射由一个`dso`来表示，syms包含dso的集合。
+
+每个dso由映射到进程地址空间内的[起始地址、结束地址、文件对象]表示。文件对象由`object`结构表示。
+
+object结构表示一个动态库的符号集合，由多个`sym`组成。object是可以给多个进程共享的，通过引用计数管理object的引用和释放。
+
+sym表示一个特定的符号。由符号名字，起始地址，大小组成。
+
+```
+syms_cache --> syms --> dso --> object --> sym
+```
+
+### 5.4 用户态内存泄露检测
+
+```
+LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /path/to/bin
+```
+
+利用tcmalloc的内存泄露检测功能。
+
+- **LD_PRELOAD=**，预先加载tcmalloc库，替换glibc库的malloc和free函数。
+- **HEAPCHECK=**，内存泄露检测。draconian检测所有的内存泄露。
+- **PPROF_PATH=**，指定符号解析命令。`perf-monitor --symbols`具备跟`pprof --symbols`一样的符号解析能力。
 
 ## 6 已支持的模块
 
@@ -313,7 +350,7 @@ TRACEEVENT_PLUGIN_DIR
 
 ### 6.3 task-state
 
-分析进程状态（睡眠状态，不可中断状态），在指定状态停留超过一定时间打印出内核栈。
+分析进程状态（睡眠状态，不可中断状态），在指定状态停留超过一定时间打印出内核栈和用户态栈。
 
 共监控2个事件：
 
@@ -383,12 +420,13 @@ TRACEEVENT_PLUGIN_DIR
 
 ```
 用法:
-	perf-monitor kvm-exit [-C cpu] [-i INT] [--perins] [--than us] [-v]
+	perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [-v]
 例子:
 	perf-monitor kvm-exit -C 5-20,53-68 -i 1000 --than 1000 #统计CPU上的特权指令耗时,每1000ms输出一次,并打印耗时超过1000us的日志
 
 
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
+  -p, --pids=PID,PID         Attach to processes
   -i, --interval=INT         Interval, ms
       --perins               print per instance stat 打印每个实例的统计信息
       --than=ge              Greater than specified time, us 微妙单位
@@ -463,7 +501,7 @@ ATTR:
 
 ```
 用法：
-	perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-i INT] [--perins] [--than us]
+	perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
 例子：
 	./perf-monitor mpdelay -e 'syscalls:sys_enter_nanosleep,syscalls:sys_exit_nanosleep' -p 16023 -i 1000 --than 600 --perins
 	# 监控进程16023的nanosleep系统调用，输出超过600us的情况。
@@ -472,6 +510,7 @@ ATTR:
 
   -e, --event=evt[,evt]      event selector. use 'perf list tracepoint' to list available tp events
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
+  -p, --pids=PID,PID         Attach to processes
   -i, --interval=INT         Interval, ms
       --perins               print per instance stat 打印每个实例的统计信息，cpu或者线程
       --than=ge              Greater than specified time, us 微妙单位
