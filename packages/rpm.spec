@@ -1,6 +1,9 @@
 #%define name    perf-monitor
 #%define version 0.1.0
 %define release 1
+%define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
+%define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
+
 %undefine _disable_source_fetch
 %define debug_package %{nil}
 
@@ -38,12 +41,15 @@ strip -g %{name}
 
 %install
 rm -rf %{buildroot}
-mkdir -p %{buildroot}/usr/bin/
+mkdir -p %{buildroot}/usr/bin/ %{buildroot}%{PLUGINS_DIR}
 install -m 0755 -o root -g root %{name} %{buildroot}/usr/bin/
+install -m 0755 -o root -g root lib/traceevent/plugins/*.so %{buildroot}%{PLUGINS_DIR}
 
 
 %files
 /usr/bin/%{name}
+%{TRACEEVENT_DIR}
+%{PLUGINS_DIR}
 
 
 %changelog
