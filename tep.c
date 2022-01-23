@@ -8,6 +8,8 @@
 #include <monitor.h>
 #include <tep.h>
 
+#define PLUGINS_DIR "/usr/lib64/perf-monitor-traceevent/plugins"
+
 static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
 
@@ -18,6 +20,7 @@ struct tep_handle *tep__ref(void)
         return tep;
     }
     tep = tep_alloc();
+    tep_add_plugin_path(tep, (char *)PLUGINS_DIR, TEP_PLUGIN_FIRST);
     plugins = tep_load_plugins(tep);
     return tep;
 }
