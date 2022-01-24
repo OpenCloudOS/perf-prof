@@ -1,6 +1,6 @@
 #%define name    perf-monitor
 #%define version 0.1.0
-%define release 1
+%define release 1%{?dist}
 %define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
 
