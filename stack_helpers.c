@@ -47,9 +47,11 @@ void callchain_ctx_deinit(bool kernel, bool user)
 {
     if (kernel && ctx.ksyms && refcount_dec_and_test(&ctx.ksyms_ref)) {
         ksyms__free(ctx.ksyms);
+        ctx.ksyms = NULL;
     }
     if (user && ctx.syms_cache && refcount_dec_and_test(&ctx.syms_ref)) {
         syms_cache__free(ctx.syms_cache);
+        ctx.syms_cache = NULL;
     }
 }
 
@@ -98,6 +100,11 @@ void print_callchain(FILE *f, struct callchain *callchain, u32 pid)
     }
 }
 
-
-
+void task_exit_free_syms(union perf_event *event)
+{
+    if (ctx.syms_cache &&
+        event->fork.pid == event->fork.tid) {
+        syms_cache__free_syms(ctx.syms_cache, event->fork.pid);
+    }
+}
 

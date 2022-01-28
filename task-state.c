@@ -10,15 +10,14 @@
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <stack_helpers.h>
 
 #define TASK_INTERRUPTIBLE	1
 #define TASK_UNINTERRUPTIBLE	2
 
 
 struct monitor task_state;
-struct monitor_ctx {
-    struct ksyms *ksyms;
-    struct syms_cache *syms_cache;
+static struct monitor_ctx {
     __u64 sched_switch;
     __u64 sched_wakeup;
     struct rblist backup;
@@ -68,8 +67,7 @@ static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        ctx.ksyms = ksyms__load();
-        ctx.syms_cache = syms_cache__new();
+        callchain_ctx_init(true, true);
         task_state.pages *= 2;
     }
     rblist__init(&ctx.backup);
@@ -84,8 +82,7 @@ static void monitor_ctx_exit(void)
 {
     rblist__exit(&ctx.backup);
     if (ctx.env->callchain) {
-        ksyms__free(ctx.ksyms);
-        syms_cache__free(ctx.syms_cache);
+        callchain_ctx_deinit(true, true);
     }
     tep__unref();
 }
@@ -196,10 +193,7 @@ struct sample_type_header {
 };
 struct sample_type_callchain {
     struct sample_type_header h;
-    struct {
-        __u64   nr;
-        __u64   ips[0];
-    } callchain;
+    struct callchain callchain;
 };
 struct sample_type_raw {
     struct sample_type_header h;
@@ -226,47 +220,12 @@ static void __raw_size(union perf_event *event, void **praw, int *psize)
     }
 }
 
-static void __print_callchain(union perf_event *event)
+static inline void __print_callchain(union perf_event *event)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain && ctx.ksyms) {
-        __u64 i;
-        bool kernel, user;
-        struct syms *syms;
-        for (i = 0; i < data->callchain.nr; i++) {
-            __u64 ip = data->callchain.ips[i];
-            if (ip == PERF_CONTEXT_KERNEL) {
-                kernel = true;
-                user = false;
-                continue;
-            } else if (ip == PERF_CONTEXT_USER) {
-                __u32 pid = data->h.tid_entry.pid;
-                kernel = false;
-                user = false;
-                if (ctx.syms_cache) {
-                    syms = syms_cache__get_syms(ctx.syms_cache, pid);
-                    if (syms)
-                        user = true;
-                }
-                continue;
-            }
-            if (kernel) {
-                const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-                printf("    %016llx %s+0x%llx ([kernel.kallsyms])\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
-            } else if (user) {
-                struct dso *dso;
-                uint64_t offset;
-                dso = syms__find_dso(syms, ip, &offset);
-                if (dso) {
-                    const struct sym *sym = dso__find_sym(dso, offset);
-                    printf("    %016llx %s+0x%lx (%s)\n", ip, sym ? sym->name : "Unknown", sym ? offset - sym->start : 0L,
-                                        dso__name(dso)?:"Unknown");
-                } else
-                    printf("    %016llx %s (%s)\n", ip, "Unknown", "Unknown");
-            }
-        }
-    }
+    if (ctx.env->callchain)
+        print_callchain(stdout, &data->callchain, data->h.tid_entry.pid);
 }
 
 static void task_state_sample(union perf_event *event, int instance)
@@ -374,10 +333,7 @@ __return:
 
 static void task_state_exit(union perf_event *event, int instance)
 {
-    if (ctx.env->callchain && ctx.ksyms && ctx.syms_cache &&
-        event->fork.pid == event->fork.tid) {
-        syms_cache__free_syms(ctx.syms_cache, event->fork.pid);
-    }
+    task_exit_free_syms(event);
 }
 
 static void task_state_sigusr1(int signum)
