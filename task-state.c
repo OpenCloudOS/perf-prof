@@ -18,6 +18,7 @@
 
 struct monitor task_state;
 static struct monitor_ctx {
+    struct callchain_ctx *cc;
     __u64 sched_switch;
     __u64 sched_wakeup;
     struct rblist backup;
@@ -67,7 +68,7 @@ static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        callchain_ctx_init(true, true);
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
         task_state.pages *= 2;
     }
     rblist__init(&ctx.backup);
@@ -82,7 +83,7 @@ static void monitor_ctx_exit(void)
 {
     rblist__exit(&ctx.backup);
     if (ctx.env->callchain) {
-        callchain_ctx_deinit(true, true);
+        callchain_ctx_free(ctx.cc);
     }
     tep__unref();
 }
@@ -225,7 +226,7 @@ static inline void __print_callchain(union perf_event *event)
     struct sample_type_callchain *data = (void *)event->sample.array;
 
     if (ctx.env->callchain)
-        print_callchain(stdout, &data->callchain, data->h.tid_entry.pid);
+        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
 }
 
 static void task_state_sample(union perf_event *event, int instance)
