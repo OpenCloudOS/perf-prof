@@ -100,7 +100,7 @@ struct callchain_ctx *callchain_ctx_new(int flags, FILE *fout)
     cc->symbol = 1;
     cc->offset = 1;
     cc->dso    = 1;
-    cc->reverse = 1;
+    cc->reverse = 0;
     cc->seperate = '\n';
     cc->end = '\n';
     cc->fout = fout;
