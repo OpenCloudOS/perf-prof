@@ -6,6 +6,7 @@ struct callchain {
     __u64   ips[0];
 };
 
+
 struct callchain_ctx;
 enum {
     CALLCHAIN_KERNEL = 1,
@@ -16,5 +17,14 @@ void callchain_ctx_free(struct callchain_ctx *cc);
 void print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void task_exit_free_syms(union perf_event *event);
+
+
+typedef struct callchain struct_key;
+struct key_value_paires;
+struct key_value_paires *keyvalue_pairs_new(int value_size);
+void keyvalue_pairs_free(struct key_value_paires *pairs);
+void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key);
+typedef void (*foreach_keyvalue)(struct_key *key, void *value, unsigned int n);
+void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f);
 
 #endif
