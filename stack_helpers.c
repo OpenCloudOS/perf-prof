@@ -294,3 +294,106 @@ void task_exit_free_syms(union perf_event *event)
     }
 }
 
+struct key_value {
+    struct rb_node rbnode;
+    unsigned int n;
+    struct_key key;
+    /* void *value; */
+};
+
+struct key_value_paires {
+    struct rblist kv_pairs;
+    int value_size;
+};
+
+static int key_value_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct key_value *kv = container_of(rbn, struct key_value, rbnode);
+    const struct_key *key = entry;
+    long i;
+
+    if (kv->key.nr > key->nr)
+        return 1;
+    else if (kv->key.nr < key->nr)
+        return -1;
+
+    for (i = (long)key->nr - 1; i >= 0; i--) {
+        if (kv->key.ips[i] > key->ips[i])
+            return 1;
+        else if (kv->key.ips[i] < key->ips[i])
+            return -1;
+    }
+    return 0;
+}
+static struct rb_node *key_value_node_new(struct rblist *rlist, const void *new_entry)
+{
+    struct key_value_paires *pairs = container_of(rlist, struct key_value_paires, kv_pairs);
+    const struct_key *key = new_entry;
+    struct key_value *kv = malloc(sizeof(struct key_value) + key->nr * sizeof(key->ips[0]) + pairs->value_size);
+    if (kv) {
+        RB_CLEAR_NODE(&kv->rbnode);
+        kv->n = 0;
+        kv->key.nr = key->nr;
+        memcpy(kv->key.ips, key->ips, key->nr * sizeof(key->ips[0]));
+        memset(&kv->key.ips[key->nr], 0, pairs->value_size);
+        return &kv->rbnode;
+    } else
+        return NULL;
+}
+static void key_value_node_delete(struct rblist *rblist, struct rb_node *rb_node)
+{
+    struct key_value *kv = container_of(rb_node, struct key_value, rbnode);
+    free(kv);
+}
+
+struct key_value_paires *keyvalue_pairs_new(int value_size)
+{
+    struct key_value_paires *pairs;
+    pairs = calloc(1, sizeof(*pairs));
+    if (!pairs)
+        return NULL;
+
+    rblist__init(&pairs->kv_pairs);
+    pairs->kv_pairs.node_cmp = key_value_node_cmp;
+    pairs->kv_pairs.node_new = key_value_node_new;
+    pairs->kv_pairs.node_delete = key_value_node_delete;
+    pairs->value_size = value_size;
+    return pairs;
+}
+
+void keyvalue_pairs_free(struct key_value_paires *pairs)
+{
+    rblist__exit(&pairs->kv_pairs);
+}
+
+void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key)
+{
+    struct rb_node *rbn;
+    struct key_value *kv = NULL;
+    void *value = NULL;
+
+    rbn = rblist__findnew(&pairs->kv_pairs, key);
+    if (rbn) {
+        kv = container_of(rbn, struct key_value, rbnode);
+        kv->n ++;
+        value = (void *)&kv->key.ips[key->nr];
+    }
+    return value;
+}
+
+void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f)
+{
+    struct rblist *rblist = &pairs->kv_pairs;
+    struct rb_node *pos, *next = rb_first_cached(&rblist->entries);
+    struct key_value *kv = NULL;
+    void *value = NULL;
+
+	while (next) {
+        pos = next;
+        next = rb_next(pos);
+		kv = container_of(pos, struct key_value, rbnode);
+        value = pairs->value_size ? (void *)&kv->key.ips[kv->key.nr] : NULL;
+        f(&kv->key, value, kv->n);
+	}
+}
+
