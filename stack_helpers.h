@@ -16,6 +16,7 @@ struct callchain_ctx *callchain_ctx_new(int flags, FILE *fout);
 void callchain_ctx_free(struct callchain_ctx *cc);
 void print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
+void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void task_exit_free_syms(union perf_event *event);
 
 
