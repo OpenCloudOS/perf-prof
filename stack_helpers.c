@@ -428,6 +428,7 @@ static struct rb_node *key_value_node_new(struct rblist *rlist, const void *new_
     } else
         return NULL;
 }
+
 static void key_value_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct key_value *kv = container_of(rb_node, struct key_value, rbnode);
@@ -472,20 +473,20 @@ void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key)
     return value;
 }
 
-void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f)
+void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, void *opaque)
 {
     struct rblist *rblist = &pairs->kv_pairs;
     struct rb_node *pos, *next = rb_first_cached(&rblist->entries);
     struct key_value *kv = NULL;
     void *value = NULL;
 
-	while (next) {
+    while (next) {
         pos = next;
         next = rb_next(pos);
-		kv = container_of(pos, struct key_value, rbnode);
+        kv = container_of(pos, struct key_value, rbnode);
         value = pairs->value_size ? (void *)&kv->key.ips[kv->key.nr] : NULL;
-        f(&kv->key, value, kv->n);
-	}
+        f(opaque, &kv->key, value, kv->n);
+    }
 }
 
 
@@ -550,13 +551,93 @@ void unique_string_stat(FILE *fp)
     struct unique_string *s = NULL;
     size_t str_len = 0, node_len = 0;
 
-	while (next) {
+    while (next) {
         pos = next;
         next = rb_next(pos);
-		s = container_of(pos, struct unique_string, rbnode);
+        s = container_of(pos, struct unique_string, rbnode);
         str_len += s->len * s->n;
         node_len += sizeof(*s);
-	}
+    }
     fprintf(fp, "UNIQUE STRING STAT: strlen %lu, nodelen %lu\n", str_len, node_len);
+}
+
+
+struct flame_graph {
+    struct callchain_ctx *cc;
+    struct key_value_paires *kv_pairs;
+};
+
+struct flame_graph *flame_graph_new(int flags, FILE *fout)
+{
+    struct flame_graph *fg = malloc(sizeof(*fg));
+    struct callchain_ctx *cc = callchain_ctx_new(flags, fout);
+    struct key_value_paires *kv_pairs = keyvalue_pairs_new(0);
+
+    if (!fg || !cc || !kv_pairs) {
+        free(fg);
+        callchain_ctx_free(cc);
+        keyvalue_pairs_free(kv_pairs);
+        return NULL;
+    }
+
+    cc->addr   = 0;
+    cc->symbol = 1;
+    cc->offset = 0;
+    cc->dso    = 0;
+    cc->reverse = 1;
+    cc->print2string_kernel = 1;
+    cc->print2string_user = 1;
+    cc->seperate = ';';
+    cc->end = ' ';
+
+    fg->cc = cc;
+    fg->kv_pairs = kv_pairs;
+    return fg;
+}
+
+void flame_graph_free(struct flame_graph *fg)
+{
+    if (!fg)
+        return ;
+
+    callchain_ctx_free(fg->cc);
+    keyvalue_pairs_free(fg->kv_pairs);
+    free(fg);
+}
+
+void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain, u32 pid)
+{
+    struct {
+        __u64   nr;
+        __u64   ips[PERF_MAX_STACK_DEPTH + PERF_MAX_CONTEXTS_PER_STACK];
+    } key;
+
+    if (!fg)
+        return ;
+
+    memcpy(&key, callchain, sizeof(*callchain) + callchain->nr * sizeof(callchain->ips[0]));
+    /*
+     * convert callchain to unique string.
+     * For user-mode stacks, symbols are freed after the process exits. Therefore,
+     * the stack needs to be converted into a unique string first.
+    **/
+    print2string_callchain(fg->cc, (struct callchain *)&key, pid);
+
+    /*
+     * Add to the storage pool with the stack as the key.
+    **/
+    keyvalue_pairs_add_key(fg->kv_pairs, (struct_key *)&key);
+}
+
+static void __flame_graph_print(void *opaque, struct_key *key, void *value, unsigned int n)
+{
+    struct flame_graph *fg = opaque;
+    print_callchain(fg->cc, key, 0);
+    fprintf(fg->cc->fout, "%u\n", n);
+}
+
+void flame_graph_output(struct flame_graph *fg)
+{
+    keyvalue_pairs_foreach(fg->kv_pairs, __flame_graph_print, fg);
 }
 
