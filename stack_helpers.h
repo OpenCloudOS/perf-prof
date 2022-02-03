@@ -27,4 +27,7 @@ void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key);
 typedef void (*foreach_keyvalue)(struct_key *key, void *value, unsigned int n);
 void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f);
 
+
+const char *unique_string(const char *str);
+void unique_string_stat(FILE *fp);
 #endif
