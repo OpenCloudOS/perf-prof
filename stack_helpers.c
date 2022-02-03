@@ -451,7 +451,10 @@ struct key_value_paires *keyvalue_pairs_new(int value_size)
 
 void keyvalue_pairs_free(struct key_value_paires *pairs)
 {
+    if (!pairs)
+        return ;
     rblist__exit(&pairs->kv_pairs);
+    free(pairs);
 }
 
 void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key)
