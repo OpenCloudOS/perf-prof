@@ -467,7 +467,7 @@ void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key)
     if (rbn) {
         kv = container_of(rbn, struct key_value, rbnode);
         kv->n ++;
-        value = (void *)&kv->key.ips[key->nr];
+        value = pairs->value_size ? (void *)&kv->key.ips[kv->key.nr] : NULL;
     }
     return value;
 }
