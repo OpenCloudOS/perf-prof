@@ -9,6 +9,7 @@
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <stack_helpers.h>
 
 struct monitor mpdelay;
 
@@ -40,7 +41,7 @@ struct monitor_ctx {
     int max_len;
     int ins_size;
     struct perf_evlist *evlist;
-    struct ksyms *ksyms;
+    struct callchain_ctx *cc;
     struct env *env;
 } ctx;
 
@@ -56,10 +57,7 @@ struct sample_type_header {
 };
 struct sample_type_callchain {
     struct sample_type_header h;
-    struct {
-        __u64   nr;
-        __u64   ips[0];
-    } callchain;
+    struct callchain callchain;
 };
 struct sample_type_raw {
     struct sample_type_header h;
@@ -198,10 +196,10 @@ static int monitor_ctx_init(struct env *env)
     }
 
     if (stacks) {
-        ctx.ksyms = ksyms__load();
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
         mpdelay.pages *= 2;
     } else
-        ctx.ksyms = NULL;
+        ctx.cc = NULL;
     ctx.env = env;
     return 0;
 }
@@ -210,8 +208,7 @@ static void monitor_ctx_exit(void)
 {
     zfree(&ctx.tp_list);
     zfree(&ctx.perins_stat);
-    if (ctx.ksyms)
-        ksyms__free(ctx.ksyms);
+    callchain_ctx_free(ctx.cc);
     tep__unref();
 }
 
@@ -362,15 +359,8 @@ static void __print_callchain(union perf_event *event, int t)
     struct sample_type_callchain *data = (void *)event->sample.array;
     struct tp_list *tp = &ctx.tp_list[t];
 
-    if (tp->stack && ctx.ksyms) {
-        __u64 i;
-        for (i = 0; i < data->callchain.nr; i++) {
-            __u64 ip = data->callchain.ips[i];
-            if (ip != PERF_CONTEXT_KERNEL) {
-                const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-                printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
-            }
-        }
+    if (tp->stack) {
+        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
     }
 }
 
