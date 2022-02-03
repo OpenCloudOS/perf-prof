@@ -605,12 +605,13 @@ void flame_graph_free(struct flame_graph *fg)
     free(fg);
 }
 
-void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain, u32 pid)
+void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain, u32 pid, const char *comm)
 {
     struct {
         __u64   nr;
         __u64   ips[PERF_MAX_STACK_DEPTH + PERF_MAX_CONTEXTS_PER_STACK];
     } key;
+    char buff[128];
 
     if (!fg)
         return ;
@@ -623,6 +624,13 @@ void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callcha
     **/
     print2string_callchain(fg->cc, (struct callchain *)&key, pid);
 
+    if (fg->cc->user) {
+        if (comm)
+            snprintf(buff, sizeof(buff), "%s %u", comm, pid);
+        else
+            snprintf(buff, sizeof(buff), "%d", pid);
+        key.ips[key.nr++] = (__u64)(void *)unique_string(buff);
+    }
     /*
      * Add to the storage pool with the stack as the key.
     **/
