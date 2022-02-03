@@ -397,3 +397,76 @@ void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f)
 	}
 }
 
+
+struct unique_string {
+    struct rb_node rbnode;
+    unsigned int n, len;
+    char str[0];
+};
+
+static int unique_string_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct unique_string *s = container_of(rbn, struct unique_string, rbnode);
+    const char *str = entry;
+
+    return strcmp(s->str, str);
+}
+static struct rb_node *unique_string_node_new(struct rblist *rlist, const void *new_entry)
+{
+    const char *str = new_entry;
+    unsigned int len = strlen(str) + 1;
+    struct unique_string *s = malloc(sizeof(struct unique_string) + len);
+    if (s) {
+        RB_CLEAR_NODE(&s->rbnode);
+        s->n = 0;
+        s->len = len;
+        strncpy(s->str, str, len);
+        return &s->rbnode;
+    } else
+        return NULL;
+}
+static void unique_string_node_delete(struct rblist *rblist, struct rb_node *rb_node)
+{
+    struct unique_string *s = container_of(rb_node, struct unique_string, rbnode);
+    free(s);
+}
+
+static struct rblist unique_strings = {
+    .entries = RB_ROOT_CACHED,
+    .nr_entries = 0,
+    .node_cmp = unique_string_node_cmp,
+    .node_new = unique_string_node_new,
+    .node_delete = unique_string_node_delete,
+};
+
+const char *unique_string(const char *str)
+{
+    struct rb_node *rbn;
+    struct unique_string *s = NULL;
+
+    rbn = rblist__findnew(&unique_strings, str);
+    if (rbn) {
+        s = container_of(rbn, struct unique_string, rbnode);
+        s->n ++;
+        return s->str;
+    }
+    return NULL;
+}
+
+void unique_string_stat(FILE *fp)
+{
+    struct rb_node *pos, *next = rb_first_cached(&unique_strings.entries);
+    struct unique_string *s = NULL;
+    size_t str_len = 0, node_len = 0;
+
+	while (next) {
+        pos = next;
+        next = rb_next(pos);
+		s = container_of(pos, struct unique_string, rbnode);
+        str_len += s->len * s->n;
+        node_len += sizeof(*s);
+	}
+    fprintf(fp, "UNIQUE STRING STAT: strlen %lu, nodelen %lu\n", str_len, node_len);
+}
+
+
