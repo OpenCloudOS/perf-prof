@@ -9,8 +9,8 @@
 
 #include <monitor.h>
 #include <tep.h>
-#include "trace_helpers.h"
-
+#include <trace_helpers.h>
+#include <stack_helpers.h>
 
 struct monitor watchdog;
 static void watchdog_sample(union perf_event *event, int instance);
@@ -32,7 +32,7 @@ static struct monitor_ctx {
     int stage;
     struct perf_evlist *evlist;
     struct perf_evsel *perf_evsel_hrtimer_expire_entry;
-    struct ksyms *ksyms;
+    struct callchain_ctx *cc;
     int in_guest;
     int comm;
     int nr_cpus;
@@ -72,7 +72,7 @@ static int monitor_ctx_init(struct env *env)
 
     tep__ref();
     if (env->callchain) {
-        ctx.ksyms = ksyms__load();
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
         watchdog.pages *= 2;
     }
     ctx.in_guest = in_guest();
@@ -102,7 +102,7 @@ static void monitor_ctx_exit(void)
 {
     tep__unref();
     if (ctx.env->callchain) {
-        ksyms__free(ctx.ksyms);
+        callchain_ctx_free(ctx.cc);
     }
     free(ctx.watchdog);
     ctx.watchdog = NULL;
@@ -270,10 +270,7 @@ struct sample_type_header {
 };
 struct sample_type_callchain {
     struct sample_type_header h;
-    struct {
-        __u64   nr;
-        __u64   ips[0];
-    } callchain;
+    struct callchain callchain;
 };
 struct sample_type_raw {
     struct sample_type_header h;
@@ -400,13 +397,8 @@ static void __print_callchain(union perf_event *event)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain && ctx.ksyms) {
-        __u64 i;
-        for (i = 0; i < data->callchain.nr; i++) {
-            __u64 ip = data->callchain.ips[i];
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-            printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
-        }
+    if (ctx.env->callchain) {
+        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
     }
 }
 
