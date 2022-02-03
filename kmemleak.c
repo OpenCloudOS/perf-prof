@@ -10,6 +10,7 @@
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <stack_helpers.h>
 
 #define TASK_INTERRUPTIBLE	1
 #define TASK_UNINTERRUPTIBLE	2
@@ -26,7 +27,7 @@ struct kmemleak_stat {
 };
 struct monitor_ctx {
     struct perf_evlist *evlist;
-    struct ksyms *ksyms;
+    struct callchain_ctx *cc;
     __u64 tp_alloc;
     __u64 tp_free;
     struct rblist alloc;
@@ -173,7 +174,7 @@ static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        ctx.ksyms = ksyms__load();
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
         kmemleak.pages *= 2;
     }
     rblist__init(&ctx.alloc);
@@ -198,7 +199,7 @@ static void monitor_ctx_exit(void)
     rblist__exit(&ctx.alloc);
     rblist__exit(&ctx.gc_free);
     if (ctx.env->callchain) {
-        ksyms__free(ctx.ksyms);
+        callchain_ctx_free(ctx.cc);
     }
     tep__unref();
 }
@@ -215,7 +216,7 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
         .pinned        = 1,
         .disabled      = 1,
         .exclude_callchain_user = 1,
-        .wakeup_events = 1, //1个事件
+        .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
     int id;
@@ -263,10 +264,7 @@ static void kmemleak_exit(struct perf_evlist *evlist)
 
 struct sample_type_callchain {
     struct sample_type_header h;
-    struct {
-        __u64   nr;
-        __u64   ips[0];
-    } callchain;
+    struct callchain callchain;
 };
 struct sample_type_raw {
     struct sample_type_header h;
@@ -297,13 +295,8 @@ static void __print_callchain(union perf_event *event, __u64 config)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain && ctx.ksyms && config == ctx.tp_alloc) {
-        __u64 i;
-        for (i = 0; i < data->callchain.nr; i++) {
-            __u64 ip = data->callchain.ips[i];
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-            printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
-        }
+    if (ctx.env->callchain && config == ctx.tp_alloc) {
+        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
     }
 }
 
