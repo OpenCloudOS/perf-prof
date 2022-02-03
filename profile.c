@@ -3,6 +3,7 @@
 #include "monitor.h"
 #include "trace_helpers.h"
 #include "tep.h"
+#include "stack_helpers.h"
 
 struct monitor profile;
 struct monitor_ctx {
@@ -13,7 +14,7 @@ struct monitor_ctx {
         uint64_t start_time;
         uint64_t num;
     }*stat;
-    struct ksyms *ksyms;
+    struct callchain_ctx *cc;
     int tsc_khz;
     int vendor;
     struct env *env;
@@ -21,6 +22,7 @@ struct monitor_ctx {
 
 static int monitor_ctx_init(struct env *env)
 {
+    tep__ref();
     ctx.nr_cpus = get_possible_cpus();
     ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
     if (!ctx.counter) {
@@ -38,7 +40,7 @@ static int monitor_ctx_init(struct env *env)
         return -1;
     }
     if (env->callchain) {
-        ctx.ksyms = ksyms__load();
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
     }
     ctx.tsc_khz = get_tsc_khz();
     ctx.vendor = get_cpu_vendor();
@@ -51,7 +53,10 @@ static void monitor_ctx_exit(void)
     free(ctx.counter);
     free(ctx.cycles);
     free(ctx.stat);
-    ksyms__free(ctx.ksyms);
+    if (ctx.env->callchain) {
+        callchain_ctx_free(ctx.cc);
+    }
+    tep__unref();
 }
 
 static int profile_init(struct perf_evlist *evlist, struct env *env)
@@ -72,7 +77,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
         .exclude_host = env->guest,
-        .wakeup_events = 1, //1个事件
+        .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
 
@@ -154,10 +159,7 @@ static void profile_sample(union perf_event *event, int instance)
             __u32    reserved;
         }    cpu_entry;
         __u64 counter;
-        struct {
-            __u64   nr;
-	        __u64   ips[0];
-        } callchain;
+        struct callchain callchain;
     } *data = (void *)event->sample.array;
     __u32 size = event->header.size - sizeof(struct perf_event_header);
     uint64_t counter = 0;
@@ -193,13 +195,8 @@ static void profile_sample(union perf_event *event, int instance)
         tep__update_comm(NULL, data->tid_entry.tid);
         printf("%16s %6u [%03d] %llu.%06llu: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                         data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
-        if (ctx.env->callchain && ctx.ksyms) {
-            __u64 i;
-            for (i = 0; i < data->callchain.nr; i++) {
-                __u64 ip = data->callchain.ips[i];
-                const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-                printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
-            }
+        if (ctx.env->callchain) {
+            print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
         }
     }
 }
