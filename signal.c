@@ -8,18 +8,20 @@
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <stack_helpers.h>
+
 
 struct monitor monitor_signal;
 static void signal_sample_callchain(union perf_event *event, int instance);
 struct monitor_ctx {
-    struct ksyms *ksyms;
+    struct callchain_ctx *cc;
     struct env *env;
 } ctx;
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        ctx.ksyms = ksyms__load();
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
         monitor_signal.pages *= 2;
         monitor_signal.sample = signal_sample_callchain;
     }
@@ -29,6 +31,9 @@ static int monitor_ctx_init(struct env *env)
 
 static void monitor_ctx_exit(void)
 {
+    if (ctx.env->callchain) {
+        callchain_ctx_free(ctx.cc);
+    }
     tep__unref();
 }
 
@@ -45,7 +50,7 @@ static int signal_init(struct perf_evlist *evlist, struct env *env)
         .pinned        = 1,
         .disabled      = 1,
         .exclude_callchain_user = 1,
-        .wakeup_events = 1, //1个事件
+        .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
     int id;
@@ -126,10 +131,7 @@ static void signal_sample_callchain(union perf_event *event, int instance)
             __u32    cpu;
             __u32    reserved;
         }    cpu_entry;
-        struct {
-            __u64   nr;
-	        __u64   ips[0];
-        } callchain;
+        struct callchain callchain;
     } *data = (void *)event->sample.array;
     struct {
         __u32   size;
@@ -139,13 +141,8 @@ static void signal_sample_callchain(union perf_event *event, int instance)
     tep__update_comm(NULL, data->tid_entry.tid);
     print_time(stdout);
     tep__print_event(data->time/1000, data->cpu_entry.cpu, raw->data, raw->size);
-    if (ctx.env->callchain && ctx.ksyms) {
-        __u64 i;
-        for (i = 0; i < data->callchain.nr; i++) {
-            __u64 ip = data->callchain.ips[i];
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
-            printf("    %016llx %s+0x%llx\n", ip, ksym ? ksym->name : "Unknown", ip - ksym->addr);
-        }
+    if (ctx.env->callchain) {
+        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
     }
 }
 
