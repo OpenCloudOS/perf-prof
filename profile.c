@@ -15,6 +15,7 @@ struct monitor_ctx {
         uint64_t num;
     }*stat;
     struct callchain_ctx *cc;
+    struct flame_graph *flame;
     int tsc_khz;
     int vendor;
     struct env *env;
@@ -40,7 +41,10 @@ static int monitor_ctx_init(struct env *env)
         return -1;
     }
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        if (!env->flame_graph)
+            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        else
+            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL, env->flame_graph);
     }
     ctx.tsc_khz = get_tsc_khz();
     ctx.vendor = get_cpu_vendor();
@@ -54,7 +58,12 @@ static void monitor_ctx_exit(void)
     free(ctx.cycles);
     free(ctx.stat);
     if (ctx.env->callchain) {
-        callchain_ctx_free(ctx.cc);
+        if (!ctx.env->flame_graph)
+            callchain_ctx_free(ctx.cc);
+        else {
+            flame_graph_output(ctx.flame);
+            flame_graph_close(ctx.flame);
+        }
     }
     tep__unref();
 }
@@ -196,7 +205,10 @@ static void profile_sample(union perf_event *event, int instance)
         printf("%16s %6u [%03d] %llu.%06llu: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                         data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
         if (ctx.env->callchain) {
-            print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+            if (!ctx.env->flame_graph)
+                print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+            else
+                flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
         }
     }
 }

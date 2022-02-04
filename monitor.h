@@ -60,6 +60,7 @@ struct env {
     char *tp_alloc;
     char *tp_free;
     char *symbols;
+    char *flame_graph;
     bool syscalls;
     bool perins;
     bool test;

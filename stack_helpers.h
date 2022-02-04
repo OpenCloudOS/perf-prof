@@ -37,4 +37,6 @@ struct flame_graph *flame_graph_new(int flags, FILE *fout);
 void flame_graph_free(struct flame_graph *fg);
 void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain, u32 pid, const char *comm);
 void flame_graph_output(struct flame_graph *fg);
+struct flame_graph *flame_graph_open(int flags, const char *path);
+void flame_graph_close(struct flame_graph *fg);
 #endif
