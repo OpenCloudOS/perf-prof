@@ -115,6 +115,7 @@ enum {
     LONG_OPT_syscalls,
     LONG_OPT_perins,
     LONG_OPT_symbols,
+    LONG_OPT_flame_graph,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -141,6 +142,7 @@ static const struct argp_option opts[] = {
     { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
     { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names. Similar to pprof --symbols" },
+    { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
@@ -227,6 +229,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_symbols:
         env.symbols = strdup(arg);
+        break;
+    case LONG_OPT_flame_graph:
+        env.flame_graph = strdup(arg);
         break;
     case 'v':
         env.verbose++;

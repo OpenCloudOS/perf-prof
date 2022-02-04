@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -646,6 +647,41 @@ static void __flame_graph_print(void *opaque, struct_key *key, void *value, unsi
 
 void flame_graph_output(struct flame_graph *fg)
 {
+    if (!fg)
+        return ;
+
     keyvalue_pairs_foreach(fg->kv_pairs, __flame_graph_print, fg);
+}
+
+struct flame_graph *flame_graph_open(int flags, const char *path)
+{
+    char filename[PATH_MAX];
+    FILE *fp;
+
+    if (!path)
+        return NULL;
+
+    snprintf(filename, sizeof(filename), "%s.folded", path);
+    if (access(filename, F_OK) == 0) {
+        char filename_old[PATH_MAX];
+        snprintf(filename_old, sizeof(filename_old), "%s.folded.old", path);
+        rename(filename, filename_old);
+    }
+    fp = fopen(filename, "w+");
+    if (!fp)
+        return NULL;
+    return flame_graph_new(flags, fp);
+}
+
+void flame_graph_close(struct flame_graph *fg)
+{
+    FILE *fp;
+
+    if (!fg)
+        return ;
+
+    fp = fg->cc->fout;
+    flame_graph_free(fg);
+    fclose(fp);
 }
 
