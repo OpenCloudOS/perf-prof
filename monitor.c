@@ -86,7 +86,7 @@ const char argp_program_doc[] =
 "USAGE:\n"
 "    perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]\n"
 "    perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]\n"
-"    perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
+"    perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file]] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
 "    perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
 "    perf-monitor trace -e event [--filter filter] [-C cpu] [-g]\n"
 "    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
@@ -95,12 +95,9 @@ const char argp_program_doc[] =
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
 "    perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
-"    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
-"    perf-monitor --symbols /path/to/bin"
-"\n"
-"EXAMPLES:\n"
-"    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock\n"
-"    perf-monitor irq-off -L 10000 -C 1-21,25-46  # Monitor irq-off\n";
+"    perf-monitor mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
+"    perf-monitor --symbols /path/to/bin\n"
+;
 
 enum {
     LONG_OPT_test = 500,
@@ -125,23 +122,28 @@ static const struct argp_option opts[] = {
     { "pids", 'p', "PID,PID", 0, "Attach to processes" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
-    { "freq", 'F', "n", 0, "profile at this frequency, Dflt: 100, No profile: 0" },
-    { "event", 'e', "evt[,evt]", 0, "event selector. use 'perf list tracepoint' to list available tp events" },
-    { "filter", LONG_OPT_filter, "filter", 0, "event filter/comm filter" },
+    { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
+    { "event", 'e', "EVENT,...", 0, "Event selector. use 'perf list tracepoint' to list available tp events.\n"
+                                    "EVENT,EVENT,...\n"
+                                    "EVENT: sys:name/filter/ATTR/ATTR/.../\n"
+                                    "ATTR:\n"
+                                    "    stack: sample_type PERF_SAMPLE_CALLCHAIN" },
+    { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
     { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
     { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
     { "than", LONG_OPT_than, "ge", 0, "Greater than specified time, ms/us/percent" },
-    { "alloc", LONG_OPT_alloc, "tp", 0, "memory alloc tracepoint/kprobe" },
-    { "free", LONG_OPT_free, "tp", 0, "memory free tracepoint/kprobe" },
-    { "syscalls", LONG_OPT_syscalls, NULL, 0, "trace syscalls" },
-    { "perins", LONG_OPT_perins, NULL, 0, "print per instance stat" },
+    { "alloc", LONG_OPT_alloc, "tp", 0, "Memory alloc tracepoint/kprobe" },
+    { "free", LONG_OPT_free, "tp", 0, "Memory free tracepoint/kprobe" },
+    { "syscalls", LONG_OPT_syscalls, NULL, 0, "Trace syscalls" },
+    { "perins", LONG_OPT_perins, NULL, 0, "Print per instance stat" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
-    { "mmap-pages", 'm', "pages", 0, "number of mmap data pages and AUX area tracing mmap pages" },
+    { "mmap-pages", 'm', "pages", 0, "Number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
-    { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names. Similar to pprof --symbols" },
+    { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names.\n"
+                                                 "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
