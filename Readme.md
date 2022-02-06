@@ -19,41 +19,44 @@ Monitor based on perf_event
 USAGE:
     perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]
     perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]
-    perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [-G] [--than PCT]
+    perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file]] [-m pages] [--exclude-*] [-G] [--than PCT]
     perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]
-    perf-monitor trace -e event [--filter filter] [-C cpu] [-g]
+    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file]]
     perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]
-    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]
+    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]
     perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]
-    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
+    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]
     perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]
     perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
-    perf-monitor mpdelay -e evt,evt[,evt] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
+    perf-monitor mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]
     perf-monitor --symbols /path/to/bin
 
-EXAMPLES:
-    perf-monitor split-lock -T 1000 -C 1-21,25-46 -G  # Monitor split-lock
-    perf-monitor irq-off -L 10000 -C 1-21,25-46  # Monitor irq-off
-
-      --alloc=tp             memory alloc tracepoint/kprobe
+      --alloc=tp             Memory alloc tracepoint/kprobe
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
   -D, --uninterruptible      TASK_UNINTERRUPTIBLE
-  -e, --event=evt[,evt]      event selector. use 'perf list tracepoint' to list available tp events
+  -e, --event=EVENT,...      Event selector. use 'perf list tracepoint' to list available tp events.
+                             EVENT,EVENT,...
+                             EVENT: sys:name/filter/ATTR/ATTR/.../
+                             ATTR:
+                                 stack: sample_type PERF_SAMPLE_CALLCHAIN
       --exclude-guest        exclude guest
       --exclude-kernel       exclude kernel
       --exclude-user         exclude user
-      --filter=filter        event filter/comm filter
-      --free=tp              memory free tracepoint/kprobe
-  -F, --freq=n               profile at this frequency, Dflt: 100, No profile: 0
+      --filter=filter        Event filter/comm filter
+      --flame-graph=file     Specify the folded stack file.
+      --free=tp              Memory free tracepoint/kprobe
+  -F, --freq=n               Profile at this frequency, Dflt: 100, No profile: 0
   -g, --call-graph           Enable call-graph recording
   -G, --guest                Monitor GUEST, Dflt: false
   -i, --interval=INT         Interval, ms
   -L, --latency=LAT          Interrupt off latency, unit: us, Dflt: 20ms
-  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
+  -m, --mmap-pages=pages     Number of mmap data pages and AUX area tracing mmap pages
   -p, --pids=PID,PID         Attach to processes
-      --perins               print per instance stat
+      --perins               Print per instance stat
       --precise              Generate precise interrupt
-      --syscalls             trace syscalls
+      --symbols=symbols      Maps addresses to symbol names.
+                             Similar to pprof --symbols.
+      --syscalls             Trace syscalls
   -S, --interruptible        TASK_INTERRUPTIBLE
       --test                 Split-lock test verification
       --than=ge              Greater than specified time, ms/us/percent
@@ -62,8 +65,7 @@ EXAMPLES:
   -?, --help                 Give this help list
       --usage                Give a short usage message
 
-Mandatory or optional arguments to long options are also mandatory or optional
-for any corresponding short options.
+Mandatory or optional arguments to long options are also mandatory or optional for any corresponding short options.
 ```
 
 监控框架采用模块化设计，目前支持一些基础的监控模块：
@@ -289,6 +291,29 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
 - **HEAPCHECK=**，内存泄露检测。draconian检测所有的内存泄露。
 - **PPROF_PATH=**，指定符号解析命令。`perf-monitor --symbols`具备跟`pprof --symbols`一样的符号解析能力。
 
+### 5.5 栈的处理
+
+栈的处理方式各种各样，如perf top风格的栈负载处理，火焰图风格的栈处理。
+
+perf-monitor目前支持的栈处理。
+
+- 栈及符号打印。用`callchain_ctx`表示，定义了栈的打印风格，可控制内核态、用户态、地址、符号、偏移量、dso、正向栈、反向栈。每个栈帧的分隔符、栈的分隔符。
+- key-value栈。以栈做为key，可以过滤重复栈，并能唯一寻址value。用`key_value_paires`结构表示，一般相同的栈都有类似的作用，如内存分配栈，可以分析相同的栈分配的总内存量，未释放的总内存量。类似于gperftools提供的HEAPCHECKE功能，最后报告的内存泄露是以栈为基准的。
+- 火焰图。把相同的栈以及栈的每一帧聚合到一起。用`flame_graph`结构表示，能够生成折叠栈格式：反向栈、每帧以";"分隔、末尾是栈的数量。例子：`swapper;start_kernel;rest_init;cpu_idle;default_idle;native_safe_halt 1`。使用[flamegraph.pl](https://github.com/brendangregg/FlameGraph/blob/master/flamegraph.pl)生成火焰图。
+
+### 5.6 火焰图
+
+perf-monitor仅输出折叠栈格式，并对输出栈比较多的模块做了支持。目前已支持：`profile, task-state, kmemleak, trace`
+
+原先在stdout直接输出栈，目前切换成火焰图之后，不会再输出栈，而是会在命令结束时输出火焰图折叠栈文件。通过`[-g [--flame-graph file]]`参数启用火焰图，必须支持栈(-g)才能输出火焰图。折叠栈文件以`file.folded`命名。使用`flamegraph.pl`最终生成svg火焰图。
+
+```
+$ perf-monitor task-state -S --than 100 --filter cat -g --flame-graph cat
+$ flamegraph.pl cat.folded > cat.svg
+```
+
+
+
 ## 6 已支持的模块
 
 ### 6.1 watchdog
@@ -332,7 +357,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
 
 ```
 用法:
-	perf-monitor profile [-F freq] [-i INT] [-C cpu] [-g] [-m pages] [--exclude-*] [--than PCT]
+	perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file]] [-m pages] [--exclude-*] [-G] [--than PCT]
 例子:
 	perf-monitor profile -F 100 -C 0 -g --exclude-user --than 30  #对cpu0采样，在内核态利用率超过30%打印内核栈。
 	perf-monitor profile -F 0 -i 1000 -C 0 --exclude-user --exclude-guest  #禁用cpu0采样，但以1000ms间隔输出%sys利用率。
@@ -344,6 +369,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
       --exclude-user         过滤掉用户态的采样，只采样内核态，可以减少采样点。降低cpu压力。
       --exclude-kernel       过滤掉内核态采样，只采样用户态。
       --exclude-guest        过滤掉guest，保留host。
+      --flame-graph=file     指定folded stack file.
   -G, --guest                过滤掉host，保留guest。
       --than=PCT             百分比，指定采样的用户态或者内核态超过一定百分比才输出信息，包括栈信息。可以抓取偶发内核态占比高的问题。
 ```
@@ -361,7 +387,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
 
 ```
 用法:
-    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]
+    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]
 例子:
     perf-monitor task-state -D --than 100 --filter nginx -g # 打印nginx进程D住超过100ms的栈。
 
@@ -369,6 +395,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
   -D, --uninterruptible      TASK_UNINTERRUPTIBLE  D状态进程
       --than=ms              Greater than specified time, ms  在特定状态停留超过指定时间，ms单位。
       --filter=filter        event filter/comm filter  过滤进程名字
+      --flame-graph=file     Specify the folded stack file  折叠栈文件
   -g, --call-graph           Enable call-graph recording  抓取栈
   -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
   -C, --cpu=CPU              Monitor the specified CPU, Dflt: all cpu
@@ -394,7 +421,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
 
 ```
 用法:
-    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]
+    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]
 例子:
     echo 'r:alloc_percpu pcpu_alloc ptr=$retval' >> /sys/kernel/debug/tracing/kprobe_events #ptr指向分配的内存地址
     echo 'p:free_percpu free_percpu ptr=%di' >> /sys/kernel/debug/tracing/kprobe_events
@@ -402,6 +429,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-monitor /
 
       --alloc=tp             memory alloc tracepoint/kprobe
       --free=tp              memory free tracepoint/kprobe
+      --flame-graph=file     Specify the folded stack file.
   -g, --call-graph           Enable call-graph recording
   -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
   -v, --verbose              Verbose debug output
