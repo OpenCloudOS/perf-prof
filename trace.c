@@ -13,13 +13,17 @@
 struct monitor trace;
 static struct monitor_ctx {
     struct callchain_ctx *cc;
+    struct flame_graph *flame;
     struct env *env;
 } ctx;
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+        if (!env->flame_graph)
+            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+        else
+            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
         trace.pages *= 2;
     }
     ctx.env = env;
@@ -29,7 +33,12 @@ static int monitor_ctx_init(struct env *env)
 static void monitor_ctx_exit(void)
 {
     if (ctx.env->callchain) {
-        callchain_ctx_free(ctx.cc);
+        if (!ctx.env->flame_graph)
+            callchain_ctx_free(ctx.cc);
+        else {
+            flame_graph_output(ctx.flame);
+            flame_graph_close(ctx.flame);
+        }
     }
     tep__unref();
 }
@@ -136,8 +145,14 @@ static inline void __print_callchain(union perf_event *event)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain)
-        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
+    if (ctx.env->callchain) {
+        if (!ctx.env->flame_graph)
+            print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
+        else {
+            const char *comm = tep__pid_to_comm((int)data->h.tid_entry.pid);
+            flame_graph_add_callchain(ctx.flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
+        }
+    }
 }
 
 static void trace_sample(union perf_event *event, int instance)
