@@ -90,7 +90,7 @@ const char argp_program_doc[] =
 "    perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
 "    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file]]\n"
 "    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
-"    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g] [-m pages]\n"
+"    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
 "    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g] [-v]\n"
 "    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
