@@ -28,6 +28,7 @@ struct kmemleak_stat {
 struct monitor_ctx {
     struct perf_evlist *evlist;
     struct callchain_ctx *cc;
+    struct flame_graph *flame;
     __u64 tp_alloc;
     __u64 tp_free;
     struct rblist alloc;
@@ -175,6 +176,8 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        if (env->flame_graph)
+            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL, env->flame_graph);
         kmemleak.pages *= 2;
     }
     rblist__init(&ctx.alloc);
@@ -200,6 +203,10 @@ static void monitor_ctx_exit(void)
     rblist__exit(&ctx.gc_free);
     if (ctx.env->callchain) {
         callchain_ctx_free(ctx.cc);
+        if (ctx.env->flame_graph) {
+            flame_graph_output(ctx.flame);
+            flame_graph_close(ctx.flame);
+        }
     }
     tep__unref();
 }
@@ -297,6 +304,8 @@ static void __print_callchain(union perf_event *event, __u64 config)
 
     if (ctx.env->callchain && config == ctx.tp_alloc) {
         print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+        if (ctx.env->flame_graph)
+            flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
     }
 }
 
