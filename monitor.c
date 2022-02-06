@@ -492,6 +492,15 @@ int main(int argc, char *argv[])
     uint64_t time_end;
     int time_left;
 
+    if (isatty(STDOUT_FILENO)) {
+        struct winsize size;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0) {
+            char buff[16];
+            snprintf(buff, sizeof(buff), "rmargin=%u", size.ws_col);
+            setenv("ARGP_HELP_FMT", buff, 1);
+        }
+    }
+
     err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
     if (err)
         return err;
