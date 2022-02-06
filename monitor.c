@@ -642,6 +642,7 @@ out_close:
 out_exit:
     monitor->deinit(evlist);
 out_delete:
+    perf_evlist__set_maps(evlist, NULL, NULL);
     perf_evlist__delete(evlist);
     perf_cpu_map__put(cpus);
     perf_thread_map__put(threads);
