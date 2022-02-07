@@ -796,7 +796,7 @@ static struct syms *__syms__load_file(FILE *f, char *line, int size)
 
     while (true) {
         s = fgets(line, size, f);
-        if (!s && feof(f))
+        if (!s || feof(f))
             break;
 
         ret = sscanf(s, "%lx-%lx %4s %lx %lx:%lx %lu%[^\n]\n",
