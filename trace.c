@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <monitor.h>
@@ -14,8 +15,12 @@ struct monitor trace;
 static struct monitor_ctx {
     struct callchain_ctx *cc;
     struct flame_graph *flame;
+    time_t time;
+    char time_str[32];
     struct env *env;
 } ctx;
+
+static void trace_interval(void);
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
@@ -25,6 +30,12 @@ static int monitor_ctx_init(struct env *env)
         else
             ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
         trace.pages *= 2;
+    }
+    if (env->interval)
+        trace_interval();
+    else {
+        ctx.time = 0;
+        ctx.time_str[0] = '\0';
     }
     ctx.env = env;
     return 0;
@@ -150,7 +161,9 @@ static inline void __print_callchain(union perf_event *event)
             print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
         else {
             const char *comm = tep__pid_to_comm((int)data->h.tid_entry.pid);
-            flame_graph_add_callchain(ctx.flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
+            flame_graph_add_callchain_at_time(ctx.flame, &data->callchain, data->h.tid_entry.pid,
+                                              !strcmp(comm, "<...>") ? NULL : comm,
+                                              ctx.time, ctx.time_str);
         }
     }
 }
@@ -168,12 +181,19 @@ static void trace_sample(union perf_event *event, int instance)
     __print_callchain(event);
 }
 
+static void trace_interval(void)
+{
+    ctx.time = time(NULL);
+    strftime(ctx.time_str, sizeof(ctx.time_str), "%Y-%m-%d;%H:%M:%S", localtime(&ctx.time));
+}
+
 struct monitor trace = {
     .name = "trace",
     .pages = 2,
     .init = trace_init,
     .filter = trace_filter,
     .deinit = trace_exit,
+    .interval = trace_interval,
     .sample = trace_sample,
 };
 MONITOR_REGISTER(trace)
