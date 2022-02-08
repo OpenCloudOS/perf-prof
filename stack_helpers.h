@@ -16,7 +16,6 @@ struct callchain_ctx *callchain_ctx_new(int flags, FILE *fout);
 void callchain_ctx_free(struct callchain_ctx *cc);
 void print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
-void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void task_exit_free_syms(union perf_event *event);
 
 
@@ -32,10 +31,20 @@ void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, 
 const char *unique_string(const char *str);
 void unique_string_stat(FILE *fp);
 
+
+#define PERF_CONTEXT_FLAME_GRAPH  (PERF_CONTEXT_KERNEL - 1)
 struct flame_graph;
 struct flame_graph *flame_graph_new(int flags, FILE *fout);
 void flame_graph_free(struct flame_graph *fg);
-void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain, u32 pid, const char *comm);
+void flame_graph_add_callchain_at_time(struct flame_graph *fg, struct callchain *callchain,
+                                         u32 pid, const char *comm,
+                                         u64 time, const char *time_str);
+static inline
+void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain,
+                                         u32 pid, const char *comm)
+{
+    flame_graph_add_callchain_at_time(fg, callchain, pid, comm, 0, NULL);
+}
 void flame_graph_output(struct flame_graph *fg);
 struct flame_graph *flame_graph_open(int flags, const char *path);
 void flame_graph_close(struct flame_graph *fg);

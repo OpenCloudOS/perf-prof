@@ -38,6 +38,7 @@ struct callchain_ctx {
         offset      : 1, /* print +offset */
         dso         : 1, /* print (dso) */
         reverse     : 1, /* reverse, down to top */
+        debug       : 1, /* debug, print PERF_CONTEXT_* */
         print2string_kernel : 1, /* convert to string, for kernel callchain */
         print2string_user   : 1; /* convert to string, for user callchain */
     char seperate;
@@ -78,6 +79,21 @@ static void global_syms_unref(bool kernel, bool user)
         syms_cache__free(ctx.syms_cache);
         ctx.syms_cache = NULL;
     }
+}
+
+static void callchain_ctx_debug_init(struct callchain_ctx *cc, bool kernel, bool user, FILE *fout)
+{
+    cc->kernel = kernel;
+    cc->user   = user;
+    cc->addr   = 1;
+    cc->symbol = 1;
+    cc->offset = 1;
+    cc->dso    = 1;
+    cc->reverse = 0;
+    cc->debug  = 1;
+    cc->seperate = '\n';
+    cc->end = '\n';
+    cc->fout = fout;
 }
 
 struct callchain_ctx *callchain_ctx_new(int flags, FILE *fout)
@@ -227,12 +243,24 @@ static bool __print_callchain_reverse(struct callchain_ctx *cc, struct callchain
         }
     }
     if (cc->user && ustart) {
-        for (; uend >= ustart; uend--)
-            __print_callchain_user(cc, syms, callchain->ips[uend], &printed);
+        for (; uend >= ustart; uend--) {
+            u64 ip = callchain->ips[uend];
+            // There may be more than 1 PERF_CONTEXT_* tag.
+            if (ip == PERF_CONTEXT_KERNEL ||
+                ip == PERF_CONTEXT_USER)
+                continue;
+            __print_callchain_user(cc, syms, ip, &printed);
+        }
     }
     if (cc->kernel && kstart) {
-        for (; kend >= kstart; kend--)
-            __print_callchain_kernel(cc, callchain->ips[kend], &printed);
+        for (; kend >= kstart; kend--) {
+            u64 ip = callchain->ips[kend];
+            // There may be more than 1 PERF_CONTEXT_* tag.
+            if (ip == PERF_CONTEXT_KERNEL ||
+                ip == PERF_CONTEXT_USER)
+                continue;
+            __print_callchain_kernel(cc, ip, &printed);
+        }
     }
     return printed;
 }
@@ -268,6 +296,8 @@ void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchai
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = cc->kernel;
             user = false;
+            if (cc->debug)
+                fprintf(cc->fout, "    %016llx PERF_CONTEXT_KERNEL\n", ip);
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
             kernel = false;
@@ -277,6 +307,8 @@ void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchai
                 if (syms)
                     user = cc->user;
             }
+            if (cc->debug)
+                fprintf(cc->fout, "    %016llx PERF_CONTEXT_USER\n", ip);
             continue;
         }
         if (kernel) {
@@ -298,11 +330,12 @@ void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchai
     }
 }
 
-void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid)
+static void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid,
+                                          int *context_kernel_num, int *context_user_num)
 {
     __u64 i;
     bool kernel = false, user = false;
-    struct syms *syms;
+    struct syms *syms = NULL;
     char buff[1024];
     int len = 0;
 
@@ -315,24 +348,26 @@ void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchai
         ctx.syms_cache == NULL)
         return ;
 
+    *context_kernel_num = 0;
+    *context_user_num = 0;
     for (i = 0; i < callchain->nr; i++) {
         u64 ip = callchain->ips[i];
         if (ip == PERF_CONTEXT_KERNEL) {
-            kernel = cc->kernel;
+            kernel = true;
             user = false;
+            (*context_kernel_num) ++;
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
             kernel = false;
-            user = false;
+            user = true;
             if (ctx.syms_cache) {
-                syms = syms_cache__get_syms(ctx.syms_cache, pid);
-                if (syms)
-                    user = cc->user;
+                syms = cc->user ? syms_cache__get_syms(ctx.syms_cache, pid) : NULL;
             }
+            (*context_user_num) ++;
             continue;
         }
         if (kernel && cc->print2string_kernel) {
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
+            const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
             len = 0;
             if (cc->addr)
                 len += snprintf(buff+len, sizeof(buff)-len, "    %016lx", ip);
@@ -350,13 +385,15 @@ void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchai
             u64 offset = 0L;
             const char *dso_name = "Unknown";
 
-            dso = syms__find_dso(syms, ip, &offset);
-            if (dso) {
-                const struct sym *sym = dso__find_sym(dso, offset);
-                if (sym) {
-                    symbol = sym->name;
-                    offset = offset - sym->start;
-                    dso_name = dso__name(dso)?:"Unknown";
+            if (syms) {
+                dso = syms__find_dso(syms, ip, &offset);
+                if (dso) {
+                    const struct sym *sym = dso__find_sym(dso, offset);
+                    if (sym) {
+                        symbol = sym->name;
+                        offset = offset - sym->start;
+                        dso_name = dso__name(dso)?:"Unknown";
+                    }
                 }
             }
             len = 0;
@@ -399,20 +436,19 @@ static int key_value_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct key_value *kv = container_of(rbn, struct key_value, rbnode);
     const struct_key *key = entry;
-    long i;
+    int i = 0, j = 0;
 
-    if (kv->key.nr > key->nr)
-        return 1;
-    else if (kv->key.nr < key->nr)
-        return -1;
-
-    for (i = (long)key->nr - 1; i >= 0; i--) {
-        if (kv->key.ips[i] > key->ips[i])
+    /*
+     * In the flame_graph_add_callchain function, the PERF_CONTEXT_FLAME_GRAPH
+     * will be added, which can be sorted by time(ips[1]).
+    **/
+    for (; i < (int)kv->key.nr && j < (int)key->nr; i++, j++) {
+        if (kv->key.ips[i] > key->ips[j])
             return 1;
-        else if (kv->key.ips[i] < key->ips[i])
+        else if (kv->key.ips[i] < key->ips[j])
             return -1;
     }
-    return 0;
+    return (int)kv->key.nr - (int)key->nr;
 }
 static struct rb_node *key_value_node_new(struct rblist *rlist, const void *new_entry)
 {
@@ -606,32 +642,76 @@ void flame_graph_free(struct flame_graph *fg)
     free(fg);
 }
 
-void flame_graph_add_callchain(struct flame_graph *fg, struct callchain *callchain, u32 pid, const char *comm)
+void flame_graph_add_callchain_at_time(struct flame_graph *fg, struct callchain *callchain,
+                                         u32 pid, const char *comm,
+                                         u64 time, const char *time_str)
 {
     struct {
         __u64   nr;
-        __u64   ips[PERF_MAX_STACK_DEPTH + PERF_MAX_CONTEXTS_PER_STACK];
+        __u64   ips[PERF_MAX_STACK_DEPTH + PERF_MAX_CONTEXTS_PER_STACK + 5];
     } key;
     char buff[128];
+    int context_kernel_num = 0;
+    int context_user_num = 0;
 
     if (!fg)
         return ;
 
-    memcpy(&key, callchain, sizeof(*callchain) + callchain->nr * sizeof(callchain->ips[0]));
+    key.nr = 0;
+    /*
+     * The time is placed at the front of the stack.
+     *   1. The flame graph can be sorted by time.
+     *   2. The print_callchain function is not affected.
+    **/
+    if (time) {
+        key.ips[key.nr++] = PERF_CONTEXT_FLAME_GRAPH;
+        key.ips[key.nr++] = time;
+    }
+
+    memcpy(&key.ips[key.nr], callchain->ips, callchain->nr * sizeof(callchain->ips[0]));
+    key.nr += callchain->nr;
     /*
      * convert callchain to unique string.
      * For user-mode stacks, symbols are freed after the process exits. Therefore,
      * the stack needs to be converted into a unique string first.
     **/
-    print2string_callchain(fg->cc, (struct callchain *)&key, pid);
+    print2string_callchain(fg->cc, (struct callchain *)&key, pid, &context_kernel_num, &context_user_num);
+    /*
+     * There may be more than 1 PERF_CONTEXT_* tag. So, pre-print the error message.
+    **/
+    if (context_kernel_num > 1 || context_user_num > 1) {
+        struct callchain_ctx debug;
+        callchain_ctx_debug_init(&debug, fg->cc->kernel, fg->cc->user, stderr);
+        print_time(stderr);
+        fprintf(stderr, "BUG: callchain error%s%s\n",
+                context_kernel_num > 1 ? " PERF_CONTEXT_KERNEL >1" : "",
+                context_user_num > 1 ? " PERF_CONTEXT_USER >1" : "");
+        print_callchain_common(&debug, callchain, pid);
+    }
 
-    if (fg->cc->user) {
+    if (fg->cc->user && fg->cc->print2string_user) {
+        /*
+         * There is no user-mode stack in callchain, add PERF_CONTEXT_USER isolates
+         * the user-mode and kernel-mode stacks.
+        **/
+        if (!context_user_num) {
+            key.ips[key.nr++] = PERF_CONTEXT_USER;
+            context_user_num++;
+        }
         if (comm)
             snprintf(buff, sizeof(buff), "%s %u", comm, pid);
         else
             snprintf(buff, sizeof(buff), "%d", pid);
         key.ips[key.nr++] = (__u64)(void *)unique_string(buff);
     }
+    if (time && time_str) {
+        if (!context_user_num) {
+            key.ips[key.nr++] = PERF_CONTEXT_USER;
+            context_user_num++;
+        }
+        key.ips[key.nr++] = (__u64)(void *)unique_string(time_str);
+    }
+
     /*
      * Add to the storage pool with the stack as the key.
     **/
