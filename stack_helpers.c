@@ -699,7 +699,7 @@ void flame_graph_add_callchain_at_time(struct flame_graph *fg, struct callchain 
             context_user_num++;
         }
         if (comm)
-            snprintf(buff, sizeof(buff), "%s %u", comm, pid);
+            snprintf(buff, sizeof(buff), "%s", comm);
         else
             snprintf(buff, sizeof(buff), "%d", pid);
         key.ips[key.nr++] = (__u64)(void *)unique_string(buff);
