@@ -765,3 +765,10 @@ void flame_graph_close(struct flame_graph *fg)
     fclose(fp);
 }
 
+void flame_graph_reset(struct flame_graph *fg)
+{
+    if (!fg)
+        return ;
+    rblist__exit(&fg->kv_pairs->kv_pairs);
+}
+

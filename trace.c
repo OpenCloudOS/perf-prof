@@ -185,6 +185,8 @@ static void trace_interval(void)
 {
     ctx.time = time(NULL);
     strftime(ctx.time_str, sizeof(ctx.time_str), "%Y-%m-%d;%H:%M:%S", localtime(&ctx.time));
+    flame_graph_output(ctx.flame);
+    flame_graph_reset(ctx.flame);
 }
 
 struct monitor trace = {
