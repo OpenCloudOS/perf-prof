@@ -226,7 +226,7 @@ MONITOR_REGISTER(profile);
 static int cpu_util_init(struct perf_evlist *evlist, struct env *env)
 {
     env->freq = 0;
-    env->interval = 1000;
+    env->interval = env->interval?:1000;
     return profile_init(evlist, env);
 }
 
