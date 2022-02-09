@@ -19,9 +19,9 @@ Monitor based on perf_event
 USAGE:
     perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]
     perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]
-    perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file]] [-m pages] [--exclude-*] [-G] [--than PCT]
+    perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file [-i INT]]] [-m pages] [--exclude-*] [-G] [--than PCT]
     perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]
-    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file]]
+    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file [-i INT]]]
     perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]
     perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]
     perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]
@@ -312,6 +312,30 @@ $ perf-monitor task-state -S --than 100 --filter cat -g --flame-graph cat
 $ flamegraph.pl cat.folded > cat.svg
 ```
 
+#### 5.6.1 按时间的火焰图
+
+是以固定间隔输出折叠栈，折叠栈包含时间戳。最终生成的火焰图是按时间排序的。对于长时间的监控，可以根据时间戳查找问题。
+
+```
+$ grep "15:46:33" cat.folded | flamegraph.pl > cat.svg #生成15:46:33秒开始的火焰图
+```
+
+#### 5.6.2 网络丢包火焰图
+
+```
+$ perf-monitor trace -e skb:kfree_skb -g --flame-graph kfree_skb -m 128 #监控丢包
+$ perf-monitor trace -e skb:kfree_skb -g --flame-graph kfree_skb -i 600000 -m 128 #每600秒间隔输出火焰图
+$ flamegraph.pl --reverse  kfree_skb.folded > kfree_skb.svg #生成火焰图
+```
+
+#### 5.6.3 CPU性能火焰图
+
+```
+$ perf-monitor profile -F 1000 -C 0,1 --exclude-user -g --flame-graph profile #采样内核态CPU利用率的火焰图
+$ perf-monitor profile -F 1000 -C 0,1 --exclude-user -g --flame-graph profile -i 600000 #每600秒间隔输出火焰图
+$ grep "15:46:33" profile.folded | flamegraph.pl > profile.svg #生成15:46:33秒开始600秒的火焰图
+```
+
 
 
 ## 6 已支持的模块
@@ -357,13 +381,12 @@ $ flamegraph.pl cat.folded > cat.svg
 
 ```
 用法:
-	perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file]] [-m pages] [--exclude-*] [-G] [--than PCT]
+	perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file [-i INT]]] [-m pages] [--exclude-*] [-G] [--than PCT]
 例子:
 	perf-monitor profile -F 100 -C 0 -g --exclude-user --than 30  #对cpu0采样，在内核态利用率超过30%打印内核栈。
-	perf-monitor profile -F 0 -i 1000 -C 0 --exclude-user --exclude-guest  #禁用cpu0采样，但以1000ms间隔输出%sys利用率。
 
   -F, --freq=n               以固定频率采样。
-  -i, --interval=INT         以固定间隔输出cpu利用率统计信息。单位ms
+  -i, --interval=INT         以固定间隔输出火焰图。单位ms
   -C, --cpu=CPU              指定在哪些cpu上采样栈。
   -g, --call-graph           抓取采样点的栈。
       --exclude-user         过滤掉用户态的采样，只采样内核态，可以减少采样点。降低cpu压力。
