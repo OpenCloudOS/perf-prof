@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include "monitor.h"
 #include "trace_helpers.h"
 #include "tep.h"
@@ -16,11 +17,14 @@ struct monitor_ctx {
     }*stat;
     struct callchain_ctx *cc;
     struct flame_graph *flame;
+    time_t time;
+    char time_str[32];
     int tsc_khz;
     int vendor;
     struct env *env;
 } ctx;
 
+static void profile_interval(void);
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
@@ -40,11 +44,18 @@ static int monitor_ctx_init(struct env *env)
         free(ctx.cycles);
         return -1;
     }
+    ctx.time = 0;
+    ctx.time_str[0] = '\0';
     if (env->callchain) {
         if (!env->flame_graph)
             ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
-        else
+        else {
             ctx.flame = flame_graph_open(CALLCHAIN_KERNEL, env->flame_graph);
+            if (env->interval) {
+                profile_interval();
+                profile.interval = profile_interval;
+            }
+        }
     }
     ctx.tsc_khz = get_tsc_khz();
     ctx.vendor = get_cpu_vendor();
@@ -107,9 +118,6 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
 
     if (env->callchain)
         profile.pages *= 2;
-
-    if (!env->interval)
-        profile.read = NULL;
 
     if (env->verbose) {
         printf("tsc_khz = %d\n", ctx.tsc_khz);
@@ -208,9 +216,17 @@ static void profile_sample(union perf_event *event, int instance)
             if (!ctx.env->flame_graph)
                 print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
             else
-                flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
+                flame_graph_add_callchain_at_time(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL, ctx.time, ctx.time_str);
         }
     }
+}
+
+static void profile_interval(void)
+{
+    ctx.time = time(NULL);
+    strftime(ctx.time_str, sizeof(ctx.time_str), "%Y-%m-%d;%H:%M:%S", localtime(&ctx.time));
+    flame_graph_output(ctx.flame);
+    flame_graph_reset(ctx.flame);
 }
 
 struct monitor profile = {
@@ -218,7 +234,6 @@ struct monitor profile = {
     .pages = 2,
     .init = profile_init,
     .deinit = profile_exit,
-    .read   = profile_read,
     .sample = profile_sample,
 };
 MONITOR_REGISTER(profile);
