@@ -676,6 +676,10 @@ void flame_graph_add_callchain_at_time(struct flame_graph *fg, struct callchain 
      * the stack needs to be converted into a unique string first.
     **/
     print2string_callchain(fg->cc, (struct callchain *)&key, pid, &context_kernel_num, &context_user_num);
+    // callchain empty
+    if (context_kernel_num + context_user_num == callchain->nr) {
+        return;
+    }
     /*
      * There may be more than 1 PERF_CONTEXT_* tag. So, pre-print the error message.
     **/
