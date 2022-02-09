@@ -24,19 +24,22 @@ static void trace_interval(void);
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
+    ctx.time = 0;
+    ctx.time_str[0] = '\0';
     if (env->callchain) {
         if (!env->flame_graph)
             ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
-        else
+        else {
             ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
+            if (env->interval) {
+                trace_interval();
+                trace.interval = trace_interval;
+            }
+        }
         trace.pages *= 2;
     }
     if (env->interval)
         trace_interval();
-    else {
-        ctx.time = 0;
-        ctx.time_str[0] = '\0';
-    }
     ctx.env = env;
     return 0;
 }
@@ -195,7 +198,6 @@ struct monitor trace = {
     .init = trace_init,
     .filter = trace_filter,
     .deinit = trace_exit,
-    .interval = trace_interval,
     .sample = trace_sample,
 };
 MONITOR_REGISTER(trace)
