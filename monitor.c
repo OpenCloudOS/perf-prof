@@ -88,7 +88,7 @@ const char argp_program_doc[] =
 "    perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]\n"
 "    perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file]] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
 "    perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
-"    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file]]\n"
+"    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file [-i INT]]]\n"
 "    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
 "    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
