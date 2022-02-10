@@ -1,18 +1,18 @@
-perf-monitor-y += trace_helpers.o uprobe_helpers.o stack_helpers.o lib/
-perf-monitor-y += monitor.o tep.o
-perf-monitor-y += split-lock.o
-perf-monitor-y += irq-off.o
-perf-monitor-y += profile.o
-perf-monitor-y += trace.o
-perf-monitor-y += signal.o
-perf-monitor-y += task-state.o
-perf-monitor-y += watchdog.o
-perf-monitor-y += kmemleak.o
-perf-monitor-y += percpu-stat.o
-perf-monitor-y += kvm-exit.o
-perf-monitor-y += mpdelay.o
+perf-prof-y += trace_helpers.o uprobe_helpers.o stack_helpers.o lib/
+perf-prof-y += monitor.o tep.o
+perf-prof-y += split-lock.o
+perf-prof-y += irq-off.o
+perf-prof-y += profile.o
+perf-prof-y += trace.o
+perf-prof-y += signal.o
+perf-prof-y += task-state.o
+perf-prof-y += watchdog.o
+perf-prof-y += kmemleak.o
+perf-prof-y += percpu-stat.o
+perf-prof-y += kvm-exit.o
+perf-prof-y += mpdelay.o
 
-bin-y += perf-monitor
-perf-monitor-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
-LDFLAGS_perf-monitor += -lpthread -ldl -lelf -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list
+bin-y += perf-prof
+perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
+LDFLAGS_perf-prof += -lpthread -ldl -lelf -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list
 

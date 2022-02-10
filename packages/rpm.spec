@@ -1,4 +1,3 @@
-#%define name    perf-monitor
 %define release 1%{?dist}
 %define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
@@ -12,7 +11,7 @@ Version:        %{version}
 Release:        %{release}
 License:        MulanPSL2
 Group:          Unspecified
-Summary:        Monitor based on perf_event
+Summary:        Profiling based on perf_event
 Distribution:   OpenCloudOS
 Vendor:         Tencent
 URL:            https://github.com/OpenCloudOS
@@ -23,11 +22,11 @@ Requires:       elfutils-libelf
 Requires:       glibc
 
 # source files
-Source:         https://github.com/OpenCloudOS/perf-monitor/archive/refs/tags/%{version}.tar.gz
+Source:         https://github.com/OpenCloudOS/perf-prof/archive/refs/tags/%{version}.tar.gz
 
 
 %description
-Monitor based on perf_event: split-lock, irq-off, profile,
+Profiling based on perf_event: split-lock, irq-off, profile,
 task-state, watchdog, kmemleak, kvm-exit, mpdelay.
 
 

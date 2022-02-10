@@ -9,5 +9,5 @@ then
 fi
 
 rpmbuild -bb rpm.spec \
-    --define "name perf-monitor" \
+    --define "name perf-prof" \
     --define "version $tag"

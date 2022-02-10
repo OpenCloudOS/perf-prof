@@ -78,25 +78,25 @@ struct env env = {
 
 static volatile bool exiting;
 
-const char *argp_program_version = "perf-monitor 0.1";
+const char *argp_program_version = "perf-prof 0.3";
 const char *argp_program_bug_address = "<corcpp@foxmail.com>";
 const char argp_program_doc[] =
-"Monitor based on perf_event\n"
+"Profiling based on perf_event\n"
 "\n"
 "USAGE:\n"
-"    perf-monitor split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]\n"
-"    perf-monitor irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]\n"
-"    perf-monitor profile [-F freq] [-C cpu] [-g [--flame-graph file [-i INT]]] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
-"    perf-monitor cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
-"    perf-monitor trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file [-i INT]]]\n"
-"    perf-monitor signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
-"    perf-monitor task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
-"    perf-monitor watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
-"    perf-monitor kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]\n"
-"    perf-monitor percpu-stat -i INT [-C cpu] [--syscalls]\n"
-"    perf-monitor kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
-"    perf-monitor mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
-"    perf-monitor --symbols /path/to/bin\n"
+"  perf-prof split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]\n"
+"  perf-prof irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]\n"
+"  perf-prof profile [-F freq] [-C cpu] [-g [--flame-graph file [-i INT]]] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
+"  perf-prof cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
+"  perf-prof trace -e event [--filter filter] [-C cpu] [-g [--flame-graph file [-i INT]]]\n"
+"  perf-prof signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
+"  perf-prof task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
+"  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
+"  perf-prof kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof percpu-stat -i INT [-C cpu] [--syscalls]\n"
+"  perf-prof kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
+"  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
+"  perf-prof --symbols /path/to/bin\n"
 ;
 
 enum {
