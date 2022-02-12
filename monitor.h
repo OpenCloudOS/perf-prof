@@ -34,6 +34,8 @@ __attribute__((constructor)) static void __monitor_register_##m(void) \
     monitor_register(&m); \
 }
 
+#define PROFILER_REGISTER(p) MONITOR_REGISTER(p)
+
 #define MAX_SLOTS 26
 struct hist {
     unsigned int slots[MAX_SLOTS];
@@ -68,7 +70,7 @@ struct env {
     int verbose;
 };
 
-struct monitor {
+typedef struct monitor {
     struct monitor *next;
     const char *name;
     int pages;
@@ -112,6 +114,6 @@ struct monitor {
 
     //PERF_RECORD_NAMESPACES			= 16,
     void (*namespace)(union perf_event *event, int instance);
-};
+}profiler;
 
 #endif
