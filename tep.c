@@ -8,7 +8,7 @@
 #include <monitor.h>
 #include <tep.h>
 
-#define PLUGINS_DIR "/usr/lib64/perf-monitor-traceevent/plugins"
+#define PLUGINS_DIR "/usr/lib64/perf-prof-traceevent/plugins"
 
 static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
