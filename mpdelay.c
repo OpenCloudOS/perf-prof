@@ -11,7 +11,7 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 
-struct monitor mpdelay;
+static profiler mpdelay;
 
 struct delay_stat {
     __u64 min;
@@ -24,13 +24,6 @@ struct mpdelay_stat {
     unsigned short common_type;
     int i;
     struct delay_stat stat[0];
-};
-struct tp_list {
-    struct perf_evsel *evsel;
-    int id;
-    char *name;
-    char *filter;
-    int stack;
 };
 struct monitor_ctx {
     int nr_ins;
@@ -93,27 +86,21 @@ static void perins_stat_reset(void)
 
 static int monitor_ctx_init(struct env *env)
 {
-    char *s = env->event;
-    char *sep;
     int i, stacks = 0;
 
-    if (!s)
+    if (!env->event)
         return -1;
+
+    tep__ref();
 
     ctx.nr_ins = monitor_nr_instance();
-    ctx.nr_points = 0;
-    while ((sep = strchr(s, ',')) != NULL) {
-        ctx.nr_points ++;
-        s = sep + 1;
-    }
-    if (*s)
-        ctx.nr_points ++;
-    if (ctx.nr_points <= 1)
-        return -1;
 
-    ctx.tp_list = zalloc(ctx.nr_points * sizeof(struct tp_list));
-    if (!ctx.tp_list)
+    ctx.tp_list = tp_list_new(env->event);
+    if (!ctx.tp_list || ctx.tp_list->nr_tp <= 1) {
+        tp_list_free(ctx.tp_list);
         return -1;
+    }
+    ctx.nr_points = ctx.tp_list->nr_tp;
 
     ctx.ins_size = offsetof(struct mpdelay_stat, stat[ctx.nr_points-1]);
     ctx.perins_stat = zalloc((ctx.nr_ins+1) * ctx.ins_size);
@@ -122,74 +109,14 @@ static int monitor_ctx_init(struct env *env)
     ctx.tolins_stat = (void *)ctx.perins_stat + ctx.nr_ins * ctx.ins_size;
     perins_stat_reset();
 
-    tep__ref();
-
-    s = env->event;
-    i = 0;
-    while ((sep = strchr(s, ',')) != NULL) {
-        ctx.tp_list[i++].name = s;
-        *sep = '\0';
-        s = sep + 1;
-    }
-    if (*s)
-        ctx.tp_list[i++].name = s;
-
-    /*
-     * Event syntax:
-     *    EVENT,EVENT,...
-     * EVENT:
-     *    sys:name/filter/ATTR/ATTR/.../
-     * ATTR:
-     *    stack : sample_type PERF_SAMPLE_CALLCHAIN
-     *    ...
-    **/
     for (i = 0; i < ctx.nr_points; i++) {
-        struct tp_list *tp = &ctx.tp_list[i];
-        char *sys = NULL;
-        char *name = NULL;
-        char *filter = NULL;
-        int stack = 0;
-        int id;
+        struct tp *tp = &ctx.tp_list->tp[i];
 
-        sys = s = tp->name;
-        sep = strchr(s, ':');
-        if (!sep)
-            return -1;
-        *sep = '\0';
-
-        name = s = sep + 1;
-        sep = strchr(s, '/');
-        if (sep) {
-            *sep = '\0';
-
-            filter = s = sep + 1;
-            sep = strchr(s, '/');
-            if (!sep)
-                return -1;
-            *sep = '\0';
-
-            s = sep + 1;
-            while ((sep = strchr(s, '/')) != NULL) {
-                char *attr = s;
-                *sep = '\0';
-                s = sep + 1;
-                if (strcmp(attr, "stack") == 0)
-                    stack = 1;
-            }
-        }
-
-        id = tep__event_id(sys, name);
-        if (id < 0)
-            return -1;
-
-        tp->evsel = NULL;
-        tp->id = id;
-        tp->filter = filter;
-        tp->stack = stack;
-        tp->name[strlen(sys)] = ':';
+        tp->name[-1] = ':';
+        tp->name = tp->sys;
         if (strlen(tp->name) > ctx.max_len)
             ctx.max_len = strlen(tp->name);
-        stacks += stack;
+        stacks += tp->stack;
 
         if (env->verbose)
             printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
@@ -206,7 +133,7 @@ static int monitor_ctx_init(struct env *env)
 
 static void monitor_ctx_exit(void)
 {
-    zfree(&ctx.tp_list);
+    tp_list_free(ctx.tp_list);
     zfree(&ctx.perins_stat);
     callchain_ctx_free(ctx.cc);
     tep__unref();
@@ -234,13 +161,14 @@ static int mpdelay_init(struct perf_evlist *evlist, struct env *env)
     attr.wakeup_watermark = (mpdelay.pages << 12) / 3;
     for (i = 0; i < ctx.nr_points; i++) {
         struct perf_evsel *evsel;
-        struct tp_list *tp = &ctx.tp_list[i];
+        struct tp *tp = &ctx.tp_list->tp[i];
 
         attr.config = tp->id;
         if (tp->stack)
             attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
         else
             attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
+        attr.sample_max_stack = tp->max_stack;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
             return -1;
@@ -260,7 +188,7 @@ static int mpdelay_filter(struct perf_evlist *evlist, struct env *env)
     int i, err;
 
     for (i = 0; i < ctx.nr_points; i++) {
-        struct tp_list *tp = &ctx.tp_list[i];
+        struct tp *tp = &ctx.tp_list->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -274,13 +202,13 @@ static void __print_instance(int i, int oncpu)
 {
     struct mpdelay_stat *mp_stat;
     struct delay_stat *stat;
-    struct tp_list *tp1, *tp2;
+    struct tp *tp1, *tp2;
     int j;
 
     mp_stat = (void *)ctx.perins_stat + i * ctx.ins_size;
     for (j = 0; j < ctx.nr_points-1; j++) {
-        tp1 = &ctx.tp_list[j];
-        tp2 = &ctx.tp_list[j+1];
+        tp1 = &ctx.tp_list->tp[j];
+        tp2 = &ctx.tp_list->tp[j+1];
         stat = &mp_stat->stat[j];
 
         if (stat->n) {
@@ -333,7 +261,7 @@ static void mpdelay_exit(struct perf_evlist *evlist)
 
 static void __raw_size(union perf_event *event, void **praw, int *psize, unsigned short *pcommon_type, int i)
 {
-    struct tp_list *tp = &ctx.tp_list[i];
+    struct tp *tp = &ctx.tp_list->tp[i];
     if (tp->stack) {
         struct sample_type_callchain *data = (void *)event->sample.array;
         struct {
@@ -357,7 +285,7 @@ static void __raw_size(union perf_event *event, void **praw, int *psize, unsigne
 static void __print_callchain(union perf_event *event, int t)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
-    struct tp_list *tp = &ctx.tp_list[t];
+    struct tp *tp = &ctx.tp_list->tp[t];
 
     if (tp->stack) {
         print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
@@ -370,7 +298,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
     unsigned short common_type;
     struct mpdelay_stat *mp_stat;
     struct delay_stat *stat;
-    struct tp_list *tp_prev;
+    struct tp *tp_prev;
     struct perf_evsel *evsel;
     int i;
     void *raw;
@@ -381,7 +309,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
         return;
 
     for (i = 0; i < ctx.nr_points; i++) {
-        if (ctx.tp_list[i].evsel == evsel)
+        if (ctx.tp_list->tp[i].evsel == evsel)
             break;
     }
     if (i == ctx.nr_points)
@@ -401,7 +329,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
     }
 
     stat = &mp_stat->stat[i-1];
-    tp_prev = &ctx.tp_list[i-1];
+    tp_prev = &ctx.tp_list->tp[i-1];
     if (mp_stat->common_type == tp_prev->id &&
         hdr->time > mp_stat->time) {
         __u64 delta = hdr->time - mp_stat->time;
@@ -438,7 +366,7 @@ __return:
     mp_stat->common_type = common_type;
 }
 
-struct monitor mpdelay = {
+static profiler mpdelay = {
     .name = "mpdelay",
     .pages = 64,
     .init = mpdelay_init,
@@ -447,6 +375,6 @@ struct monitor mpdelay = {
     .interval = mpdelay_interval,
     .sample = mpdelay_sample,
 };
-MONITOR_REGISTER(mpdelay)
+PROFILER_REGISTER(mpdelay)
 
 

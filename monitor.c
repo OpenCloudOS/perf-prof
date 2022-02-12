@@ -125,9 +125,10 @@ static const struct argp_option opts[] = {
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
     { "event", 'e', "EVENT,...", 0, "Event selector. use 'perf list tracepoint' to list available tp events.\n"
                                     "EVENT,EVENT,...\n"
-                                    "EVENT: sys:name/filter/ATTR/ATTR/.../\n"
+                                    "EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
                                     "ATTR:\n"
-                                    "    stack: sample_type PERF_SAMPLE_CALLCHAIN" },
+                                    "    stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
+                                    "    max-stack=int : sample_max_stack" },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },

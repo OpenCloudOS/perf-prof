@@ -139,3 +139,128 @@ void monitor_tep__comm(union perf_event *event, int instance)
 }
 
 
+struct tp_list *tp_list_new(char *event)
+{
+    char *s = event;
+    char *sep;
+    int i, stacks = 0;
+    int nr_tp = 0;
+    struct tp_list *tp_list = NULL;
+
+    if (!s)
+        return NULL;
+
+    while ((sep = strchr(s, ',')) != NULL) {
+        nr_tp ++;
+        s = sep + 1;
+    }
+    if (*s)
+        nr_tp ++;
+
+    if (nr_tp == 0)
+        return NULL;
+
+    tp_list = calloc(1, sizeof(struct tp_list) + nr_tp * sizeof(struct tp));
+    if (!tp_list)
+        return NULL;
+
+    tp_list->nr_tp = nr_tp;
+    s = event;
+    i = 0;
+    while ((sep = strchr(s, ',')) != NULL) {
+        tp_list->tp[i++].name = s;
+        *sep = '\0';
+        s = sep + 1;
+    }
+    if (*s)
+        tp_list->tp[i++].name = s;
+
+    tep__ref();
+    /*
+     * Event syntax:
+     *    EVENT,EVENT,...
+     * EVENT:
+     *    sys:name[/filter/ATTR/ATTR/.../]
+     * ATTR:
+     *    stack : sample_type PERF_SAMPLE_CALLCHAIN
+     *    max-stack=int : sample_max_stack
+     *    ...
+    **/
+    for (i = 0; i < nr_tp; i++) {
+        struct tp *tp = &tp_list->tp[i];
+        char *sys = NULL;
+        char *name = NULL;
+        char *filter = NULL;
+        int stack = 0;
+        int max_stack = 0;
+        int id;
+
+        sys = s = tp->name;
+        sep = strchr(s, ':');
+        if (!sep)
+            goto err_out;
+        *sep = '\0';
+
+        name = s = sep + 1;
+        sep = strchr(s, '/');
+        if (sep) {
+            *sep = '\0';
+
+            filter = s = sep + 1;
+            sep = strchr(s, '/');
+            if (!sep)
+                goto err_out;
+            *sep = '\0';
+
+            s = sep + 1;
+            while ((sep = strchr(s, '/')) != NULL) {
+                char *attr = s;
+                char *value = NULL;
+                *sep = '\0';
+                s = sep + 1;
+                if ((sep = strchr(attr, '=')) != NULL) {
+                    *sep = '\0';
+                    value = sep + 1;
+                }
+                if (strcmp(attr, "stack") == 0)
+                    stack = 1;
+                else if (strcmp(attr, "max-stack") == 0) {
+                    stack = 1;
+                    max_stack = value ? atoi(value) : 0;
+                    if (max_stack > PERF_MAX_STACK_DEPTH)
+                        max_stack = PERF_MAX_STACK_DEPTH;
+                }
+            }
+        }
+
+        id = tep__event_id(sys, name);
+        if (id < 0)
+            goto err_out;
+
+        tp->evsel = NULL;
+        tp->id = id;
+        tp->sys = sys;
+        tp->name = name;
+        tp->filter = filter;
+        tp->stack = stack;
+        tp->max_stack = max_stack;
+        stacks += stack;
+    }
+
+    tp_list->nr_need_stack = stacks;
+    tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);
+
+    tep__unref();
+    return tp_list;
+
+err_out:
+    tep__unref();
+    free(tp_list);
+    return NULL;
+}
+
+void tp_list_free(struct tp_list *tp_list)
+{
+    free(tp_list);
+}
+
