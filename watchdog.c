@@ -6,7 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cpuid.h>
-
+#include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
@@ -49,26 +49,10 @@ static struct monitor_ctx {
     .stage = STAGE_INIT,
 };
 
-static char *path_read(const char *path)
-{
-    char buff[256];
-    int fd, len;
-
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return NULL;
-    len = (int)read(fd, buff, sizeof(buff));
-    close(fd);
-    if (len <= 0)
-        return NULL;
-    len--;
-    if (buff[len] == '\n' || len == sizeof(buff)-1)
-        buff[len] = '\0';
-    return strdup(buff);
-}
 static int monitor_ctx_init(struct env *env)
 {
-    char *str;
+    char *str = NULL;
+    size_t len;
 
     tep__ref();
     if (env->callchain) {
@@ -85,9 +69,9 @@ static int monitor_ctx_init(struct env *env)
     ctx.nr_watchdog = 0;
 
     if (env->cpumask == NULL)
-        env->cpumask = path_read("/proc/sys/kernel/watchdog_cpumask");
+        procfs__read_str("sys/kernel/watchdog_cpumask", &env->cpumask, &len);
 
-    str = path_read("/proc/sys/kernel/watchdog_thresh");
+    procfs__read_str("sys/kernel/watchdog_thresh", &str, &len);
     if (str) {
         ctx.watchdog_thresh = strtol(str, NULL, 10);
         free(str);
