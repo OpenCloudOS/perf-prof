@@ -526,6 +526,10 @@ void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, 
     }
 }
 
+static bool keyvalue_pairs_empty(struct key_value_paires *pairs)
+{
+    return !pairs || rblist__empty(&pairs->kv_pairs);
+}
 
 struct unique_string {
     struct rb_node rbnode;
@@ -602,6 +606,7 @@ void unique_string_stat(FILE *fp)
 struct flame_graph {
     struct callchain_ctx *cc;
     struct key_value_paires *kv_pairs;
+    char *filename;
 };
 
 struct flame_graph *flame_graph_new(int flags, FILE *fout)
@@ -741,6 +746,7 @@ struct flame_graph *flame_graph_open(int flags, const char *path)
 {
     char filename[PATH_MAX];
     FILE *fp;
+    struct flame_graph *fg;
 
     if (!path)
         return NULL;
@@ -754,7 +760,11 @@ struct flame_graph *flame_graph_open(int flags, const char *path)
     fp = fopen(filename, "w+");
     if (!fp)
         return NULL;
-    return flame_graph_new(flags, fp);
+
+    fg = flame_graph_new(flags, fp);
+    if (fg)
+        fg->filename = strdup(path);
+    return fg;
 }
 
 void flame_graph_close(struct flame_graph *fg)
@@ -764,7 +774,13 @@ void flame_graph_close(struct flame_graph *fg)
     if (!fg)
         return ;
 
+    if (!keyvalue_pairs_empty(fg->kv_pairs)) {
+        printf("To generate the flame graph, running THIS shell command:\n");
+        printf("\n  flamegraph.pl %s.folded > %s.svg\n\n", fg->filename, fg->filename);
+    }
+
     fp = fg->cc->fout;
+    free(fg->filename);
     flame_graph_free(fg);
     fclose(fp);
 }
