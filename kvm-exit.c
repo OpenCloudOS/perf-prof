@@ -143,7 +143,7 @@ static struct rb_node *exit_reason_stat__node_new(struct rblist *rlist, const vo
     if (b) {
         b->isa = e->isa;
         b->exit_reason = e->exit_reason;
-        b->name = find_exit_reason(b->isa, b->exit_reason); //TODO
+        b->name = find_exit_reason(b->isa, b->exit_reason);
         b->min = ~0UL;
         b->max = 0UL;
         b->n = 0UL;
@@ -210,6 +210,11 @@ static int monitor_ctx_init(struct env *env)
 
 static void monitor_ctx_exit(void)
 {
+    free(ctx.perins_kvm_exit);
+    free(ctx.perins_kvm_exit_valid);
+    if (ctx.env->perins)
+        free(ctx.perins_hist);
+    rblist__exit(&ctx.exit_reason_stat);
     tep__unref();
 }
 
