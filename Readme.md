@@ -336,6 +336,21 @@ $ perf-monitor profile -F 1000 -C 0,1 --exclude-user -g --flame-graph profile -i
 $ grep "15:46:33" profile.folded | flamegraph.pl > profile.svg #生成15:46:33秒开始600秒的火焰图
 ```
 
+### 5.7 延迟处理
+
+perf-monitor目前支持的延迟处理。
+
+- 统计延迟。最大延迟，最小延迟，平均延迟。
+- 直方图。log2和linear直方图，使用`print_log2_hist`和`print_linear_hist`函数打印。
+- 热图。横坐标是时间轴，纵坐标是延迟信息。目前支持：`kvm-exit, mpdelay`
+
+### 5.8 热图
+
+```
+$ perf-prof mpdelay -e "kvm:kvm_exit,kvm:kvm_entry" -C 1 --heatmap mpdelay
+$ trace2heatmap.pl --unitstime=ns --unitslabel=ns --grid mpdelay-kvm_exit-kvm_entry.lat > mpdelay-kvm_exit-kvm_entry.svg
+```
+
 
 
 ## 6 已支持的模块
