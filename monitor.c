@@ -113,6 +113,7 @@ enum {
     LONG_OPT_perins,
     LONG_OPT_symbols,
     LONG_OPT_flame_graph,
+    LONG_OPT_heatmap,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -146,6 +147,7 @@ static const struct argp_option opts[] = {
     { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names.\n"
                                                  "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
+    { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the latency file." },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
@@ -235,6 +237,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_flame_graph:
         env.flame_graph = strdup(arg);
+        break;
+    case LONG_OPT_heatmap:
+        env.heatmap = strdup(arg);
         break;
     case 'v':
         env.verbose++;

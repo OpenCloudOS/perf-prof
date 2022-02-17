@@ -792,3 +792,63 @@ void flame_graph_reset(struct flame_graph *fg)
     rblist__exit(&fg->kv_pairs->kv_pairs);
 }
 
+
+struct heatmap {
+    const char *time_units;    //"s", "ms", "us", "ns"
+    const char *latency_units; //"s", "ms", "us", "ns"
+    char *filename;
+    FILE *fp;
+};
+
+struct heatmap *heatmap_open(const char *time_uints, const char *latency_units, const char *path)
+{
+    char filename[PATH_MAX];
+    FILE *fp;
+    struct heatmap *heatmap;
+
+    if (!path)
+        return NULL;
+
+    snprintf(filename, sizeof(filename), "%s.lat", path);
+    if (access(filename, F_OK) == 0) {
+        char filename_old[PATH_MAX];
+        snprintf(filename_old, sizeof(filename_old), "%s.lat.old", path);
+        rename(filename, filename_old);
+    }
+    fp = fopen(filename, "w+");
+    if (!fp)
+        return NULL;
+
+    heatmap = malloc(sizeof(*heatmap));
+    if (heatmap) {
+        heatmap->time_units = time_uints;
+        heatmap->latency_units = latency_units;
+        heatmap->filename = strdup(path);
+        heatmap->fp = fp;
+    }
+    return heatmap;
+}
+
+void heatmap_close(struct heatmap *heatmap)
+{
+    if (!heatmap)
+        return ;
+
+    if (ftell(heatmap->fp)) {
+        printf("To generate the heatmap, running THIS shell command:\n");
+        printf("\n  trace2heatmap.pl --unitstime=%s --unitslabel=%s %s.lat > %s.svg\n\n",
+                heatmap->time_units, heatmap->latency_units, heatmap->filename, heatmap->filename);
+    }
+
+    fclose(heatmap->fp);
+    free(heatmap->filename);
+    free(heatmap);
+}
+
+void heatmap_write(struct heatmap *heatmap, unsigned long time, unsigned long latency)
+{
+    if (heatmap)
+        fprintf(heatmap->fp, "%ld %ld\n", time, latency);
+}
+
+
