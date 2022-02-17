@@ -836,7 +836,7 @@ void heatmap_close(struct heatmap *heatmap)
 
     if (ftell(heatmap->fp)) {
         printf("To generate the heatmap, running THIS shell command:\n");
-        printf("\n  trace2heatmap.pl --unitstime=%s --unitslabel=%s %s.lat > %s.svg\n\n",
+        printf("\n  trace2heatmap.pl --unitstime=%s --unitslabel=%s --grid %s.lat > %s.svg\n\n",
                 heatmap->time_units, heatmap->latency_units, heatmap->filename, heatmap->filename);
     }
 
