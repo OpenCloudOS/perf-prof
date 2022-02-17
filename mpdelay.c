@@ -35,6 +35,7 @@ struct monitor_ctx {
     int ins_size;
     struct perf_evlist *evlist;
     struct callchain_ctx *cc;
+    struct heatmap **heatmaps;
     struct env *env;
 } ctx;
 
@@ -113,9 +114,8 @@ static int monitor_ctx_init(struct env *env)
         struct tp *tp = &ctx.tp_list->tp[i];
 
         tp->name[-1] = ':';
-        tp->name = tp->sys;
-        if (strlen(tp->name) > ctx.max_len)
-            ctx.max_len = strlen(tp->name);
+        if (strlen(tp->sys) > ctx.max_len)
+            ctx.max_len = strlen(tp->sys);
         stacks += tp->stack;
 
         if (env->verbose)
@@ -127,6 +127,21 @@ static int monitor_ctx_init(struct env *env)
         mpdelay.pages *= 2;
     } else
         ctx.cc = NULL;
+
+    if (env->heatmap) {
+        char buff[1024];
+        struct tp *tp1, *tp2;
+
+        ctx.heatmaps = malloc((ctx.nr_points-1) * sizeof(*ctx.heatmaps));
+        if (!ctx.heatmaps)
+            return -1;
+        for (i = 0; i < ctx.nr_points-1; i++) {
+            tp1 = &ctx.tp_list->tp[i];
+            tp2 = &ctx.tp_list->tp[i+1];
+            snprintf(buff, sizeof(buff), "%s-%s-%s", env->heatmap, tp1->name, tp2->name);
+            ctx.heatmaps[i] = heatmap_open("ns", "ns", buff);
+        }
+    }
     ctx.env = env;
     return 0;
 }
@@ -136,6 +151,12 @@ static void monitor_ctx_exit(void)
     tp_list_free(ctx.tp_list);
     zfree(&ctx.perins_stat);
     callchain_ctx_free(ctx.cc);
+    if (ctx.env->heatmap) {
+        int i;
+        for (i = 0; i < ctx.nr_points-1; i++)
+            heatmap_close(ctx.heatmaps[i]);
+        free(ctx.heatmaps);
+    }
     tep__unref();
 }
 
@@ -218,7 +239,7 @@ static void __print_instance(int i, int oncpu)
                 else
                     printf("%-8d ", monitor_instance_thread(i));
             }
-            printf("%*s => %-*s %8llu %16.3f %9.3f %9.3f %12.3f\n", ctx.max_len, tp1->name, ctx.max_len, tp2->name,
+            printf("%*s => %-*s %8llu %16.3f %9.3f %9.3f %12.3f\n", ctx.max_len, tp1->sys, ctx.max_len, tp2->sys,
                 stat->n, stat->sum/1000.0, stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0);
         }
     }
@@ -347,6 +368,9 @@ static void mpdelay_sample(union perf_event *event, int instance)
             stat->max = delta;
         stat->n ++;
         stat->sum += delta;
+
+        if (ctx.env->heatmap)
+            heatmap_write(ctx.heatmaps[i-1], mp_stat->time, delta);
 
         if (ctx.env->greater_than &&
             delta > ctx.env->greater_than * 1000UL) {
