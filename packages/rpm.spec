@@ -42,12 +42,14 @@ rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/bin/ %{buildroot}%{PLUGINS_DIR}
 install -m 0755 -o root -g root %{name} %{buildroot}/usr/bin/
 install -m 0755 -o root -g root flamegraph.pl %{buildroot}/usr/bin/
+install -m 0755 -o root -g root trace2heatmap.pl %{buildroot}/usr/bin/
 install -m 0755 -o root -g root lib/traceevent/plugins/*.so %{buildroot}%{PLUGINS_DIR}
 
 
 %files
 /usr/bin/%{name}
 /usr/bin/flamegraph.pl
+/usr/bin/trace2heatmap.pl
 %{TRACEEVENT_DIR}
 %{PLUGINS_DIR}
 
