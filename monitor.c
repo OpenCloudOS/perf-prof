@@ -94,7 +94,7 @@ const char argp_program_doc[] =
 "  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "  perf-prof kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof percpu-stat -i INT [-C cpu] [--syscalls]\n"
-"  perf-prof kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
+"  perf-prof kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
@@ -147,7 +147,7 @@ static const struct argp_option opts[] = {
     { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names.\n"
                                                  "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
-    { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the latency file." },
+    { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
