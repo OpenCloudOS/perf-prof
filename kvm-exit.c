@@ -11,6 +11,8 @@
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <stack_helpers.h>
+
 #define ALIGN(x, a)  __ALIGN_KERNEL((x), (a))
 
 #define KVM_ISA_VMX   1
@@ -32,6 +34,7 @@ struct monitor_ctx {
     struct hist hist;
     struct hist *perins_hist;
     struct rblist exit_reason_stat;
+    struct heatmap *heatmap;
     struct env *env;
 } ctx;
 
@@ -204,6 +207,8 @@ static int monitor_ctx_init(struct env *env)
     ctx.exit_reason_stat.node_cmp = exit_reason_stat__node_cmp;
     ctx.exit_reason_stat.node_new = exit_reason_stat__node_new;
     ctx.exit_reason_stat.node_delete = exit_reason_stat__node_delete;
+    if (env->heatmap)
+        ctx.heatmap = heatmap_open("ns", "ns", env->heatmap);
     ctx.env = env;
     return 0;
 }
@@ -215,6 +220,8 @@ static void monitor_ctx_exit(void)
     if (ctx.env->perins)
         free(ctx.perins_hist);
     rblist__exit(&ctx.exit_reason_stat);
+    if (ctx.env->heatmap)
+        heatmap_close(ctx.heatmap);
     tep__unref();
 }
 
@@ -436,6 +443,9 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
             pstat->ksum += delta;
         }
     }
+
+    if (ctx.env->heatmap)
+        heatmap_write(ctx.heatmap, rkvm_exit->time, delta);
 
     if (ctx.env->greater_than &&
         exit_reason != hlt &&
