@@ -49,4 +49,10 @@ void flame_graph_output(struct flame_graph *fg);
 struct flame_graph *flame_graph_open(int flags, const char *path);
 void flame_graph_close(struct flame_graph *fg);
 void flame_graph_reset(struct flame_graph *fg);
+
+
+struct heatmap;
+struct heatmap *heatmap_open(const char *time_uints, const char *latency_units, const char *path);
+void heatmap_close(struct heatmap *heatmap);
+void heatmap_write(struct heatmap *heatmap, unsigned long time, unsigned long latency);
 #endif

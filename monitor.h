@@ -63,6 +63,7 @@ struct env {
     char *tp_free;
     char *symbols;
     char *flame_graph;
+    char *heatmap;
     bool syscalls;
     bool perins;
     bool test;
