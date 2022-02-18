@@ -67,12 +67,18 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
         .sample_type = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ,
         .read_format = 0,
         .exclude_host = env->guest,  //是否只采样guest模式.
-        .pinned        = 1,
+        .pinned        = 0,
         .disabled    = 1,
         .wakeup_events = 1, //1个事件
     };
     struct perf_evsel *evsel;
     pthread_t t;
+    int vendor = get_cpu_vendor();
+
+    if (vendor != X86_VENDOR_INTEL) {
+        fprintf(stderr, "split-lock exists only on intel platforms\n");
+        return -1;
+    }
 
     if (env->test)
         pthread_create(&t, NULL, do_split_lock, NULL);
