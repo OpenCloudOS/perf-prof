@@ -51,17 +51,17 @@ int monitor_nr_instance(void)
 
 int monitor_instance_cpu(int ins)
 {
-	return perf_cpu_map__cpu(monitor->cpus, ins);
+    return perf_cpu_map__cpu(monitor->cpus, ins);
 }
 
 int monitor_instance_thread(int ins)
 {
-	return perf_thread_map__pid(monitor->threads, ins);
+    return perf_thread_map__pid(monitor->threads, ins);
 }
 
 int monitor_instance_oncpu(void)
 {
-	return !perf_cpu_map__empty(monitor->cpus);
+    return !perf_cpu_map__empty(monitor->cpus);
 }
 
 /******************************************************
@@ -267,20 +267,20 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 }
 static void sig_handler(int sig)
 {
-	exiting = 1;
+    exiting = 1;
 }
 
 int get_possible_cpus(void)
 {
     struct perf_cpu_map *cpumap = NULL;
-	FILE *f;
+    FILE *f;
     int cpus;
 
-	f = fopen("/sys/devices/system/cpu/possible", "r");
-	if (!f)
-		f = fopen("/sys/devices/system/cpu/online", "r");
-	cpumap = perf_cpu_map__read(f);
-	fclose(f);
+    f = fopen("/sys/devices/system/cpu/possible", "r");
+    if (!f)
+        f = fopen("/sys/devices/system/cpu/online", "r");
+    cpumap = perf_cpu_map__read(f);
+    fclose(f);
 
     cpus = perf_cpu_map__max(cpumap);
     perf_cpu_map__put(cpumap);
@@ -321,22 +321,55 @@ int get_tsc_khz(void)
     return tsc_khz;
 }
 
-int get_cpu_vendor(void)
+int get_cpuinfo(struct cpuinfo_x86 *info)
 {
     __u32 eax, ebx, ecx, edx;
 
-	eax = ebx = ecx = edx = 0;
-	__get_cpuid(0, &eax, &ebx, &ecx, &edx);
+    eax = ebx = ecx = edx = 0;
+    __get_cpuid(0, &eax, &ebx, &ecx, &edx);
 
-	if (ebx == 0x756e6547 && ecx == 0x6c65746e && edx == 0x49656e69)
-		return X86_VENDOR_INTEL;
-	else if (ebx == 0x68747541 && ecx == 0x444d4163 && edx == 0x69746e65)
-		return X86_VENDOR_AMD;
-	else if (ebx == 0x6f677948 && ecx == 0x656e6975 && edx == 0x6e65476e)
-		return X86_VENDOR_HYGON;
-    else
+    if (info)
+        memset(info, 0, sizeof(*info));
+    if (ebx == 0x756e6547 && ecx == 0x6c65746e && edx == 0x49656e69) {
+        if (info && eax > 1) {
+            int family, model, stepping;
+            __get_cpuid(1, &eax, &ebx, &ecx, &edx);
+            family = (eax >> 8) & 0xf;
+            model = (eax >> 4) & 0xf;
+            stepping = eax & 0xf;
+            if (family == 0x6 || family == 0xf)
+                model += ((eax > 16) & 0xf) << 4;
+            if (family == 0xf)
+                family += (eax >> 20) & 0xff;
+            info->vendor = X86_VENDOR_INTEL;
+            info->family = family;
+            info->model = model;
+            info->stepping = stepping;
+        }
+        return X86_VENDOR_INTEL;
+    } else if (ebx == 0x68747541 && ecx == 0x444d4163 && edx == 0x69746e65) {
+        if (info && eax > 1) {
+            int family, model, stepping;
+            __get_cpuid(1, &eax, &ebx, &ecx, &edx);
+            family = (eax >> 8) & 0xf;
+            model = (eax >> 4) & 0xf;
+            stepping = eax & 0xf;
+            if (family == 0xf) {
+                model += ((eax > 16) & 0xf) << 4;
+                family += (eax >> 20) & 0xff;
+            }
+            info->vendor = X86_VENDOR_AMD;
+            info->family = family;
+            info->model = model;
+            info->stepping = stepping;
+        }
+        return X86_VENDOR_AMD;
+    } else if (ebx == 0x6f677948 && ecx == 0x656e6975 && edx == 0x6e65476e) {
+        return X86_VENDOR_HYGON;
+    } else
         return -1;
 }
+
 #define CPUID_EXT_HYPERVISOR  (1U << 31)
 int in_guest(void)
 {
@@ -561,7 +594,6 @@ reinit:
         }
         perf_cpu_map__put(online);
     }
-    perf_evlist__set_maps(evlist, cpus, threads);
     monitor->cpus = cpus;
     monitor->threads = threads;
 
@@ -569,6 +601,10 @@ reinit:
         fprintf(stderr, "monitor(%s) init failed\n", monitor->name);
         goto out_delete;
     }
+    /* monitor->init allows reassignment of cpus and threads */
+    cpus = monitor->cpus;
+    threads = monitor->threads;
+    perf_evlist__set_maps(evlist, cpus, threads);
 
     err = perf_evlist__open(evlist);
     if (err) {
@@ -603,7 +639,7 @@ reinit:
 
         fds = perf_evlist__poll(evlist, time_left);
 
-        if (monitor->pages && (fds || exiting || time_left == 0))
+        if (monitor->pages && (fds || time_left == 0 || exiting))
         perf_evlist__for_each_mmap(evlist, map, false) {
             if (perf_mmap__read_init(map) < 0)
                 continue;

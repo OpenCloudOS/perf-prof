@@ -25,7 +25,16 @@ int get_tsc_khz(void);
 #define X86_VENDOR_INTEL	0
 #define X86_VENDOR_AMD		1
 #define X86_VENDOR_HYGON	2
-int get_cpu_vendor(void);
+struct cpuinfo_x86 {
+    int vendor;
+    int family;
+    int model;
+    int stepping;
+};
+int get_cpuinfo(struct cpuinfo_x86 *info);
+static inline int get_cpu_vendor(void) {
+    return get_cpuinfo(NULL);
+};
 int in_guest(void);
 
 #define MONITOR_REGISTER(m) \
