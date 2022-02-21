@@ -96,6 +96,7 @@ const char argp_program_doc[] =
 "  perf-prof percpu-stat -i INT [-C cpu] [--syscalls]\n"
 "  perf-prof kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
+"  perf-prof llcstat [-C cpu] [-i INT]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
