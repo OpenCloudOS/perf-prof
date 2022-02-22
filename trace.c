@@ -73,8 +73,8 @@ static int trace_init(struct perf_evlist *evlist, struct env *env)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW |
-                         (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+                         PERF_SAMPLE_RAW | (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
@@ -132,7 +132,7 @@ static void trace_exit(struct perf_evlist *evlist)
 }
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct sample_type_header {
     struct {
         __u32    pid;
@@ -144,6 +144,7 @@ struct sample_type_header {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
+    __u64		period;
 };
 struct sample_type_callchain {
     struct sample_type_header h;
