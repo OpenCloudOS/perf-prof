@@ -97,6 +97,7 @@ const char argp_program_doc[] =
 "  perf-prof kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof llcstat [-C cpu] [-i INT]\n"
+"  perf-prof sched-migrate [-d] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
@@ -149,6 +150,7 @@ static const struct argp_option opts[] = {
                                                  "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
+    { "detail", 'd', NULL, 0, "More detailed information output" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
@@ -241,6 +243,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_heatmap:
         env.heatmap = strdup(arg);
+        break;
+    case 'd':
+        env.detail = true;
         break;
     case 'v':
         env.verbose++;
