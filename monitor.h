@@ -77,6 +77,7 @@ struct env {
     bool perins;
     bool test;
     bool precise;
+    bool detail;
     int verbose;
 };
 
