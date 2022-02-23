@@ -67,14 +67,54 @@ struct sched_migrate_task {
 	int dest_cpu;//	offset:36;	size:4;	signed:1;
 };
 
+static int read_llc_cpumap(int cpu)
+{
+    struct perf_cpu_map *cpumap;
+    char buff[PATH_MAX];
+    char *cpu_list;
+    size_t len;
+    int err, idx;
+
+    if (cpu >= ctx.nr_cpus)
+        return -1;
+
+    snprintf(buff, sizeof(buff), "devices/system/cpu/cpu%d/cache/index3/shared_cpu_list", cpu);
+    if ((err = sysfs__read_str(buff, &cpu_list, &len)) < 0 &&
+        len == 0) {
+        fprintf(stderr, "failed to read %s, Not Supported.\n", buff);
+        return -1;
+    }
+
+    cpumap = perf_cpu_map__new(cpu_list);
+    free(cpu_list);
+
+    perf_cpu_map__for_each_cpu(cpu, idx, cpumap) {
+        if (cpu < 0) {
+            fprintf(stderr, "failed to read %s, Not Supported.\n", buff);
+            return -1;
+        }
+        ctx.llc_cpumap[cpu] = perf_cpu_map__get(cpumap);
+    }
+    perf_cpu_map__put(cpumap);
+    return 0;
+}
+
 static int monitor_ctx_init(struct env *env)
 {
+    int i;
+
     tep__ref();
 
     ctx.nr_cpus = get_possible_cpus();
     ctx.llc_cpumap = calloc(ctx.nr_cpus, sizeof(*ctx.llc_cpumap));
     if (!ctx.llc_cpumap)
         return -1;
+    for (i = 0; i < ctx.nr_cpus; i++) {
+        if (!ctx.llc_cpumap[i]) {
+            if (read_llc_cpumap(i) < 0)
+                return -1;
+        }
+    }
 
     if (env->callchain) {
         if (!env->flame_graph)
@@ -178,33 +218,6 @@ static inline void __print_callchain(union perf_event *event)
         else
             flame_graph_add_callchain(ctx.flame, &data->callchain, 0, NULL);
     }
-}
-
-static void read_llc_cpumap(int cpu)
-{
-    struct perf_cpu_map *cpumap;
-    char buff[PATH_MAX];
-    char *cpu_list;
-    size_t len;
-    int err, idx;
-
-    if (cpu > ctx.nr_cpus)
-        exit(1);
-
-    snprintf(buff, sizeof(buff), "devices/system/cpu/cpu%d/cache/index3/shared_cpu_list", cpu);
-    if ((err = sysfs__read_str(buff, &cpu_list, &len)) < 0 &&
-        len == 0) {
-        fprintf(stderr, "failed to read %s, Not Supported.\n", buff);
-        exit(1);
-    }
-
-    cpumap = perf_cpu_map__new(cpu_list);
-    free(cpu_list);
-
-    perf_cpu_map__for_each_cpu(cpu, idx, cpumap) {
-        ctx.llc_cpumap[cpu] = perf_cpu_map__get(cpumap);
-    }
-    perf_cpu_map__put(cpumap);
 }
 
 static bool same_llc(int orig_cpu, int dest_cpu)
