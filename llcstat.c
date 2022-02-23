@@ -85,6 +85,7 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
         cpus = perf_cpu_map__new(cpumask);
         llcstat.cpus = perf_cpu_map__and(llcstat.cpus, cpus);
         perf_cpu_map__put(cpus);
+        free(cpumask);
 
         if (ctx.cpuinfo.family == 0x17) { // AMD rome
             l3_cache_reference = 0xFF0F00000040FF04UL;
