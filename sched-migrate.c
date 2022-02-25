@@ -181,7 +181,7 @@ static void sched_migrate_interval(void)
 {
     print_time(stdout);
     printf("sched-migrate total %lu, same llc %lu, hit %lu%%\n", ctx.stat.total, ctx.stat.same_llc,
-                ctx.stat.same_llc*100/ctx.stat.total);
+                ctx.stat.total ? ctx.stat.same_llc*100/ctx.stat.total : 0);
     memset(&ctx.stat, 0 , sizeof(ctx.stat));
 }
 
