@@ -21,6 +21,7 @@ struct tp {
     char *filter;
     int stack;
     int max_stack;
+    char *top_by;
 };
 
 struct tp_list {

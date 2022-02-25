@@ -98,6 +98,7 @@ const char argp_program_doc[] =
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof llcstat [-C cpu] [-i INT]\n"
 "  perf-prof sched-migrate [-d] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof top -e EVENT [-C cpu] [-i INT] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
@@ -131,7 +132,8 @@ static const struct argp_option opts[] = {
                                     "EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
                                     "ATTR:\n"
                                     "    stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
-                                    "    max-stack=int : sample_max_stack" },
+                                    "    max-stack=int : sample_max_stack\n"
+                                    "    top-by=field: add to top, sort by this field" },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
