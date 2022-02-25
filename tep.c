@@ -193,6 +193,7 @@ struct tp_list *tp_list_new(char *event)
         char *filter = NULL;
         int stack = 0;
         int max_stack = 0;
+        char *top_by = NULL;
         int id;
 
         sys = s = tp->name;
@@ -229,6 +230,12 @@ struct tp_list *tp_list_new(char *event)
                     max_stack = value ? atoi(value) : 0;
                     if (max_stack > PERF_MAX_STACK_DEPTH)
                         max_stack = PERF_MAX_STACK_DEPTH;
+                } else if (strcmp(attr, "top-by") == 0 ||
+                           strcmp(attr, "top_by") == 0) {
+                    top_by = value;
+                } else if (strcmp(attr, "top-add") == 0 ||
+                           strcmp(attr, "top_add") == 0) {
+                    //TODO
                 }
             }
         }
@@ -244,6 +251,7 @@ struct tp_list *tp_list_new(char *event)
         tp->filter = filter;
         tp->stack = stack;
         tp->max_stack = max_stack;
+        tp->top_by = top_by;
         stacks += stack;
     }
 
