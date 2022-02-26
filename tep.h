@@ -21,13 +21,19 @@ struct tp {
     char *filter;
     int stack;
     int max_stack;
-    char *top_by;
+    struct {
+        char *field;
+        bool event;
+        bool top_by;
+    } *top_add;
+    int nr_top;
 };
 
 struct tp_list {
     int nr_tp;
     int nr_need_stack;
     bool need_stream_id;
+    int nr_top;
     struct tp tp[0];
 };
 

@@ -143,7 +143,7 @@ struct tp_list *tp_list_new(char *event)
 {
     char *s = event;
     char *sep;
-    int i, stacks = 0;
+    int i;
     int nr_tp = 0;
     struct tp_list *tp_list = NULL;
 
@@ -184,6 +184,8 @@ struct tp_list *tp_list_new(char *event)
      * ATTR:
      *    stack : sample_type PERF_SAMPLE_CALLCHAIN
      *    max-stack=int : sample_max_stack
+     *    top-by=field : top add and sort by this field
+     *    top-add=field: top add this field
      *    ...
     **/
     for (i = 0; i < nr_tp; i++) {
@@ -193,7 +195,7 @@ struct tp_list *tp_list_new(char *event)
         char *filter = NULL;
         int stack = 0;
         int max_stack = 0;
-        char *top_by = NULL;
+        bool top_by;
         int id;
 
         sys = s = tp->name;
@@ -223,6 +225,7 @@ struct tp_list *tp_list_new(char *event)
                     *sep = '\0';
                     value = sep + 1;
                 }
+                top_by = false;
                 if (strcmp(attr, "stack") == 0)
                     stack = 1;
                 else if (strcmp(attr, "max-stack") == 0) {
@@ -232,10 +235,15 @@ struct tp_list *tp_list_new(char *event)
                         max_stack = PERF_MAX_STACK_DEPTH;
                 } else if (strcmp(attr, "top-by") == 0 ||
                            strcmp(attr, "top_by") == 0) {
-                    top_by = value;
+                    top_by = true;
+                    goto top_add;
                 } else if (strcmp(attr, "top-add") == 0 ||
                            strcmp(attr, "top_add") == 0) {
-                    //TODO
+                    top_add:
+                    tp->nr_top ++;
+                    tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
+                    tp->top_add[tp->nr_top-1].field = value;
+                    tp->top_add[tp->nr_top-1].top_by = top_by;
                 }
             }
         }
@@ -251,11 +259,18 @@ struct tp_list *tp_list_new(char *event)
         tp->filter = filter;
         tp->stack = stack;
         tp->max_stack = max_stack;
-        tp->top_by = top_by;
-        stacks += stack;
+        if (tp->nr_top == 0) {
+            tp->nr_top = 1;
+            tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
+            tp->top_add[0].field = name;
+            tp->top_add[0].event = true;
+            tp->top_add[0].top_by = false;
+        }
+
+        tp_list->nr_need_stack += stack;
+        tp_list->nr_top += tp->nr_top;
     }
 
-    tp_list->nr_need_stack = stacks;
     tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);
 
     tep__unref();
@@ -263,12 +278,18 @@ struct tp_list *tp_list_new(char *event)
 
 err_out:
     tep__unref();
-    free(tp_list);
+    tp_list_free(tp_list);
     return NULL;
 }
 
 void tp_list_free(struct tp_list *tp_list)
 {
+    int i;
+    for (i = 0; i < tp_list->nr_tp; i++) {
+        struct tp *tp = &tp_list->tp[i];
+        if (tp->top_add)
+            free(tp->top_add);
+    }
     free(tp_list);
 }
 
