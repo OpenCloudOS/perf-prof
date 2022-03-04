@@ -94,11 +94,11 @@ const char argp_program_doc[] =
 "  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "  perf-prof kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof percpu-stat -i INT [-C cpu] [--syscalls]\n"
-"  perf-prof kvm-exit [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
-"  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
+"  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
+"  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof llcstat [-C cpu] [-i INT]\n"
 "  perf-prof sched-migrate [-d] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
-"  perf-prof top -e EVENT [-C cpu] [-i INT] [-v]\n"
+"  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
@@ -124,6 +124,7 @@ static const struct argp_option opts[] = {
     { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
     { "interval", 'i', "INT", 0, "Interval, ms" },
     { "pids", 'p', "PID,PID", 0, "Attach to processes" },
+    { "tids", 't', "TID,TID", 0, "Attach to thread" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
@@ -180,6 +181,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'p':
         env.pids = strdup(arg);
+        break;
+    case 't':
+        env.tids = strdup(arg);
         break;
     case LONG_OPT_test:
         env.test = 1;
@@ -574,9 +578,9 @@ reinit:
         return -1;
     }
 
-    if (env.pids) {
+    if (env.pids || env.tids) {
         // attach to processes
-        threads = thread_map__new_str(env.pids, NULL, 0, 0);
+        threads = thread_map__new_str(env.pids, env.tids, 0, 0);
         cpus = perf_cpu_map__dummy_new();
         if (!threads || !cpus) {
             fprintf(stderr, "failed to create pids\n");
