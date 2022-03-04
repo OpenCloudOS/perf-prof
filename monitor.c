@@ -97,7 +97,7 @@ const char argp_program_doc[] =
 "  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof llcstat [-C cpu] [-i INT]\n"
-"  perf-prof sched-migrate [-d] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof sched-migrate [-d] [--filter filter] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
