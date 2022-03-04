@@ -1,43 +1,89 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <linux/rblist.h>
 #include "monitor.h"
 #include "trace_helpers.h"
 #include "tep.h"
 
-struct monitor percpu_stat;
+static profiler percpu_stat;
 
-#define PERCPU_COUNTER_MAX 20
 struct swevent_stat {
-    uint64_t count[PERCPU_COUNTER_MAX];
-    uint64_t diff[PERCPU_COUNTER_MAX];
+    uint64_t count;
+    uint64_t diff;
 };
-struct monitor_ctx {
-    int nr_cpus;
+struct evsel_node {
+    struct rb_node rbnode;
+    struct evsel_node *next;
+    struct perf_evsel *evsel;
+    const char *name;
+    int name_len;
+    bool cpu_idle;
     struct swevent_stat *stats;
-    struct {
-        struct perf_evsel *evsel;
-        const char *name;
-        int name_len;
-    } evsels[PERCPU_COUNTER_MAX];
-    int nr_evsels;
-    int n;
-    uint64_t num;
-    int min_cpu;
+};
+
+struct monitor_ctx {
+    int nr_ins;
+    struct evsel_node *first;
+    struct evsel_node **p_next;
+    struct rblist evsel_list;
     struct env *env;
 } ctx;
 
+static int evsel_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct evsel_node *e = container_of(rbn, struct evsel_node, rbnode);
+    const struct evsel_node *n = entry;
+
+    if (e->evsel > n->evsel)
+        return 1;
+    else if (e->evsel < n->evsel)
+        return -1;
+    else
+        return 0;
+}
+
+static struct rb_node *evsel_node_new(struct rblist *rlist, const void *new_entry)
+{
+    const struct evsel_node *n = new_entry;
+    struct evsel_node *e = malloc(sizeof(*e));
+    if (e) {
+        e->next = NULL;
+        e->evsel = n->evsel;
+        e->name = n->name;
+        e->name_len = (int)strlen(e->name);
+        e->cpu_idle = n->cpu_idle;
+        e->stats = calloc(ctx.nr_ins, sizeof(*e->stats));
+        if (!e->stats) {
+            free(e);
+            return NULL;
+        }
+        *ctx.p_next = e;
+        ctx.p_next = &e->next;
+        RB_CLEAR_NODE(&e->rbnode);
+        return &e->rbnode;
+    } else
+        return NULL;
+}
+
+static void evsel_node_delete(struct rblist *rblist, struct rb_node *rb_node)
+{
+    struct evsel_node *e = container_of(rb_node, struct evsel_node, rbnode);
+    free(e->stats);
+    free(e);
+}
+
 static int monitor_ctx_init(struct env *env)
 {
-    ctx.nr_cpus = get_possible_cpus();
-    ctx.stats = calloc(ctx.nr_cpus, sizeof(struct swevent_stat));
-    if (!ctx.stats) {
-        return -1;
-    }
-    ctx.nr_evsels = 0;
-    ctx.n = 0;
-    ctx.num = 0;
-    ctx.min_cpu = -1;
-    ctx.env = env;
+    ctx.nr_ins = monitor_nr_instance();
+
+    ctx.first = NULL;
+    ctx.p_next = &ctx.first;
+
+    rblist__init(&ctx.evsel_list);
+    ctx.evsel_list.node_cmp = evsel_node_cmp;
+    ctx.evsel_list.node_new = evsel_node_new;
+    ctx.evsel_list.node_delete = evsel_node_delete;
+
     tep__ref();
     return 0;
 }
@@ -45,7 +91,7 @@ static int monitor_ctx_init(struct env *env)
 static void monitor_ctx_exit(void)
 {
     tep__unref();
-    free(ctx.stats);
+    rblist__exit(&ctx.evsel_list);
 }
 
 static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *sys, const char *name)
@@ -103,16 +149,17 @@ static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
     return evsel;
 }
 
-static void evsel_name(struct perf_evsel *evsel, const char *name)
+static void __evsel_name(struct perf_evsel *evsel, const char *name, bool cpu_idle)
 {
-    if (evsel && ctx.nr_evsels < PERCPU_COUNTER_MAX) {
-        ctx.evsels[ctx.nr_evsels].evsel = evsel;
-        ctx.evsels[ctx.nr_evsels].name = name;
-        ctx.evsels[ctx.nr_evsels].name_len = (int)strlen(name);
-        ctx.nr_evsels ++;
+    struct evsel_node n;
+    if (evsel) {
+        n.evsel = evsel;
+        n.name = name;
+        n.cpu_idle = cpu_idle;
+        rblist__add_node(&ctx.evsel_list, &n);
     }
 }
-
+#define evsel_name(evsel, name) __evsel_name((evsel), (name), false)
 static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
 {
     if (monitor_ctx_init(env) < 0)
@@ -148,8 +195,8 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
     //page cache
     evsel_name(perf_tp_event(evlist, "filemap", "mm_filemap_add_to_page_cache"), " PAGE cache");
     evsel_name(perf_tp_event(evlist, "writeback", "wbc_writepage"), " WB pages");
-    //cpu_idle, must be last
-    evsel_name(perf_tp_event(evlist, "power", "cpu_idle"), " idle");
+    //cpu_idle
+    __evsel_name(perf_tp_event(evlist, "power", "cpu_idle"), " idle", true);
 
     return 0;
 }
@@ -161,62 +208,59 @@ static void percpu_stat_exit(struct perf_evlist *evlist)
 
 static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
-    int cpu = monitor_instance_cpu(instance);
-    int n;
+    struct evsel_node n = {.evsel = evsel};
+    struct rb_node *rbn = rblist__find(&ctx.evsel_list, &n);
+    struct evsel_node *e = rbn ? container_of(rbn, struct evsel_node, rbnode) : NULL;
 
-    for (n = ctx.n; n < ctx.nr_evsels; n++)
-        if (evsel == ctx.evsels[n].evsel)
-            break;
-    if (n == ctx.nr_evsels) {
-        for (n = 0; n < ctx.n; n++)
-            if (evsel == ctx.evsels[n].evsel)
-                break;
-        if (n == ctx.n)
-            return ;
-    }
+    if (e == NULL)
+        return;
 
-    ctx.n = n;
-    ctx.stats[cpu].diff[n] = 0;
-    if (count->val > ctx.stats[cpu].count[n]) {
-        ctx.stats[cpu].diff[n] = count->val - ctx.stats[cpu].count[n];
-        ctx.stats[cpu].count[n] = count->val;
-        if (n == ctx.nr_evsels-1) {
+    e->stats[instance].diff = 0;
+    if (count->val > e->stats[instance].count) {
+        e->stats[instance].diff = count->val - e->stats[instance].count;
+        e->stats[instance].count = count->val;
+        if (e->cpu_idle) {
             //cpu_idle, contains enter and exit, must be divided by 2
-            ctx.stats[cpu].diff[n] /= 2;
+            e->stats[instance].diff /= 2;
         }
+    }
+}
+
+static void percpu_stat_interval(void)
+{
+    struct evsel_node *next = ctx.first;
+    int ins;
+
+    print_time(stdout);
+    printf("\n[CPU] ");
+    while (next) {
+        printf("%s ", next->name);
+        next = next->next;
     }
 
-    if (evsel == ctx.evsels[ctx.nr_evsels-1].evsel) {
-        if ((ctx.num % 60) == 0 && (ctx.min_cpu == cpu || ctx.min_cpu == -1)) {
-            print_time(stdout);
-            printf(" %3s ", "CPU");
-            for (n = 0; n < ctx.nr_evsels; n++)
-                printf("%s ", ctx.evsels[n].name);
-            printf("\n");
+    for (ins = 0; ins < ctx.nr_ins; ins ++) {
+        printf("\n[%03d] ", monitor_instance_cpu(ins));
+        next = ctx.first;
+        while (next) {
+            printf("%*lu ", next->name_len, next->stats[ins].diff);
+            next = next->next;
         }
-        if (ctx.min_cpu == -1 || cpu < ctx.min_cpu)
-            ctx.min_cpu = cpu;
-        if (ctx.min_cpu == cpu)
-            ctx.num ++;
-        print_time(stdout);
-        printf(" %3d ", cpu);
-        for (n = 0; n < ctx.nr_evsels; n++)
-            printf("%*lu ", ctx.evsels[n].name_len, ctx.stats[cpu].diff[n]);
-        printf("\n");
     }
+    printf("\n");
 }
 
 static void percpu_stat_sample(union perf_event *event, int instance)
 {
 }
 
-struct monitor percpu_stat = {
+static profiler percpu_stat = {
     .name = "percpu-stat",
     .pages = 0,
     .init = percpu_stat_init,
     .deinit = percpu_stat_exit,
+    .interval = percpu_stat_interval,
     .read   = percpu_stat_read,
     .sample = percpu_stat_sample,
 };
-MONITOR_REGISTER(percpu_stat)
+PROFILER_REGISTER(percpu_stat)
 
