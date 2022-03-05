@@ -93,12 +93,13 @@ const char argp_program_doc[] =
 "  perf-prof task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
 "  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "  perf-prof kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]\n"
-"  perf-prof percpu-stat -i INT [-C cpu] [--syscalls]\n"
+"  perf-prof percpu-stat [-i INT] [-C cpu] [--syscalls]\n"
 "  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof llcstat [-C cpu] [-i INT]\n"
 "  perf-prof sched-migrate [-d] [--filter filter] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
+"  perf-prof stat -e EVENT[...] [-i INT] [-C cpu] [--perins]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
@@ -134,7 +135,10 @@ static const struct argp_option opts[] = {
                                     "ATTR:\n"
                                     "    stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
                                     "    max-stack=int : sample_max_stack\n"
-                                    "    top-by=field: add to top, sort by this field" },
+                                    "    top-by=field: add to top, sort by this field\n"
+                                    "    top-add=field: add to top\n"
+                                    "    alias=str: event alias"
+                                    },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },

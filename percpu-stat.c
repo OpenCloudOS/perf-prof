@@ -18,14 +18,16 @@ struct evsel_node {
     const char *name;
     int name_len;
     bool cpu_idle;
-    struct swevent_stat *stats;
+    struct swevent_stat *perins_stats;
+    struct swevent_stat *total_stats;
 };
 
-struct monitor_ctx {
+static struct monitor_ctx {
     int nr_ins;
     struct evsel_node *first;
     struct evsel_node **p_next;
     struct rblist evsel_list;
+    struct tp_list *tp_list;
     struct env *env;
 } ctx;
 
@@ -52,11 +54,12 @@ static struct rb_node *evsel_node_new(struct rblist *rlist, const void *new_entr
         e->name = n->name;
         e->name_len = (int)strlen(e->name);
         e->cpu_idle = n->cpu_idle;
-        e->stats = calloc(ctx.nr_ins, sizeof(*e->stats));
-        if (!e->stats) {
+        e->perins_stats = calloc(ctx.nr_ins + 1, sizeof(*e->perins_stats));
+        if (!e->perins_stats) {
             free(e);
             return NULL;
         }
+        e->total_stats = e->perins_stats + ctx.nr_ins;
         *ctx.p_next = e;
         ctx.p_next = &e->next;
         RB_CLEAR_NODE(&e->rbnode);
@@ -68,7 +71,7 @@ static struct rb_node *evsel_node_new(struct rblist *rlist, const void *new_entr
 static void evsel_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct evsel_node *e = container_of(rb_node, struct evsel_node, rbnode);
-    free(e->stats);
+    free(e->perins_stats);
     free(e);
 }
 
@@ -84,6 +87,7 @@ static int monitor_ctx_init(struct env *env)
     ctx.evsel_list.node_new = evsel_node_new;
     ctx.evsel_list.node_delete = evsel_node_delete;
 
+    ctx.env = env;
     tep__ref();
     return 0;
 }
@@ -167,6 +171,7 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
 
     if (env->interval == 0)
         env->interval = 1000;
+    env->perins = true;
 
     //software event
     evsel_name(perf_sw_event(evlist, PERF_COUNT_SW_CONTEXT_SWITCHES), " SOFT csw");
@@ -215,15 +220,16 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
     if (e == NULL)
         return;
 
-    e->stats[instance].diff = 0;
-    if (count->val > e->stats[instance].count) {
-        e->stats[instance].diff = count->val - e->stats[instance].count;
-        e->stats[instance].count = count->val;
+    e->perins_stats[instance].diff = 0;
+    if (count->val > e->perins_stats[instance].count) {
+        e->perins_stats[instance].diff = count->val - e->perins_stats[instance].count;
+        e->perins_stats[instance].count = count->val;
         if (e->cpu_idle) {
             //cpu_idle, contains enter and exit, must be divided by 2
-            e->stats[instance].diff /= 2;
+            e->perins_stats[instance].diff /= 2;
         }
     }
+    e->total_stats->diff += e->perins_stats[instance].diff;
 }
 
 static void percpu_stat_interval(void)
@@ -238,13 +244,22 @@ static void percpu_stat_interval(void)
         next = next->next;
     }
 
+    if (ctx.env->perins)
     for (ins = 0; ins < ctx.nr_ins; ins ++) {
         printf("\n[%03d] ", monitor_instance_cpu(ins));
         next = ctx.first;
         while (next) {
-            printf("%*lu ", next->name_len, next->stats[ins].diff);
+            printf("%*lu ", next->name_len, next->perins_stats[ins].diff);
             next = next->next;
         }
+    }
+
+    printf("\n[ALL] ");
+    next = ctx.first;
+    while (next) {
+        printf("%*lu ", next->name_len, next->total_stats->diff);
+        next->total_stats->diff = 0;
+        next = next->next;
     }
     printf("\n");
 }
@@ -262,5 +277,62 @@ static profiler percpu_stat = {
     .read   = percpu_stat_read,
     .sample = percpu_stat_sample,
 };
-PROFILER_REGISTER(percpu_stat)
+PROFILER_REGISTER(percpu_stat);
+
+static int stat_init(struct perf_evlist *evlist, struct env *env)
+{
+    int i;
+
+    if (!env->event)
+        return -1;
+    if (monitor_ctx_init(env) < 0)
+        return -1;
+
+    if (env->interval == 0)
+        env->interval = 1000;
+
+    ctx.tp_list = tp_list_new(env->event);
+    if (!ctx.tp_list)
+        return -1;
+
+    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_list->tp[i];
+        tp->evsel = perf_tp_event(evlist, tp->sys, tp->name);
+        evsel_name(tp->evsel, tp->alias && tp->alias[0] ? tp->alias : tp->name);
+    }
+    return 0;
+}
+
+static void stat_exit(struct perf_evlist *evlist)
+{
+    tp_list_free(ctx.tp_list);
+    monitor_ctx_exit();
+}
+
+static int stat_filter(struct perf_evlist *evlist, struct env *env)
+{
+    int i, err;
+
+    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_list->tp[i];
+        if (tp->evsel && tp->filter && tp->filter[0]) {
+            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+            if (err < 0)
+                return err;
+        }
+    }
+    return 0;
+}
+
+static profiler stat = {
+    .name = "stat",
+    .pages = 0,
+    .init = stat_init,
+    .filter = stat_filter,
+    .deinit = stat_exit,
+    .interval = percpu_stat_interval,
+    .read   = percpu_stat_read,
+    .sample = percpu_stat_sample,
+};
+PROFILER_REGISTER(stat);
 

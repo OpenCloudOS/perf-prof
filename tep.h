@@ -21,6 +21,7 @@ struct tp {
     char *filter;
     int stack;
     int max_stack;
+    char *alias;
     struct {
         char *field;
         bool event;

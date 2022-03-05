@@ -196,6 +196,7 @@ struct tp_list *tp_list_new(char *event)
         int stack = 0;
         int max_stack = 0;
         bool top_by;
+        char *alias = NULL;
         int id;
 
         sys = s = tp->name;
@@ -244,6 +245,8 @@ struct tp_list *tp_list_new(char *event)
                     tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
                     tp->top_add[tp->nr_top-1].field = value;
                     tp->top_add[tp->nr_top-1].top_by = top_by;
+                } else if (strcmp(attr, "alias") == 0) {
+                    alias = value;
                 }
             }
         }
@@ -259,6 +262,7 @@ struct tp_list *tp_list_new(char *event)
         tp->filter = filter;
         tp->stack = stack;
         tp->max_stack = max_stack;
+        tp->alias = alias;
         if (tp->nr_top == 0) {
             tp->nr_top = 1;
             tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
@@ -285,6 +289,8 @@ err_out:
 void tp_list_free(struct tp_list *tp_list)
 {
     int i;
+    if (!tp_list)
+        return ;
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
         if (tp->top_add)
