@@ -219,6 +219,7 @@ static int top_init(struct perf_evlist *evlist, struct env *env)
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
                          PERF_SAMPLE_RAW,
         .read_format   = 0,
+        .comm          = 1,
         .pinned        = 1,
         .disabled      = 1,
         .watermark     = 1,
@@ -242,6 +243,8 @@ static int top_init(struct perf_evlist *evlist, struct env *env)
         perf_evlist__add(evlist, evsel);
 
         tp->evsel = evsel;
+
+        attr.comm = 0;
     }
 
     ctx.evlist = evlist;
@@ -433,7 +436,7 @@ static void top_interval(void)
             printf("%8d ", t->pid);
             for (i = 0; i < ctx.nr_fields; i++)
                 printf("%*llu ", ctx.fields[i].len, t->counter[i]);
-            printf("%-s\n", t->comm);
+            printf("%-s\n", *(u64*)t->comm == 0x3e2e2e2e3c /*<...>*/ ? tep__pid_to_comm(t->pid) : t->comm);
         }
 
         rblist__remove_node(&sorted, rbn);
@@ -449,6 +452,7 @@ static profiler top = {
     .filter = top_filter,
     .deinit = top_exit,
     .interval = top_interval,
+    .comm   = monitor_tep__comm,
     .sample = top_sample,
 };
 PROFILER_REGISTER(top)
