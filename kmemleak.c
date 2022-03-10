@@ -34,6 +34,7 @@ struct monitor_ctx {
     struct rblist alloc;
     struct rblist gc_free;
     struct kmemleak_stat stat;
+    bool user;
     struct env *env;
 } ctx;
 struct perf_event_backup {
@@ -174,10 +175,12 @@ static struct rb_node *sorted_node_new(struct rblist *rlist, const void *new_ent
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
+    ctx.user = !monitor_instance_oncpu();
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        int user = ctx.user ? CALLCHAIN_USER : 0;
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | user, stdout);
         if (env->flame_graph)
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL, env->flame_graph);
+            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | user, env->flame_graph);
         kmemleak.pages *= 2;
     }
     rblist__init(&ctx.alloc);
@@ -222,7 +225,7 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = monitor_instance_oncpu(),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
@@ -303,7 +306,7 @@ static void __print_callchain(union perf_event *event, __u64 config)
     struct sample_type_callchain *data = (void *)event->sample.array;
 
     if (ctx.env->callchain && config == ctx.tp_alloc) {
-        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
         if (ctx.env->flame_graph)
             flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
     }
@@ -438,6 +441,11 @@ static void kmemleak_sample(union perf_event *event, int instance)
     config = perf_evsel__attr(evsel)->config;
     __raw_size(event, config, &raw, &size);
 
+    tep = tep__ref();
+
+    if (ctx.user && !tep_is_pid_registered(tep, data->tid_entry.tid))
+        tep__update_comm(NULL, data->tid_entry.tid);
+
     if (ctx.env->verbose) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
@@ -451,8 +459,6 @@ static void kmemleak_sample(union perf_event *event, int instance)
     record.cpu = data->cpu_entry.cpu;
     record.size = size;
     record.data = raw;
-
-    tep = tep__ref();
 
     e = tep_find_event_by_record(tep, &record);
     if (config == ctx.tp_alloc) {
