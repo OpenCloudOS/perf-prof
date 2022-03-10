@@ -92,7 +92,7 @@ const char argp_program_doc[] =
 "  perf-prof signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "  perf-prof task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
 "  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
-"  perf-prof kmemleak --alloc tp --free tp [-m pages] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof kmemleak --alloc tp --free tp [-p PID] [-m pages] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof percpu-stat [-i INT] [-C cpu] [--syscalls]\n"
 "  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
@@ -624,7 +624,7 @@ reinit:
 
     err = perf_evlist__open(evlist);
     if (err) {
-        fprintf(stderr, "failed to open evlist\n");
+        fprintf(stderr, "failed to open evlist, %d\n", err);
         goto out_exit;
     }
 
