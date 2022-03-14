@@ -307,8 +307,13 @@ static void __print_callchain(union perf_event *event, __u64 config)
 
     if (ctx.env->callchain && config == ctx.tp_alloc) {
         print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
-        if (ctx.env->flame_graph)
-            flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
+        if (ctx.env->flame_graph) {
+            if (ctx.user) {
+                const char *comm = tep__pid_to_comm((int)data->h.tid_entry.tid);
+                flame_graph_add_callchain(ctx.flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
+            } else
+                flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
+        }
     }
 }
 
