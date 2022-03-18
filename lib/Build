@@ -1,2 +1,3 @@
 perf-prof-y += rbtree.o rblist.o ctype.o string.o strlist.o thread_map.o
+perf-prof-y += ordered-events.o
 

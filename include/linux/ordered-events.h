@@ -4,8 +4,6 @@
 
 #include <linux/types.h>
 
-struct perf_sample;
-
 struct ordered_event {
 	u64			timestamp;
 	u64			file_offset;
