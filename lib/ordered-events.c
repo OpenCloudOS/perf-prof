@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
+#include <stdlib.h>
+#include <limits.h>
 #include <inttypes.h>
+#include <asm/bug.h>
 #include <linux/list.h>
 #include <linux/compiler.h>
 #include <linux/string.h>
-#include "ordered-events.h"
-#include "session.h"
-#include "asm/bug.h"
-#include "debug.h"
-#include "ui/progress.h"
+#include <perf/event.h>
+#include <linux/ordered-events.h>
 
-#define pr_N(n, fmt, ...) \
-	eprintf(n, debug_ordered_events, fmt, ##__VA_ARGS__)
+#define pr_N(n, fmt, ...)
 
 #define pr(fmt, ...) pr_N(1, pr_fmt(fmt), ##__VA_ARGS__)
 
@@ -23,8 +22,6 @@ static void queue_event(struct ordered_events *oe, struct ordered_event *new)
 
 	++oe->nr_events;
 	oe->last = new;
-
-	pr_oe_time2(timestamp, "queue_event nr_events %u\n", oe->nr_events);
 
 	if (!last) {
 		list_add(&new->list, &oe->events);
@@ -200,10 +197,6 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 		return -ETIME;
 
 	if (timestamp < oe->last_flush) {
-		pr_oe_time(timestamp,      "out of order event\n");
-		pr_oe_time(oe->last_flush, "last flush, last_flush_type %d\n",
-			   oe->last_flush_type);
-
 		oe->nr_unordered_events++;
 	}
 
@@ -220,25 +213,18 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 	return 0;
 }
 
-static int do_flush(struct ordered_events *oe, bool show_progress)
+static int do_flush(struct ordered_events *oe)
 {
 	struct list_head *head = &oe->events;
 	struct ordered_event *tmp, *iter;
 	u64 limit = oe->next_flush;
 	u64 last_ts = oe->last ? oe->last->timestamp : 0ULL;
-	struct ui_progress prog;
 	int ret;
 
 	if (!limit)
 		return 0;
 
-	if (show_progress)
-		ui_progress__init(&prog, oe->nr_events, "Processing time ordered events...");
-
 	list_for_each_entry_safe(iter, tmp, head, list) {
-		if (session_done())
-			return 0;
-
 		if (iter->timestamp > limit)
 			break;
 		ret = oe->deliver(oe, iter);
@@ -247,9 +233,6 @@ static int do_flush(struct ordered_events *oe, bool show_progress)
 
 		ordered_events__delete(oe, iter);
 		oe->last_flush = iter->timestamp;
-
-		if (show_progress)
-			ui_progress__update(&prog, 1);
 	}
 
 	if (list_empty(head))
@@ -257,33 +240,19 @@ static int do_flush(struct ordered_events *oe, bool show_progress)
 	else if (last_ts <= limit)
 		oe->last = list_entry(head->prev, struct ordered_event, list);
 
-	if (show_progress)
-		ui_progress__finish();
-
 	return 0;
 }
 
 static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 				   u64 timestamp)
 {
-	static const char * const str[] = {
-		"NONE",
-		"FINAL",
-		"ROUND",
-		"HALF ",
-		"TOP  ",
-		"TIME ",
-	};
 	int err;
-	bool show_progress = false;
 
 	if (oe->nr_events == 0)
 		return 0;
 
 	switch (how) {
 	case OE_FLUSH__FINAL:
-		show_progress = true;
-		__fallthrough;
 	case OE_FLUSH__TOP:
 		oe->next_flush = ULLONG_MAX;
 		break;
@@ -307,7 +276,6 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 
 	case OE_FLUSH__TIME:
 		oe->next_flush = timestamp;
-		show_progress = false;
 		break;
 
 	case OE_FLUSH__ROUND:
@@ -316,11 +284,7 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 		break;
 	}
 
-	pr_oe_time(oe->next_flush, "next_flush - ordered_events__flush PRE  %s, nr_events %u\n",
-		   str[how], oe->nr_events);
-	pr_oe_time(oe->max_timestamp, "max_timestamp\n");
-
-	err = do_flush(oe, show_progress);
+	err = do_flush(oe);
 
 	if (!err) {
 		if (how == OE_FLUSH__ROUND)
@@ -328,10 +292,6 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 
 		oe->last_flush_type = how;
 	}
-
-	pr_oe_time(oe->next_flush, "next_flush - ordered_events__flush POST %s, nr_events %u\n",
-		   str[how], oe->nr_events);
-	pr_oe_time(oe->last_flush, "last_flush\n");
 
 	return err;
 }
@@ -409,8 +369,9 @@ void ordered_events__free(struct ordered_events *oe)
 void ordered_events__reinit(struct ordered_events *oe)
 {
 	ordered_events__deliver_t old_deliver = oe->deliver;
+	void *old_data = oe->data;
 
 	ordered_events__free(oe);
 	memset(oe, '\0', sizeof(*oe));
-	ordered_events__init(oe, old_deliver, oe->data);
+	ordered_events__init(oe, old_deliver, old_data);
 }
