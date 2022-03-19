@@ -74,14 +74,14 @@ static int read_cpumap(struct perf_cpu_map **cpumaps, int cpu, int level)
     struct perf_cpu_map *cpumap;
     char buff[PATH_MAX];
     char *cpu_list;
-    size_t len;
+    size_t len = 0;
     int err, idx;
 
     if (cpu >= ctx.nr_cpus)
         return -1;
 
     snprintf(buff, sizeof(buff), "devices/system/cpu/cpu%d/cache/index%d/shared_cpu_list", cpu, level);
-    if ((err = sysfs__read_str(buff, &cpu_list, &len)) < 0 &&
+    if ((err = sysfs__read_str(buff, &cpu_list, &len)) < 0 ||
         len == 0) {
         fprintf(stderr, "failed to read %s, %d Not Supported.\n", buff, err);
         return -1;
