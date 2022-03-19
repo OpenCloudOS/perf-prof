@@ -14,6 +14,7 @@ perf-prof-y += mpdelay.o
 perf-prof-y += llcstat.o
 perf-prof-y += sched-migrate.o
 perf-prof-y += top.o
+perf-prof-y += order.o
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a

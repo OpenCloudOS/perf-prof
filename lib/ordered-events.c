@@ -189,7 +189,7 @@ void ordered_events__delete(struct ordered_events *oe, struct ordered_event *eve
 }
 
 int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
-			  u64 timestamp, u64 file_offset)
+			  u64 timestamp, int instance)
 {
 	struct ordered_event *oevent;
 
@@ -209,7 +209,7 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 	if (!oevent)
 		return -ENOMEM;
 
-	oevent->file_offset = file_offset;
+	oevent->instance = instance;
 	return 0;
 }
 

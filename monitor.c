@@ -118,6 +118,8 @@ enum {
     LONG_OPT_symbols,
     LONG_OPT_flame_graph,
     LONG_OPT_heatmap,
+    LONG_OPT_order,
+    LONG_OPT_order_mem,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -157,6 +159,8 @@ static const struct argp_option opts[] = {
                                                  "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
+    { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
+    { "order-mem", LONG_OPT_order_mem, "MB", 0, "Maximum memory used by ordering events. Unit: MB." },
     { "detail", 'd', NULL, 0, "More detailed information output" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
@@ -253,6 +257,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_heatmap:
         env.heatmap = strdup(arg);
+        break;
+    case LONG_OPT_order:
+        env.order = true;
+        break;
+    case LONG_OPT_order_mem:
+        env.order_mem = strtol(arg, NULL, 10) * 1024 * 1024;
         break;
     case 'd':
         env.detail = true;
@@ -567,6 +577,8 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    if (env.order)
+        monitor = order(monitor);
     if (env.mmap_pages)
         monitor->pages = env.mmap_pages;
 
