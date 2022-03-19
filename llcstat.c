@@ -101,7 +101,7 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
     } else
         return -1;
 
-    ctx.nr_ins = monitor_nr_instance();
+    ctx.nr_ins = perf_cpu_map__nr(llcstat.cpus);
     ctx.l3_cache_references = calloc(ctx.nr_ins, sizeof(struct cache));
     ctx.l3_cache_misses = calloc(ctx.nr_ins, sizeof(struct cache));
     if (!ctx.l3_cache_references || !ctx.l3_cache_misses)
