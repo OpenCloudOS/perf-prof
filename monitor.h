@@ -79,6 +79,11 @@ struct env {
     bool test;
     bool precise;
     bool detail;
+
+    /* order */
+    bool order;
+    unsigned long order_mem;
+
     int verbose;
 };
 
@@ -127,5 +132,7 @@ typedef struct monitor {
     //PERF_RECORD_NAMESPACES			= 16,
     void (*namespace)(union perf_event *event, int instance);
 }profiler;
+
+profiler *order(profiler *p);
 
 #endif
