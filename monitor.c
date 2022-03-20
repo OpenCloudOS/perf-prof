@@ -100,6 +100,7 @@ const char argp_program_doc[] =
 "  perf-prof sched-migrate [-d] [--filter filter] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [-i INT] [-C cpu] [--perins]\n"
+"  perf-prof blktrace -d device [-i INT] [--than ms] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
@@ -120,6 +121,7 @@ enum {
     LONG_OPT_heatmap,
     LONG_OPT_order,
     LONG_OPT_order_mem,
+    LONG_OPT_detail,
 };
 static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
@@ -161,7 +163,8 @@ static const struct argp_option opts[] = {
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
     { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
     { "order-mem", LONG_OPT_order_mem, "MB", 0, "Maximum memory used by ordering events. Unit: MB." },
-    { "detail", 'd', NULL, 0, "More detailed information output" },
+    { "detail", LONG_OPT_detail, NULL, 0, "More detailed information output" },
+    { "device", 'd', "device", 0, "Block device, /dev/sdx" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
     { "", 'h', NULL, OPTION_HIDDEN, "" },
     {},
@@ -264,8 +267,11 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case LONG_OPT_order_mem:
         env.order_mem = strtol(arg, NULL, 10) * 1024 * 1024;
         break;
-    case 'd':
+    case LONG_OPT_detail:
         env.detail = true;
+        break;
+    case 'd':
+        env.device = strdup(arg);
         break;
     case 'v':
         env.verbose++;
