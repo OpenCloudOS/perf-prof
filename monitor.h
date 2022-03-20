@@ -64,7 +64,7 @@ struct env {
     char *filter;
     bool interruptible;
     bool uninterruptible;
-    int greater_than;
+    unsigned long greater_than; // unit: ns, percent
     bool callchain;
     int mmap_pages;
     bool exclude_user;

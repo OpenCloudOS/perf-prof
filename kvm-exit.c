@@ -449,7 +449,7 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
 
     if (ctx.env->greater_than &&
         exit_reason != hlt &&
-        delta > ctx.env->greater_than * 1000UL) {
+        delta > ctx.env->greater_than) {
         __print_raw(rkvm_exit, NULL);
         __print_raw(rkvm_entry, NULL);
     }

@@ -335,6 +335,7 @@ static void blktrace_sample(union perf_event *event, int instance)
     struct rb_node *rbn = NULL;
     u64 delta;
     const char *print = NULL;
+    int verbose = ctx.env->verbose;
 
     r.time = data->time;
     IF(BLOCK_GETRQ, getrq)
@@ -371,8 +372,9 @@ static void blktrace_sample(union perf_event *event, int instance)
         iostat->sum += delta;
 
         if (ctx.env->greater_than &&
-            delta > ctx.env->greater_than * 1000000) {
+            delta > ctx.env->greater_than) {
             print = "GREATER_THAN";
+            verbose = 1;
         }
 
         if (r.tp != BLOCK_RQ_COMPLETE) {
@@ -388,8 +390,8 @@ static void blktrace_sample(union perf_event *event, int instance)
     else if (r.tp != BLOCK_RQ_COMPLETE)
         rblist__add_node(&ctx.rq_tracks, &r);
 
-    if (ctx.env->verbose &&
-        (print || ctx.env->verbose >= 2)) {
+    if (verbose &&
+        (print || verbose >= 2)) {
         tep__update_comm(NULL, data->tid_entry.tid);
         print_time(stdout);
         if (print)

@@ -373,7 +373,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
             heatmap_write(ctx.heatmaps[i-1], mp_stat->time, delta);
 
         if (ctx.env->greater_than &&
-            delta > ctx.env->greater_than * 1000UL) {
+            delta > ctx.env->greater_than) {
             print_time(stdout);
             printf("%.6f ", mp_stat->time/1000/1000000.0);
             tep__print_event(hdr->time/1000, hdr->cpu_entry.cpu, raw, size);

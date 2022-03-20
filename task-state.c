@@ -319,7 +319,7 @@ static void task_state_sample(union perf_event *event, int instance)
         data0 = (void *)sched_switch->event.sample.array;
 
         if (data->time > data0->time &&
-            data->time - data0->time > ctx.env->greater_than * 1000000UL) {
+            data->time - data0->time > ctx.env->greater_than) {
             const char *comm;
             int len;
 

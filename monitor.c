@@ -90,17 +90,17 @@ const char argp_program_doc[] =
 "  perf-prof cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
 "  perf-prof trace -e EVENT[...] [-C cpu] [-g [--flame-graph file [-i INT]]]\n"
 "  perf-prof signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
-"  perf-prof task-state [-S] [-D] [--than ms] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
+"  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
 "  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
 "  perf-prof kmemleak --alloc tp --free tp [-p PID] [-m pages] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof percpu-stat [-i INT] [-C cpu] [--syscalls]\n"
-"  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
-"  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than us] [--heatmap file]\n"
+"  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than ns] [--heatmap file]\n"
+"  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof llcstat [-C cpu] [-i INT]\n"
 "  perf-prof sched-migrate [-d] [--filter filter] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [-i INT] [-C cpu] [--perins]\n"
-"  perf-prof blktrace -d device [-i INT] [--than ms] [-v]\n"
+"  perf-prof blktrace -d device [-i INT] [--than ns] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
@@ -127,11 +127,11 @@ static const struct argp_option opts[] = {
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
     { "cpu", 'C', "CPU", 0, "Monitor the specified CPU, Dflt: all cpu" },
     { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
-    { "interval", 'i', "INT", 0, "Interval, ms" },
+    { "interval", 'i', "ms", 0, "Interval, Unit: ms" },
     { "pids", 'p', "PID,PID", 0, "Attach to processes" },
     { "tids", 't', "TID,TID", 0, "Attach to thread" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
-    { "latency", 'L', "LAT", 0, "Interrupt off latency, unit: us, Dflt: 20ms" },
+    { "latency", 'L', "LAT", 0, "Interrupt off latency, Unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
     { "event", 'e', "EVENT,...", 0, "Event selector. use 'perf list tracepoint' to list available tp events.\n"
                                     "EVENT,EVENT,...\n"
@@ -149,7 +149,7 @@ static const struct argp_option opts[] = {
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
     { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
     { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
-    { "than", LONG_OPT_than, "ge", 0, "Greater than specified time, ms/us/percent" },
+    { "than", LONG_OPT_than, "ns", 0, "Greater than specified time, Unit: s/ms/us/*ns/percent" },
     { "alloc", LONG_OPT_alloc, "tp", 0, "Memory alloc tracepoint/kprobe" },
     { "free", LONG_OPT_free, "tp", 0, "Memory free tracepoint/kprobe" },
     { "syscalls", LONG_OPT_syscalls, NULL, 0, "Trace syscalls" },
@@ -162,7 +162,7 @@ static const struct argp_option opts[] = {
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
     { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
-    { "order-mem", LONG_OPT_order_mem, "MB", 0, "Maximum memory used by ordering events. Unit: MB." },
+    { "order-mem", LONG_OPT_order_mem, "B", 0, "Maximum memory used by ordering events. Unit: GB/MB/KB/*B." },
     { "detail", LONG_OPT_detail, NULL, 0, "More detailed information output" },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
@@ -170,13 +170,103 @@ static const struct argp_option opts[] = {
     {},
 };
 
+/**
+ *  Parses a string into a number.  The number stored at @ptr is
+ *  potentially suffixed with K, M, G, T, P, E.
+ */
+static unsigned long memparse(const char *ptr, char **retptr)
+{
+    char *endptr;   /* local pointer to end of parsed string */
+
+    unsigned long ret = strtoul(ptr, &endptr, 10);
+
+    switch (*endptr) {
+    case 'E':
+    case 'e':
+        ret <<= 10;
+        /* fall through */
+    case 'P':
+    case 'p':
+        ret <<= 10;
+        /* fall through */
+    case 'T':
+    case 't':
+        ret <<= 10;
+        /* fall through */
+    case 'G':
+    case 'g':
+        ret <<= 10;
+        /* fall through */
+    case 'M':
+    case 'm':
+        ret <<= 10;
+        /* fall through */
+    case 'K':
+    case 'k':
+        ret <<= 10;
+        /* fall through */
+    case 'B':
+    case 'b':
+        endptr++;
+    default:
+        break;
+    }
+
+    if (retptr)
+        *retptr = endptr;
+
+    return ret;
+}
+
+/**
+ *  Parses a string into ns.  The number stored at @ptr is
+ *  potentially suffixed with s, ms, us, ns.
+ */
+static unsigned long nsparse(const char *ptr, char **retptr)
+{
+    char *endptr;   /* local pointer to end of parsed string */
+
+    unsigned long ret = strtoul(ptr, &endptr, 10);
+    unsigned long tmp = ret;
+
+    switch (*endptr) {
+    case 'S':
+    case 's':
+        tmp *= 1000;
+        endptr--;
+        /* fall through */
+    case 'M':
+    case 'm':
+        tmp *= 1000;
+        /* fall through */
+    case 'U':
+    case 'u':
+        tmp *= 1000;
+        /* fall through */
+    case 'N':
+    case 'n':
+        endptr++;
+        if (*endptr == 's') {
+            endptr++;
+            ret = tmp;
+        }
+    default:
+        break;
+    }
+
+    if (retptr)
+        *retptr = endptr;
+
+    return ret;
+}
+
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
     int latency;
 
     switch (key) {
     case 'h':
-        argp_help((const struct argp *__restrict)state->root_argp, stderr, ARGP_HELP_STD_HELP, (char *__restrict)"perf-monitor");
+        argp_help((const struct argp *__restrict)state->root_argp, stderr, ARGP_HELP_STD_HELP, (char *__restrict)"perf-prof");
         exit(0);
     case 'T':
         env.trigger_freq = strtol(arg, NULL, 10);
@@ -229,7 +319,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         env.exclude_guest = 1;
         break;
     case LONG_OPT_than:
-        env.greater_than = strtol(arg, NULL, 10);
+        env.greater_than = nsparse(arg, NULL);
         break;
     case LONG_OPT_alloc:
         env.tp_alloc = strdup(arg);
@@ -265,7 +355,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         env.order = true;
         break;
     case LONG_OPT_order_mem:
-        env.order_mem = strtol(arg, NULL, 10) * 1024 * 1024;
+        env.order_mem = memparse(arg, NULL);
         break;
     case LONG_OPT_detail:
         env.detail = true;
