@@ -149,7 +149,7 @@ static int request_track_node_cmp(struct rb_node *rbn, const void *entry)
 
     if (rq->dev > r->dev)
         return 1;
-    else if (r->dev < r->dev)
+    else if (rq->dev < r->dev)
         return -1;
 
     if (rq->sector >= r->sector + r->nr_sector)
