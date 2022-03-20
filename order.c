@@ -39,6 +39,7 @@ static void order_deinit(struct perf_evlist *evlist)
 {
     ordered_events__flush(&ctx.oe, OE_FLUSH__FINAL);
     ctx.base->deinit(evlist);
+    ordered_events__free(&ctx.oe);
 }
 
 static void order_interval(void)
