@@ -37,13 +37,14 @@ static inline int get_cpu_vendor(void) {
 };
 int in_guest(void);
 
-#define MONITOR_REGISTER(m) \
-__attribute__((constructor)) static void __monitor_register_##m(void) \
-{ \
-    monitor_register(&m); \
-}
 
-#define PROFILER_REGISTER(p) MONITOR_REGISTER(p)
+#define PROFILER_REGISTER_NAME(p, name) \
+__attribute__((constructor)) static void __monitor_register_##name(void) \
+{ \
+    monitor_register(p); \
+}
+#define PROFILER_REGISTER(p) PROFILER_REGISTER_NAME((&p), p)
+#define MONITOR_REGISTER(m)  PROFILER_REGISTER(m)
 
 #define MAX_SLOTS 26
 struct hist {
@@ -79,6 +80,7 @@ struct env {
     bool test;
     bool precise;
     bool detail;
+    char *device;
 
     /* order */
     bool order;
