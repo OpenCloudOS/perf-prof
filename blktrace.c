@@ -290,24 +290,23 @@ static void blktrace_interval(void)
     print_time(stdout);
     printf("\n");
 
-    printf("%*s => %-*s %8s %16s %9s %9s %12s\n", ctx.max_name_len, "start", ctx.max_name_len, "end",
-                    "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+    printf("%*s => %-*s %8s %16s %12s %12s %12s\n", ctx.max_name_len, "start", ctx.max_name_len, "end",
+                    "reqs", "total(us)", "min(us)", "avg(us)", "max(us)");
 
     for (i=0; i<ctx.max_name_len; i++) printf("-");
     printf("    ");
     for (i=0; i<ctx.max_name_len; i++) printf("-");
-    printf(" %8s %16s %9s %9s %12s\n",
-                    "--------", "----------------", "---------", "---------", "------------");
+    printf(" %8s %16s %12s %12s %12s\n",
+                    "--------", "----------------", "------------", "------------", "------------");
 
     for (i = 1; i < BLOCK_MAX; i++) {
         struct block_iostat *iostat1 = &ctx.stats[i-1];
         struct block_iostat *iostat = &ctx.stats[i];
-        if (iostat->n)
-        printf("%*s => %-*s %8llu %16.3f %9.3f %9.3f %12.3f\n",
+        printf("%*s => %-*s %8llu %16.3f %12.3f %12.3f %12.3f\n",
                 ctx.max_name_len, iostat1->name,
                 ctx.max_name_len, iostat->name,
-                iostat->n, iostat->sum/1000.0, iostat->min/1000.0,
-                iostat->sum/iostat->n/1000.0, iostat->max/1000.0);
+                iostat->n, iostat->sum/1000.0, iostat->n ? iostat->min/1000.0 : 0.0,
+                iostat->n ? iostat->sum/iostat->n/1000.0 : 0.0, iostat->max/1000.0);
     }
     iostat_reset();
 }
