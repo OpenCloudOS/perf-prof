@@ -136,5 +136,7 @@ typedef struct monitor {
 }profiler;
 
 profiler *order(profiler *p);
+bool using_order(profiler *p);
+void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr);
 
 #endif
