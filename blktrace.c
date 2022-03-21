@@ -237,6 +237,8 @@ static struct perf_evsel *add_tp_event(struct perf_evlist *evlist, const char *s
     if (id < 0)
         return NULL;
 
+    reduce_wakeup_times(&blktrace, &attr);
+
     attr.config = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
