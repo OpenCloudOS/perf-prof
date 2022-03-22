@@ -19,6 +19,7 @@ struct monitor_ctx {
     struct flame_graph *flame;
     time_t time;
     char time_str[32];
+    int in_guest;
     int tsc_khz;
     int vendor;
     struct env *env;
@@ -57,7 +58,8 @@ static int monitor_ctx_init(struct env *env)
             }
         }
     }
-    ctx.tsc_khz = get_tsc_khz();
+    ctx.in_guest = in_guest();
+    ctx.tsc_khz = ctx.in_guest ? 0 : get_tsc_khz();
     ctx.vendor = get_cpu_vendor();
     ctx.env = env;
     return 0;
@@ -113,7 +115,11 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         attr.freq = 0;
         attr.sample_period = ctx.tsc_khz * 1000ULL / env->freq;
     }
-    if (ctx.vendor == X86_VENDOR_INTEL)
+    if (ctx.in_guest) {
+        attr.type = PERF_TYPE_SOFTWARE;
+        attr.config = PERF_COUNT_SW_CPU_CLOCK;
+        attr.exclude_idle = 1;
+    } else if (ctx.vendor == X86_VENDOR_INTEL)
         attr.config = PERF_COUNT_HW_REF_CPU_CYCLES;
 
     if (env->callchain)
@@ -178,14 +184,8 @@ static void profile_sample(union perf_event *event, int instance)
         __u64 counter;
         struct callchain callchain;
     } *data = (void *)event->sample.array;
-    __u32 size = event->header.size - sizeof(struct perf_event_header);
     uint64_t counter = 0;
     int print = 1;
-
-    if (size != sizeof(struct sample_type_data) +
-            (ctx.env->callchain ? data->callchain.nr * sizeof(__u64) : -sizeof(__u64))) {
-        fprintf(stderr, "size(%u) != sizeof sample_type_data\n", size);
-    }
 
     if (data->counter > ctx.counter[data->cpu_entry.cpu]) {
         counter = data->counter - ctx.counter[data->cpu_entry.cpu];
@@ -240,6 +240,10 @@ MONITOR_REGISTER(profile);
 
 static int cpu_util_init(struct perf_evlist *evlist, struct env *env)
 {
+    if (in_guest()) {
+        fprintf(stderr, "cpu-util not support in guest\n");
+        return -1;
+    }
     env->freq = 0;
     env->interval = env->interval?:1000;
     return profile_init(evlist, env);
