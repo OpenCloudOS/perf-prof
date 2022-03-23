@@ -286,6 +286,29 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static int kmemleak_filter(struct perf_evlist *evlist, struct env *env)
+{
+    int i, err;
+
+    for (i = 0; i < ctx.tp_alloc->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_alloc->tp[i];
+        if (tp->filter && tp->filter[0]) {
+            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+            if (err < 0)
+                return err;
+        }
+    }
+    for (i = 0; i < ctx.tp_free->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_free->tp[i];
+        if (tp->filter && tp->filter[0]) {
+            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+            if (err < 0)
+                return err;
+        }
+    }
+    return 0;
+}
+
 static void kmemleak_exit(struct perf_evlist *evlist)
 {
     monitor_ctx_exit();
@@ -576,6 +599,7 @@ struct monitor kmemleak = {
     .name = "kmemleak",
     .pages = 4,
     .init = kmemleak_init,
+    .filter = kmemleak_filter,
     .deinit = kmemleak_exit,
     .sigusr1 = kmemleak_sigusr1,
     .comm   = monitor_tep__comm,
