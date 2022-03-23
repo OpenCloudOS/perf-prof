@@ -239,6 +239,8 @@ static int add_tp_list(struct perf_evlist *evlist, struct tp_list *tp_list, bool
     struct perf_evsel *evsel;
     int i;
 
+    reduce_wakeup_times(&kmemleak, &attr);
+
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
 
