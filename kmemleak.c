@@ -25,12 +25,12 @@ struct kmemleak_stat {
     __u64 total_alloc;
     __u64 total_free;
 };
-struct monitor_ctx {
+static struct kmemleak_ctx {
     struct perf_evlist *evlist;
     struct callchain_ctx *cc;
     struct flame_graph *flame;
-    __u64 tp_alloc;
-    __u64 tp_free;
+    struct tp_list *tp_alloc;
+    struct tp_list *tp_free;
     struct rblist alloc;
     struct rblist gc_free;
     struct kmemleak_stat stat;
@@ -40,13 +40,15 @@ struct monitor_ctx {
 struct perf_event_backup {
     struct rb_node rbnode;
     __u64    ptr;
-    __u64    config;
+    __u64    is_alloc:1;
+    __u64    is_free:1;
     union perf_event event;
 };
 struct perf_event_entry {
     __u64    ptr;
     int      insert;
-    int      config;
+    int      is_alloc:1;
+    int      is_free:1;
     union perf_event *event;
 };
 
@@ -94,13 +96,14 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
     struct perf_event_backup *b = malloc(size);
     if (b) {
         b->ptr = e->ptr;
-        b->config = e->config;
+        b->is_alloc = e->is_alloc;
+        b->is_free = e->is_free;
         RB_CLEAR_NODE(&b->rbnode);
         memmove(&b->event, event, event->header.size);
-        if (b->config == ctx.tp_alloc) {
+        if (b->is_alloc) {
             ctx.stat.alloc_num ++;
             ctx.stat.alloc_mem += size;
-        } else if (b->config == ctx.tp_free) {
+        } else if (b->is_free) {
             ctx.stat.free_num ++;
             ctx.stat.free_mem += size;
         }
@@ -112,10 +115,10 @@ static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node 
 {
     struct perf_event_backup *b = container_of(rb_node, struct perf_event_backup, rbnode);
     size_t size = offsetof(struct perf_event_backup, event) + b->event.header.size;
-    if (b->config == ctx.tp_alloc) {
+    if (b->is_alloc) {
         ctx.stat.alloc_num --;
         ctx.stat.alloc_mem -= size;
-    } else if (b->config == ctx.tp_free) {
+    } else if (b->is_free) {
         ctx.stat.free_num --;
         ctx.stat.free_mem -= size;
     }
@@ -174,6 +177,10 @@ static struct rb_node *perf_event_backup_sorted_node_new(struct rblist *rlist, c
 
 static int monitor_ctx_init(struct env *env)
 {
+    if (!env->tp_alloc ||
+        !env->tp_free)
+        return -1;
+
     tep__ref();
     ctx.user = !monitor_instance_oncpu();
     if (env->callchain) {
@@ -214,14 +221,15 @@ static void monitor_ctx_exit(void)
     tep__unref();
 }
 
-static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
+static int add_tp_list(struct perf_evlist *evlist, struct tp_list *tp_list, bool callchain)
 {
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW |
+                         (callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
@@ -229,40 +237,49 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
-    int id;
-    char *sys;
-    char *name;
+    int i;
 
+    for (i = 0; i < tp_list->nr_tp; i++) {
+        struct tp *tp = &tp_list->tp[i];
+
+        attr.config = tp->id;
+        if (!callchain) {
+            if (tp->stack)
+                attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
+            else
+                attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
+        }
+        attr.sample_max_stack = tp->max_stack;
+
+        evsel = perf_evsel__new(&attr);
+        if (!evsel) {
+            return -1;
+        }
+        perf_evlist__add(evlist, evsel);
+
+        tp->evsel = evsel;
+    }
+    return 0;
+}
+
+static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
+{
     if (monitor_ctx_init(env) < 0)
         return -1;
 
-    sys = strtok(env->tp_alloc, ":");
-    name = strtok(NULL, ":");
-    id = tep__event_id(sys, name);
-    if (id < 0)
+    ctx.tp_alloc = tp_list_new(env->tp_alloc);
+    if (!ctx.tp_alloc)
         return -1;
-    attr.config = ctx.tp_alloc = id;
-    attr.sample_type |= (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0);
-    evsel = perf_evsel__new(&attr);
-    if (!evsel) {
-        return -1;
-    }
-    perf_evlist__add(evlist, evsel);
 
-    sys = strtok(env->tp_free, ":");
-    name = strtok(NULL, ":");
-    id = tep__event_id(sys, name);
-    if (id < 0)
+    ctx.tp_free = tp_list_new(env->tp_free);
+    if (!ctx.tp_free)
         return -1;
-    attr.config = ctx.tp_free = id;
-    attr.sample_type &= ~PERF_SAMPLE_CALLCHAIN;
-    evsel = perf_evsel__new(&attr);
-    if (!evsel) {
-        return -1;
-    }
-    perf_evlist__add(evlist, evsel);
 
-    //perf_evlist__set_leader(evlist);
+    if (add_tp_list(evlist, ctx.tp_alloc, env->callchain) < 0)
+        return -1;
+    if (add_tp_list(evlist, ctx.tp_free, false) < 0)
+        return -1;
+
     ctx.evlist = evlist;
     return 0;
 }
@@ -270,6 +287,8 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
 static void kmemleak_exit(struct perf_evlist *evlist)
 {
     monitor_ctx_exit();
+    tp_list_free(ctx.tp_alloc);
+    tp_list_free(ctx.tp_free);
 }
 
 struct sample_type_callchain {
@@ -284,9 +303,9 @@ struct sample_type_raw {
     } raw;
 };
 
-static void __raw_size(union perf_event *event, __u64 config, void **praw, int *psize)
+static void __raw_size(union perf_event *event, bool is_alloc, void **praw, int *psize)
 {
-    if (ctx.env->callchain && config == ctx.tp_alloc) {
+    if (ctx.env->callchain && is_alloc) {
         struct sample_type_callchain *data = (void *)event->sample.array;
         struct {
             __u32   size;
@@ -301,11 +320,11 @@ static void __raw_size(union perf_event *event, __u64 config, void **praw, int *
     }
 }
 
-static void __print_callchain(union perf_event *event, __u64 config)
+static void __print_callchain(union perf_event *event, bool is_alloc)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain && config == ctx.tp_alloc) {
+    if (ctx.env->callchain && is_alloc) {
         print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
         if (ctx.env->flame_graph) {
             if (ctx.user) {
@@ -420,6 +439,30 @@ static void report_kmemleak(void)
     } while (!rblist__empty(&sorted));
 }
 
+static bool config_is_alloc(__u64 config)
+{
+    int i;
+
+    for (i = 0; i < ctx.tp_alloc->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_alloc->tp[i];
+        if (tp->id == config)
+            return true;
+    }
+    return false;
+}
+
+static bool config_is_free(__u64 config)
+{
+    int i;
+
+    for (i = 0; i < ctx.tp_free->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_free->tp[i];
+        if (tp->id == config)
+            return true;
+    }
+    return false;
+}
+
 static void kmemleak_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
@@ -437,13 +480,22 @@ static void kmemleak_sample(union perf_event *event, int instance)
     int rc;
     void *raw;
     int size;
+    bool is_alloc;
 
+    /* PERF_SAMPLE_STREAM_ID:
+     * alloc need stack, free does not need stack, PERF_SAMPLE_STREAM_ID must be set.
+     * Because, there is no way to know whether there is a callchain in the perf_event sample.
+     *
+     * You can use the common_type of traceevent, but you need to get the raw location first.
+     * To get the raw location, you must know whether there is a callchain in perf_event.
+     */
     evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
     if (!evsel)
         return;
 
     config = perf_evsel__attr(evsel)->config;
-    __raw_size(event, config, &raw, &size);
+    is_alloc = config_is_alloc(config);
+    __raw_size(event, is_alloc, &raw, &size);
 
     tep = tep__ref();
 
@@ -453,7 +505,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
     if (ctx.env->verbose) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-        __print_callchain(event, config);
+        __print_callchain(event, is_alloc);
     }
 
     trace_seq_init(&s);
@@ -465,7 +517,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
     record.data = raw;
 
     e = tep_find_event_by_record(tep, &record);
-    if (config == ctx.tp_alloc) {
+    if (is_alloc) {
         if (tep_get_field_val(&s, e, "ptr", &record, &ptr, 1) < 0) {
             trace_seq_putc(&s, '\n');
             trace_seq_do_fprintf(&s, stderr);
@@ -474,7 +526,8 @@ static void kmemleak_sample(union perf_event *event, int instance)
 
         entry.ptr = (__u64)ptr;
         entry.insert = 1;
-        entry.config = (int)config;
+        entry.is_alloc = 1;
+        entry.is_free = 0;
         entry.event = event;
         rc = rblist__add_node(&ctx.alloc, &entry);
         if (rc == -EEXIST) {
@@ -484,7 +537,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
             rblist__add_node(&ctx.alloc, &entry);
         }
         ctx.stat.total_alloc ++;
-    } else if (config == ctx.tp_free) {
+    } else if (config_is_free(config)) {
         if (tep_get_field_val(&s, e, "ptr", &record, &ptr, 1) < 0) {
             trace_seq_putc(&s, '\n');
             trace_seq_do_fprintf(&s, stderr);
@@ -493,7 +546,8 @@ static void kmemleak_sample(union perf_event *event, int instance)
 
         entry.ptr = (__u64)ptr;
         entry.insert = 0;
-        entry.config = (int)config;
+        entry.is_alloc = 0;
+        entry.is_free = 1;
         entry.event = event;
         rbn = rblist__find(&ctx.alloc, &entry);
         if (rbn == NULL) {
