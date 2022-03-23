@@ -654,6 +654,7 @@ int main(int argc, char *argv[])
     struct perf_thread_map *threads = NULL;
     uint64_t time_end;
     int time_left;
+    bool deinited;
 
     if (isatty(STDOUT_FILENO)) {
         struct winsize size;
@@ -682,6 +683,7 @@ int main(int argc, char *argv[])
     libperf_init(libperf_print);
 
 reinit:
+    deinited = false;
     monitor->reinit = 0;
 
     evlist = perf_evlist__new();
@@ -802,11 +804,26 @@ reinit:
     }
 
     perf_evlist__disable(evlist);
+    if (!deinited) {
+        deinited = true;
+        /*
+         * deinit before perf_evlist__munmap.
+         * When order is enabled, some events are also cached inside the order,
+         * and then deinit will refresh all events.
+         * Order::base profiler handles events and may call perf_evlist__id_to_evsel,
+         * which requires id_hash. But perf_evlist__munmap will reset id_hash.
+         * Therefore, deinit must be executed first.
+        **/
+        monitor->deinit(evlist);
+    }
     perf_evlist__munmap(evlist);
 out_close:
     perf_evlist__close(evlist);
 out_exit:
-    monitor->deinit(evlist);
+    if (!deinited) {
+        deinited = true;
+        monitor->deinit(evlist);
+    }
 out_delete:
     perf_evlist__set_maps(evlist, NULL, NULL);
     perf_evlist__delete(evlist);
