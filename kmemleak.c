@@ -65,7 +65,7 @@ struct sample_type_header {
     }    cpu_entry;
 };
 
-static int node_cmp(struct rb_node *rbn, const void *entry)
+static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct perf_event_backup *b = container_of(rbn, struct perf_event_backup, rbnode);
     const struct perf_event_entry *e = entry;
@@ -86,7 +86,7 @@ static int node_cmp(struct rb_node *rbn, const void *entry)
     }
 }
 
-static struct rb_node *node_new(struct rblist *rlist, const void *new_entry)
+static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const void *new_entry)
 {
     const struct perf_event_entry *e = new_entry;
     const union perf_event *event = e->event;
@@ -108,7 +108,7 @@ static struct rb_node *node_new(struct rblist *rlist, const void *new_entry)
     } else
         return NULL;
 }
-static void node_delete(struct rblist *rblist, struct rb_node *rb_node)
+static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct perf_event_backup *b = container_of(rb_node, struct perf_event_backup, rbnode);
     size_t size = offsetof(struct perf_event_backup, event) + b->event.header.size;
@@ -121,11 +121,11 @@ static void node_delete(struct rblist *rblist, struct rb_node *rb_node)
     }
     free(b);
 }
-static void node_delete_empty(struct rblist *rblist, struct rb_node *rb_node)
+static void perf_event_backup_node_delete_empty(struct rblist *rblist, struct rb_node *rb_node)
 {
 }
 
-static int gc_free_node_cmp(struct rb_node *rbn, const void *entry)
+static int perf_event_backup_gc_free_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct perf_event_backup *b = container_of(rbn, struct perf_event_backup, rbnode);
     const struct perf_event_entry *e = entry;
@@ -145,7 +145,7 @@ static int gc_free_node_cmp(struct rb_node *rbn, const void *entry)
             return 0;
     }
 }
-static int sorted_node_cmp(struct rb_node *rbn, const void *entry)
+static int perf_event_backup_sorted_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct perf_event_backup *b = container_of(rbn, struct perf_event_backup, rbnode);
     const struct perf_event_backup *e = entry;
@@ -165,7 +165,7 @@ static int sorted_node_cmp(struct rb_node *rbn, const void *entry)
             return 0;
     }
 }
-static struct rb_node *sorted_node_new(struct rblist *rlist, const void *new_entry)
+static struct rb_node *perf_event_backup_sorted_node_new(struct rblist *rlist, const void *new_entry)
 {
     struct perf_event_backup *b = (void *)new_entry;
     RB_CLEAR_NODE(&b->rbnode);
@@ -184,14 +184,14 @@ static int monitor_ctx_init(struct env *env)
         kmemleak.pages *= 2;
     }
     rblist__init(&ctx.alloc);
-    ctx.alloc.node_cmp = node_cmp;
-    ctx.alloc.node_new = node_new;
-    ctx.alloc.node_delete = node_delete;
+    ctx.alloc.node_cmp = perf_event_backup_node_cmp;
+    ctx.alloc.node_new = perf_event_backup_node_new;
+    ctx.alloc.node_delete = perf_event_backup_node_delete;
 
     rblist__init(&ctx.gc_free);
-    ctx.gc_free.node_cmp = gc_free_node_cmp;
-    ctx.gc_free.node_new = node_new;
-    ctx.gc_free.node_delete = node_delete;
+    ctx.gc_free.node_cmp = perf_event_backup_gc_free_node_cmp;
+    ctx.gc_free.node_new = perf_event_backup_node_new;
+    ctx.gc_free.node_delete = perf_event_backup_node_delete;
 
     memset(&ctx.stat, 0, sizeof(ctx.stat));
     ctx.env = env;
@@ -390,10 +390,10 @@ static void report_kmemleak(void)
         return;
 
     rblist__init(&sorted);
-    sorted.node_cmp = sorted_node_cmp;
-    sorted.node_new = sorted_node_new;
+    sorted.node_cmp = perf_event_backup_sorted_node_cmp;
+    sorted.node_new = perf_event_backup_sorted_node_new;
     sorted.node_delete = ctx.alloc.node_delete;
-    ctx.alloc.node_delete = node_delete_empty; //empty, not really delete
+    ctx.alloc.node_delete = perf_event_backup_node_delete_empty; //empty, not really delete
 
     /* sort, remove from `ctx.alloc', add to `sorted'. */
     do {
@@ -424,7 +424,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
-    struct sample_type_header *data = (void *)event->sample.array;//, *data0;
+    struct sample_type_header *data = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct perf_event_entry entry;
     struct tep_record record;
@@ -432,7 +432,6 @@ static void kmemleak_sample(union perf_event *event, int instance)
     struct trace_seq s;
     struct tep_event *e;
     struct rb_node *rbn;
-    //struct perf_event_backup *free;
     unsigned long long ptr;
     __u64 config;
     int rc;
