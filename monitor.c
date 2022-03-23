@@ -92,7 +92,7 @@ const char argp_program_doc[] =
 "  perf-prof signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
 "  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
 "  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
-"  perf-prof kmemleak --alloc tp --free tp [-p PID] [-m pages] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-p PID] [-m pages] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof percpu-stat [-i INT] [-C cpu] [--syscalls]\n"
 "  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than ns] [--heatmap file]\n"
@@ -150,8 +150,8 @@ static const struct argp_option opts[] = {
     { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
     { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
     { "than", LONG_OPT_than, "ns", 0, "Greater than specified time, Unit: s/ms/us/*ns/percent" },
-    { "alloc", LONG_OPT_alloc, "tp", 0, "Memory alloc tracepoint/kprobe" },
-    { "free", LONG_OPT_free, "tp", 0, "Memory free tracepoint/kprobe" },
+    { "alloc", LONG_OPT_alloc, "EVENT,...", 0, "Memory alloc tracepoint/kprobe" },
+    { "free", LONG_OPT_free, "EVENT,...", 0, "Memory free tracepoint/kprobe" },
     { "syscalls", LONG_OPT_syscalls, NULL, 0, "Trace syscalls" },
     { "perins", LONG_OPT_perins, NULL, 0, "Print per instance stat" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
