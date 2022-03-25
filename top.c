@@ -162,8 +162,9 @@ static int monitor_ctx_init(struct env *env)
     for (i = 0; i < ctx.tp_list->nr_tp; i++) {
         struct tp *tp = &ctx.tp_list->tp[i];
         for (j = 0; j < tp->nr_top; j++) {
-            ctx.fields[f].field = ctx.EVENT + (tp->top_add[j].field - env->event);
-            ctx.fields[f].len = strlen(tp->top_add[j].field);
+            char *field = (j == 0 && tp->alias) ? tp->alias : tp->top_add[j].field;
+            ctx.fields[f].field = ctx.EVENT + (field - env->event);
+            ctx.fields[f].len = strlen(field);
             ctx.fields[f].field[ctx.fields[f].len] = '\0';
             ctx.fields[f].top_by = tp->top_add[j].top_by;
             if (ctx.fields[f].len < 12)
