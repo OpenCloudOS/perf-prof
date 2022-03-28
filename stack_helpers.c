@@ -423,7 +423,13 @@ void task_exit_free_syms(union perf_event *event)
 }
 
 struct key_value {
-    /* void *value; */
+    /* void *value;
+     * The value is placed at the beginning of the key_value structure, and the
+     * key_value pointer and the value pointer can be converted to each other.
+     *
+     *   void *value = (void *)(struct key_value *)kv - pairs->value_size;
+     *   struct key_value *kv = (void *)value + pairs->value_size;
+     */
     struct rb_node rbnode;
     unsigned int n;
     struct_key key;
@@ -539,6 +545,46 @@ void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, 
         value = pairs->value_size ? (void *)kv - pairs->value_size : NULL;
         f(opaque, &kv->key, value, kv->n);
     }
+}
+
+void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque)
+{
+    struct rblist *rblist;
+    struct rb_node *pos, *next;
+    struct key_value *kv = NULL;
+    void *value = NULL;
+    void **sorted_values = NULL;
+    unsigned int nr = 0, i;
+
+    if (!pairs || rblist__empty(&pairs->kv_pairs))
+        return;
+
+    if (pairs->value_size == 0)
+        return keyvalue_pairs_foreach(pairs, f, opaque);
+
+    rblist = &pairs->kv_pairs;
+    next = rb_first_cached(&rblist->entries);
+
+    sorted_values = calloc(rblist__nr_entries(rblist), sizeof(*sorted_values));
+    if (!sorted_values)
+        return;
+
+    while (next) {
+        pos = next;
+        next = rb_next(pos);
+        kv = container_of(pos, struct key_value, rbnode);
+        value = (void *)kv - pairs->value_size;
+        sorted_values[nr++] = value;
+    }
+
+    qsort(sorted_values, nr, sizeof(*sorted_values), (__compar_fn_t)cmp);
+
+    for (i = 0; i < nr; i++) {
+        value = sorted_values[i];
+        kv = value + pairs->value_size;
+        f(opaque, &kv->key, value, kv->n);
+    }
+    free(sorted_values);
 }
 
 static bool keyvalue_pairs_empty(struct key_value_paires *pairs)
