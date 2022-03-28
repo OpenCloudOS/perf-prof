@@ -464,26 +464,30 @@ static void report_kmemleak(void)
     } while (!rblist__empty(&sorted));
 }
 
-static bool config_is_alloc(__u64 config)
+static bool config_is_alloc(__u64 config, struct tp **p)
 {
     int i;
 
     for (i = 0; i < ctx.tp_alloc->nr_tp; i++) {
         struct tp *tp = &ctx.tp_alloc->tp[i];
-        if (tp->id == config)
+        if (tp->id == config) {
+            *p = tp;
             return true;
+        }
     }
     return false;
 }
 
-static bool config_is_free(__u64 config)
+static bool config_is_free(__u64 config, struct tp **p)
 {
     int i;
 
     for (i = 0; i < ctx.tp_free->nr_tp; i++) {
         struct tp *tp = &ctx.tp_free->tp[i];
-        if (tp->id == config)
+        if (tp->id == config) {
+            *p = tp;
             return true;
+        }
     }
     return false;
 }
@@ -500,6 +504,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
     struct trace_seq s;
     struct tep_event *e;
     struct rb_node *rbn;
+    struct tp *tp = NULL;
     unsigned long long ptr;
     __u64 config;
     int rc;
@@ -519,7 +524,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
         return;
 
     config = perf_evsel__attr(evsel)->config;
-    is_alloc = config_is_alloc(config);
+    is_alloc = config_is_alloc(config, &tp);
     __raw_size(event, is_alloc, &raw, &size);
 
     tep = tep__ref();
@@ -543,7 +548,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
 
     e = tep_find_event_by_record(tep, &record);
     if (is_alloc) {
-        if (tep_get_field_val(&s, e, "ptr", &record, &ptr, 1) < 0) {
+        if (tep_get_field_val(&s, e, tp->mem_ptr, &record, &ptr, 1) < 0) {
             trace_seq_putc(&s, '\n');
             trace_seq_do_fprintf(&s, stderr);
             goto __return;
@@ -562,8 +567,8 @@ static void kmemleak_sample(union perf_event *event, int instance)
             rblist__add_node(&ctx.alloc, &entry);
         }
         ctx.stat.total_alloc ++;
-    } else if (config_is_free(config)) {
-        if (tep_get_field_val(&s, e, "ptr", &record, &ptr, 1) < 0) {
+    } else if (config_is_free(config, &tp)) {
+        if (tep_get_field_val(&s, e, tp->mem_ptr, &record, &ptr, 1) < 0) {
             trace_seq_putc(&s, '\n');
             trace_seq_do_fprintf(&s, stderr);
             goto __return;
