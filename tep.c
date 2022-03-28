@@ -190,6 +190,7 @@ struct tp_list *tp_list_new(char *event)
     **/
     for (i = 0; i < nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
+        struct tep_event *event = NULL;
         char *sys = NULL;
         char *name = NULL;
         char *filter = NULL;
@@ -207,9 +208,17 @@ struct tp_list *tp_list_new(char *event)
 
         name = s = sep + 1;
         sep = strchr(s, '/');
-        if (sep) {
+        if (sep)
             *sep = '\0';
 
+        id = tep__event_id(sys, name);
+        if (id < 0)
+            goto err_out;
+        event = tep_find_event_by_name(tep, sys, name);
+        if (!event)
+            goto err_out;
+
+        if (sep) {
             filter = s = sep + 1;
             sep = strchr(s, '/');
             if (!sep)
@@ -241,19 +250,31 @@ struct tp_list *tp_list_new(char *event)
                 } else if (strcmp(attr, "top-add") == 0 ||
                            strcmp(attr, "top_add") == 0) {
                     top_add:
+                    if (!tep_find_any_field(event, value)) {
+                        fprintf(stderr, "Attr top-add: cannot find %s field at %s:%s\n", value, sys, name);
+                        goto err_out;
+                    }
                     tp->nr_top ++;
                     tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
                     tp->top_add[tp->nr_top-1].field = value;
                     tp->top_add[tp->nr_top-1].top_by = top_by;
                 } else if (strcmp(attr, "alias") == 0) {
                     alias = value;
+                } else if (strcmp(attr, "ptr") == 0) {
+                    if (!tep_find_any_field(event, value)) {
+                        fprintf(stderr, "Attr ptr: cannot find %s field at %s:%s\n", value, sys, name);
+                        goto err_out;
+                    }
+                    tp->mem_ptr = value;
+                } else if (strcmp(attr, "size") == 0) {
+                    if (!tep_find_any_field(event, value)) {
+                        fprintf(stderr, "Attr size: cannot find %s field at %s:%s\n", value, sys, name);
+                        goto err_out;
+                    }
+                    tp->mem_size = value;
                 }
             }
         }
-
-        id = tep__event_id(sys, name);
-        if (id < 0)
-            goto err_out;
 
         tp->evsel = NULL;
         tp->id = id;
@@ -270,6 +291,10 @@ struct tp_list *tp_list_new(char *event)
             tp->top_add[0].event = true;
             tp->top_add[0].top_by = false;
         }
+        if (!tp->mem_ptr && tep_find_any_field(event, "ptr"))
+            tp->mem_ptr = "ptr";
+        if (!tp->mem_size && tep_find_any_field(event, "bytes_alloc"))
+            tp->mem_size = "bytes_alloc";
 
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;

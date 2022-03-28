@@ -22,12 +22,19 @@ struct tp {
     int stack;
     int max_stack;
     char *alias;
+
+    // top profiler
     struct {
         char *field;
         bool event;
         bool top_by;
     } *top_add;
     int nr_top;
+
+    // kmemleak profiler
+    const char *mem_ptr;
+    const char *mem_size;
+
 };
 
 struct tp_list {

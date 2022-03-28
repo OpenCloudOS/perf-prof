@@ -139,9 +139,11 @@ static const struct argp_option opts[] = {
                                     "ATTR:\n"
                                     "    stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
                                     "    max-stack=int : sample_max_stack\n"
+                                    "    alias=str: event alias\n"
                                     "    top-by=field: add to top, sort by this field\n"
                                     "    top-add=field: add to top\n"
-                                    "    alias=str: event alias"
+                                    "    ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
+                                    "    size=field: kmemleak, size field, Dflt: size=bytes_alloc"
                                     },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
