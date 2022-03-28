@@ -34,18 +34,21 @@ static struct kmemleak_ctx {
     struct rblist alloc;
     struct rblist gc_free;
     struct kmemleak_stat stat;
+    bool report_leaked_bytes;
     bool user;
     struct env *env;
 } ctx;
 struct perf_event_backup {
     struct rb_node rbnode;
     __u64    ptr;
+    unsigned long bytes_alloc;
     __u64    is_alloc:1;
     __u64    is_free:1;
     union perf_event event;
 };
 struct perf_event_entry {
     __u64    ptr;
+    unsigned long bytes_alloc;
     int      insert;
     int      is_alloc:1;
     int      is_free:1;
@@ -96,6 +99,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
     struct perf_event_backup *b = malloc(size);
     if (b) {
         b->ptr = e->ptr;
+        b->bytes_alloc = e->bytes_alloc;
         b->is_alloc = e->is_alloc;
         b->is_free = e->is_free;
         RB_CLEAR_NODE(&b->rbnode);
@@ -201,6 +205,7 @@ static int monitor_ctx_init(struct env *env)
     ctx.gc_free.node_delete = perf_event_backup_node_delete;
 
     memset(&ctx.stat, 0, sizeof(ctx.stat));
+    ctx.report_leaked_bytes = false;
     ctx.env = env;
     return 0;
 }
@@ -282,6 +287,12 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
     if (add_tp_list(evlist, ctx.tp_free, false) < 0)
         return -1;
 
+    if (ctx.tp_alloc->nr_mem_size == ctx.tp_alloc->nr_tp) {
+        ctx.report_leaked_bytes = true;
+        if (!env->verbose && env->callchain && env->flame_graph)
+            fprintf(stderr, "Support LEAKED BYTES REPORT, will disable flame graph.\n");
+    }
+
     ctx.evlist = evlist;
     return 0;
 }
@@ -361,6 +372,46 @@ static void __print_callchain(union perf_event *event, bool is_alloc)
     }
 }
 
+struct leaked_bytes {
+    unsigned long leaked;
+    int pid;
+};
+
+static void collect_leaked_bytes(struct key_value_paires *kv_pairs, struct perf_event_backup *alloc)
+{
+    union perf_event *event = &alloc->event;
+    struct sample_type_callchain *data = (void *)event->sample.array;
+
+    if (ctx.env->callchain) {
+        struct leaked_bytes *leaked = keyvalue_pairs_add_key(kv_pairs, (struct_key *)&data->callchain);
+        leaked->leaked += alloc->bytes_alloc;
+        if (ctx.user)
+            leaked->pid = data->h.tid_entry.pid;
+        else
+            leaked->pid = 0;
+    }
+}
+
+static int __leak_cmp(void **value1, void **value2)
+{
+    struct leaked_bytes *b1 = *(struct leaked_bytes **)value1;
+    struct leaked_bytes *b2 = *(struct leaked_bytes **)value2;
+
+    if (b1->leaked < b2->leaked)
+        return 1;
+    else if (b1->leaked > b2->leaked)
+        return -1;
+    else
+        return b1->pid - b2->pid;
+}
+
+static void __print_leak(void *opaque, struct_key *key, void *value, unsigned int n)
+{
+    struct leaked_bytes *leaked = value;
+    printf("Leak of %lu bytes in %u objects allocated from:\n", leaked->leaked, n);
+    print_callchain_common(ctx.cc, key, leaked->pid);
+}
+
 static int gc_need_free(union perf_event *event)
 {
     struct sample_type_header *data = (void *)event->sample.array, *data0;
@@ -404,15 +455,19 @@ static void gc_free(union perf_event *event)
     } while (gc_need_free(event));
 }
 
-static void report_kmemleak_stat(void)
+static void report_kmemleak_stat(bool from_sigusr1)
 {
     print_time(stdout);
     printf("\nKMEMLEAK STATS:\n");
-    printf("ALLOC LIST num %llu mem %llu\n"
+    if (from_sigusr1)
+        printf("ALLOC LIST num %llu mem %llu\n"
            "FREE LIST  num %llu mem %llu\n"
            "TOTAL alloc %llu free %llu\n\n",
            ctx.stat.alloc_num, ctx.stat.alloc_mem,
            ctx.stat.free_num, ctx.stat.free_mem,
+           ctx.stat.total_alloc, ctx.stat.total_free);
+    else
+        printf("TOTAL alloc %llu free %llu\n\n",
            ctx.stat.total_alloc, ctx.stat.total_free);
 }
 
@@ -425,10 +480,13 @@ static void report_kmemleak(void)
     void *raw;
     int size;
     struct rblist sorted;
+    struct key_value_paires *kv_pairs = NULL;
 
     while (!rblist__empty(&ctx.gc_free)) {
         __gc_free_first();
     }
+
+    report_kmemleak_stat(false);
 
     if (rblist__empty(&ctx.alloc))
         return;
@@ -447,21 +505,36 @@ static void report_kmemleak(void)
         rblist__add_node(&sorted, alloc);
     } while (!rblist__empty(&ctx.alloc));
 
-    report_kmemleak_stat();
-    print_time(stdout);
-    printf("\nKMEMLEAK REPORT: %u\n", rblist__nr_entries(&sorted));
+
+    if (ctx.report_leaked_bytes) {
+        kv_pairs = keyvalue_pairs_new(sizeof(struct leaked_bytes));
+    }
+    if (!kv_pairs || ctx.env->verbose) {
+        printf("KMEMLEAK REPORT: %u\n", rblist__nr_entries(&sorted));
+    }
     do {
         rbn = rblist__entry(&sorted, 0);
         alloc = container_of(rbn, struct perf_event_backup, rbnode);
         event = &alloc->event;
         data = (void *)event->sample.array;
 
-        __raw_size(event, ctx.tp_alloc, &raw, &size);
-        tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-        __print_callchain(event, ctx.tp_alloc);
+        if (kv_pairs) {
+            collect_leaked_bytes(kv_pairs, alloc);
+        }
+        if (!kv_pairs || ctx.env->verbose) {
+            __raw_size(event, true, &raw, &size);
+            tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
+            __print_callchain(event, true);
+        }
 
         rblist__remove_node(&sorted, rbn);
     } while (!rblist__empty(&sorted));
+
+    if (kv_pairs) {
+        printf("LEAKED BYTES REPORT:\n");
+        keyvalue_pairs_sorted_foreach(kv_pairs, __leak_cmp, __print_leak, NULL);
+        keyvalue_pairs_free(kv_pairs);
+    }
 }
 
 static bool config_is_alloc(__u64 config, struct tp **p)
@@ -506,6 +579,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
     struct rb_node *rbn;
     struct tp *tp = NULL;
     unsigned long long ptr;
+    unsigned long long bytes_alloc = 0;
     __u64 config;
     int rc;
     void *raw;
@@ -532,7 +606,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
     if (ctx.user && !tep_is_pid_registered(tep, data->tid_entry.tid))
         tep__update_comm(NULL, data->tid_entry.tid);
 
-    if (ctx.env->verbose) {
+    if (ctx.env->verbose >= 2) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
         __print_callchain(event, is_alloc);
@@ -553,8 +627,13 @@ static void kmemleak_sample(union perf_event *event, int instance)
             trace_seq_do_fprintf(&s, stderr);
             goto __return;
         }
+        if (tp->mem_size &&
+            tep_get_field_val(&s, e, tp->mem_size, &record, &bytes_alloc, 0) < 0) {
+            bytes_alloc = 1;
+        }
 
         entry.ptr = (__u64)ptr;
+        entry.bytes_alloc = (unsigned long)bytes_alloc;
         entry.insert = 1;
         entry.is_alloc = 1;
         entry.is_free = 0;
@@ -597,7 +676,7 @@ __return:
 
 static void kmemleak_sigusr1(int signum)
 {
-    report_kmemleak_stat();
+    report_kmemleak_stat(true);
 }
 
 struct monitor kmemleak = {

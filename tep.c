@@ -298,6 +298,7 @@ struct tp_list *tp_list_new(char *event)
 
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;
+        tp_list->nr_mem_size += !!tp->mem_size;
     }
 
     tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);
