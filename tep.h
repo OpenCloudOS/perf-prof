@@ -42,6 +42,7 @@ struct tp_list {
     int nr_need_stack;
     bool need_stream_id;
     int nr_top;
+    int nr_mem_size;
     struct tp tp[0];
 };
 
