@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <monitor.h>
 #include <errno.h>
+#include <linux/const.h>
 #include <linux/refcount.h>
 #include <linux/rblist.h>
 #include <monitor.h>
@@ -13,6 +14,7 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 
+#define ALIGN(x, a)  __ALIGN_KERNEL((x), (a))
 
 static struct global_syms {
     struct ksyms *ksyms;
@@ -421,10 +423,10 @@ void task_exit_free_syms(union perf_event *event)
 }
 
 struct key_value {
+    /* void *value; */
     struct rb_node rbnode;
     unsigned int n;
     struct_key key;
-    /* void *value; */
 };
 
 struct key_value_paires {
@@ -450,17 +452,19 @@ static int key_value_node_cmp(struct rb_node *rbn, const void *entry)
     }
     return (int)kv->key.nr - (int)key->nr;
 }
+
 static struct rb_node *key_value_node_new(struct rblist *rlist, const void *new_entry)
 {
     struct key_value_paires *pairs = container_of(rlist, struct key_value_paires, kv_pairs);
     const struct_key *key = new_entry;
-    struct key_value *kv = malloc(sizeof(struct key_value) + key->nr * sizeof(key->ips[0]) + pairs->value_size);
-    if (kv) {
+    void *value = malloc(pairs->value_size + sizeof(struct key_value) + key->nr * sizeof(key->ips[0]));
+    if (value) {
+        struct key_value *kv = value + pairs->value_size;
         RB_CLEAR_NODE(&kv->rbnode);
         kv->n = 0;
         kv->key.nr = key->nr;
         memcpy(kv->key.ips, key->ips, key->nr * sizeof(key->ips[0]));
-        memset(&kv->key.ips[key->nr], 0, pairs->value_size);
+        memset(value, 0, pairs->value_size);
         return &kv->rbnode;
     } else
         return NULL;
@@ -468,8 +472,10 @@ static struct rb_node *key_value_node_new(struct rblist *rlist, const void *new_
 
 static void key_value_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
+    struct key_value_paires *pairs = container_of(rblist, struct key_value_paires, kv_pairs);
     struct key_value *kv = container_of(rb_node, struct key_value, rbnode);
-    free(kv);
+    void *value = (void *)kv - pairs->value_size;
+    free(value);
 }
 
 struct key_value_paires *keyvalue_pairs_new(int value_size)
@@ -483,7 +489,7 @@ struct key_value_paires *keyvalue_pairs_new(int value_size)
     pairs->kv_pairs.node_cmp = key_value_node_cmp;
     pairs->kv_pairs.node_new = key_value_node_new;
     pairs->kv_pairs.node_delete = key_value_node_delete;
-    pairs->value_size = value_size;
+    pairs->value_size = ALIGN(value_size, 8);
     return pairs;
 }
 
@@ -501,27 +507,36 @@ void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key)
     struct key_value *kv = NULL;
     void *value = NULL;
 
+    if (!pairs)
+        return NULL;
+
     rbn = rblist__findnew(&pairs->kv_pairs, key);
     if (rbn) {
         kv = container_of(rbn, struct key_value, rbnode);
         kv->n ++;
-        value = pairs->value_size ? (void *)&kv->key.ips[kv->key.nr] : NULL;
+        value = pairs->value_size ? (void *)kv - pairs->value_size : NULL;
     }
     return value;
 }
 
 void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, void *opaque)
 {
-    struct rblist *rblist = &pairs->kv_pairs;
-    struct rb_node *pos, *next = rb_first_cached(&rblist->entries);
+    struct rblist *rblist;
+    struct rb_node *pos, *next;
     struct key_value *kv = NULL;
     void *value = NULL;
+
+    if (!pairs)
+        return ;
+
+    rblist = &pairs->kv_pairs;
+    next = rb_first_cached(&rblist->entries);
 
     while (next) {
         pos = next;
         next = rb_next(pos);
         kv = container_of(pos, struct key_value, rbnode);
-        value = pairs->value_size ? (void *)&kv->key.ips[kv->key.nr] : NULL;
+        value = pairs->value_size ? (void *)kv - pairs->value_size : NULL;
         f(opaque, &kv->key, value, kv->n);
     }
 }
