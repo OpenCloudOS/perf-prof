@@ -393,23 +393,6 @@ static void top_interval(void)
     int printed;
     int i;
 
-    if (rblist__empty(&ctx.pid_list))
-        return;
-
-    rblist__init(&sorted);
-    sorted.node_cmp = top_info_sorted_node_cmp;
-    sorted.node_new = top_info_sorted_node_new;
-    sorted.node_delete = ctx.pid_list.node_delete;
-    ctx.pid_list.node_delete = top_info_node_delete_empty; //empty, not really delete
-
-    /* sort, remove from `ctx.pid_list', add to `sorted'. */
-    do {
-        rbn = rblist__entry(&ctx.pid_list, 0);
-        t = container_of(rbn, struct top_info, rbnode);
-        rblist__remove_node(&ctx.pid_list, rbn);
-        rblist__add_node(&sorted, t);
-    } while (!rblist__empty(&ctx.pid_list));
-
     if (!ctx.tty)
         print_time(stdout);
     else {
@@ -428,6 +411,24 @@ static void top_interval(void)
     printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
 
     if (ctx.tty) printf("\033[0m");
+
+    //pid_list is empty still print header
+    if (rblist__empty(&ctx.pid_list))
+        return;
+
+    rblist__init(&sorted);
+    sorted.node_cmp = top_info_sorted_node_cmp;
+    sorted.node_new = top_info_sorted_node_new;
+    sorted.node_delete = ctx.pid_list.node_delete;
+    ctx.pid_list.node_delete = top_info_node_delete_empty; //empty, not really delete
+
+    /* sort, remove from `ctx.pid_list', add to `sorted'. */
+    do {
+        rbn = rblist__entry(&ctx.pid_list, 0);
+        t = container_of(rbn, struct top_info, rbnode);
+        rblist__remove_node(&ctx.pid_list, rbn);
+        rblist__add_node(&sorted, t);
+    } while (!rblist__empty(&ctx.pid_list));
 
     do {
         rbn = rblist__entry(&sorted, 0);
