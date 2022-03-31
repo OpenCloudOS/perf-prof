@@ -272,6 +272,12 @@ struct tp_list *tp_list_new(char *event)
                         goto err_out;
                     }
                     tp->mem_size = value;
+                } else if (strcmp(attr, "delay") == 0) {
+                    if (!tep_find_any_field(event, value)) {
+                        fprintf(stderr, "Attr delay: cannot find %s field at %s:%s\n", value, sys, name);
+                        goto err_out;
+                    }
+                    tp->delay = value;
                 }
             }
         }
@@ -299,6 +305,7 @@ struct tp_list *tp_list_new(char *event)
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;
         tp_list->nr_mem_size += !!tp->mem_size;
+        tp_list->nr_delay += !!tp->delay;
     }
 
     tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);

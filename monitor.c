@@ -143,7 +143,8 @@ static const struct argp_option opts[] = {
                                     "    top-by=field: add to top, sort by this field\n"
                                     "    top-add=field: add to top\n"
                                     "    ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
-                                    "    size=field: kmemleak, size field, Dflt: size=bytes_alloc"
+                                    "    size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
+                                    "    delay=field: mpdelay, delay field"
                                     },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },

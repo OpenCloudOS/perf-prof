@@ -35,6 +35,8 @@ struct tp {
     const char *mem_ptr;
     const char *mem_size;
 
+    // mpdelay profiler
+    const char *delay;
 };
 
 struct tp_list {
@@ -43,6 +45,7 @@ struct tp_list {
     bool need_stream_id;
     int nr_top;
     int nr_mem_size;
+    int nr_delay;
     struct tp tp[0];
 };
 
