@@ -139,9 +139,9 @@ void monitor_tep__comm(union perf_event *event, int instance)
 }
 
 
-struct tp_list *tp_list_new(char *event)
+struct tp_list *tp_list_new(char *event_str)
 {
-    char *s = event;
+    char *s = event_str;
     char *sep;
     int i;
     int nr_tp = 0;
@@ -165,7 +165,7 @@ struct tp_list *tp_list_new(char *event)
         return NULL;
 
     tp_list->nr_tp = nr_tp;
-    s = event;
+    s = event_str;
     i = 0;
     while ((sep = strchr(s, ',')) != NULL) {
         tp_list->tp[i++].name = s;

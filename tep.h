@@ -49,7 +49,7 @@ struct tp_list {
     struct tp tp[0];
 };
 
-struct tp_list *tp_list_new(char *event);
+struct tp_list *tp_list_new(char *event_str);
 void tp_list_free(struct tp_list *tp_list);
 
 
