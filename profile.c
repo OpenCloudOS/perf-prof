@@ -7,6 +7,8 @@
 #include "stack_helpers.h"
 
 struct monitor profile;
+static profiler hrtimer;
+
 struct monitor_ctx {
     int nr_cpus;
     uint64_t *counter;
@@ -58,7 +60,7 @@ static int monitor_ctx_init(struct env *env)
             }
         }
     }
-    ctx.in_guest = in_guest();
+    ctx.in_guest = (current_monitor() == &hrtimer) || in_guest();
     ctx.tsc_khz = ctx.in_guest ? 0 : get_tsc_khz();
     ctx.vendor = get_cpu_vendor();
     ctx.env = env;
@@ -236,7 +238,7 @@ struct monitor profile = {
     .deinit = profile_exit,
     .sample = profile_sample,
 };
-MONITOR_REGISTER(profile);
+PROFILER_REGISTER(profile);
 
 static int cpu_util_init(struct perf_evlist *evlist, struct env *env)
 {
@@ -249,7 +251,7 @@ static int cpu_util_init(struct perf_evlist *evlist, struct env *env)
     return profile_init(evlist, env);
 }
 
-static void cpu_util_sample(union perf_event *event, int instance)
+static void empty_sample(union perf_event *event, int instance)
 {
 }
 
@@ -259,7 +261,18 @@ struct monitor cpu_util = {
     .init = cpu_util_init,
     .deinit = profile_exit,
     .read   = profile_read,
-    .sample = cpu_util_sample,
+    .sample = empty_sample,
 };
-MONITOR_REGISTER(cpu_util)
+PROFILER_REGISTER(cpu_util);
+
+// hidden profiler
+static profiler hrtimer = {
+    .name = "hrtimer",
+    .pages = 0,
+    .init = profile_init,
+    .deinit = profile_exit,
+    .read   = profile_read,
+    .sample = empty_sample,
+};
+PROFILER_REGISTER(hrtimer);
 

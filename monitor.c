@@ -64,6 +64,11 @@ int monitor_instance_oncpu(void)
     return !perf_cpu_map__empty(monitor->cpus);
 }
 
+struct monitor *current_monitor(void)
+{
+    return monitor;
+}
+
 /******************************************************
 perf-monitor argc argv
 ******************************************************/
