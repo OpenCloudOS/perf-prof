@@ -28,6 +28,7 @@ struct mpdelay_stat {
 struct monitor_ctx {
     int nr_ins;
     int nr_points;
+    int nr_delay;
     struct tp_list *tp_list;
     struct mpdelay_stat *perins_stat;
     struct mpdelay_stat *tolins_stat;
@@ -40,14 +41,19 @@ struct monitor_ctx {
 } ctx;
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct sample_type_header {
+    struct {
+        __u32    pid;
+        __u32    tid;
+    }    tid_entry;
     __u64   time;
     __u64   stream_id;
     struct {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
+    __u64		period;
 };
 struct sample_type_callchain {
     struct sample_type_header h;
@@ -75,7 +81,7 @@ static void perins_stat_reset(void)
         mp_stat = (void *)ctx.perins_stat + i * ctx.ins_size;
         mp_stat->time = 0;
         mp_stat->common_type = 0;
-        for (j = 0; j < ctx.nr_points-1; j++) {
+        for (j = 0; j < ctx.nr_points; j++) {
             stat = &mp_stat->stat[j];
             stat->min = ~0UL;
             stat->max = 0UL;
@@ -97,13 +103,24 @@ static int monitor_ctx_init(struct env *env)
     ctx.nr_ins = monitor_nr_instance();
 
     ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list || ctx.tp_list->nr_tp <= 1) {
+    if (!ctx.tp_list) {
+        return -1;
+    }
+    if (ctx.tp_list->nr_delay == 0 && ctx.tp_list->nr_tp <= 1) {
+        fprintf(stderr, "event <= 1\n");
         tp_list_free(ctx.tp_list);
         return -1;
     }
-    ctx.nr_points = ctx.tp_list->nr_tp;
+    if (ctx.tp_list->nr_delay && ctx.tp_list->nr_tp != ctx.tp_list->nr_delay) {
+        fprintf(stderr, "The number of delay attr is not equal to the number of event\n");
+        tp_list_free(ctx.tp_list);
+        return -1;
+    }
 
-    ctx.ins_size = offsetof(struct mpdelay_stat, stat[ctx.nr_points-1]);
+    ctx.nr_points = ctx.tp_list->nr_tp;
+    ctx.nr_delay = ctx.tp_list->nr_delay;
+
+    ctx.ins_size = offsetof(struct mpdelay_stat, stat[ctx.nr_points]);
     ctx.perins_stat = zalloc((ctx.nr_ins+1) * ctx.ins_size);
     if (!ctx.perins_stat)
         return -1;
@@ -113,9 +130,8 @@ static int monitor_ctx_init(struct env *env)
     for (i = 0; i < ctx.nr_points; i++) {
         struct tp *tp = &ctx.tp_list->tp[i];
 
-        tp->name[-1] = ':';
-        if (strlen(tp->sys) > ctx.max_len)
-            ctx.max_len = strlen(tp->sys);
+        if (strlen(tp->name) > ctx.max_len)
+            ctx.max_len = strlen(tp->name);
         stacks += tp->stack;
 
         if (env->verbose)
@@ -131,14 +147,18 @@ static int monitor_ctx_init(struct env *env)
     if (env->heatmap) {
         char buff[1024];
         struct tp *tp1, *tp2;
+        int bit = ctx.nr_delay ? 0 : 1;
 
-        ctx.heatmaps = malloc((ctx.nr_points-1) * sizeof(*ctx.heatmaps));
+        ctx.heatmaps = calloc(ctx.nr_points, sizeof(*ctx.heatmaps));
         if (!ctx.heatmaps)
             return -1;
-        for (i = 0; i < ctx.nr_points-1; i++) {
-            tp1 = &ctx.tp_list->tp[i];
-            tp2 = &ctx.tp_list->tp[i+1];
-            snprintf(buff, sizeof(buff), "%s-%s-%s", env->heatmap, tp1->name, tp2->name);
+        for (i = bit; i < ctx.nr_points; i++) {
+            tp1 = &ctx.tp_list->tp[i-bit];
+            tp2 = &ctx.tp_list->tp[i];
+            if (!ctx.nr_delay)
+                snprintf(buff, sizeof(buff), "%s-%s-%s", env->heatmap, tp1->name, tp2->name);
+            else
+                snprintf(buff, sizeof(buff), "%s-%s", env->heatmap, tp1->name);
             ctx.heatmaps[i] = heatmap_open("ns", "ns", buff);
         }
     }
@@ -153,7 +173,7 @@ static void monitor_ctx_exit(void)
     callchain_ctx_free(ctx.cc);
     if (ctx.env->heatmap) {
         int i;
-        for (i = 0; i < ctx.nr_points-1; i++)
+        for (i = 0; i < ctx.nr_points; i++)
             heatmap_close(ctx.heatmaps[i]);
         free(ctx.heatmaps);
     }
@@ -167,7 +187,7 @@ static int mpdelay_init(struct perf_evlist *evlist, struct env *env)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
@@ -225,11 +245,12 @@ static void __print_instance(int i, int oncpu)
     struct delay_stat *stat;
     struct tp *tp1, *tp2;
     int j;
+    int bit = ctx.nr_delay ? 0 : 1;
 
     mp_stat = (void *)ctx.perins_stat + i * ctx.ins_size;
-    for (j = 0; j < ctx.nr_points-1; j++) {
-        tp1 = &ctx.tp_list->tp[j];
-        tp2 = &ctx.tp_list->tp[j+1];
+    for (j = bit; j < ctx.nr_points; j++) {
+        tp1 = &ctx.tp_list->tp[j-bit];
+        tp2 = &ctx.tp_list->tp[j];
         stat = &mp_stat->stat[j];
 
         if (stat->n) {
@@ -239,7 +260,10 @@ static void __print_instance(int i, int oncpu)
                 else
                     printf("%-8d ", monitor_instance_thread(i));
             }
-            printf("%*s => %-*s %8llu %16.3f %9.3f %9.3f %12.3f\n", ctx.max_len, tp1->sys, ctx.max_len, tp2->sys,
+            printf("%*s", ctx.max_len, tp1->name);
+            if (!ctx.nr_delay)
+                printf(" => %-*s", ctx.max_len, tp2->name);
+            printf(" %8llu %16.3f %9.3f %9.3f %12.3f\n",
                 stat->n, stat->sum/1000.0, stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0);
         }
     }
@@ -252,15 +276,22 @@ static void mpdelay_interval(void)
 
     print_time(stdout);
     printf("\n");
+
     if (ctx.env->perins)
         printf(oncpu ? "[CPU] " : "[THREAD] ");
-    printf("%*s => %-*s %8s %16s %9s %9s %12s\n", ctx.max_len, "start", ctx.max_len, "end",
-                    "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+    if (ctx.nr_delay)
+        printf("%-*s", ctx.max_len, "event");
+    else
+        printf("%*s => %-*s", ctx.max_len, "start", ctx.max_len, "end");
+    printf(" %8s %16s %9s %9s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+
     if (ctx.env->perins)
         printf(oncpu ? "----- " : "-------- ");
     for (i=0; i<ctx.max_len; i++) printf("-");
-    printf("    ");
-    for (i=0; i<ctx.max_len; i++) printf("-");
+    if (!ctx.nr_delay) {
+        printf("    ");
+        for (i=0; i<ctx.max_len; i++) printf("-");
+    }
     printf(" %8s %16s %9s %9s %12s\n",
                     "--------", "----------------", "---------", "---------", "------------");
 
@@ -324,6 +355,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
     int i;
     void *raw;
     int size;
+    __u64 delta;
 
     evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
     if (!evsel)
@@ -340,51 +372,81 @@ static void mpdelay_sample(union perf_event *event, int instance)
 
     if (ctx.env->verbose) {
         print_time(stdout);
+        tep__update_comm(NULL, hdr->tid_entry.tid);
         tep__print_event(hdr->time/1000, hdr->cpu_entry.cpu, raw, size);
     }
 
     mp_stat = (void *)ctx.perins_stat + instance * ctx.ins_size;
-    if (i == 0 ||
-        mp_stat->time == 0) {
-        goto __return;
-    }
+    stat = &mp_stat->stat[i];
 
-    stat = &mp_stat->stat[i-1];
-    tp_prev = &ctx.tp_list->tp[i-1];
-    if (mp_stat->common_type == tp_prev->id &&
-        hdr->time > mp_stat->time) {
-        __u64 delta = hdr->time - mp_stat->time;
-        if (delta < stat->min)
-            stat->min = delta;
-        if (delta > stat->max)
-            stat->max = delta;
-        stat->n ++;
-        stat->sum += delta;
+    if (ctx.nr_delay) {
+        struct tep_record record;
+        struct tep_handle *tep = tep__ref();
+        struct trace_seq s;
+        struct tep_event *e;
+        trace_seq_init(&s);
+        memset(&record, 0, sizeof(record));
+        record.ts = hdr->time/1000;
+        record.cpu = hdr->cpu_entry.cpu;
+        record.size = size;
+        record.data = raw;
 
-        stat = &ctx.tolins_stat->stat[i-1];
-        if (delta < stat->min)
-            stat->min = delta;
-        if (delta > stat->max)
-            stat->max = delta;
-        stat->n ++;
-        stat->sum += delta;
-
-        if (ctx.env->heatmap)
-            heatmap_write(ctx.heatmaps[i-1], mp_stat->time, delta);
-
-        if (ctx.env->greater_than &&
-            delta > ctx.env->greater_than) {
-            print_time(stdout);
-            printf("%.6f ", mp_stat->time/1000/1000000.0);
-            tep__print_event(hdr->time/1000, hdr->cpu_entry.cpu, raw, size);
-            __print_callchain(event, i);
+        e = tep_find_event_by_record(tep, &record);
+        if (tep_get_field_val(&s, e, ctx.tp_list->tp[i].delay, &record, &delta, 1) < 0) {
+            trace_seq_putc(&s, '\n');
+            trace_seq_do_fprintf(&s, stderr);
+            tep__unref();
+            goto __return;
         }
+        tep__unref();
     } else {
-        if (mp_stat->common_type != tp_prev->id ||
-            hdr->time <= mp_stat->time) {
-            //TODO
+        if (i == 0 ||
+            mp_stat->time == 0) {
+            goto __return;
+        }
+
+        tp_prev = &ctx.tp_list->tp[i-1];
+        if (mp_stat->common_type == tp_prev->id &&
+            hdr->time > mp_stat->time) {
+            delta = hdr->time - mp_stat->time;
+        } else {
+            if (mp_stat->common_type != tp_prev->id ||
+                hdr->time <= mp_stat->time) {
+                //TODO
+                goto __return;
+            }
         }
     }
+
+
+    if (delta < stat->min)
+        stat->min = delta;
+    if (delta > stat->max)
+        stat->max = delta;
+    stat->n ++;
+    stat->sum += delta;
+
+    stat = &ctx.tolins_stat->stat[i];
+    if (delta < stat->min)
+        stat->min = delta;
+    if (delta > stat->max)
+        stat->max = delta;
+    stat->n ++;
+    stat->sum += delta;
+
+    if (ctx.env->heatmap)
+        heatmap_write(ctx.heatmaps[i], hdr->time, delta);
+
+    if (ctx.env->greater_than &&
+        delta > ctx.env->greater_than) {
+        print_time(stdout);
+        if (!ctx.nr_delay)
+            printf("%.6f ", mp_stat->time/1000/1000000.0);
+        tep__update_comm(NULL, hdr->tid_entry.tid);
+        tep__print_event(hdr->time/1000, hdr->cpu_entry.cpu, raw, size);
+        __print_callchain(event, i);
+    }
+
 __return:
     mp_stat->time = hdr->time;
     mp_stat->common_type = common_type;
