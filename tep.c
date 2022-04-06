@@ -278,6 +278,12 @@ struct tp_list *tp_list_new(char *event_str)
                         goto err_out;
                     }
                     tp->delay = value;
+                } else if (strcmp(attr, "key") == 0) {
+                    if (!tep_find_any_field(event, value)) {
+                        fprintf(stderr, "Attr key: cannot find %s field at %s:%s\n", value, sys, name);
+                        goto err_out;
+                    }
+                    tp->key = value;
                 }
             }
         }
