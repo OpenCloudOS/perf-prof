@@ -3,7 +3,6 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <monitor.h>
 #include <linux/zalloc.h>
 #include <linux/strlist.h>
 #include <monitor.h>
@@ -22,7 +21,6 @@ struct delay_stat {
 struct mpdelay_stat {
     u64  time;
     unsigned short common_type;
-    int i;
     struct delay_stat stat[0];
 };
 struct monitor_ctx {
@@ -382,9 +380,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
     if (ctx.nr_delay) {
         struct tep_record record;
         struct tep_handle *tep = tep__ref();
-        struct trace_seq s;
         struct tep_event *e;
-        trace_seq_init(&s);
         memset(&record, 0, sizeof(record));
         record.ts = hdr->time/1000;
         record.cpu = hdr->cpu_entry.cpu;
@@ -392,9 +388,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
         record.data = raw;
 
         e = tep_find_event_by_record(tep, &record);
-        if (tep_get_field_val(&s, e, ctx.tp_list->tp[i].delay, &record, &delta, 1) < 0) {
-            trace_seq_putc(&s, '\n');
-            trace_seq_do_fprintf(&s, stderr);
+        if (tep_get_field_val(NULL, e, ctx.tp_list->tp[i].delay, &record, &delta, 0) < 0) {
             tep__unref();
             goto __return;
         }
