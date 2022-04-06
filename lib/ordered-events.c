@@ -14,60 +14,37 @@
 
 #define pr(fmt, ...) pr_N(1, pr_fmt(fmt), ##__VA_ARGS__)
 
+static bool __always_inline less(struct rb_node *rb1, const struct rb_node *rb2)
+{
+	struct ordered_event *o1 = rb_entry(rb1, struct ordered_event, rbnode);
+	struct ordered_event *o2 = rb_entry(rb2, struct ordered_event, rbnode);
+	return o1->timestamp < o2->timestamp;
+}
+
 static void queue_event(struct ordered_events *oe, struct ordered_event *new)
 {
-	struct ordered_event *last = oe->last;
 	u64 timestamp = new->timestamp;
-	struct list_head *p;
 
 	++oe->nr_events;
-	oe->last = new;
 
-	if (!last) {
-		list_add(&new->list, &oe->events);
+	if (new->timestamp > oe->max_timestamp) {
+		oe->last = new;
 		oe->max_timestamp = timestamp;
-		return;
 	}
 
-	/*
-	 * last event might point to some random place in the list as it's
-	 * the last queued event. We expect that the new event is close to
-	 * this.
-	 */
-	if (last->timestamp <= timestamp) {
-		while (last->timestamp <= timestamp) {
-			p = last->list.next;
-			if (p == &oe->events) {
-				list_add_tail(&new->list, &oe->events);
-				oe->max_timestamp = timestamp;
-				return;
-			}
-			last = list_entry(p, struct ordered_event, list);
-		}
-		list_add_tail(&new->list, &last->list);
-	} else {
-		while (last->timestamp > timestamp) {
-			p = last->list.prev;
-			if (p == &oe->events) {
-				list_add(&new->list, &oe->events);
-				return;
-			}
-			last = list_entry(p, struct ordered_event, list);
-		}
-		list_add(&new->list, &last->list);
-	}
+	rb_add_cached(&new->rbnode, &oe->events, less);
 }
 
 static inline void update_alloc_size(struct ordered_events *oe, struct ordered_event *event, bool free)
 {
-    if (!oe->copy_on_queue)
-        return;
+	if (!oe->copy_on_queue)
+		return;
 
-    if (!free) {
-        event->size = event->event->header.size;
-        oe->cur_alloc_size += event->size;
-    } else
-        oe->cur_alloc_size -= event->size;
+	if (!free) {
+		event->size = event->event->header.size;
+		oe->cur_alloc_size += event->size;
+	} else
+		oe->cur_alloc_size -= event->size;
 }
 
 static union perf_event *__dup_event(struct ordered_events *oe,
@@ -171,6 +148,7 @@ static struct ordered_event *alloc_event(struct ordered_events *oe,
 	}
 
 	new->event = new_event;
+	RB_CLEAR_NODE(&new->rbnode);
 	update_alloc_size(oe, new, false);
 	return new;
 }
@@ -192,7 +170,8 @@ ordered_events__new_event(struct ordered_events *oe, u64 timestamp,
 
 void ordered_events__delete(struct ordered_events *oe, struct ordered_event *event)
 {
-	list_move(&event->list, &oe->cache);
+	rb_erase_cached(&event->rbnode, &oe->events);
+	list_add(&event->list, &oe->cache);
 	oe->nr_events--;
 	update_alloc_size(oe, event, true);
 	free_dup_event(oe, event->event);
@@ -226,16 +205,19 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 
 static int do_flush(struct ordered_events *oe)
 {
-	struct list_head *head = &oe->events;
-	struct ordered_event *tmp, *iter;
+	struct rb_node *pos, *next = rb_first_cached(&oe->events);
+	struct ordered_event *iter;
 	u64 limit = oe->next_flush;
-	u64 last_ts = oe->last ? oe->last->timestamp : 0ULL;
 	int ret;
 
 	if (!limit)
 		return 0;
 
-	list_for_each_entry_safe(iter, tmp, head, list) {
+	while (next) {
+		pos = next;
+		next = rb_next(pos);
+
+		iter = rb_entry(pos, struct ordered_event, rbnode);
 		if (iter->timestamp > limit)
 			break;
 		ret = oe->deliver(oe, iter);
@@ -246,10 +228,8 @@ static int do_flush(struct ordered_events *oe)
 		oe->last_flush = iter->timestamp;
 	}
 
-	if (list_empty(head))
+	if (RB_EMPTY_ROOT(&oe->events.rb_root))
 		oe->last = NULL;
-	else if (last_ts <= limit)
-		oe->last = list_entry(head->prev, struct ordered_event, list);
 
 	return 0;
 }
@@ -271,13 +251,13 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 	case OE_FLUSH__HALF:
 	{
 		struct ordered_event *first, *last;
-		struct list_head *head = &oe->events;
+		struct rb_node *pos = rb_first_cached(&oe->events);
 
-		first = list_entry(head->next, struct ordered_event, list);
+		first = rb_entry_safe(pos, struct ordered_event, rbnode);
 		last = oe->last;
 
 		/* Warn if we are called before any event got allocated. */
-		if (WARN_ONCE(!last || list_empty(head), "empty queue"))
+		if (WARN_ONCE(!last || !first, "empty queue"))
 			return 0;
 
 		oe->next_flush  = first->timestamp;
@@ -319,19 +299,17 @@ int ordered_events__flush_time(struct ordered_events *oe, u64 timestamp)
 
 u64 ordered_events__first_time(struct ordered_events *oe)
 {
-	struct ordered_event *event;
+	struct rb_node *pos = rb_first_cached(&oe->events);
+	struct ordered_event *event = rb_entry_safe(pos, struct ordered_event, rbnode);
 
-	if (list_empty(&oe->events))
-		return 0;
-
-	event = list_first_entry(&oe->events, struct ordered_event, list);
-	return event->timestamp;
+	return event ? event->timestamp : 0;
 }
 
 void ordered_events__init(struct ordered_events *oe, ordered_events__deliver_t deliver,
 			  void *data)
 {
-	INIT_LIST_HEAD(&oe->events);
+	oe->max_timestamp = 0;
+	oe->events = RB_ROOT_CACHED;
 	INIT_LIST_HEAD(&oe->cache);
 	INIT_LIST_HEAD(&oe->to_free);
 	oe->max_alloc_size = (u64) -1;

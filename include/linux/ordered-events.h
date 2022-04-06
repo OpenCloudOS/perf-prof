@@ -3,13 +3,17 @@
 #define __ORDERED_EVENTS_H
 
 #include <linux/types.h>
+#include <linux/rbtree.h>
 
 struct ordered_event {
 	u64			timestamp;
 	int			instance;
 	int			size;
 	union perf_event	*event;
-	struct list_head	list;
+	union {
+		struct list_head	list;
+		struct rb_node	rbnode;
+	};
 };
 
 enum oe_flush {
@@ -37,7 +41,7 @@ struct ordered_events {
 	u64				 max_timestamp;
 	u64				 max_alloc_size;
 	u64				 cur_alloc_size;
-	struct list_head		 events;
+	struct rb_root_cached		 events;
 	struct list_head		 cache;
 	struct list_head		 to_free;
 	struct ordered_events_buffer	*buffer;
