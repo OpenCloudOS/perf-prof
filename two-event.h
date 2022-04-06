@@ -14,6 +14,7 @@ enum keytype {
 struct two_event_options {
     enum keytype keytype;
     bool perins;
+    unsigned long greater_than;
 };
 
 struct two_event {
