@@ -98,6 +98,7 @@ typedef struct monitor {
     const char *name;
     int pages;
     int reinit;
+    bool dup; //dup event
     struct perf_cpu_map *cpus;
     struct perf_thread_map *threads;
 
