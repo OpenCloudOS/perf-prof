@@ -73,6 +73,7 @@ static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node 
 static int monitor_ctx_init(struct env *env)
 {
     int i, j, stacks = 0;
+    struct tep_handle *tep;
     struct two_event_options options = {
         .keytype = monitor_instance_oncpu() ? K_CPU : K_THREAD,
         .perins = env->perins,
@@ -81,7 +82,7 @@ static int monitor_ctx_init(struct env *env)
     if (env->nr_events < 2)
         return -1;
 
-    tep__ref();
+    tep = tep__ref();
 
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_list = env->nr_events;
@@ -99,6 +100,13 @@ static int monitor_ctx_init(struct env *env)
             struct tp *tp = &ctx.tp_list[i]->tp[j];
             if (env->verbose)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
+            if (env->key) {
+                struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
+                if (!tep_find_any_field(event, env->key)) {
+                    fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
+                    return -1;
+                }
+            }
         }
     }
 
@@ -107,6 +115,10 @@ static int monitor_ctx_init(struct env *env)
         multi_trace.pages *= 2;
     } else
         ctx.cc = NULL;
+
+    if (env->key) {
+        options.keytype = K_CUSTOM;
+    }
 
     ctx.impl = impl_get(TWO_EVENT_DELAY_ANALYSIS);
     ctx.class = ctx.impl->class_new(ctx.impl, &options);
@@ -299,6 +311,26 @@ found:
 
     //get key
     key = monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance);
+    if (ctx.env->key) {
+        struct tep_record record;
+        struct tep_handle *tep = tep__ref();
+        struct tep_event *e;
+        void *raw;
+        int size;
+        __raw_size(event, &raw, &size, tp);
+        memset(&record, 0, sizeof(record));
+        record.ts = hdr->time/1000;
+        record.cpu = hdr->cpu_entry.cpu;
+        record.size = size;
+        record.data = raw;
+
+        e = tep_find_event_by_record(tep, &record);
+        if (tep_get_field_val(NULL, e, ctx.env->key, &record, &key, 0) < 0) {
+            tep__unref();
+            return;
+        }
+        tep__unref();
+    }
 
     // find prev event
     if (i != 0) {
