@@ -65,6 +65,7 @@ struct env {
     char **events;
     int nr_events;
     char *filter;
+    char *key;
     bool interruptible;
     bool uninterruptible;
     unsigned long greater_than; // unit: ns, percent
