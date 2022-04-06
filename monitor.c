@@ -152,6 +152,7 @@ static const struct argp_option opts[] = {
                                     "    delay=field: mpdelay, delay field"
                                     },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
+    { "key", 'k', "str", 0, "Key for series events" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
@@ -314,6 +315,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_filter:
         env.filter = strdup(arg);
+        break;
+    case 'k':
+        env.key = strdup(arg);
         break;
     case 'S':
         env.interruptible = 1;
