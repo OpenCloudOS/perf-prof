@@ -78,6 +78,7 @@ static int monitor_ctx_init(struct env *env)
         .keytype = monitor_instance_oncpu() ? K_CPU : K_THREAD,
         .perins = env->perins,
         .greater_than = env->greater_than,
+        .heatmap = env->heatmap,
     };
 
     if (env->nr_events < 2)

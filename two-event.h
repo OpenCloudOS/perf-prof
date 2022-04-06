@@ -15,6 +15,7 @@ struct two_event_options {
     enum keytype keytype;
     bool perins;
     unsigned long greater_than;
+    char *heatmap;
 };
 
 struct two_event {
