@@ -37,6 +37,9 @@ struct tp {
 
     // mpdelay profiler
     const char *delay;
+
+    //multi-trace profiler
+    const char *key;
 };
 
 struct tp_list {

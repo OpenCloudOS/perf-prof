@@ -100,7 +100,7 @@ static int monitor_ctx_init(struct env *env)
             struct tp *tp = &ctx.tp_list[i]->tp[j];
             if (env->verbose)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
-            if (env->key) {
+            if (env->key && !tp->key) {
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
                 if (!tep_find_any_field(event, env->key)) {
                     fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
@@ -325,7 +325,7 @@ found:
         record.data = raw;
 
         e = tep_find_event_by_record(tep, &record);
-        if (tep_get_field_val(NULL, e, ctx.env->key, &record, &key, 0) < 0) {
+        if (tep_get_field_val(NULL, e, tp->key ?: ctx.env->key, &record, &key, 0) < 0) {
             tep__unref();
             return;
         }

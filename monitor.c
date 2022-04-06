@@ -150,7 +150,8 @@ static const struct argp_option opts[] = {
                                     "    top-add=field: add to top\n"
                                     "    ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
                                     "    size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
-                                    "    delay=field: mpdelay, delay field"
+                                    "    delay=field: mpdelay, delay field\n"
+                                    "    key=field: multi-trace, key for two-event"
                                     },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
     { "key", 'k', "str", 0, "Key for series events" },
