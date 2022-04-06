@@ -172,7 +172,7 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
         multi_trace.dup = true;
     }
 
-    attr.wakeup_watermark = (multi_trace.pages << 12) / 3;
+    reduce_wakeup_times(&multi_trace, &attr);
 
     for (i = 0; i < ctx.nr_list; i++) {
         for (j = 0; j < ctx.tp_list[i]->nr_tp; j++) {
