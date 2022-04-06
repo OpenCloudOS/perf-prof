@@ -77,6 +77,7 @@ static int monitor_ctx_init(struct env *env)
     struct two_event_options options = {
         .keytype = monitor_instance_oncpu() ? K_CPU : K_THREAD,
         .perins = env->perins,
+        .greater_than = env->greater_than,
     };
 
     if (env->nr_events < 2)

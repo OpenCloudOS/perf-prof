@@ -285,6 +285,11 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 stat->max = delta;
             stat->n ++;
             stat->sum += delta;
+
+            if (opts->greater_than && delta > opts->greater_than) {
+                multi_trace_print(event1, two->tp1);
+                multi_trace_print(event2, two->tp2);
+            }
         }
     }
 }
