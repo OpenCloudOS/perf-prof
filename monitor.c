@@ -106,7 +106,7 @@ const char argp_program_doc[] =
 "  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [-i INT] [-C cpu] [--perins]\n"
 "  perf-prof blktrace -d device [-i INT] [--than ns] [-v]\n"
-"  perf-prof multi-trace -e EVENT [-e ...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [-v]\n"
+"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [-v]\n"
 "  perf-prof --symbols /path/to/bin\n"
 ;
 
