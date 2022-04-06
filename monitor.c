@@ -306,7 +306,11 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         env.freq = strtol(arg, NULL, 10);
         break;
     case 'e':
-        env.event = strdup(arg);
+        env.events = realloc(env.events, (env.nr_events + 1) * sizeof(*env.events));
+        env.events[env.nr_events] = strdup(arg);
+        if (env.nr_events == 0)
+            env.event = env.events[0];
+        env.nr_events ++;
         break;
     case LONG_OPT_filter:
         env.filter = strdup(arg);
