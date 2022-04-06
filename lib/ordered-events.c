@@ -58,15 +58,25 @@ static void queue_event(struct ordered_events *oe, struct ordered_event *new)
 	}
 }
 
+static inline void update_alloc_size(struct ordered_events *oe, struct ordered_event *event, bool free)
+{
+    if (!oe->copy_on_queue)
+        return;
+
+    if (!free) {
+        event->size = event->event->header.size;
+        oe->cur_alloc_size += event->size;
+    } else
+        oe->cur_alloc_size -= event->size;
+}
+
 static union perf_event *__dup_event(struct ordered_events *oe,
 				     union perf_event *event)
 {
 	union perf_event *new_event = NULL;
 
-	if (oe->cur_alloc_size < oe->max_alloc_size) {
+	if (oe->cur_alloc_size + event->header.size < oe->max_alloc_size) {
 		new_event = memdup(event, event->header.size);
-		if (new_event)
-			oe->cur_alloc_size += event->header.size;
 	}
 
 	return new_event;
@@ -81,7 +91,6 @@ static union perf_event *dup_event(struct ordered_events *oe,
 static void __free_dup_event(struct ordered_events *oe, union perf_event *event)
 {
 	if (event) {
-		oe->cur_alloc_size -= event->header.size;
 		free(event);
 	}
 }
@@ -162,6 +171,7 @@ static struct ordered_event *alloc_event(struct ordered_events *oe,
 	}
 
 	new->event = new_event;
+	update_alloc_size(oe, new, false);
 	return new;
 }
 
@@ -184,6 +194,7 @@ void ordered_events__delete(struct ordered_events *oe, struct ordered_event *eve
 {
 	list_move(&event->list, &oe->cache);
 	oe->nr_events--;
+	update_alloc_size(oe, event, true);
 	free_dup_event(oe, event->event);
 	event->event = NULL;
 }

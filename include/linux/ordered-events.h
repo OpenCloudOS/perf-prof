@@ -7,6 +7,7 @@
 struct ordered_event {
 	u64			timestamp;
 	int			instance;
+	int			size;
 	union perf_event	*event;
 	struct list_head	list;
 };
