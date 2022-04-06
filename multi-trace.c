@@ -244,7 +244,6 @@ static void multi_trace_interval(void)
             }
         }
     }
-    rblist__exit(&ctx.backup);
 }
 
 static void multi_trace_exit(struct perf_evlist *evlist)
@@ -365,11 +364,27 @@ found:
             .tp = tp,
             .event = event,
         };
-        int err = rblist__add_node(&ctx.backup, &backup);
-        if (err == -EEXIST) {
-            struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
-            rblist__remove_node(&ctx.backup, rbn);
-            rblist__add_node(&ctx.backup, &backup);
+
+        if (multi_trace.dup) {
+            struct rb_node *rbn = rblist__findnew(&ctx.backup, &backup);
+            if (rbn) {
+                struct perf_event_backup *new;
+                new = rb_entry(rbn, struct perf_event_backup, rbnode);
+                if (new->event != event) {
+                    free(new->event);
+                    new->event = event;
+                }
+                new->tp = tp;
+            }
+        } else {
+            int err = rblist__add_node(&ctx.backup, &backup);
+            if (err == -EEXIST) {
+                struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
+                struct perf_event_backup *new = rb_entry(rbn, struct perf_event_backup, rbnode);
+                free(new->event);
+                new->event = memdup(event, event->header.size);
+                new->tp = tp;
+            }
         }
     } else
         goto free_dup_event;
