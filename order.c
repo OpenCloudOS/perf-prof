@@ -33,6 +33,11 @@ static int ordered_events__deliver(struct ordered_events *oe,
 					 struct ordered_event *event)
 {
     ctx.base->sample(event->event, event->instance);
+
+    // The base profiler is responsible for releasing the dup event.
+    if (ctx.base->dup)
+        event->event = NULL;
+
     return 0;
 }
 

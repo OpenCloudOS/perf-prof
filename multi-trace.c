@@ -50,8 +50,8 @@ static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const void *new_entry)
 {
     const struct perf_event_backup *e = new_entry;
-    const union perf_event *event = e->event;
-    union perf_event *new_event = memdup(event, event->header.size);
+    union perf_event *event = e->event;
+    union perf_event *new_event = multi_trace.dup ? event : memdup(event, event->header.size);
     struct perf_event_backup *b = malloc(sizeof(*b));
     if (b && new_event) {
         b->key = e->key;
@@ -167,6 +167,10 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
 
     if (monitor_ctx_init(env) < 0)
         return -1;
+
+    if (using_order(&multi_trace)) {
+        multi_trace.dup = true;
+    }
 
     attr.wakeup_watermark = (multi_trace.pages << 12) / 3;
 
@@ -293,7 +297,7 @@ static void multi_trace_sample(union perf_event *event, int instance)
 
     evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
     if (!evsel)
-        return;
+        goto free_dup_event;
 
     for (i = 0; i < ctx.nr_list; i++) {
         for (j = 0; j < ctx.tp_list[i]->nr_tp; j++) {
@@ -302,6 +306,10 @@ static void multi_trace_sample(union perf_event *event, int instance)
                 goto found;
         }
     }
+
+free_dup_event:
+    if (multi_trace.dup)
+        free(event);
     return;
 
 found:
@@ -328,7 +336,7 @@ found:
         e = tep_find_event_by_record(tep, &record);
         if (tep_get_field_val(NULL, e, tp->key ?: ctx.env->key, &record, &key, 0) < 0) {
             tep__unref();
-            return;
+            goto free_dup_event;
         }
         tep__unref();
     }
@@ -363,7 +371,8 @@ found:
             rblist__remove_node(&ctx.backup, rbn);
             rblist__add_node(&ctx.backup, &backup);
         }
-    }
+    } else
+        goto free_dup_event;
 }
 
 static profiler multi_trace = {
