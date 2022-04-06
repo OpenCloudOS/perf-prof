@@ -62,6 +62,8 @@ struct env {
     char *pids;
     char *tids;
     char *event;
+    char **events;
+    int nr_events;
     char *filter;
     bool interruptible;
     bool uninterruptible;
