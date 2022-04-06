@@ -165,7 +165,7 @@ struct delay {
     struct two_event base;
     struct rblist perins_stat;
     struct delay_stat totins_stat;
-    //heatmap;
+    struct heatmap *heatmap;
 };
 
 struct delay_class {
@@ -228,6 +228,11 @@ static struct two_event *delay_new(struct two_event_class *class, struct tp *tp1
             delay_class->max_len1 = strlen(tp1->name);
         if (strlen(tp2->name) > delay_class->max_len2)
             delay_class->max_len2 = strlen(tp2->name);
+        if (class->opts.heatmap) {
+            char buff[1024];
+            snprintf(buff, sizeof(buff), "%s-%s-%s", class->opts.heatmap, tp1->name, tp2->name);
+            delay->heatmap = heatmap_open("ns", "ns", buff);
+        }
     }
     return two;
 }
@@ -238,6 +243,7 @@ static void delay_delete(struct two_event_class *class, struct two_event *two)
 
     if (two) {
         delay = container_of(two, struct delay, base);
+        heatmap_close(delay->heatmap);
         rblist__exit(&delay->perins_stat);
         two_event_delete(class, two);
     }
@@ -285,6 +291,9 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 stat->max = delta;
             stat->n ++;
             stat->sum += delta;
+
+            if (delay->heatmap)
+                heatmap_write(delay->heatmap, e2->time, delta);
 
             if (opts->greater_than && delta > opts->greater_than) {
                 multi_trace_print(event1, two->tp1);
