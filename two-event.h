@@ -55,5 +55,36 @@ struct two_event_impl {
 
 struct two_event_impl *impl_get(int type);
 
+
+// in linux/perf_event.h
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+struct multi_trace_type_header {
+    struct {
+        __u32    pid;
+        __u32    tid;
+    }    tid_entry;
+    __u64   time;
+    __u64   stream_id;
+    struct {
+        __u32    cpu;
+        __u32    reserved;
+    }    cpu_entry;
+    __u64		period;
+};
+struct multi_trace_type_callchain {
+    struct multi_trace_type_header h;
+    struct callchain callchain;
+};
+struct multi_trace_type_raw {
+    struct multi_trace_type_header h;
+    struct {
+        __u32   size;
+        __u8    data[0];
+    } raw;
+};
+
+void multi_trace_print(union perf_event *event, struct tp *tp);
+
+
 #endif
 
