@@ -70,7 +70,7 @@ struct monitor *current_monitor(void)
 }
 
 /******************************************************
-perf-monitor argc argv
+perf-prof argc argv
 ******************************************************/
 
 struct env env = {
@@ -83,31 +83,50 @@ struct env env = {
 
 static volatile bool exiting;
 
-const char *argp_program_version = "perf-prof 0.3";
+
+#define PROGRAME "perf-prof"
+
+const char *argp_program_version = PROGRAME " 0.4";
 const char *argp_program_bug_address = "<corcpp@foxmail.com>";
+const char argp_program_args_doc[] =
+    "profiler [PROFILER OPTION...]\n"
+    "--symbols /path/to/bin";
 const char argp_program_doc[] =
-"Profiling based on perf_event\n"
+"\nProfiling based on perf_event\n\n"
+"Available Profilers:\n"
+"  perf-prof split-lock [-T trigger] [-G] [--test]\n"
+"  perf-prof irq-off [-L lat] [-g] [--precise]\n"
+"  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--exclude-*] [-G] [--than PCT]\n"
+"  perf-prof cpu-util [--exclude-*] [-G]\n"
+"  perf-prof trace -e EVENT[...] [-g [--flame-graph file [-i INT]]]\n"
+"  perf-prof signal [--filter comm] [-g]\n"
+"  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]\n"
+"  perf-prof watchdog [-F freq] [-g]\n"
+"  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof percpu-stat [--syscalls]\n"
+"  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file]\n"
+"  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
+"  perf-prof llcstat\n"
+"  perf-prof sched-migrate [-d] [--filter filter] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
+"  perf-prof stat -e EVENT[...] [--perins]\n"
+"  perf-prof blktrace -d device [--than ns]\n"
+"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--than ns] [--perins] [--heatmap file]\n"
 "\n"
-"USAGE:\n"
-"  perf-prof split-lock [-T trigger] [-C cpu] [-G] [-i INT] [--test]\n"
-"  perf-prof irq-off [-L lat] [-C cpu] [-g] [-m pages] [--precise]\n"
-"  perf-prof profile [-F freq] [-C cpu] [-g [--flame-graph file [-i INT]]] [-m pages] [--exclude-*] [-G] [--than PCT]\n"
-"  perf-prof cpu-util [-i INT] [-C cpu] [--exclude-*] [-G]\n"
-"  perf-prof trace -e EVENT[...] [-C cpu] [-g [--flame-graph file [-i INT]]]\n"
-"  perf-prof signal [--filter comm] [-C cpu] [-g] [-m pages]\n"
-"  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-C cpu] [-g [--flame-graph file]] [-m pages]\n"
-"  perf-prof watchdog [-F freq] [-g] [-m pages] [-C cpu] [-v]\n"
-"  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-p PID] [-m pages] [-g [--flame-graph file]] [-v]\n"
-"  perf-prof percpu-stat [-i INT] [-C cpu] [--syscalls]\n"
-"  perf-prof kvm-exit [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than ns] [--heatmap file]\n"
-"  perf-prof mpdelay -e EVENT[...] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--than ns] [--heatmap file]\n"
-"  perf-prof llcstat [-C cpu] [-i INT]\n"
-"  perf-prof sched-migrate [-d] [--filter filter] [-C cpu] [-i INT] [-g [--flame-graph file]] [-v]\n"
-"  perf-prof top -e EVENT[...] [-C cpu] [-i INT] [-v]\n"
-"  perf-prof stat -e EVENT[...] [-i INT] [-C cpu] [--perins]\n"
-"  perf-prof blktrace -d device [-i INT] [--than ns] [-v]\n"
-"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--than ns] [-C cpu] [-p PID] [-t TID] [-i INT] [--perins] [--heatmap file]\n"
-"  perf-prof --symbols /path/to/bin\n"
+"Event selector. use 'perf list tracepoint' to list available tp events.\n"
+"  EVENT,EVENT,...\n"
+"  EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
+"  filter: ftrace filter\n"
+"  ATTR:\n"
+"      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
+"      max-stack=int : sample_max_stack\n"
+"      alias=str: event alias\n"
+"      top-by=field: add to top, sort by this field\n"
+"      top-add=field: add to top\n"
+"      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
+"      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
+"      delay=field: mpdelay, delay field\n"
+"      key=field: multi-trace, key for two-event\n"
 ;
 
 enum {
@@ -130,30 +149,24 @@ enum {
     LONG_OPT_detail,
 };
 static const struct argp_option opts[] = {
-    { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
-    { "cpu", 'C', "CPU", 0, "Monitor the specified CPU, Dflt: all cpu" },
-    { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
+    { NULL, 0, NULL, 0, "OPTION:" },
+    { "cpu", 'C', "CPU[-CPU],...", 0, "Monitor the specified CPU, Dflt: all cpu" },
+    { "pids", 'p', "PID,...", 0, "Attach to processes" },
+    { "tids", 't', "TID,...", 0, "Attach to thread" },
     { "interval", 'i', "ms", 0, "Interval, Unit: ms" },
-    { "pids", 'p', "PID,PID", 0, "Attach to processes" },
-    { "tids", 't', "TID,TID", 0, "Attach to thread" },
+    { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
+    { "order-mem", LONG_OPT_order_mem, "Bytes", 0, "Maximum memory used by ordering events. Unit: GB/MB/KB/*B." },
+    { "mmap-pages", 'm', "pages", 0, "Number of mmap data pages and AUX area tracing mmap pages" },
+    { "verbose", 'v', NULL, 0, "Verbose debug output" },
+
+    { NULL, 0, NULL, 0, "PROFILER OPTION:" },
+    { "event", 'e', "EVENT,...", 0, "Event selector" },
+    { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
+    { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, Unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
-    { "event", 'e', "EVENT,...", 0, "Event selector. use 'perf list tracepoint' to list available tp events.\n"
-                                    "EVENT,EVENT,...\n"
-                                    "EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
-                                    "ATTR:\n"
-                                    "    stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
-                                    "    max-stack=int : sample_max_stack\n"
-                                    "    alias=str: event alias\n"
-                                    "    top-by=field: add to top, sort by this field\n"
-                                    "    top-add=field: add to top\n"
-                                    "    ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
-                                    "    size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
-                                    "    delay=field: mpdelay, delay field\n"
-                                    "    key=field: multi-trace, key for two-event"
-                                    },
-    { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter" },
+    { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter", },
     { "key", 'k', "str", 0, "Key for series events" },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
@@ -166,18 +179,16 @@ static const struct argp_option opts[] = {
     { "syscalls", LONG_OPT_syscalls, NULL, 0, "Trace syscalls" },
     { "perins", LONG_OPT_perins, NULL, 0, "Print per instance stat" },
     { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
-    { "mmap-pages", 'm', "pages", 0, "Number of mmap data pages and AUX area tracing mmap pages" },
     { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
     { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names.\n"
                                                  "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
-    { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
-    { "order-mem", LONG_OPT_order_mem, "B", 0, "Maximum memory used by ordering events. Unit: GB/MB/KB/*B." },
     { "detail", LONG_OPT_detail, NULL, 0, "More detailed information output" },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
-    { "verbose", 'v', NULL, 0, "Verbose debug output" },
-    { "", 'h', NULL, OPTION_HIDDEN, "" },
+
+    { "version", 'V', NULL, 0, "Version info" },
+    { NULL, 'h', NULL, OPTION_HIDDEN, "" },
     {},
 };
 
@@ -383,6 +394,10 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'v':
         env.verbose++;
+        break;
+    case 'V':
+        printf("%s\n", argp_program_version);
+        exit(0);
         break;
     case ARGP_KEY_ARG:
         switch (state->arg_num) {
@@ -664,6 +679,7 @@ int main(int argc, char *argv[])
     static const struct argp argp = {
         .options = opts,
         .parser = parse_arg,
+        .args_doc = argp_program_args_doc,
         .doc = argp_program_doc,
     };
     int err;
