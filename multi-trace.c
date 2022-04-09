@@ -320,7 +320,7 @@ found:
 
     //get key
     key = monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance);
-    if (ctx.env->key) {
+    if (ctx.env->key || tp->key) {
         struct tep_record record;
         struct tep_handle *tep = tep__ref();
         struct tep_event *e;
