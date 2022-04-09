@@ -80,6 +80,7 @@ static int monitor_ctx_init(struct env *env)
         .greater_than = env->greater_than,
         .heatmap = env->heatmap,
     };
+    bool key_attr = false;
 
     if (env->nr_events < 2)
         return -1;
@@ -109,6 +110,8 @@ static int monitor_ctx_init(struct env *env)
                     return -1;
                 }
             }
+            if (tp->key)
+                key_attr = true;
         }
     }
 
@@ -118,8 +121,12 @@ static int monitor_ctx_init(struct env *env)
     } else
         ctx.cc = NULL;
 
-    if (env->key) {
+    if (env->key || key_attr) {
         options.keytype = K_CUSTOM;
+        if (!using_order(&multi_trace)) {
+            fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
+                            "--order parameter to order events.\n");
+        }
     }
 
     ctx.impl = impl_get(TWO_EVENT_DELAY_ANALYSIS);
