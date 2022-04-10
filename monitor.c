@@ -111,7 +111,7 @@ const char argp_program_doc[] =
 "  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"
 "  perf-prof blktrace -d device [--than ns]\n"
-"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--than ns] [--perins] [--heatmap file]\n"
+"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--perins] [--heatmap file]\n"
 "\n"
 "Event selector. use 'perf list tracepoint' to list available tp events.\n"
 "  EVENT,EVENT,...\n"
@@ -147,6 +147,7 @@ enum {
     LONG_OPT_order,
     LONG_OPT_order_mem,
     LONG_OPT_detail,
+    LONG_OPT_impl,
 };
 static const struct argp_option opts[] = {
     { NULL, 0, NULL, 0, "OPTION:" },
@@ -168,6 +169,10 @@ static const struct argp_option opts[] = {
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter", },
     { "key", 'k', "str", 0, "Key for series events" },
+    { "impl", LONG_OPT_impl, "impl", 0, "Implementation of two-event analysis class. Dflt: delay.\n"
+                                        "    delay: latency distribution between two events\n"
+                                        "    pair: determine if two events are paired"
+                                        },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
@@ -331,6 +336,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'k':
         env.key = strdup(arg);
+        break;
+    case LONG_OPT_impl:
+        env.impl = strdup(arg);
         break;
     case 'S':
         env.interruptible = 1;
