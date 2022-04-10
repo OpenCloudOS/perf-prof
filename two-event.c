@@ -20,12 +20,16 @@ static int two_event_node_cmp(struct rb_node *rbn, const void *entry)
         return 1;
     else if (two->tp1 < e->tp1)
         return -1;
-    else if (two->tp2 > e->tp2)
-        return 1;
-    else if (two->tp2 < e->tp2)
-        return -1;
-    else
+    else {
+        // tp2 can be NULL
+        if (e->tp2) {
+            if (two->tp2 > e->tp2)
+                return 1;
+            else if (two->tp2 < e->tp2)
+                return -1;
+        }
         return 0;
+    }
 }
 
 static struct rb_node *two_event_node_new(struct rblist *rlist, const void *new_entry)
@@ -98,6 +102,7 @@ static struct two_event *two_event_find(struct two_event_class *class, struct tp
 }
 
 static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key) {}
+static void dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {}
 static int dummp_print_header(struct two_event *two) {return 0;}
 static void dummy_print(struct two_event *two) {}
 
@@ -118,6 +123,7 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
     class->two_events.node_delete = two_event_node_delete;
 
     class->two = dummy_two;
+    class->remaining = dummy_remaining;
     class->print_header = dummp_print_header;
     class->print = dummy_print;
 
@@ -151,6 +157,13 @@ static void impl_init(struct two_event_impl *impl)
         impl->object_find = two_event_find;
 }
 
+
+/*
+ * Delay between two events
+ *
+ * Count the maximum, minimum, and average values of each instance.
+ * And can output delay heatmap.
+**/
 
 struct delay_stat {
     struct rb_node rbnode;
@@ -255,14 +268,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     struct rb_node *rbn = NULL;
     struct two_event_options *opts;
     struct delay_stat *stat = NULL;
-    struct sample_type_header {
-        struct {
-            __u32    pid;
-            __u32    tid;
-        }    tid_entry;
-        __u64   time;
-    } *e1 = (void *)event1->sample.array,
-      *e2 = (void *)event2->sample.array;
+    struct multi_trace_type_header *e1 = (void *)event1->sample.array;
+    struct multi_trace_type_header *e2 = (void *)event2->sample.array;
     u64 delta = 0;
 
     if (two) {
@@ -412,12 +419,84 @@ static struct two_event_impl delay_impl = {
     .object_delete = delay_delete,
 };
 
+/*
+ * Determine if two events are paired
+ *
+ * Print unpaired events.
+ * Report the number of paired and unpaired events.
+**/
+
+struct pair {
+    struct two_event base;
+    u64 paired;
+    u64 unpaired;
+};
+
+struct pair_class {
+    struct two_event_class base;
+};
+
+static void pair_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+{
+    struct pair *pair;
+
+    if (two) {
+        pair = container_of(two, struct pair, base);
+        pair->paired ++;
+    }
+}
+
+static void pair_remaining(struct two_event *two, union perf_event *event, u64 key)
+{
+    struct pair *pair;
+
+    if (two) {
+        pair = container_of(two, struct pair, base);
+        pair->unpaired ++;
+        multi_trace_print(event, two->tp1);
+    }
+}
+
+static void pair_print(struct two_event *two)
+{
+    struct pair *pair;
+
+    if (two) {
+        pair = container_of(two, struct pair, base);
+        printf("%s:%s %s:%s paired %lu unpaired %lu\n", two->tp1->sys, two->tp1->name, two->tp2->sys, two->tp2->name,
+                pair->paired, pair->unpaired);
+    }
+}
+
+static struct two_event_class *pair_class_new(struct two_event_impl *impl, struct two_event_options *options)
+{
+    struct two_event_class *class = two_event_class_new(impl, options);
+
+    if (class) {
+        class->two = pair_two;
+        class->remaining = pair_remaining;
+        class->print = pair_print;
+    }
+    return class;
+}
+
+static struct two_event_impl pair_impl = {
+    .class_size = sizeof(struct pair_class),
+    .class_new = pair_class_new,
+
+    .instance_size = sizeof(struct pair),
+};
+
+
 struct two_event_impl *impl_get(int type)
 {
     struct two_event_impl *impl = NULL;
     switch (type) {
         case TWO_EVENT_DELAY_ANALYSIS:
             impl = &delay_impl;
+            break;
+        case TWO_EVENT_PAIR_ANALYSIS:
+            impl = &pair_impl;
             break;
         default:
             break;

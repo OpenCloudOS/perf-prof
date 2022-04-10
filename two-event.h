@@ -35,6 +35,7 @@ struct two_event_class {
 
     /* object function */
     void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key);
+    void (*remaining)(struct two_event *two, union perf_event *event, u64 key);
     int (*print_header)(struct two_event *two);
     void (*print)(struct two_event *two);
 };
@@ -52,8 +53,19 @@ struct two_event_impl {
     struct two_event *(*object_find)(struct two_event_class *class, struct tp *tp1, struct tp *tp2);
 };
 
-
+/* delay analysis:
+ * syscall delay
+ * kvm_exit to kvm_entry delay
+ * hrtimer_start to hrtimer_expire_entry delay
+ * and many more
+ */
 #define TWO_EVENT_DELAY_ANALYSIS 1
+/*
+ * event pair:
+ * kmemleak, alloc and free
+ * fdleak, open and close
+ */
+#define TWO_EVENT_PAIR_ANALYSIS 2
 
 struct two_event_impl *impl_get(int type);
 
