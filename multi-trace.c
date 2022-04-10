@@ -129,7 +129,7 @@ static int monitor_ctx_init(struct env *env)
         }
     }
 
-    ctx.impl = impl_get(TWO_EVENT_DELAY_ANALYSIS);
+    ctx.impl = impl_get(env->impl ?: "delay");
     ctx.class = ctx.impl->class_new(ctx.impl, &options);
 
     rblist__init(&ctx.backup);

@@ -42,6 +42,7 @@ struct two_event_class {
 
 struct two_event_impl {
     /* impl object */
+    const char *name;
     int class_size;
     struct two_event_class *(*class_new)(struct two_event_impl *impl, struct two_event_options *options);
     void (*class_delete)(struct two_event_class *class);
@@ -59,15 +60,15 @@ struct two_event_impl {
  * hrtimer_start to hrtimer_expire_entry delay
  * and many more
  */
-#define TWO_EVENT_DELAY_ANALYSIS 1
+#define TWO_EVENT_DELAY_IMPL "delay"
 /*
  * event pair:
  * kmemleak, alloc and free
  * fdleak, open and close
  */
-#define TWO_EVENT_PAIR_ANALYSIS 2
+#define TWO_EVENT_PAIR_IMPL "pair"
 
-struct two_event_impl *impl_get(int type);
+struct two_event_impl *impl_get(const char *name);
 
 
 // in linux/perf_event.h

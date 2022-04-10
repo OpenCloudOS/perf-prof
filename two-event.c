@@ -411,6 +411,7 @@ static struct two_event_class *delay_class_new(struct two_event_impl *impl, stru
 }
 
 static struct two_event_impl delay_impl = {
+    .name = TWO_EVENT_DELAY_IMPL,
     .class_size = sizeof(struct delay_class),
     .class_new = delay_class_new,
 
@@ -481,26 +482,22 @@ static struct two_event_class *pair_class_new(struct two_event_impl *impl, struc
 }
 
 static struct two_event_impl pair_impl = {
+    .name = TWO_EVENT_PAIR_IMPL,
     .class_size = sizeof(struct pair_class),
     .class_new = pair_class_new,
 
     .instance_size = sizeof(struct pair),
 };
 
-
-struct two_event_impl *impl_get(int type)
+struct two_event_impl *impl_get(const char *name)
 {
     struct two_event_impl *impl = NULL;
-    switch (type) {
-        case TWO_EVENT_DELAY_ANALYSIS:
-            impl = &delay_impl;
-            break;
-        case TWO_EVENT_PAIR_ANALYSIS:
-            impl = &pair_impl;
-            break;
-        default:
-            break;
-    }
+
+    if (strcmp(name, delay_impl.name) == 0)
+        impl = &delay_impl;
+    else if (strcmp(name, pair_impl.name) == 0)
+        impl = &pair_impl;
+
     if (impl)
         impl_init(impl);
     return impl;
