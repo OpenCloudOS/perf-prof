@@ -39,7 +39,7 @@ struct monitor_ctx {
 
 static int monitor_ctx_init(void)
 {
-    ctx.nr_cpus = get_possible_cpus();
+    ctx.nr_cpus = get_present_cpus();
     ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
     ctx.polling = calloc(ctx.nr_cpus, sizeof(uint64_t));
     return ctx.counter && ctx.polling ? 0 : -1;

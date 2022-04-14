@@ -62,7 +62,7 @@ static int monitor_ctx_init(struct env *env)
     ctx.in_guest = in_guest();
     ctx.comm = 1;
 
-    ctx.nr_cpus = get_possible_cpus();
+    ctx.nr_cpus = get_present_cpus();
     ctx.watchdog = calloc(ctx.nr_cpus, sizeof(struct watchdog_ctx));
     if (ctx.watchdog == NULL)
         return -1;

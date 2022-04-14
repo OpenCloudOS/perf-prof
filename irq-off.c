@@ -16,7 +16,7 @@ struct monitor_ctx {
 } ctx;
 static int monitor_ctx_init(struct env *env)
 {
-    ctx.nr_cpus = get_possible_cpus();
+    ctx.nr_cpus = get_present_cpus();
     ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
     if (!ctx.counter) {
         return -1;
