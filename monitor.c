@@ -433,13 +433,13 @@ static void sig_handler(int sig)
     exiting = 1;
 }
 
-int get_possible_cpus(void)
+int get_present_cpus(void)
 {
     struct perf_cpu_map *cpumap = NULL;
     FILE *f;
     int cpus;
 
-    f = fopen("/sys/devices/system/cpu/possible", "r");
+    f = fopen("/sys/devices/system/cpu/present", "r");
     if (!f)
         f = fopen("/sys/devices/system/cpu/online", "r");
     cpumap = perf_cpu_map__read(f);

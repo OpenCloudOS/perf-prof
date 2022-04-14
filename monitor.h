@@ -19,7 +19,7 @@ int monitor_instance_thread(int ins);
 int monitor_instance_oncpu(void);
 struct monitor *current_monitor(void);
 
-int get_possible_cpus(void);
+int get_present_cpus(void);
 void print_time(FILE *fp);
 int get_tsc_khz(void);
 

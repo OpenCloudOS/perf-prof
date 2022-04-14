@@ -108,7 +108,7 @@ static int monitor_ctx_init(struct env *env)
 
     tep__ref();
 
-    ctx.nr_cpus = get_possible_cpus();
+    ctx.nr_cpus = get_present_cpus();
     ctx.l2_cpumap = calloc(ctx.nr_cpus, sizeof(*ctx.l2_cpumap));
     ctx.llc_cpumap = calloc(ctx.nr_cpus, sizeof(*ctx.llc_cpumap));
     if (!ctx.l2_cpumap || !ctx.llc_cpumap)
