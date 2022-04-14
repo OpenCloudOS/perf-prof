@@ -17,6 +17,7 @@ perf-prof-y += top.o
 perf-prof-y += order.o
 perf-prof-y += blktrace.o
 perf-prof-y += multi-trace.o two-event.o
+perf-prof-y += oncpu.o
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
