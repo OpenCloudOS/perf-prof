@@ -112,6 +112,7 @@ const char argp_program_doc[] =
 "  perf-prof stat -e EVENT[...] [--perins]\n"
 "  perf-prof blktrace -d device [--than ns]\n"
 "  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--perins] [--heatmap file]\n"
+"  perf-prof oncpu -p PID [--perins]\n"
 "\n"
 "Event selector. use 'perf list tracepoint' to list available tp events.\n"
 "  EVENT,EVENT,...\n"
