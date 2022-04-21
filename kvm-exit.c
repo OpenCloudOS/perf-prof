@@ -31,8 +31,6 @@ struct monitor_ctx {
     int *perins_kvm_exit_valid;
     __u64 kvm_exit;
     __u64 kvm_entry;
-    struct hist hist;
-    struct hist *perins_hist;
     struct rblist exit_reason_stat;
     struct heatmap *heatmap;
     struct env *env;
@@ -197,12 +195,7 @@ static int monitor_ctx_init(struct env *env)
     ctx.perins_kvm_exit_valid = calloc(ctx.nr_ins, sizeof(int));
     if (!ctx.perins_kvm_exit || !ctx.perins_kvm_exit_valid)
         return -1;
-    memset(&ctx.hist, 0, sizeof(ctx.hist));
-    if (env->perins) {
-        ctx.perins_hist = calloc(ctx.nr_ins, sizeof(struct hist));
-        if (!ctx.perins_hist)
-            return -1;
-    }
+
     rblist__init(&ctx.exit_reason_stat);
     ctx.exit_reason_stat.node_cmp = exit_reason_stat__node_cmp;
     ctx.exit_reason_stat.node_new = exit_reason_stat__node_new;
@@ -217,8 +210,6 @@ static void monitor_ctx_exit(void)
 {
     free(ctx.perins_kvm_exit);
     free(ctx.perins_kvm_exit_valid);
-    if (ctx.env->perins)
-        free(ctx.perins_hist);
     rblist__exit(&ctx.exit_reason_stat);
     if (ctx.env->heatmap)
         heatmap_close(ctx.heatmap);
@@ -276,26 +267,6 @@ static void kvm_exit_interval(void)
 
     print_time(stdout);
     printf("\n");
-    if (!ctx.env->perins) {
-        print_log2_hist(ctx.hist.slots, MAX_SLOTS, "kvm-exit latency(ns)");
-        memset(&ctx.hist, 0, sizeof(ctx.hist));
-    } else {
-        int cpu, idx, thread;
-        char buff[128];
-        if (monitor_instance_oncpu()) {
-            perf_cpu_map__for_each_cpu(cpu, idx, kvm_exit.cpus) {
-                snprintf(buff, sizeof(buff), "[%03d] latency(ns)", cpu);
-                print_log2_hist(ctx.perins_hist[idx].slots, MAX_SLOTS, buff);
-                memset(&ctx.perins_hist[idx], 0, sizeof(struct hist));
-            }
-        } else {
-            perf_thread_map__for_each_thread(thread, idx, kvm_exit.threads) {
-                snprintf(buff, sizeof(buff), "[%d] latency(ns)", thread);
-                print_log2_hist(ctx.perins_hist[idx].slots, MAX_SLOTS, buff);
-                memset(&ctx.perins_hist[idx], 0, sizeof(struct hist));
-            }
-        }
-    }
 
     if (rblist__empty(&ctx.exit_reason_stat))
         return;
@@ -342,29 +313,6 @@ static void kvm_exit_deinit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static __always_inline u64 __log2(u32 v)
-{
-	u32 shift, r;
-
-	r = (v > 0xFFFF) << 4; v >>= r;
-	shift = (v > 0xFF) << 3; v >>= shift; r |= shift;
-	shift = (v > 0xF) << 2; v >>= shift; r |= shift;
-	shift = (v > 0x3) << 1; v >>= shift; r |= shift;
-	r |= (v >> 1);
-
-	return r;
-}
-
-static __always_inline u64 __log2l(u64 v)
-{
-	u32 hi = v >> 32;
-
-	if (hi)
-		return __log2(hi) + 32;
-	else
-		return __log2(v);
-}
-
 static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason, u32 *isa, unsigned long *guest_rip)
 {
     unsigned short common_type = raw->raw.common_type;
@@ -409,22 +357,10 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
     struct exit_reason_stat stat, *pstat;
     struct rb_node *rbn;
     __u64 delta = rkvm_entry->time - rkvm_exit->time;
-    int slot;
 
     __exit_reason(rkvm_exit, &exit_reason, &isa, &guest_rip);
-
     if (isa == KVM_ISA_SVM) {
         hlt = SVM_EXIT_HLT;
-    }
-
-    if (exit_reason != hlt) {
-        slot = (int)__log2l(delta);
-        if (slot > MAX_SLOTS)
-            slot = MAX_SLOTS;
-        if (!ctx.env->perins)
-            ctx.hist.slots[slot] ++;
-        else
-            ctx.perins_hist[instance].slots[slot] ++;
     }
 
     stat.isa = isa;
