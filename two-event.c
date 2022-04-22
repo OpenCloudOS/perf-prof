@@ -103,7 +103,7 @@ static struct two_event *two_event_find(struct two_event_class *class, struct tp
 
 static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key) {}
 static void dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {}
-static int dummp_print_header(struct two_event *two) {return 0;}
+static int dummy_print_header(struct two_event *two) {return 0;}
 static void dummy_print(struct two_event *two) {}
 
 static struct two_event_class *two_event_class_new(struct two_event_impl *impl, struct two_event_options *options)
@@ -124,7 +124,7 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
 
     class->two = dummy_two;
     class->remaining = dummy_remaining;
-    class->print_header = dummp_print_header;
+    class->print_header = dummy_print_header;
     class->print = dummy_print;
 
     return class;
