@@ -12,6 +12,8 @@
 #include <tep.h>
 #include <trace_helpers.h>
 #include <stack_helpers.h>
+#include <latency_helpers.h>
+
 
 #define ALIGN(x, a)  __ALIGN_KERNEL((x), (a))
 
@@ -31,7 +33,7 @@ struct monitor_ctx {
     int *perins_kvm_exit_valid;
     __u64 kvm_exit;
     __u64 kvm_entry;
-    struct rblist exit_reason_stat;
+    struct latency_dist *lat_dist;
     struct heatmap *heatmap;
     struct env *env;
 } ctx;
@@ -109,83 +111,7 @@ struct sample_type_raw {
     } raw;
 };
 
-struct exit_reason_stat {
-    struct rb_node rbnode;
-    unsigned int isa;
-    unsigned int exit_reason;
-    const char *name;
-    __u64 min;
-    __u64 max;
-    __u64 n;
-    __u64 sum;
-    __u64 k;    //in kernel
-    __u64 ksum; //sum in kernel
-};
-
 #define START_OF_KERNEL 0xffff000000000000UL
-
-static int exit_reason_stat__node_cmp(struct rb_node *rbn, const void *entry)
-{
-    struct exit_reason_stat *a = container_of(rbn, struct exit_reason_stat, rbnode);
-    const struct exit_reason_stat *b = entry;
-
-    if (a->exit_reason > b->exit_reason)
-        return 1;
-    else if (a->exit_reason < b->exit_reason)
-        return -1;
-    else
-        return 0;
-}
-
-static struct rb_node *exit_reason_stat__node_new(struct rblist *rlist, const void *new_entry)
-{
-    const struct exit_reason_stat *e = new_entry;
-    struct exit_reason_stat *b = malloc(sizeof(struct exit_reason_stat));
-    if (b) {
-        b->isa = e->isa;
-        b->exit_reason = e->exit_reason;
-        b->name = find_exit_reason(b->isa, b->exit_reason);
-        b->min = ~0UL;
-        b->max = 0UL;
-        b->n = 0UL;
-        b->sum = 0UL;
-        b->k = 0UL;
-        b->ksum = 0UL;
-        RB_CLEAR_NODE(&b->rbnode);
-        return &b->rbnode;
-    } else
-        return NULL;
-}
-
-static void exit_reason_stat__node_delete(struct rblist *rblist, struct rb_node *rb_node)
-{
-    struct exit_reason_stat *b = container_of(rb_node, struct exit_reason_stat, rbnode);
-    free(b);
-}
-
-static void exit_reason_stat__node_delete_empty(struct rblist *rblist, struct rb_node *rb_node)
-{
-}
-
-static int exit_reason_stat__sorted_node_cmp(struct rb_node *rbn, const void *entry)
-{
-    struct exit_reason_stat *a = container_of(rbn, struct exit_reason_stat, rbnode);
-    const struct exit_reason_stat *b = entry;
-
-    if (a->sum > b->sum)
-        return -1;
-    else if (a->sum < b->sum)
-        return 1;
-    else
-        return 0;
-}
-
-static struct rb_node *exit_reason_stat__sorted_node_new(struct rblist *rlist, const void *new_entry)
-{
-    struct exit_reason_stat *b = (void *)new_entry;
-    RB_CLEAR_NODE(&b->rbnode);
-    return &b->rbnode;
-}
 
 static int monitor_ctx_init(struct env *env)
 {
@@ -196,10 +122,10 @@ static int monitor_ctx_init(struct env *env)
     if (!ctx.perins_kvm_exit || !ctx.perins_kvm_exit_valid)
         return -1;
 
-    rblist__init(&ctx.exit_reason_stat);
-    ctx.exit_reason_stat.node_cmp = exit_reason_stat__node_cmp;
-    ctx.exit_reason_stat.node_new = exit_reason_stat__node_new;
-    ctx.exit_reason_stat.node_delete = exit_reason_stat__node_delete;
+    ctx.lat_dist = latency_dist_new(env->perins, true, sizeof(u64));
+    if (!ctx.lat_dist)
+        return -1;
+
     if (env->heatmap)
         ctx.heatmap = heatmap_open("ns", "ns", env->heatmap);
     ctx.env = env;
@@ -210,7 +136,7 @@ static void monitor_ctx_exit(void)
 {
     free(ctx.perins_kvm_exit);
     free(ctx.perins_kvm_exit_valid);
-    rblist__exit(&ctx.exit_reason_stat);
+    latency_dist_free(ctx.lat_dist);
     if (ctx.env->heatmap)
         heatmap_close(ctx.heatmap);
     tep__unref();
@@ -258,53 +184,59 @@ static int kvm_exit_init(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+struct print_info {
+    bool started;
+    bool print_header;
+    u64 instance;
+};
+static void print_latency_node(void *opaque, struct latency_node *node)
+{
+    struct print_info *info = opaque;
+    unsigned int exit_reason = node->key & 0xffffffff;
+    u32 isa = node->key >> 32;
+
+    if (!info->started ||
+        info->instance != node->instance) {
+        if (!info->started) {
+            print_time(stdout);
+            printf("\n");
+        }
+        info->started = true;
+        info->print_header = true;
+        info->instance = node->instance;
+    }
+    if (info->print_header) {
+        info->print_header = false;
+        if (ctx.env->perins)
+            if (monitor_instance_oncpu())
+                printf("kvm-exit latency CPU %d\n", monitor_instance_cpu((int)node->instance));
+            else
+                printf("kvm-exit latency THREAD %d\n", monitor_instance_thread((int)node->instance));
+        else
+            printf("kvm-exit latency\n");
+        printf("%-*s %8s %16s %9s %9s %12s %6s\n", isa == KVM_ISA_VMX ? 20 : 32,
+                "exit_reason", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "%gsys");
+        printf("%s %8s %16s %9s %9s %12s %6s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
+                "--------", "----------------", "---------", "---------", "------------", "------");
+    }
+    printf("%-*s %8lu %16.3f %9.3f %9.3f %12.3f %6.2f\n", isa == KVM_ISA_VMX ? 20 : 32,
+            find_exit_reason(isa, exit_reason),
+            node->n, node->sum/1000.0,
+            node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0,
+            node->extra[0]*100.0/node->sum);
+}
+
+static void print_latency_interval(void)
+{
+    struct print_info info;
+
+    info.started = false;
+    latency_dist_print(ctx.lat_dist, print_latency_node, &info);
+}
+
 static void kvm_exit_interval(void)
 {
-    struct exit_reason_stat *stat;
-    struct rb_node *rbn;
-    struct rblist sorted;
-    int print_header = 1;
-
-    print_time(stdout);
-    printf("\n");
-
-    if (rblist__empty(&ctx.exit_reason_stat))
-        return;
-
-    rblist__init(&sorted);
-    sorted.node_cmp = exit_reason_stat__sorted_node_cmp;
-    sorted.node_new = exit_reason_stat__sorted_node_new;
-    sorted.node_delete = ctx.exit_reason_stat.node_delete;
-    ctx.exit_reason_stat.node_delete = exit_reason_stat__node_delete_empty; //empty, not really delete
-
-    /* sort, remove from `ctx.exit_reason_stat', add to `sorted'. */
-    do {
-        rbn = rblist__entry(&ctx.exit_reason_stat, 0);
-        stat = container_of(rbn, struct exit_reason_stat, rbnode);
-        rblist__remove_node(&ctx.exit_reason_stat, rbn);
-        rblist__add_node(&sorted, stat);
-    } while (!rblist__empty(&ctx.exit_reason_stat));
-
-    do {
-        rbn = rblist__entry(&sorted, 0);
-        stat = container_of(rbn, struct exit_reason_stat, rbnode);
-
-        if (print_header) {
-            printf("%-*s %8s %16s %9s %9s %12s %6s\n", stat->isa == KVM_ISA_VMX ? 20 : 32,
-                "exit_reason", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "%gsys");
-            printf("%s %8s %16s %9s %9s %12s %6s\n", stat->isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
-                "--------", "----------------", "---------", "---------", "------------", "------");
-            print_header = 0;
-        }
-        printf("%-*s %8llu %16.3f %9.3f %9.3f %12.3f %6.2f\n", stat->isa == KVM_ISA_VMX ? 20 : 32,
-                stat->name, stat->n, stat->sum/1000.0,
-                stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0,
-                stat->ksum*100.0/stat->sum);
-
-        rblist__remove_node(&sorted, rbn);
-    } while (!rblist__empty(&sorted));
-
-    ctx.exit_reason_stat.node_delete = sorted.node_delete;
+    print_latency_interval();
 }
 
 static void kvm_exit_deinit(struct perf_evlist *evlist)
@@ -354,31 +286,19 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
     unsigned int exit_reason, hlt = EXIT_REASON_HLT;
     u32 isa;
     unsigned long guest_rip;
-    struct exit_reason_stat stat, *pstat;
-    struct rb_node *rbn;
     __u64 delta = rkvm_entry->time - rkvm_exit->time;
+    u64 key = 0;
+    struct latency_node *node;
 
     __exit_reason(rkvm_exit, &exit_reason, &isa, &guest_rip);
     if (isa == KVM_ISA_SVM) {
         hlt = SVM_EXIT_HLT;
     }
 
-    stat.isa = isa;
-    stat.exit_reason = exit_reason;
-    rbn = rblist__findnew(&ctx.exit_reason_stat, &stat);
-    if (rbn) {
-        pstat = container_of(rbn, struct exit_reason_stat, rbnode);
-        if (delta < pstat->min)
-            pstat->min = delta;
-        if (delta > pstat->max)
-            pstat->max = delta;
-        pstat->n ++;
-        pstat->sum += delta;
-        if (guest_rip >= START_OF_KERNEL) {
-            pstat->k ++;
-            pstat->ksum += delta;
-        }
-    }
+    key = ((u64)isa<<32)|exit_reason;
+    node = latency_dist_input(ctx.lat_dist, ctx.env->perins?instance:0, key, delta);
+    if (node && guest_rip >= START_OF_KERNEL)
+        node->extra[0] += delta;
 
     if (ctx.env->heatmap)
         heatmap_write(ctx.heatmap, rkvm_exit->time, delta);
