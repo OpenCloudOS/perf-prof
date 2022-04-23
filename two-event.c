@@ -489,6 +489,230 @@ static struct two_event_impl pair_impl = {
     .instance_size = sizeof(struct pair),
 };
 
+
+
+
+/*
+ * Profile memory allocated and freed bytes.
+ *
+**/
+
+struct mem_profile {
+    struct two_event base;
+    struct key_value_paires *alloc;
+    struct key_value_paires *free;
+    unsigned int nr_alloc;
+    u64 alloc_bytes;
+    unsigned int nr_free;
+    u64 free_bytes;
+};
+
+struct mem_profile_class {
+    struct two_event_class base;
+    struct callchain_ctx *cc;
+};
+
+static struct two_event *mem_profile_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
+{
+    struct two_event *two = NULL;
+    struct mem_profile *profile = NULL;
+
+    if (!tp1->mem_size) {
+        fprintf(stderr, "%s:%s//size=?/ size attribute is not set\n", tp1->sys, tp1->name);
+        return NULL;
+    }
+    if (!tp1->stack) {
+        fprintf(stderr, "WARN: %s:%s//stack/ without stack attribute, memory allocations "
+                        "cannot be profiled based on the stack.\n", tp1->sys, tp1->name);
+    }
+    if (!tp2->stack) {
+        fprintf(stderr, "WARN: %s:%s//stack/ without stack attribute, memory deallocation "
+                        "cannot be profiled based on the stack.\n", tp2->sys, tp2->name);
+    }
+
+    two = two_event_new(class, tp1, tp2);
+    if (two) {
+        profile = container_of(two, struct mem_profile, base);
+        profile->alloc = keyvalue_pairs_new(sizeof(u64));
+        profile->free = keyvalue_pairs_new(sizeof(u64));
+    }
+    return two;
+}
+
+static void mem_profile_delete(struct two_event_class *class, struct two_event *two)
+{
+    struct mem_profile *profile = NULL;
+
+    if (two) {
+        profile = container_of(two, struct mem_profile, base);
+        keyvalue_pairs_free(profile->alloc);
+        keyvalue_pairs_free(profile->free);
+        two_event_delete(class, two);
+    }
+}
+
+static void mem_profile_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+{
+    struct mem_profile *profile = NULL;
+    struct multi_trace_type_callchain *data;
+
+    if (!two)
+        return ;
+
+    if (two) {
+        struct tep_handle *tep;
+        struct tep_record record;
+        struct tep_event *e;
+        unsigned long long bytes_alloc = 0;
+        u64 *bytes;
+        void *raw;
+        int size;
+
+        profile = container_of(two, struct mem_profile, base);
+
+        tep = tep__ref();
+
+        multi_trace_raw_size(event1, &raw, &size, two->tp1);
+        memset(&record, 0, sizeof(record));
+        record.size = size;
+        record.data = raw;
+
+        e = tep_find_event_by_record(tep, &record);
+        if (tep_get_field_val(NULL, e, two->tp1->mem_size, &record, &bytes_alloc, 0) < 0) {
+            bytes_alloc = 1;
+        }
+
+        profile->nr_alloc ++;
+        profile->alloc_bytes += bytes_alloc;
+        if (two->tp1->stack) {
+            data = (void *)event1->sample.array;
+            bytes = keyvalue_pairs_add_key(profile->alloc, (struct_key *)&data->callchain);
+            *bytes += bytes_alloc;
+        }
+
+        if (event2) {
+            profile->nr_free ++;
+            profile->free_bytes += bytes_alloc;
+            if (two->tp2->stack) {
+                data = (void *)event2->sample.array;
+                bytes = keyvalue_pairs_add_key(profile->free, (struct_key *)&data->callchain);
+                *bytes += bytes_alloc;
+            }
+        }
+
+        tep__unref();
+    }
+}
+
+static void mem_profile_remaining(struct two_event *two, union perf_event *event, u64 key)
+{
+    mem_profile_two(two, event, NULL, key);
+}
+
+static int mem_profile_print_header(struct two_event *two)
+{
+    return 1;
+}
+
+static int __cmp(void **value1, void **value2)
+{
+    u64 *b1 = *(u64 **)value1;
+    u64 *b2 = *(u64 **)value2;
+
+    if (*b1 < *b2)
+        return 1;
+    else if (*b1 > *b2)
+        return -1;
+    else
+        return 0;
+}
+
+static void __print_alloc(void *opaque, struct_key *key, void *value, unsigned int n)
+{
+    struct mem_profile *profile = opaque;
+    struct mem_profile_class *mpclass = container_of(profile->base.class, struct mem_profile_class, base);
+    u64 *bytes = value;
+    printf("Allocate %lu (%.1f%%) bytes on %u (%.1f%%) objects:\n", *bytes, *bytes * 100.0 / profile->alloc_bytes,
+                                                                     n, n * 100.0 / profile->nr_alloc);
+    print_callchain_common(mpclass->cc, key, 0);
+}
+
+static void __print_free(void *opaque, struct_key *key, void *value, unsigned int n)
+{
+    struct mem_profile *profile = opaque;
+    struct mem_profile_class *mpclass = container_of(profile->base.class, struct mem_profile_class, base);
+    u64 *bytes = value;
+    printf("Free %lu (%.1f%%) bytes on %u (%.1f%%) objects:\n", *bytes, *bytes * 100.0 / profile->free_bytes,
+                                                                 n, n * 100.0 / profile->nr_free);
+    print_callchain_common(mpclass->cc, key, 0);
+}
+
+static void mem_profile_print(struct two_event *two)
+{
+    struct mem_profile *profile = NULL;
+
+    if (two) {
+        profile = container_of(two, struct mem_profile, base);
+
+        print_time(stdout);
+        printf("\n%s:%s => %s:%s\n", two->tp1->sys, two->tp1->name, two->tp2->sys, two->tp2->name);
+
+        printf("%s:%s total alloc %lu bytes on %u objects\n", two->tp1->sys, two->tp1->name, profile->alloc_bytes, profile->nr_alloc);
+        keyvalue_pairs_sorted_firstn(profile->alloc, __cmp, __print_alloc, profile, two->class->opts.first_n);
+
+        printf("%s:%s total free %lu bytes on %u objects\n", two->tp2->sys, two->tp2->name, profile->free_bytes, profile->nr_free);
+        keyvalue_pairs_sorted_firstn(profile->free, __cmp, __print_free, profile, two->class->opts.first_n);
+        printf("\n");
+
+        //reset
+        profile->nr_alloc = 0;
+        profile->nr_free = 0;
+        profile->alloc_bytes = 0;
+        profile->free_bytes = 0;
+        keyvalue_pairs_reinit(profile->alloc);
+        keyvalue_pairs_reinit(profile->free);
+    }
+}
+
+static struct two_event_class *mem_profile_class_new(struct two_event_impl *impl, struct two_event_options *options)
+{
+    struct two_event_class *class = two_event_class_new(impl, options);
+    struct mem_profile_class *mpclass;
+
+    if (class) {
+        mpclass = container_of(class, struct mem_profile_class, base);
+        class->two = mem_profile_two;
+        class->remaining = mem_profile_remaining;
+        class->print_header = mem_profile_print_header;
+        class->print = mem_profile_print;
+        mpclass->cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+    }
+    return class;
+}
+
+static void mem_profile_class_delete(struct two_event_class *class)
+{
+    struct mem_profile_class *mpclass;
+    if (class) {
+        mpclass = container_of(class, struct mem_profile_class, base);
+        callchain_ctx_free(mpclass->cc);
+        two_event_class_delete(class);
+    }
+}
+
+
+static struct two_event_impl mem_profile_impl = {
+    .name = TWO_EVENT_MEM_PROFILE,
+    .class_size = sizeof(struct mem_profile_class),
+    .class_new = mem_profile_class_new,
+    .class_delete = mem_profile_class_delete,
+
+    .instance_size = sizeof(struct mem_profile),
+    .object_new = mem_profile_new,
+    .object_delete = mem_profile_delete,
+};
+
+
 struct two_event_impl *impl_get(const char *name)
 {
     struct two_event_impl *impl = NULL;
@@ -497,6 +721,8 @@ struct two_event_impl *impl_get(const char *name)
         impl = &delay_impl;
     else if (strcmp(name, pair_impl.name) == 0)
         impl = &pair_impl;
+    else if (strcmp(name, mem_profile_impl.name) == 0)
+        impl = &mem_profile_impl;
 
     if (impl)
         impl_init(impl);
