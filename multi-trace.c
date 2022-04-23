@@ -79,6 +79,7 @@ static int monitor_ctx_init(struct env *env)
         .perins = env->perins,
         .greater_than = env->greater_than,
         .heatmap = env->heatmap,
+        .first_n = 10,
     };
     bool key_attr = false;
 
@@ -129,7 +130,11 @@ static int monitor_ctx_init(struct env *env)
         }
     }
 
-    ctx.impl = impl_get(env->impl ?: "delay");
+    ctx.impl = impl_get(env->impl ?: TWO_EVENT_DELAY_IMPL);
+    if (!ctx.impl) {
+        fprintf(stderr, "--impl %s not implemented\n", env->impl);
+        return -1;
+    }
     ctx.class = ctx.impl->class_new(ctx.impl, &options);
 
     rblist__init(&ctx.backup);
@@ -208,7 +213,8 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
             for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
                 struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
-                ctx.impl->object_new(ctx.class, tp1, tp2);
+                if (!ctx.impl->object_new(ctx.class, tp1, tp2))
+                    return -1;
             }
         }
     }
@@ -277,7 +283,7 @@ static void multi_trace_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void __raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp)
+void multi_trace_raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp)
 {
     if (tp->stack) {
         struct multi_trace_type_callchain *data = (void *)event->sample.array;
@@ -300,7 +306,7 @@ void multi_trace_print(union perf_event *event, struct tp *tp)
     void *raw;
     int size;
 
-    __raw_size(event, &raw, &size, tp);
+    multi_trace_raw_size(event, &raw, &size, tp);
 
     print_time(stdout);
     tep__update_comm(NULL, data->h.tid_entry.tid);
@@ -350,7 +356,8 @@ found:
         struct tep_event *e;
         void *raw;
         int size;
-        __raw_size(event, &raw, &size, tp);
+
+        multi_trace_raw_size(event, &raw, &size, tp);
         memset(&record, 0, sizeof(record));
         record.ts = hdr->time/1000;
         record.cpu = hdr->cpu_entry.cpu;

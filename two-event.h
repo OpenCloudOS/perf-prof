@@ -16,6 +16,7 @@ struct two_event_options {
     bool perins;
     unsigned long greater_than;
     char *heatmap;
+    unsigned int first_n;
 };
 
 struct two_event {
@@ -68,6 +69,13 @@ struct two_event_impl {
  */
 #define TWO_EVENT_PAIR_IMPL "pair"
 
+/*
+ * mem profile:
+ * mem-profile, alloc and free bytes
+ */
+#define TWO_EVENT_MEM_PROFILE "mem-prof"
+
+
 struct two_event_impl *impl_get(const char *name);
 
 
@@ -98,6 +106,7 @@ struct multi_trace_type_raw {
     } raw;
 };
 
+void multi_trace_raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp);
 void multi_trace_print(union perf_event *event, struct tp *tp);
 
 

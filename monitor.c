@@ -172,7 +172,8 @@ static const struct argp_option opts[] = {
     { "key", 'k', "str", 0, "Key for series events" },
     { "impl", LONG_OPT_impl, "impl", 0, "Implementation of two-event analysis class. Dflt: delay.\n"
                                         "    delay: latency distribution between two events\n"
-                                        "    pair: determine if two events are paired"
+                                        "    pair: determine if two events are paired\n"
+                                        "    mem-prof: profile memory allocated and freed bytes"
                                         },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
