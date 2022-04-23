@@ -4,7 +4,6 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <monitor.h>
 #include <errno.h>
 #include <linux/const.h>
 #include <linux/refcount.h>
@@ -547,7 +546,7 @@ void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, 
     }
 }
 
-void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque)
+void keyvalue_pairs_sorted_firstn(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque, unsigned int n)
 {
     struct rblist *rblist;
     struct rb_node *pos, *next;
@@ -579,12 +578,26 @@ void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp 
 
     qsort(sorted_values, nr, sizeof(*sorted_values), (__compar_fn_t)cmp);
 
+    if (n && nr > n)
+        nr = n;
     for (i = 0; i < nr; i++) {
         value = sorted_values[i];
         kv = value + pairs->value_size;
         f(opaque, &kv->key, value, kv->n);
     }
     free(sorted_values);
+}
+
+void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque)
+{
+    keyvalue_pairs_sorted_firstn(pairs, cmp, f, opaque, 0);
+}
+
+void keyvalue_pairs_reinit(struct key_value_paires *pairs)
+{
+    if (pairs) {
+        rblist__exit(&pairs->kv_pairs);
+    }
 }
 
 static bool keyvalue_pairs_empty(struct key_value_paires *pairs)

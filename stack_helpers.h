@@ -27,7 +27,10 @@ void *keyvalue_pairs_add_key(struct key_value_paires *pairs, struct_key *key);
 typedef void (*foreach_keyvalue)(void *opaque, struct_key *key, void *value, unsigned int n);
 void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, void *opaque);
 typedef int (*keyvalue_cmp)(void **value1, void **value2);
+void keyvalue_pairs_sorted_firstn(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque, unsigned int n);
 void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque);
+void keyvalue_pairs_reinit(struct key_value_paires *pairs);
+
 
 const char *unique_string(const char *str);
 void unique_string_stat(FILE *fp);
