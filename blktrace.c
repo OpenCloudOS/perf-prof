@@ -404,11 +404,12 @@ static void blktrace_sample(union perf_event *event, int instance)
 static profiler blktrace = {
     .name = "blktrace",
     .pages = 8,
+    .order = true,
     .init = blktrace_init,
     .filter = blktrace_filter,
     .deinit = blktrace_exit,
     .interval = blktrace_interval,
     .sample = blktrace_sample,
 };
-PROFILER_REGISTER_NAME(order(&blktrace), blktrace)
+PROFILER_REGISTER(blktrace)
 

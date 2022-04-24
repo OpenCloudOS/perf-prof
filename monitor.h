@@ -9,10 +9,12 @@
 #include <perf/evsel.h>
 #include <perf/mmap.h>
 #include <perf/event.h>
+#include <tep.h>
 
 struct monitor;
 void monitor_register(struct monitor *m);
 struct monitor * monitor_find(char *name);
+struct monitor *monitor_next(struct monitor *m);
 int monitor_nr_instance(void);
 int monitor_instance_cpu(int ins);
 int monitor_instance_thread(int ins);
@@ -46,6 +48,8 @@ __attribute__((constructor)) static void __monitor_register_##name(void) \
 }
 #define PROFILER_REGISTER(p) PROFILER_REGISTER_NAME((&p), p)
 #define MONITOR_REGISTER(m)  PROFILER_REGISTER(m)
+
+#define PROGRAME "perf-prof"
 
 #define MAX_SLOTS 26
 struct hist {
@@ -91,7 +95,16 @@ struct env {
     bool order;
     unsigned long order_mem;
 
+    /* help */
+    struct monitor *help_monitor;
+
     int verbose;
+};
+
+struct help_ctx {
+    int nr_list;
+    struct tp_list **tp_list;
+    struct env *env;
 };
 
 typedef struct monitor {
@@ -100,8 +113,11 @@ typedef struct monitor {
     int pages;
     int reinit;
     bool dup; //dup event
+    bool order; // default enable order
     struct perf_cpu_map *cpus;
     struct perf_thread_map *threads;
+
+    void (*help)(struct help_ctx *ctx);
 
     int (*init)(struct perf_evlist *evlist, struct env *env);
     int (*filter)(struct perf_evlist *evlist, struct env *env);
