@@ -422,9 +422,72 @@ found:
         goto free_dup_event;
 }
 
+static void __help_events(struct help_ctx *ctx, const char *impl)
+{
+    int i, j;
+    struct env *env = ctx->env;
+
+    for (i = 0; i < ctx->nr_list; i++) {
+        printf("-e \"");
+        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &ctx->tp_list[i]->tp[j];
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__");
+            if (!env->key)
+                printf("key=%s/", tp->key?:"__");
+            if (strcmp(impl, TWO_EVENT_MEM_PROFILE) == 0)
+                printf("ptr=%s/size=%s/", tp->mem_ptr?:"__", tp->mem_size?:"__");
+            if (strcmp(impl, TWO_EVENT_PAIR_IMPL) != 0)
+                printf("stack/");
+            if (j != ctx->tp_list[i]->nr_tp - 1)
+                printf(",");
+        }
+        printf("\" ");
+    }
+}
+
+static void __multi_trece_help(struct help_ctx *ctx, const char *common, const char *impl)
+{
+    struct env *env = ctx->env;
+
+    if (env->impl && strcmp(env->impl, impl))
+        return;
+
+    printf("%s ", common);
+    __help_events(ctx, impl);
+    if (env->pids)
+        printf("-p %s ", env->pids);
+    else if (env->cpumask)
+        printf("-C %s ", env->cpumask);
+    else
+        printf("[-C __|-p __] ");
+
+    if (env->key)
+        printf("-k %s --order --order-mem __ ", env->key);
+    else
+        printf("[-k __ --order --order-mem __] ");
+    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0)
+        printf("--impl %s [--than __] [--heatmap __] [--perins] ", impl);
+    else
+        printf("--impl %s ", impl);
+
+    printf("\n");
+}
+
+#define NUM(ary) (sizeof(ary)/sizeof(ary[0]))
+static void multi_trece_help(struct help_ctx *ctx)
+{
+    const char *common = PROGRAME " multi-trace";
+    const char *impl_str[] = {TWO_EVENT_DELAY_IMPL, TWO_EVENT_PAIR_IMPL, TWO_EVENT_MEM_PROFILE};
+    int impl;
+
+    for (impl = 0; impl < NUM(impl_str); impl++)
+        __multi_trece_help(ctx, common, impl_str[impl]);
+}
+
 static profiler multi_trace = {
     .name = "multi-trace",
     .pages = 64,
+    .help = multi_trece_help,
     .init = multi_trace_init,
     .filter = multi_trace_filter,
     .deinit = multi_trace_exit,
