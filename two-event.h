@@ -73,7 +73,7 @@ struct two_event_impl {
  * mem profile:
  * mem-profile, alloc and free bytes
  */
-#define TWO_EVENT_MEM_PROFILE "mem-prof"
+#define TWO_EVENT_MEM_PROFILE "kmemprof"
 
 
 struct two_event_impl *impl_get(const char *name);

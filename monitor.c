@@ -100,6 +100,7 @@ const char argp_program_doc[] =
 "  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--perins] [--heatmap file]\n"
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
 "  perf-prof percpu-stat [--syscalls]\n"
 "  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"
@@ -174,7 +175,7 @@ static const struct argp_option opts[] = {
     { "impl", LONG_OPT_impl, "impl", 0, "Implementation of two-event analysis class. Dflt: delay.\n"
                                         "    delay: latency distribution between two events\n"
                                         "    pair: determine if two events are paired\n"
-                                        "    mem-prof: profile memory allocated and freed bytes"
+                                        "    kmemprof: profile memory allocated and freed bytes"
                                         },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
