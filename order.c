@@ -106,6 +106,11 @@ profiler *order(profiler *p)
     return &ctx.order;
 }
 
+bool current_is_order(void)
+{
+    return current_monitor() == &ctx.order;
+}
+
 bool using_order(profiler *p)
 {
     if (p != NULL)

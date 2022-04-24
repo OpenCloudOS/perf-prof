@@ -124,7 +124,7 @@ static int monitor_ctx_init(struct env *env)
 
     if (env->key || key_attr) {
         options.keytype = K_CUSTOM;
-        if (!using_order(&multi_trace)) {
+        if (!current_is_order()) {
             fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
                             "--order parameter to order events.\n");
         }
@@ -431,6 +431,26 @@ static profiler multi_trace = {
     .interval = multi_trace_interval,
     .sample = multi_trace_sample,
 };
-PROFILER_REGISTER(multi_trace)
+PROFILER_REGISTER(multi_trace);
+
+
+static int kmemprof_init(struct perf_evlist *evlist, struct env *env)
+{
+    if (env->impl)
+        free(env->impl);
+    env->impl = strdup(TWO_EVENT_MEM_PROFILE);
+    return multi_trace_init(evlist, env);
+}
+
+static profiler kmemprof = {
+    .name = "kmemprof",
+    .pages = 64,
+    .init = kmemprof_init,
+    .filter = multi_trace_filter,
+    .deinit = multi_trace_exit,
+    .interval = multi_trace_interval,
+    .sample = multi_trace_sample,
+};
+PROFILER_REGISTER(kmemprof)
 
 
