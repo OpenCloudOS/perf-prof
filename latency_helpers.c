@@ -164,6 +164,8 @@ void latency_dist_print(struct latency_dist *dist, print_node print_node, void *
 
     if (!dist)
         return;
+    if (rblist__empty(&dist->lat))
+        return;
 
     rblist__init(&sorted);
     sorted.node_cmp = latency_stat__sorted_node_cmp;
