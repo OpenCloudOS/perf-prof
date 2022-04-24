@@ -38,6 +38,14 @@ struct monitor * monitor_find(char *name)
     return NULL;
 }
 
+struct monitor *monitor_next(struct monitor *m)
+{
+    if (!m)
+        return monitors_list;
+    else
+        return m->next;
+}
+
 int monitor_nr_instance(void)
 {
     int nr_ins;
@@ -84,12 +92,10 @@ struct env env = {
 static volatile bool exiting;
 
 
-#define PROGRAME "perf-prof"
-
 const char *argp_program_version = PROGRAME " 0.4";
 const char *argp_program_bug_address = "<corcpp@foxmail.com>";
 const char argp_program_args_doc[] =
-    "profiler [PROFILER OPTION...]\n"
+    "profiler [PROFILER OPTION...] [help]\n"
     "--symbols /path/to/bin";
 const char argp_program_doc[] =
 "\nProfiling based on perf_event\n\n"
@@ -418,6 +424,11 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
                 if (monitor == NULL && env.symbols == NULL)
                     argp_usage (state);
                 break;
+            case 1:
+                env.help_monitor = monitor;
+                monitor = monitor_find(arg);
+                if (monitor)
+                    break;
             default:
                 argp_usage (state);
                 break;
@@ -720,7 +731,7 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    if (env.order)
+    if (env.order || monitor->order)
         monitor = order(monitor);
     if (env.mmap_pages)
         monitor->pages = env.mmap_pages;
