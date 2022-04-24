@@ -505,9 +505,20 @@ static int kmemprof_init(struct perf_evlist *evlist, struct env *env)
     return multi_trace_init(evlist, env);
 }
 
+static void kmemprof_help(struct help_ctx *ctx)
+{
+    struct env *env = ctx->env;
+    const char *common = PROGRAME " multi-trace";
+    if (env->impl)
+        free(env->impl);
+    env->impl = strdup(TWO_EVENT_MEM_PROFILE);
+    __multi_trece_help(ctx, common, TWO_EVENT_MEM_PROFILE);
+}
+
 static profiler kmemprof = {
     .name = "kmemprof",
     .pages = 64,
+    .help = kmemprof_help,
     .init = kmemprof_init,
     .filter = multi_trace_filter,
     .deinit = multi_trace_exit,
