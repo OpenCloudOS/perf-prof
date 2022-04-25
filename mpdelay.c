@@ -334,9 +334,47 @@ static void mpdelay_sample(union perf_event *event, int instance)
     }
 }
 
+static void mpdelay_help(struct help_ctx *ctx)
+{
+    int i, j;
+    struct env *env = ctx->env;
+
+    printf(PROGRAME " %s ", mpdelay.name);
+    printf("-e \"");
+    for (i = 0; i < ctx->nr_list; i++) {
+        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &ctx->tp_list[i]->tp[j];
+            printf("%s:%s/%s/delay=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__",
+                             tp->delay?:"__");
+            if (i != ctx->nr_list - 1)
+                printf(",");
+        }
+    }
+    printf("\" ");
+
+    if (env->perins)
+        printf("--perins ");
+    if (env->greater_than)
+        printf("--than %lu ", env->greater_than);
+    if (env->heatmap)
+        printf("--heatmap %s ", env->heatmap);
+    common_help(ctx, true, true, true, true, false, false, true);
+
+    if (!env->perins)
+        printf("[--perins] ");
+    if (!env->greater_than)
+        printf("[--than __] ");
+    if (!env->heatmap)
+        printf("[--heatmap __] ");
+    common_help(ctx, false, true, true, true, false, false, true);
+    printf("\n");
+}
+
+
 static profiler mpdelay = {
     .name = "mpdelay",
     .pages = 64,
+    .help = mpdelay_help,
     .init = mpdelay_init,
     .filter = mpdelay_filter,
     .deinit = mpdelay_exit,
