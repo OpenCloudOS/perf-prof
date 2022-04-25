@@ -431,11 +431,11 @@ static void __help_events(struct help_ctx *ctx, const char *impl)
         printf("-e \"");
         for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &ctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__");
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (!env->key)
-                printf("key=%s/", tp->key?:"__");
+                printf("key=%s/", tp->key?:".");
             if (strcmp(impl, TWO_EVENT_MEM_PROFILE) == 0)
-                printf("ptr=%s/size=%s/", tp->mem_ptr?:"__", tp->mem_size?:"__");
+                printf("ptr=%s/size=%s/", tp->mem_ptr?:".", tp->mem_size?:".");
             if (strcmp(impl, TWO_EVENT_PAIR_IMPL) != 0)
                 printf("stack/");
             if (j != ctx->tp_list[i]->nr_tp - 1)
@@ -458,7 +458,7 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
     __help_events(ctx, impl);
 
     if (env->key)
-        printf("-k %s --order --order-mem __ ", env->key);
+        printf("-k %s --order --order-mem . ", env->key);
     if (!impl_default)
         printf("--impl %s ", impl);
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
@@ -472,14 +472,14 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
     common_help(ctx, true, true, true, true, false, true, true);
 
     if (!env->key)
-        printf("[-k __ --order --order-mem __] ");
+        printf("[-k . --order --order-mem .] ");
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
         if (!env->perins)
             printf("[--perins] ");
         if (!env->greater_than)
-            printf("[--than __] ");
+            printf("[--than .] ");
         if (!env->heatmap)
-            printf("[--heatmap __] ");
+            printf("[--heatmap .] ");
     }
     common_help(ctx, false, true, true, true, false, true, true);
 

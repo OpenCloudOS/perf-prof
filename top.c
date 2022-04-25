@@ -457,7 +457,7 @@ static void top_help(struct help_ctx *ctx)
     for (i = 0; i < ctx->nr_list; i++) {
         for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &ctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__");
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             top_by = false;
             top_add = false;
             if (tp->alias)
@@ -467,21 +467,21 @@ static void top_help(struct help_ctx *ctx)
                     if (!tp->top_add[k].event) {
                         if (tp->top_add[k].top_by) {
                             top_by = true;
-                            printf("top-by=%s/", tp->top_add[k].field?:"__");
+                            printf("top-by=%s/", tp->top_add[k].field?:".");
                         } else {
                             top_add = true;
-                            printf("top-add=%s/", tp->top_add[k].field?:"__");
+                            printf("top-add=%s/", tp->top_add[k].field?:".");
                         }
                     }
             }
             if (!tp->alias || !top_by || !top_add)
                 printf("[");
             if (!tp->alias)
-                printf("alias=__/");
+                printf("alias=./");
             if (!top_by)
-                printf("top-by=__/");
+                printf("top-by=./");
             if (!top_add)
-                printf("top-add=__/");
+                printf("top-add=./");
             if (!tp->alias || !top_by || !top_add)
                 printf("]");
             if (i != ctx->nr_list - 1)

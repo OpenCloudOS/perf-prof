@@ -336,11 +336,11 @@ static void stat_help(struct help_ctx *ctx)
     for (i = 0; i < ctx->nr_list; i++) {
         for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &ctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__");
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (tp->alias)
                 printf("alias=%s/", tp->alias);
             else
-                printf("[alias=__/]");
+                printf("[alias=./]");
             if (i != ctx->nr_list - 1)
                 printf(",");
         }

@@ -344,8 +344,8 @@ static void mpdelay_help(struct help_ctx *ctx)
     for (i = 0; i < ctx->nr_list; i++) {
         for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &ctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/delay=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__",
-                             tp->delay?:"__");
+            printf("%s:%s/%s/delay=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
+                             tp->delay?:".");
             if (i != ctx->nr_list - 1)
                 printf(",");
         }
@@ -363,9 +363,9 @@ static void mpdelay_help(struct help_ctx *ctx)
     if (!env->perins)
         printf("[--perins] ");
     if (!env->greater_than)
-        printf("[--than __] ");
+        printf("[--than .] ");
     if (!env->heatmap)
-        printf("[--heatmap __] ");
+        printf("[--heatmap .] ");
     common_help(ctx, false, true, true, true, false, false, true);
     printf("\n");
 }
