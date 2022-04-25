@@ -4,6 +4,48 @@
 #include <api/fs/fs.h>
 #include <monitor.h>
 
+
+void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool interval, bool order, bool pages, bool verbose)
+{
+    struct env *env = ctx->env;
+
+    if (!enabled)
+        goto can_be_enabled;
+
+    if (cpus && env->cpumask)
+        printf("-C %s ", env->cpumask);
+    if (pids && env->pids)
+        printf("-p %s ", env->pids);
+    if (interval && env->interval)
+        printf("-i %d ", env->interval);
+    if (order && env->order) {
+        if (env->order_mem)
+            printf("--order --order-mem %lu ", env->order_mem);
+        else
+            printf("--order [--order-mem __] ");
+    }
+    if (pages && env->mmap_pages)
+        printf("-m %d ", env->mmap_pages);
+    if (env->verbose)
+        printf("-v ");
+    return;
+
+can_be_enabled:
+    if (cpus && !env->cpumask)
+        printf("[-C __] ");
+    if (pids && !env->pids)
+        printf("[-p __] ");
+    if (interval && !env->interval)
+        printf("[-i __] ");
+    if (order && !env->order)
+        printf("[--order] [--order-mem __] ");
+    if (pages && !env->mmap_pages)
+        printf("[-m __] ");
+    if (!env->verbose)
+        printf("[-v] ");
+}
+
+
 static void monitor_help(struct monitor *m, struct help_ctx *ctx)
 {
     if (m && m->help)

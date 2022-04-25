@@ -162,4 +162,8 @@ bool current_is_order(void);
 bool using_order(profiler *p);
 void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr);
 
+//help.c
+void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool interval, bool order, bool pages, bool verbose);
+
+
 #endif

@@ -449,26 +449,38 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
 {
     struct env *env = ctx->env;
 
+    if (ctx->nr_list < 2)
+        return;
     if (env->impl && strcmp(env->impl, impl))
         return;
 
     printf("%s ", common);
     __help_events(ctx, impl);
-    if (env->pids)
-        printf("-p %s ", env->pids);
-    else if (env->cpumask)
-        printf("-C %s ", env->cpumask);
-    else
-        printf("[-C __|-p __] ");
 
     if (env->key)
         printf("-k %s --order --order-mem __ ", env->key);
-    else
+    printf("--impl %s ", impl);
+    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
+        if (env->perins)
+            printf("--perins ");
+        if (env->greater_than)
+            printf("--than %lu ", env->greater_than);
+        if (env->heatmap)
+            printf("--heatmap %s ", env->heatmap);
+    }
+    common_help(ctx, true, true, true, true, false, true, true);
+
+    if (!env->key)
         printf("[-k __ --order --order-mem __] ");
-    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0)
-        printf("--impl %s [--than __] [--heatmap __] [--perins] ", impl);
-    else
-        printf("--impl %s ", impl);
+    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
+        if (!env->perins)
+            printf("[--perins] ");
+        if (!env->greater_than)
+            printf("[--than __] ");
+        if (!env->heatmap)
+            printf("[--heatmap __] ");
+    }
+    common_help(ctx, false, true, true, true, false, true, true);
 
     printf("\n");
 }
