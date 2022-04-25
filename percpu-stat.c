@@ -6,6 +6,8 @@
 #include "tep.h"
 
 static profiler percpu_stat;
+static profiler stat;
+
 
 struct swevent_stat {
     uint64_t count;
@@ -324,9 +326,41 @@ static int stat_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static void stat_help(struct help_ctx *ctx)
+{
+    int i, j;
+    struct env *env = ctx->env;
+
+    printf(PROGRAME " %s ", stat.name);
+    printf("-e \"");
+    for (i = 0; i < ctx->nr_list; i++) {
+        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &ctx->tp_list[i]->tp[j];
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__");
+            if (tp->alias)
+                printf("alias=%s/", tp->alias);
+            else
+                printf("[alias=__/]");
+            if (i != ctx->nr_list - 1)
+                printf(",");
+        }
+    }
+    printf("\" ");
+
+    if (env->perins)
+        printf("--perins ");
+    common_help(ctx, true, true, false, true, false, false, true);
+
+    if (!env->perins)
+        printf("[--perins] ");
+    common_help(ctx, false, true, false, true, false, false, true);
+    printf("\n");
+}
+
 static profiler stat = {
     .name = "stat",
     .pages = 0,
+    .help = stat_help,
     .init = stat_init,
     .filter = stat_filter,
     .deinit = stat_exit,
