@@ -257,6 +257,7 @@ struct tp_list *tp_list_new(char *event_str)
                     tp->nr_top ++;
                     tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
                     tp->top_add[tp->nr_top-1].field = value;
+                    tp->top_add[tp->nr_top-1].event = false;
                     tp->top_add[tp->nr_top-1].top_by = top_by;
                 } else if (strcmp(attr, "alias") == 0) {
                     alias = value;
