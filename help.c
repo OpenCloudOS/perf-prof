@@ -22,7 +22,7 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
         if (env->order_mem)
             printf("--order --order-mem %lu ", env->order_mem);
         else
-            printf("--order [--order-mem __] ");
+            printf("--order [--order-mem .] ");
     }
     if (pages && env->mmap_pages)
         printf("-m %d ", env->mmap_pages);
@@ -32,15 +32,15 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 
 can_be_enabled:
     if (cpus && !env->cpumask)
-        printf("[-C __] ");
+        printf("[-C .] ");
     if (pids && !env->pids)
-        printf("[-p __] ");
+        printf("[-p .] ");
     if (interval && !env->interval)
-        printf("[-i __] ");
+        printf("[-i .] ");
     if (order && !env->order)
-        printf("[--order] [--order-mem __] ");
+        printf("[--order] [--order-mem .] ");
     if (pages && !env->mmap_pages)
-        printf("[-m __] ");
+        printf("[-m .] ");
     if (!env->verbose)
         printf("[-v] ");
 }

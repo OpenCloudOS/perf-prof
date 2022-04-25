@@ -694,12 +694,12 @@ static void kmemleak_help(struct help_ctx *ctx)
     printf("--alloc \"");
     for (j = 0; j < tp_alloc->nr_tp; j++) {
         struct tp *tp = &tp_alloc->tp[j];
-        printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__",
-                         tp->mem_ptr?:"__");
+        printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
+                         tp->mem_ptr?:".");
         if (tp->mem_size)
             printf("size=%s/", tp->mem_size);
         else
-            printf("[size=__/]");
+            printf("[size=./]");
         if (!env->callchain)
             printf("[stack/]");
         if (j != tp_alloc->nr_tp - 1)
@@ -710,8 +710,8 @@ static void kmemleak_help(struct help_ctx *ctx)
     printf("--free \"");
     for (j = 0; j < tp_free->nr_tp; j++) {
         struct tp *tp = &tp_free->tp[j];
-        printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__",
-                         tp->mem_ptr?:"__");
+        printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
+                         tp->mem_ptr?:".");
         if (j != tp_free->nr_tp - 1)
             printf(",");
     }
@@ -726,7 +726,7 @@ static void kmemleak_help(struct help_ctx *ctx)
     if (!env->callchain)
         printf("[-g] ");
     if (!env->flame_graph)
-        printf("[--flame-graph __] ");
+        printf("[--flame-graph .] ");
     common_help(ctx, false, true, true, false, true, true, true);
     printf("\n");
 }
