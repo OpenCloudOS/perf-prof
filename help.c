@@ -87,22 +87,31 @@ static int help_init(struct perf_evlist *evlist, struct env *env)
     struct help_ctx *ctx = &_ctx;
     int i;
 
-    if (!env->nr_events)
-        exit(0);
-
-    tep__ref();
-
     ctx->env = env;
-    ctx->nr_list = env->nr_events;
+    ctx->nr_list = env->nr_events + !!env->tp_alloc + !!env->tp_free;
+    if (!ctx->nr_list)
+        exit(0);
     ctx->tp_list = calloc(ctx->nr_list, sizeof(*ctx->tp_list));
     if (!ctx->tp_list)
         exit(-1);
 
-    for (i = 0; i < ctx->nr_list; i++) {
+    tep__ref();
+
+    for (i = 0; i < env->nr_events; i++) {
         ctx->tp_list[i] = tp_list_new(env->events[i]);
         if (!ctx->tp_list[i]) {
             exit(-1);
         }
+    }
+    if (env->tp_alloc) {
+        ctx->tp_list[i++] = tp_list_new(env->tp_alloc);
+        if (!ctx->tp_list[i-1])
+            exit(1);
+    }
+    if (env->tp_free) {
+        ctx->tp_list[i++] = tp_list_new(env->tp_free);
+        if (!ctx->tp_list[i-1])
+            exit(1);
     }
 
     printf("\n");

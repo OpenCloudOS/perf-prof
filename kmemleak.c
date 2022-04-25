@@ -679,9 +679,63 @@ static void kmemleak_sigusr1(int signum)
     report_kmemleak_stat(true);
 }
 
+static void kmemleak_help(struct help_ctx *ctx)
+{
+    int j;
+    struct env *env = ctx->env;
+    struct tp_list *tp_alloc, *tp_free;
+
+    if (ctx->nr_list != 2)
+        return ;
+
+    tp_alloc = ctx->tp_list[0];
+    tp_free = ctx->tp_list[1];
+    printf(PROGRAME " %s ", kmemleak.name);
+    printf("--alloc \"");
+    for (j = 0; j < tp_alloc->nr_tp; j++) {
+        struct tp *tp = &tp_alloc->tp[j];
+        printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__",
+                         tp->mem_ptr?:"__");
+        if (tp->mem_size)
+            printf("size=%s/", tp->mem_size);
+        else
+            printf("[size=__/]");
+        if (!env->callchain)
+            printf("[stack/]");
+        if (j != tp_alloc->nr_tp - 1)
+            printf(",");
+    }
+    printf("\" ");
+
+    printf("--free \"");
+    for (j = 0; j < tp_free->nr_tp; j++) {
+        struct tp *tp = &tp_free->tp[j];
+        printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__",
+                         tp->mem_ptr?:"__");
+        if (j != tp_free->nr_tp - 1)
+            printf(",");
+    }
+    printf("\" ");
+
+    if (env->callchain)
+        printf("-g ");
+    if (env->flame_graph)
+        printf("--flame-graph %s ", env->flame_graph);
+    common_help(ctx, true, true, true, false, true, true, true);
+
+    if (!env->callchain)
+        printf("[-g] ");
+    if (!env->flame_graph)
+        printf("[--flame-graph __] ");
+    common_help(ctx, false, true, true, false, true, true, true);
+    printf("\n");
+}
+
+
 struct monitor kmemleak = {
     .name = "kmemleak",
     .pages = 4,
+    .help = kmemleak_help,
     .init = kmemleak_init,
     .filter = kmemleak_filter,
     .deinit = kmemleak_exit,
