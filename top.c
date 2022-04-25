@@ -447,9 +447,59 @@ static void top_interval(void)
     ctx.pid_list.node_delete = sorted.node_delete;
 }
 
+static void top_help(struct help_ctx *ctx)
+{
+    int i, j, k;
+    bool top_by, top_add;
+
+    printf(PROGRAME " %s ", top.name);
+    printf("-e \"");
+    for (i = 0; i < ctx->nr_list; i++) {
+        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &ctx->tp_list[i]->tp[j];
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:"__");
+            top_by = false;
+            top_add = false;
+            if (tp->alias)
+                printf("alias=%s/", tp->alias);
+            if (tp->nr_top) {
+                for (k = 0; k < tp->nr_top; k++)
+                    if (!tp->top_add[k].event) {
+                        if (tp->top_add[k].top_by) {
+                            top_by = true;
+                            printf("top-by=%s/", tp->top_add[k].field?:"__");
+                        } else {
+                            top_add = true;
+                            printf("top-add=%s/", tp->top_add[k].field?:"__");
+                        }
+                    }
+            }
+            if (!tp->alias || !top_by || !top_add)
+                printf("[");
+            if (!tp->alias)
+                printf("alias=__/");
+            if (!top_by)
+                printf("top-by=__/");
+            if (!top_add)
+                printf("top-add=__/");
+            if (!tp->alias || !top_by || !top_add)
+                printf("]");
+            if (i != ctx->nr_list - 1)
+                printf(",");
+        }
+    }
+    printf("\" ");
+
+    common_help(ctx, true, true, true, true, false, true, true);
+    common_help(ctx, false, true, true, true, false, true, true);
+    printf("\n");
+}
+
+
 static profiler top = {
     .name = "top",
     .pages = 4,
+    .help = top_help,
     .init = top_init,
     .filter = top_filter,
     .deinit = top_exit,
