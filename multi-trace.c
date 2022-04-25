@@ -445,7 +445,7 @@ static void __help_events(struct help_ctx *ctx, const char *impl)
     }
 }
 
-static void __multi_trece_help(struct help_ctx *ctx, const char *common, const char *impl)
+static void __multi_trece_help(struct help_ctx *ctx, const char *common, const char *impl, bool impl_default)
 {
     struct env *env = ctx->env;
 
@@ -459,7 +459,8 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
 
     if (env->key)
         printf("-k %s --order --order-mem __ ", env->key);
-    printf("--impl %s ", impl);
+    if (!impl_default)
+        printf("--impl %s ", impl);
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
         if (env->perins)
             printf("--perins ");
@@ -493,7 +494,7 @@ static void multi_trece_help(struct help_ctx *ctx)
     int impl;
 
     for (impl = 0; impl < NUM(impl_str); impl++)
-        __multi_trece_help(ctx, common, impl_str[impl]);
+        __multi_trece_help(ctx, common, impl_str[impl], false);
 }
 
 static profiler multi_trace = {
@@ -520,11 +521,12 @@ static int kmemprof_init(struct perf_evlist *evlist, struct env *env)
 static void kmemprof_help(struct help_ctx *ctx)
 {
     struct env *env = ctx->env;
-    const char *common = PROGRAME " multi-trace";
-    if (env->impl)
-        free(env->impl);
+    const char *common = PROGRAME " kmemprof";
+    char *oldimpl = env->impl;
     env->impl = strdup(TWO_EVENT_MEM_PROFILE);
-    __multi_trece_help(ctx, common, TWO_EVENT_MEM_PROFILE);
+    __multi_trece_help(ctx, common, TWO_EVENT_MEM_PROFILE, true);
+    free(env->impl);
+    env->impl = oldimpl;
 }
 
 static profiler kmemprof = {
