@@ -422,7 +422,7 @@ found:
         goto free_dup_event;
 }
 
-static void __help_events(struct help_ctx *ctx, const char *impl)
+static void __help_events(struct help_ctx *ctx, const char *impl, bool *has_key)
 {
     int i, j;
     struct env *env = ctx->env;
@@ -432,8 +432,10 @@ static void __help_events(struct help_ctx *ctx, const char *impl)
         for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &ctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
-            if (!env->key)
+            if (!env->key || tp->key)
                 printf("key=%s/", tp->key?:".");
+            if (tp->key)
+                *has_key = true;
             if (strcmp(impl, TWO_EVENT_MEM_PROFILE) == 0)
                 printf("ptr=%s/size=%s/", tp->mem_ptr?:".", tp->mem_size?:".");
             if (strcmp(impl, TWO_EVENT_PAIR_IMPL) != 0)
@@ -448,6 +450,7 @@ static void __help_events(struct help_ctx *ctx, const char *impl)
 static void __multi_trece_help(struct help_ctx *ctx, const char *common, const char *impl, bool impl_default)
 {
     struct env *env = ctx->env;
+    bool has_key = false;
 
     if (ctx->nr_list < 2)
         return;
@@ -455,10 +458,12 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
         return;
 
     printf("%s ", common);
-    __help_events(ctx, impl);
+    __help_events(ctx, impl, &has_key);
 
     if (env->key)
         printf("-k %s --order --order-mem . ", env->key);
+    else if (has_key)
+        printf("--order --order-mem . ");
     if (!impl_default)
         printf("--impl %s ", impl);
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
@@ -471,8 +476,10 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
     }
     common_help(ctx, true, true, true, true, false, true, true);
 
-    if (!env->key)
+    if (!env->key && !has_key)
         printf("[-k . --order --order-mem .] ");
+    else if (!env->key)
+        printf("[-k .] ");
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
         if (!env->perins)
             printf("[--perins] ");
