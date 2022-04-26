@@ -193,4 +193,11 @@ void latency_dist_print(struct latency_dist *dist, print_node print_node, void *
     dist->lat.node_delete = latency_stat_node_delete;
 }
 
+bool latency_dist_empty(struct latency_dist *dist)
+{
+    if (!dist)
+        return true;
+    return rblist__empty(&dist->lat);
+}
+
 
