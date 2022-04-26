@@ -9,6 +9,7 @@
 #include <tep.h>
 #include <trace_helpers.h>
 #include <stack_helpers.h>
+#include <latency_helpers.h>
 #include <two-event.h>
 
 static int two_event_node_cmp(struct rb_node *rbn, const void *entry)
@@ -165,19 +166,8 @@ static void impl_init(struct two_event_impl *impl)
  * And can output delay heatmap.
 **/
 
-struct delay_stat {
-    struct rb_node rbnode;
-    u64 key;
-    u64 min;
-    u64 max;
-    u64 n;
-    u64 sum;
-};
-
 struct delay {
     struct two_event base;
-    struct rblist perins_stat;
-    struct delay_stat totins_stat;
     struct heatmap *heatmap;
 };
 
@@ -185,41 +175,8 @@ struct delay_class {
     struct two_event_class base;
     int max_len1;
     int max_len2;
+    struct latency_dist *lat_dist;
 };
-
-static int delay_stat_node_cmp(struct rb_node *rbn, const void *entry)
-{
-    struct delay_stat *d = container_of(rbn, struct delay_stat, rbnode);
-    const u64 *key = entry;
-
-    if (d->key > *key)
-        return 1;
-    else if (d->key < *key)
-        return -1;
-    else
-        return 0;
-}
-
-static struct rb_node *delay_stat_node_new(struct rblist *rlist, const void *new_entry)
-{
-    const u64 *key = new_entry;
-    struct delay_stat *d = malloc(sizeof(*d));
-    if (d) {
-        RB_CLEAR_NODE(&d->rbnode);
-        d->key = *key;
-        d->min = ~0UL;
-        d->max = d->n = d->sum = 0;
-        return &d->rbnode;
-    } else
-        return NULL;
-}
-
-static void delay_stat_node_delete(struct rblist *rblist, struct rb_node *rb_node)
-{
-    struct delay_stat *d = container_of(rb_node, struct delay_stat, rbnode);
-    free(d);
-}
-
 
 static struct two_event *delay_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
 {
@@ -231,12 +188,6 @@ static struct two_event *delay_new(struct two_event_class *class, struct tp *tp1
         delay = container_of(two, struct delay, base);
         delay_class = container_of(two->class, struct delay_class, base);
 
-        rblist__init(&delay->perins_stat);
-        delay->perins_stat.node_cmp = delay_stat_node_cmp;
-        delay->perins_stat.node_new = delay_stat_node_new;
-        delay->perins_stat.node_delete = delay_stat_node_delete;
-
-        delay->totins_stat.min = ~0UL;
         if (strlen(tp1->name) > delay_class->max_len1)
             delay_class->max_len1 = strlen(tp1->name);
         if (strlen(tp2->name) > delay_class->max_len2)
@@ -257,7 +208,6 @@ static void delay_delete(struct two_event_class *class, struct two_event *two)
     if (two) {
         delay = container_of(two, struct delay, base);
         heatmap_close(delay->heatmap);
-        rblist__exit(&delay->perins_stat);
         two_event_delete(class, two);
     }
 }
@@ -265,39 +215,21 @@ static void delay_delete(struct two_event_class *class, struct two_event *two)
 static void delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
 {
     struct delay *delay = NULL;
-    struct rb_node *rbn = NULL;
+    struct delay_class *delay_class = NULL;
     struct two_event_options *opts;
-    struct delay_stat *stat = NULL;
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     struct multi_trace_type_header *e2 = (void *)event2->sample.array;
     u64 delta = 0;
 
     if (two) {
         delay = container_of(two, struct delay, base);
+        delay_class = container_of(two->class, struct delay_class, base);
         opts = &two->class->opts;
 
         if (e2->time > e1->time) {
             delta = e2->time - e1->time;
-            if (opts->perins) {
-                rbn = rblist__findnew(&delay->perins_stat, &key);
-                if (rbn) {
-                    stat = container_of(rbn, struct delay_stat, rbnode);
 
-                    if (delta < stat->min)
-                        stat->min = delta;
-                    if (delta > stat->max)
-                        stat->max = delta;
-                    stat->n ++;
-                    stat->sum += delta;
-                }
-            }
-            stat = &delay->totins_stat;
-            if (delta < stat->min)
-                stat->min = delta;
-            if (delta > stat->max)
-                stat->max = delta;
-            stat->n ++;
-            stat->sum += delta;
+            latency_dist_input(delay_class->lat_dist, key, (u64)two, delta);
 
             if (delay->heatmap)
                 heatmap_write(delay->heatmap, e2->time, delta);
@@ -310,9 +242,23 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     }
 }
 
+static void delay_print_node(void *opaque, struct latency_node *node)
+{
+    struct delay_class *delay_class = opaque;
+    struct two_event_options *opts = &delay_class->base.opts;
+    struct two_event *two = (struct two_event *)node->key;
+
+    if (opts->perins) {
+        printf("[%*lu] ", opts->keytype == K_CPU ? 3 : 6, node->instance);
+    }
+    printf("%*s", delay_class->max_len1, two->tp1->name);
+    printf(" => %-*s", delay_class->max_len2, two->tp2->name);
+    printf(" %8lu %16.3f %9.3f %9.3f %12.3f\n",
+        node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
+}
+
 static int delay_print_header(struct two_event *two)
 {
-    struct delay *delay = NULL;
     struct delay_class *delay_class = NULL;
     struct two_event_options *opts;
     const char *str_keytype[] = {
@@ -323,18 +269,11 @@ static int delay_print_header(struct two_event *two)
     int i;
 
     if (two) {
-        delay = container_of(two, struct delay, base);
         delay_class = container_of(two->class, struct delay_class, base);
         opts = &two->class->opts;
 
-        if (opts->perins) {
-            if (rblist__nr_entries(&delay->perins_stat) == 0)
-                return 0;
-        } else {
-            struct delay_stat *stat = &delay->totins_stat;
-            if (stat->n == 0)
-                return 0;
-        }
+        if (latency_dist_empty(delay_class->lat_dist))
+            return 1;
 
         print_time(stdout);
         printf("\n");
@@ -352,6 +291,8 @@ static int delay_print_header(struct two_event *two)
         for (i=0; i<delay_class->max_len2; i++) printf("-");
         printf(" %8s %16s %9s %9s %12s\n",
                         "--------", "----------------", "---------", "---------", "------------");
+
+        latency_dist_print(delay_class->lat_dist, delay_print_node, delay_class);
         return 1;
     }
     return 0;
@@ -359,61 +300,39 @@ static int delay_print_header(struct two_event *two)
 
 static void delay_print(struct two_event *two)
 {
-    struct delay *delay = NULL;
-    struct delay_class *delay_class = NULL;
-    struct two_event_options *opts;
-    struct delay_stat *stat;
-    struct rb_node *node = NULL, *next = NULL;
-
-    if (two) {
-        delay = container_of(two, struct delay, base);
-        delay_class = container_of(two->class, struct delay_class, base);
-        opts = &two->class->opts;
-        if (!opts->perins) {
-            stat = &delay->totins_stat;
-            goto print_stat;
-        }
-        for (node = rb_first_cached(&delay->perins_stat.entries); node;
-	         node = next) {
-            next = rb_next(node);
-		    stat = container_of(node, struct delay_stat, rbnode);
-        print_stat:
-            if (stat->n) {
-                if (opts->perins) {
-                    printf("[%*lu] ", opts->keytype == K_CPU ? 3 : 6, stat->key);
-                }
-                printf("%*s", delay_class->max_len1, two->tp1->name);
-                printf(" => %-*s", delay_class->max_len2, two->tp2->name);
-                printf(" %8lu %16.3f %9.3f %9.3f %12.3f\n",
-                    stat->n, stat->sum/1000.0, stat->min/1000.0, stat->sum/stat->n/1000.0, stat->max/1000.0);
-
-                stat->min = ~0UL;
-                stat->max = stat->n = stat->sum = 0;
-            } else {
-                if (opts->perins) {
-                    rblist__remove_node(&delay->perins_stat, node);
-                }
-            }
-        }
-    }
 }
 
 static struct two_event_class *delay_class_new(struct two_event_impl *impl, struct two_event_options *options)
 {
     struct two_event_class *class = two_event_class_new(impl, options);
+    struct delay_class *delay_class;
 
     if (class) {
         class->two = delay_two;
         class->print_header = delay_print_header;
         class->print = delay_print;
+
+        delay_class = container_of(class, struct delay_class, base);
+        delay_class->lat_dist = latency_dist_new(options->perins, true, 0);
     }
     return class;
+}
+
+static void delay_class_delete(struct two_event_class *class)
+{
+    struct delay_class *delay_class;
+    if (class) {
+        delay_class = container_of(class, struct delay_class, base);
+        latency_dist_free(delay_class->lat_dist);
+        two_event_class_delete(class);
+    }
 }
 
 static struct two_event_impl delay_impl = {
     .name = TWO_EVENT_DELAY_IMPL,
     .class_size = sizeof(struct delay_class),
     .class_new = delay_class_new,
+    .class_delete = delay_class_delete,
 
     .instance_size = sizeof(struct delay),
     .object_new = delay_new,
