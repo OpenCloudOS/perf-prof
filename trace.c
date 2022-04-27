@@ -235,9 +235,43 @@ static void trace_interval(void)
     flame_graph_reset(ctx.flame);
 }
 
+static void trace_help(struct help_ctx *ctx)
+{
+    int i, j;
+    struct env *env = ctx->env;
+
+    printf(PROGRAME " %s ", trace.name);
+    printf("-e \"");
+    for (i = 0; i < ctx->nr_list; i++) {
+        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &ctx->tp_list[i]->tp[j];
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
+            if (!env->callchain)
+                printf("[stack/]");
+            if (i != ctx->nr_list - 1)
+                printf(",");
+        }
+    }
+    printf("\" ");
+
+    if (env->callchain)
+        printf("-g ");
+    if (env->flame_graph)
+        printf("--flame-graph %s ", env->flame_graph);
+    common_help(ctx, true, true, true, true, true, true, false);
+
+    if (!env->callchain)
+        printf("[-g] ");
+    if (!env->flame_graph)
+        printf("[--flame-graph .] ");
+    common_help(ctx, false, true, true, true, true, true, false);
+    printf("\n");
+}
+
 static profiler trace = {
     .name = "trace",
     .pages = 2,
+    .help = trace_help,
     .init = trace_init,
     .filter = trace_filter,
     .deinit = trace_exit,

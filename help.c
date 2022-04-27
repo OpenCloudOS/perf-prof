@@ -26,7 +26,7 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
     }
     if (pages && env->mmap_pages)
         printf("-m %d ", env->mmap_pages);
-    if (env->verbose)
+    if (verbose && env->verbose)
         printf("-v ");
     return;
 
@@ -41,7 +41,7 @@ can_be_enabled:
         printf("[--order] [--order-mem .] ");
     if (pages && !env->mmap_pages)
         printf("[-m .] ");
-    if (!env->verbose)
+    if (verbose && !env->verbose)
         printf("[-v] ");
 }
 
