@@ -107,6 +107,7 @@ const char argp_program_doc[] =
 "  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--perins] [--heatmap file]\n"
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
+"  perf-prof syscalls -e EVENT [-e ...] [-k str] [--than ns] [--perins] [--heatmap file]\n"
 "  perf-prof percpu-stat [--syscalls]\n"
 "  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"

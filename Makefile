@@ -31,6 +31,7 @@ INCLUDES = \
 -I$(srctree)/include \
 -I$(srctree)/include/uapi \
 -I$(srctree)/arch/$(SRCARCH)/include \
+-I$(srctree)/arch/$(SRCARCH)/include/uapi \
 -I$(srctree)/
 
 # Append required CFLAGS

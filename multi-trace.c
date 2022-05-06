@@ -366,8 +366,10 @@ found:
 
         e = tep_find_event_by_record(tep, &record);
         if (tep_get_field_val(NULL, e, tp->key ?: ctx.env->key, &record, &key, 0) < 0) {
-            tep__unref();
-            goto free_dup_event;
+            if (tep_get_common_field_val(NULL, e, tp->key ?: ctx.env->key, &record, &key, 0) < 0) {
+                tep__unref();
+                goto free_dup_event;
+            }
         }
         tep__unref();
     }
@@ -427,6 +429,11 @@ static void __help_events(struct help_ctx *ctx, const char *impl, bool *has_key)
     int i, j;
     struct env *env = ctx->env;
 
+    if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0) {
+        printf("-e raw_syscalls:sys_enter/./ -e raw_syscalls:sys_exit/./ ");
+        return;
+    }
+
     for (i = 0; i < ctx->nr_list; i++) {
         printf("-e \"");
         for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
@@ -452,7 +459,7 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
     struct env *env = ctx->env;
     bool has_key = false;
 
-    if (ctx->nr_list < 2)
+    if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) && ctx->nr_list < 2)
         return;
     if (env->impl && strcmp(env->impl, impl))
         return;
@@ -466,7 +473,8 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
         printf("--order --order-mem . ");
     if (!impl_default)
         printf("--impl %s ", impl);
-    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
+    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 ||
+        strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0) {
         if (env->perins)
             printf("--perins ");
         if (env->greater_than)
@@ -480,7 +488,8 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
         printf("[-k . --order --order-mem .] ");
     else if (!env->key)
         printf("[-k .] ");
-    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0) {
+    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 ||
+        strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0) {
         if (!env->perins)
             printf("[--perins] ");
         if (!env->greater_than)
@@ -497,7 +506,7 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
 static void multi_trece_help(struct help_ctx *ctx)
 {
     const char *common = PROGRAME " multi-trace";
-    const char *impl_str[] = {TWO_EVENT_DELAY_IMPL, TWO_EVENT_PAIR_IMPL, TWO_EVENT_MEM_PROFILE};
+    const char *impl_str[] = {TWO_EVENT_DELAY_IMPL, TWO_EVENT_PAIR_IMPL, TWO_EVENT_MEM_PROFILE, TWO_EVENT_SYSCALLS_IMPL};
     int impl;
 
     for (impl = 0; impl < NUM(impl_str); impl++)
@@ -546,6 +555,38 @@ static profiler kmemprof = {
     .interval = multi_trace_interval,
     .sample = multi_trace_sample,
 };
-PROFILER_REGISTER(kmemprof)
+PROFILER_REGISTER(kmemprof);
+
+
+static int syscalls_init(struct perf_evlist *evlist, struct env *env)
+{
+    if (env->impl)
+        free(env->impl);
+    env->impl = strdup(TWO_EVENT_SYSCALLS_IMPL);
+    return multi_trace_init(evlist, env);
+}
+
+static void syscalls_help(struct help_ctx *ctx)
+{
+    struct env *env = ctx->env;
+    const char *common = PROGRAME " syscalls";
+    char *oldimpl = env->impl;
+    env->impl = strdup(TWO_EVENT_SYSCALLS_IMPL);
+    __multi_trece_help(ctx, common, TWO_EVENT_SYSCALLS_IMPL, true);
+    free(env->impl);
+    env->impl = oldimpl;
+}
+
+static profiler syscalls = {
+    .name = "syscalls",
+    .pages = 64,
+    .help = syscalls_help,
+    .init = syscalls_init,
+    .filter = multi_trace_filter,
+    .deinit = multi_trace_exit,
+    .interval = multi_trace_interval,
+    .sample = multi_trace_sample,
+};
+PROFILER_REGISTER(syscalls);
 
 

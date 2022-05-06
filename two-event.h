@@ -76,6 +76,10 @@ struct two_event_impl {
 #define TWO_EVENT_MEM_PROFILE "kmemprof"
 
 
+#define TWO_EVENT_SYSCALLS_IMPL "syscalls"
+extern const char *syscalls_table[];
+
+
 struct two_event_impl *impl_get(const char *name);
 
 
