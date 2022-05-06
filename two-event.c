@@ -5,6 +5,8 @@
 #include <sys/stat.h>
 #include <linux/zalloc.h>
 #include <linux/rblist.h>
+#include <linux/compiler.h>
+#include <linux/err.h>
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
@@ -339,6 +341,187 @@ static struct two_event_impl delay_impl = {
     .object_delete = delay_delete,
 };
 
+
+/*
+ * syscall delay
+ *
+ * Count the maximum, minimum, and average values of each instance.
+ * Number of syscall errors
+ * And can output delay heatmap.
+ *
+**/
+
+struct sys_enter {
+    unsigned short common_type;//       offset:0;       size:2; signed:0;
+    unsigned char common_flags;//       offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
+    int common_pid;//   offset:4;       size:4; signed:1;
+
+    long id;//  offset:8;       size:8; signed:1;
+    unsigned long args[6];//    offset:16;      size:48;        signed:0;
+};
+
+struct sys_exit {
+    unsigned short common_type;//       offset:0;       size:2; signed:0;
+    unsigned char common_flags;//       offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
+    int common_pid;//   offset:4;       size:4; signed:1;
+
+    long id;//  offset:8;       size:8; signed:1;
+    long ret;// offset:16;      size:8; signed:1;
+};
+
+
+#undef __SYSCALL
+#undef __SYSCALL_WITH_COMPAT
+#define __SYSCALL(nr, sym) [nr] = #sym,
+#define __SYSCALL_WITH_COMPAT(nr, sym, compat) [nr] = #sym,
+const char *syscalls_table[] = {
+#if defined(__i386__)
+#include <asm/syscalls_32.h>
+#elif defined(__x86_64__)
+#include <asm/syscalls_64.h>
+#else
+#include <asm-generic/unistd.h>
+#endif
+};
+
+static struct two_event *syscalls_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
+{
+    if (strcmp(tp1->sys, "raw_syscalls") ||
+        strcmp(tp1->name, "sys_enter") ||
+        strcmp(tp2->sys, "raw_syscalls") ||
+        strcmp(tp2->name, "sys_exit")) {
+        fprintf(stderr, "Please use -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit\n");
+        return NULL;
+    }
+    return delay_new(class, tp1, tp2);
+}
+
+static void syscalls_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+{
+    struct delay *delay = NULL;
+    struct delay_class *delay_class = NULL;
+    struct two_event_options *opts;
+    struct multi_trace_type_header *e1 = (void *)event1->sample.array;
+    struct multi_trace_type_header *e2 = (void *)event2->sample.array;
+    struct sys_enter *sys_enter;
+    int enter_size;
+    struct sys_exit *sys_exit;
+    int exit_size;
+    u64 delta = 0;
+    struct latency_node *node;
+
+    if (two) {
+        delay = container_of(two, struct delay, base);
+        delay_class = container_of(two->class, struct delay_class, base);
+        opts = &two->class->opts;
+
+        if (e2->time > e1->time) {
+            delta = e2->time - e1->time;
+
+            multi_trace_raw_size(event1, (void **)&sys_enter, &enter_size, two->tp1);
+            multi_trace_raw_size(event2, (void **)&sys_exit, &exit_size, two->tp2);
+
+            if (sys_enter->common_pid != sys_exit->common_pid ||
+                sys_enter->id != sys_exit->id)
+                return ;
+
+            node = latency_dist_input(delay_class->lat_dist, sys_enter->common_pid, sys_enter->id, delta);
+            node->extra[0] += IS_ERR_VALUE((unsigned long)sys_exit->ret); //error
+
+            if (delay->heatmap)
+                heatmap_write(delay->heatmap, e2->time, delta);
+
+            if (opts->greater_than && delta > opts->greater_than) {
+                multi_trace_print(event1, two->tp1);
+                multi_trace_print(event2, two->tp2);
+            }
+        }
+    }
+}
+
+static void syscalls_print_node(void *opaque, struct latency_node *node)
+{
+    struct delay_class *delay_class = opaque;
+    struct two_event_options *opts = &delay_class->base.opts;
+
+    if (opts->perins) {
+        printf("[%6lu] ", node->instance);
+    }
+    if (node->key < sizeof(syscalls_table)/sizeof(syscalls_table[0])
+        && syscalls_table[node->key])
+        printf("%-16s", syscalls_table[node->key]);
+    else
+        printf("%-16lu", node->key);
+    printf(" %8lu %16.3f %12.3f %12.3f %12.3f %6lu\n",
+        node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0, node->extra[0]);
+}
+
+static int syscalls_print_header(struct two_event *two)
+{
+    struct delay_class *delay_class = NULL;
+    struct two_event_options *opts;
+    int i;
+
+    if (two) {
+        delay_class = container_of(two->class, struct delay_class, base);
+        opts = &two->class->opts;
+
+        if (latency_dist_empty(delay_class->lat_dist))
+            return 1;
+
+        print_time(stdout);
+        printf("\n");
+
+        if (opts->perins)
+            printf("[THREAD] ");
+
+        printf("%-16s", "syscalls");
+        printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "err");
+
+        if (opts->perins)
+            printf("-------- ");
+        for (i=0; i<16; i++) printf("-");
+        printf(" %8s %16s %12s %12s %12s %6s\n",
+                        "--------", "----------------", "------------", "------------", "------------", "------");
+
+        latency_dist_print(delay_class->lat_dist, syscalls_print_node, delay_class);
+        return 1;
+    }
+    return 0;
+}
+
+
+static struct two_event_class *syscalls_class_new(struct two_event_impl *impl, struct two_event_options *options)
+{
+    struct two_event_class *class = two_event_class_new(impl, options);
+    struct delay_class *delay_class;
+
+    if (class) {
+        class->two = syscalls_two;
+        class->print_header = syscalls_print_header;
+        class->print = delay_print;
+
+        delay_class = container_of(class, struct delay_class, base);
+        delay_class->lat_dist = latency_dist_new(options->perins, true, sizeof(u64));
+    }
+    return class;
+}
+
+
+static struct two_event_impl syscalls_impl = {
+    .name = TWO_EVENT_SYSCALLS_IMPL,
+    .class_size = sizeof(struct delay_class),
+    .class_new = syscalls_class_new,
+    .class_delete = delay_class_delete,
+
+    .instance_size = sizeof(struct delay),
+    .object_new = syscalls_new,
+    .object_delete = delay_delete,
+};
+
+
 /*
  * Determine if two events are paired
  *
@@ -642,6 +825,8 @@ struct two_event_impl *impl_get(const char *name)
         impl = &pair_impl;
     else if (strcmp(name, mem_profile_impl.name) == 0)
         impl = &mem_profile_impl;
+    else if (strcmp(name, syscalls_impl.name) == 0)
+        impl = &syscalls_impl;
 
     if (impl)
         impl_init(impl);
