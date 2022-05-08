@@ -445,15 +445,17 @@ static void syscalls_print_node(void *opaque, struct latency_node *node)
 {
     struct delay_class *delay_class = opaque;
     struct two_event_options *opts = &delay_class->base.opts;
+    char buf[64];
 
     if (opts->perins) {
         printf("[%6lu] ", node->instance);
     }
     if (node->key < sizeof(syscalls_table)/sizeof(syscalls_table[0])
-        && syscalls_table[node->key])
-        printf("%-16s", syscalls_table[node->key]);
-    else
-        printf("%-16lu", node->key);
+        && syscalls_table[node->key]) {
+        snprintf(buf, sizeof(buf), "%s(%lu)", syscalls_table[node->key], node->key);
+        printf("%-20s", buf);
+    } else
+        printf("%-20lu", node->key);
     printf(" %8lu %16.3f %12.3f %12.3f %12.3f %6lu\n",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0, node->extra[0]);
 }
@@ -477,12 +479,12 @@ static int syscalls_print_header(struct two_event *two)
         if (opts->perins)
             printf("[THREAD] ");
 
-        printf("%-16s", "syscalls");
+        printf("%-20s", "syscalls");
         printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "err");
 
         if (opts->perins)
             printf("-------- ");
-        for (i=0; i<16; i++) printf("-");
+        for (i=0; i<20; i++) printf("-");
         printf(" %8s %16s %12s %12s %12s %6s\n",
                         "--------", "----------------", "------------", "------------", "------------", "------");
 
