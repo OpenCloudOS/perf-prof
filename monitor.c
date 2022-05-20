@@ -114,6 +114,7 @@ const char argp_program_doc[] =
 "  perf-prof blktrace -d device [--than ns]\n"
 "  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--exclude-*] [-G] [--than PCT]\n"
 "  perf-prof cpu-util [--exclude-*] [-G]\n"
+"  perf-prof ldlat-loads [--ldlat cycles] [-T trigger]\n"
 "Use Fewer Profilers:\n"
 "  perf-prof split-lock [-T trigger] [-G] [--test]\n"
 "  perf-prof irq-off [-L lat] [-g] [--precise]\n"
@@ -203,7 +204,7 @@ static const struct argp_option opts[] = {
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
     { "detail", LONG_OPT_detail, NULL, 0, "More detailed information output" },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
-    { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency" },
+    { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency, Unit: cycles" },
 
     { "version", 'V', NULL, 0, "Version info" },
     { NULL, 'h', NULL, OPTION_HIDDEN, "" },
