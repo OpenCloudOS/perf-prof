@@ -158,6 +158,7 @@ enum {
     LONG_OPT_order_mem,
     LONG_OPT_detail,
     LONG_OPT_impl,
+    LONG_OPT_ldlat,
 };
 static const struct argp_option opts[] = {
     { NULL, 0, NULL, 0, "OPTION:" },
@@ -202,6 +203,7 @@ static const struct argp_option opts[] = {
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
     { "detail", LONG_OPT_detail, NULL, 0, "More detailed information output" },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
+    { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency" },
 
     { "version", 'V', NULL, 0, "Version info" },
     { NULL, 'h', NULL, OPTION_HIDDEN, "" },
@@ -410,6 +412,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'd':
         env.device = strdup(arg);
+        break;
+    case LONG_OPT_ldlat:
+        env.ldlat = strtol(arg, NULL, 10);
         break;
     case 'v':
         env.verbose++;

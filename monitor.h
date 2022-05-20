@@ -90,6 +90,7 @@ struct env {
     bool precise;
     bool detail;
     char *device;
+    int ldlat;
 
     /* order */
     bool order;
