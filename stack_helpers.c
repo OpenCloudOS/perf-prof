@@ -126,6 +126,22 @@ struct callchain_ctx *callchain_ctx_new(int flags, FILE *fout)
     return cc;
 }
 
+void callchain_ctx_config(struct callchain_ctx *cc, bool addr, bool symbol, bool offset,
+        bool dso, bool reverse, char sep, char end)
+{
+    if (!cc)
+        return ;
+    if (!(addr || symbol || offset || dso))
+        return ;
+    cc->addr   = addr;
+    cc->symbol = symbol;
+    cc->offset = offset;
+    cc->dso    = dso;
+    cc->reverse = reverse;
+    cc->seperate = sep;
+    cc->end = end;
+}
+
 void callchain_ctx_free(struct callchain_ctx *cc)
 {
     if (!cc)

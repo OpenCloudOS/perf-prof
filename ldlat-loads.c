@@ -9,10 +9,12 @@
 #include <stack_helpers.h>
 #include <latency_helpers.h>
 
+#define START_OF_KERNEL 0xffff000000000000UL
 
 static profiler ldlat_loads;
 static struct monitor_ctx {
     struct latency_dist *lat_dist;
+    struct callchain_ctx *ccx;
     struct env *env;
 } ctx;
 
@@ -24,6 +26,8 @@ static int monitor_ctx_init(struct env *env)
     }
 
     ctx.lat_dist = latency_dist_new(env->perins, true, 0);
+    ctx.ccx = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+    callchain_ctx_config(ctx.ccx, 0, 1, 1, 0, 0, '\n', '\n');
     ctx.env = env;
     return 0;
 }
@@ -31,6 +35,7 @@ static int monitor_ctx_init(struct env *env)
 static void monitor_ctx_exit(void)
 {
     latency_dist_free(ctx.lat_dist);
+    callchain_ctx_free(ctx.ccx);
 }
 
 static int ldlat_loads_init(struct perf_evlist *evlist, struct env *env)
@@ -93,11 +98,21 @@ struct sample_type_header {
 static void ldlat_loads_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *data = (void *)event->sample.array;
+    struct {
+        __u64 nr;
+        __u64 ips[2];
+    } callchain;
 
-    if (ctx.env->verbose)
-        printf("CPU %u PID %u TID %u IP %016lx DATA ADDR %016lx PHYS %016lx latency %llu cycles\n",
+    if (ctx.env->verbose) {
+        callchain.nr = 2;
+        callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+        callchain.ips[1] = data->ip;
+
+        printf("CPU %3u PID %6u TID %6u DATA ADDR %016lx PHYS %016lx latency %6llu cycles RIP %016lx ",
                 data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid,
-                data->ip, data->addr, data->phys_addr, data->weight.full);
+                data->addr, data->phys_addr, data->weight.full, data->ip);
+        print_callchain(ctx.ccx, (struct callchain *)&callchain, data->tid_entry.pid);
+    }
 
     latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full);
 }
