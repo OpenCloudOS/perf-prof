@@ -39,7 +39,8 @@ static int ldlat_loads_init(struct perf_evlist *evlist, struct env *env)
         .type          = PERF_TYPE_RAW,
         .config        = 0x1cd,  //MEM_TRANS_RETIRED.* /sys/bus/event_source/devices/cpu/events/mem-loads
         .size          = sizeof(struct perf_event_attr),
-        .sample_period = 1000,  //
+        //Every trigger_freq memory load, the PEBS hardware triggers an assist and causes a PEBS record to be written
+        .sample_period = env->trigger_freq,
         .sample_type   = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
                          PERF_SAMPLE_WEIGHT | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_PHYS_ADDR,
         .read_format   = 0,
