@@ -96,29 +96,6 @@ struct sample_type_header {
     u64			phys_addr;
 };
 
-static void ldlat_loads_sample(union perf_event *event, int instance)
-{
-    struct sample_type_header *data = (void *)event->sample.array;
-    struct {
-        __u64 nr;
-        __u64 ips[2];
-    } callchain;
-
-    if (ctx.env->verbose) {
-        callchain.nr = 2;
-        callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
-        callchain.ips[1] = data->ip;
-
-        printf("CPU %3u PID %6u TID %6u DATA ADDR %016lx PHYS %016lx latency %6llu cycles RIP %016lx ",
-                data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid,
-                data->addr, data->phys_addr, data->weight.full, data->ip);
-        print_callchain(ctx.ccx, (struct callchain *)&callchain, data->tid_entry.pid);
-    }
-
-    latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full);
-}
-
-
 struct mem_info {
     union perf_mem_data_src data_src;
 };
@@ -407,6 +384,32 @@ static void ldlat_loads_interval(void)
     return ;
 }
 
+static void ldlat_loads_sample(union perf_event *event, int instance)
+{
+    struct sample_type_header *data = (void *)event->sample.array;
+    struct mem_info mem_info;
+    char buf[64];
+    struct {
+        __u64 nr;
+        __u64 ips[2];
+    } callchain;
+
+    if (ctx.env->verbose) {
+        callchain.nr = 2;
+        callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+        callchain.ips[1] = data->ip;
+
+        mem_info.data_src.val = data->data_src;
+        perf_mem__lvl_scnprintf(buf, sizeof(buf), &mem_info);
+
+        printf("CPU %3u PID %6u TID %6u DATA ADDR %016lx PHYS %016lx latency %6llu cycles %s RIP %016lx ",
+                data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid,
+                data->addr, data->phys_addr, data->weight.full, buf, data->ip);
+        print_callchain(ctx.ccx, (struct callchain *)&callchain, data->tid_entry.pid);
+    }
+
+    latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full);
+}
 
 //PEBS
 //18.3.4.4.2 Load Latency Performance Monitoring Facility
@@ -418,6 +421,49 @@ static profiler ldlat_loads = {
     .interval = ldlat_loads_interval,
     .sample = ldlat_loads_sample,
 };
-PROFILER_REGISTER(ldlat_loads)
+PROFILER_REGISTER(ldlat_loads);
 
+
+
+static profiler ldlat_stores;
+static int ldlat_stores_init(struct perf_evlist *evlist, struct env *env)
+{
+    struct perf_event_attr attr = {
+        .type          = PERF_TYPE_RAW,
+        .config        = 0x82d0, //MEM_UOPS_RETIRED.ALL_STORES /sys/bus/event_source/devices/cpu/events/mem-stores
+        .size          = sizeof(struct perf_event_attr),
+        //Every trigger_freq memory load, the PEBS hardware triggers an assist and causes a PEBS record to be written
+        .sample_period = env->trigger_freq,
+        .sample_type   = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
+                         PERF_SAMPLE_WEIGHT | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_PHYS_ADDR,
+        .read_format   = 0,
+        .pinned        = 1,
+        .disabled      = 1,
+        .precise_ip    = 3, // enable PEBS
+        .watermark     = 1,
+        .wakeup_watermark = (ldlat_stores.pages << 12) / 2, // enable large PEBS, PERF_X86_EVENT_LARGE_PEBS
+    };
+    struct perf_evsel *evsel;
+
+    if (monitor_ctx_init(env) < 0)
+        return -1;
+
+    evsel = perf_evsel__new(&attr);
+    if (!evsel) {
+        return -1;
+    }
+    perf_evlist__add(evlist, evsel);
+    return 0;
+}
+
+
+static profiler ldlat_stores = {
+    .name = "ldlat-stores",
+    .pages = 32, // 2x PEBS_BUFFER_SIZE, in kernel PEBS_BUFFER_SIZE=(PAGE_SIZE << 4)
+    .init = ldlat_stores_init,
+    .deinit = ldlat_loads_exit,
+    .interval = ldlat_loads_interval,
+    .sample = ldlat_loads_sample,
+};
+PROFILER_REGISTER(ldlat_stores);
 

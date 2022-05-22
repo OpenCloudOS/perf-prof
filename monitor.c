@@ -115,6 +115,7 @@ const char argp_program_doc[] =
 "  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--exclude-*] [-G] [--than PCT]\n"
 "  perf-prof cpu-util [--exclude-*] [-G]\n"
 "  perf-prof ldlat-loads [--ldlat cycles] [-T trigger]\n"
+"  perf-prof ldlat-stores [-T trigger]\n"
 "Use Fewer Profilers:\n"
 "  perf-prof split-lock [-T trigger] [-G] [--test]\n"
 "  perf-prof irq-off [-L lat] [-g] [--precise]\n"
