@@ -53,7 +53,8 @@ static int ldlat_loads_init(struct perf_evlist *evlist, struct env *env)
         .disabled      = 1,
         .precise_ip    = 3, // enable PEBS
         .config1       = env->ldlat <= 0 ? 3 : env->ldlat, // MSR_PEBS_LD_LAT_THRESHOLD MSR
-        .wakeup_events = 1,
+        .watermark     = 1,
+        .wakeup_watermark = (ldlat_loads.pages << 12) / 2, // enable large PEBS, PERF_X86_EVENT_LARGE_PEBS
     };
     struct perf_evsel *evsel;
 
