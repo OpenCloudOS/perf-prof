@@ -86,12 +86,20 @@ static int latency_stat__sorted_node_cmp(struct rb_node *rbn, const void *entry)
         else if (n->instance < e->instance)
             return -1;
     }
+
     if (n->sum > e->sum)
         return -1;
     else if (n->sum < e->sum)
         return 1;
-    else
-        return 0;
+
+    if (dist->perkey) {
+        if (n->key > e->key)
+            return 1;
+        else if (n->key < e->key)
+            return -1;
+    }
+    return 0;
+
 }
 
 static struct rb_node *latency_stat__sorted_node_new(struct rblist *rlist, const void *new_entry)
