@@ -412,7 +412,7 @@ static void ldlat_loads_interval(void)
 //18.3.4.4.2 Load Latency Performance Monitoring Facility
 static profiler ldlat_loads = {
     .name = "ldlat-loads",
-    .pages = 16,
+    .pages = 32, // 2x PEBS_BUFFER_SIZE, in kernel PEBS_BUFFER_SIZE=(PAGE_SIZE << 4)
     .init = ldlat_loads_init,
     .deinit = ldlat_loads_exit,
     .interval = ldlat_loads_interval,
