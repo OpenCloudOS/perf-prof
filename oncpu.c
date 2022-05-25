@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <errno.h>
+#include <fcntl.h>
 #include <monitor.h>
 #include <tep.h>
 
@@ -15,12 +17,17 @@ struct perins_cpumap {
     int map[0];
 };
 
+struct perins_info {
+    char comm[16];
+};
+
 static struct oncpu_ctx {
     int nr_ins;
     int nr_cpus;
     int size_perins_cpumap;
     struct perins_cpumap *maps;
     struct perins_cpumap *all_ins;
+    struct perins_info *infos;
     struct env *env;
 } ctx;
 
@@ -39,6 +46,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         .wakeup_watermark = (oncpu.pages << 12) / 2,
     };
     struct perf_evsel *evsel;
+    int i;
 
     if (monitor_instance_oncpu()) {
         fprintf(stderr, "Need to specify -p PID parameter\n");
@@ -57,6 +65,24 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     ctx.all_ins = (void *)ctx.maps + ctx.nr_ins * ctx.size_perins_cpumap;
     memset(ctx.maps, 0, (ctx.nr_ins + 1) * ctx.size_perins_cpumap);
 
+    ctx.infos = calloc(ctx.nr_ins, sizeof(struct perins_info));
+    if (!ctx.infos)
+        return -1;
+    for (i = 0; i < ctx.nr_ins; i++) {
+        char path[64];
+        int fd, len;
+
+        snprintf(path, sizeof(path), "/proc/%d/comm", monitor_instance_thread(i));
+        fd = open(path, O_RDONLY);
+        if (fd < 0) return -1;
+        len = (int)read(fd, ctx.infos[i].comm, 16);
+        close(fd);
+        if (len <= 0) return -1;
+        len--;
+        if (ctx.infos[i].comm[len] == '\n' || len == 15)
+            ctx.infos[i].comm[len] = '\0';
+    }
+
     attr.config = tep__event_id("sched", "sched_stat_runtime");
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -69,6 +95,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 static void oncpu_exit(struct perf_evlist *evlist)
 {
     free(ctx.maps);
+    free(ctx.infos);
 }
 
 static void print_cpumap(int ins, struct perins_cpumap *map)
@@ -79,7 +106,7 @@ static void print_cpumap(int ins, struct perins_cpumap *map)
         return;
 
     if (ins >= 0) {
-        printf("[%6d] ", monitor_instance_thread(ins));
+        printf("[%6d] %-16s ", monitor_instance_thread(ins), ctx.infos[ins].comm);
     }
     for (i = 0; i < ctx.nr_cpus; i++) {
         if (map->map[i] > 0)
@@ -95,7 +122,7 @@ static void oncpu_interval(void)
     print_time(stdout);
     printf("\n");
     if (ctx.env->perins) {
-        printf("[THREAD] [CPUS]\n");
+        printf("[THREAD] %-16s [CPUS]\n", "[COMM]");
         for (i = 0; i < ctx.nr_ins; i++) {
             print_cpumap(i, (void *)ctx.maps + i * ctx.size_perins_cpumap);
         }
