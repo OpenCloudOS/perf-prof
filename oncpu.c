@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
 
@@ -28,8 +29,47 @@ static struct oncpu_ctx {
     struct perins_cpumap *maps;
     struct perins_cpumap *all_ins;
     struct perins_info *infos;
+    int *percpu_thread_siblings;
     struct env *env;
 } ctx;
+
+static int read_cpu_thread_sibling(int cpu)
+{
+    struct perf_cpu_map *cpumap;
+    char buff[PATH_MAX];
+    char *cpu_list;
+    size_t len = 0;
+    int err, c, idx;
+    int thread_sibling = -1;
+
+    if (cpu >= ctx.nr_cpus)
+        return -1;
+
+    snprintf(buff, sizeof(buff), "devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+    if ((err = sysfs__read_str(buff, &cpu_list, &len)) < 0 ||
+        len == 0) {
+        fprintf(stderr, "failed to read %s, %d Not Supported.\n", buff, err);
+        return -1;
+    }
+    cpu_list[len] = '\0';
+    cpumap = perf_cpu_map__new(cpu_list);
+
+    perf_cpu_map__for_each_cpu(c, idx, cpumap) {
+        if (c < 0) {
+            fprintf(stderr, "cpu < 0 %s, Not Supported.\n", cpu_list);
+            free(cpu_list);
+            return -1;
+        }
+        if (c == cpu)
+            continue;
+        thread_sibling = c;
+        break;
+    }
+    perf_cpu_map__put(cpumap);
+    free(cpu_list);
+    return thread_sibling;
+}
+
 
 static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 {
@@ -83,6 +123,20 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
             ctx.infos[i].comm[len] = '\0';
     }
 
+    if (env->detail) {
+        ctx.percpu_thread_siblings = calloc(ctx.nr_cpus, sizeof(int));
+        if (!ctx.infos)
+            return -1;
+        for (i = 0; i < ctx.nr_cpus; i++) {
+            ctx.percpu_thread_siblings[i] = read_cpu_thread_sibling(i);
+            if (ctx.percpu_thread_siblings[i] == -1) {
+                free(ctx.percpu_thread_siblings);
+                ctx.percpu_thread_siblings = NULL;
+                break;
+            }
+        }
+    }
+
     attr.config = tep__event_id("sched", "sched_stat_runtime");
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -96,21 +150,33 @@ static void oncpu_exit(struct perf_evlist *evlist)
 {
     free(ctx.maps);
     free(ctx.infos);
+    if (ctx.percpu_thread_siblings)
+        free(ctx.percpu_thread_siblings);
 }
 
 static void print_cpumap(int ins, struct perins_cpumap *map)
 {
-    int i;
+    int i, p = 0;
 
     if (!map->nr)
         return;
 
     if (ins >= 0) {
-        printf("[%6d] %-16s ", monitor_instance_thread(ins), ctx.infos[ins].comm);
+        printf("%-6d %-16s ", monitor_instance_thread(ins), ctx.infos[ins].comm);
     }
     for (i = 0; i < ctx.nr_cpus; i++) {
         if (map->map[i] > 0)
-            printf("%d ", i);
+            p += printf("%d ", i);
+    }
+    if (ctx.percpu_thread_siblings) {
+        if (p >= 7)
+            printf(",");
+        else
+            printf("%-*s", 7-p, "");
+        for (i = 0; i < ctx.nr_cpus; i++) {
+            if (map->map[i] > 0)
+                printf("%d ", ctx.percpu_thread_siblings[i]);
+        }
     }
     printf("\n");
 }
@@ -122,7 +188,7 @@ static void oncpu_interval(void)
     print_time(stdout);
     printf("\n");
     if (ctx.env->perins) {
-        printf("[THREAD] %-16s [CPUS]\n", "[COMM]");
+        printf("THREAD %-16s CPUS %s\n", "COMM", ctx.env->detail ? ", SIBLINGS" : "");
         for (i = 0; i < ctx.nr_ins; i++) {
             print_cpumap(i, (void *)ctx.maps + i * ctx.size_perins_cpumap);
         }
