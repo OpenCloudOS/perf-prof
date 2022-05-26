@@ -14,7 +14,7 @@
 static profiler oncpu;
 
 struct perins_cpumap {
-    int nr;
+    u64 nr;
     u64 map[0];
 };
 
@@ -162,7 +162,7 @@ static void print_cpumap(int ins, struct perins_cpumap *map)
         return;
 
     if (ins >= 0) {
-        printf("%-6d %-16s ", monitor_instance_thread(ins), ctx.infos[ins].comm);
+        printf("%-6d %-16s %-7lu ", monitor_instance_thread(ins), ctx.infos[ins].comm, map->nr/1000000);
     }
     for (i = 0; i < ctx.nr_cpus; i++) {
         if (map->map[i] > 0)
@@ -185,7 +185,7 @@ static void oncpu_interval(void)
     print_time(stdout);
     printf("\n");
     if (ctx.env->perins) {
-        printf("THREAD %-16s CPUS(ms) %s\n", "COMM", ctx.env->detail ? ", SIBLINGS" : "");
+        printf("THREAD %-16s %-7s CPUS(ms) %s\n", "COMM", "SUM(ms)", ctx.env->detail ? ", SIBLINGS" : "");
         for (i = 0; i < ctx.nr_ins; i++) {
             print_cpumap(i, (void *)ctx.maps + i * ctx.size_perins_cpumap);
         }
@@ -212,9 +212,9 @@ static void oncpu_sample(union perf_event *event, int instance)
     } *data = (void *)event->sample.array;
     struct perins_cpumap *map = (void *)ctx.maps + instance * ctx.size_perins_cpumap;
 
-    map->nr++;
+    map->nr += data->period;
     map->map[data->cpu_entry.cpu] += data->period;
-    ctx.all_ins->nr++;
+    ctx.all_ins->nr += data->period;
     ctx.all_ins->map[data->cpu_entry.cpu] += data->period;
 }
 
