@@ -15,7 +15,7 @@ static profiler oncpu;
 
 struct perins_cpumap {
     int nr;
-    int map[0];
+    u64 map[0];
 };
 
 struct perins_info {
@@ -77,8 +77,8 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
-        .sample_period = 1000000,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU,
+        .sample_period = 1,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD,
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
@@ -98,7 +98,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     ctx.env = env;
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_cpus = get_present_cpus();
-    ctx.size_perins_cpumap = sizeof(struct perins_cpumap) + ctx.nr_cpus * sizeof(int);
+    ctx.size_perins_cpumap = sizeof(struct perins_cpumap) + ctx.nr_cpus * sizeof(u64);
     ctx.maps = malloc((ctx.nr_ins + 1) * ctx.size_perins_cpumap);
     if (!ctx.maps)
         return -1;
@@ -166,13 +166,10 @@ static void print_cpumap(int ins, struct perins_cpumap *map)
     }
     for (i = 0; i < ctx.nr_cpus; i++) {
         if (map->map[i] > 0)
-            p += printf("%d ", i);
+            p += printf("%d(%lums) ", i, map->map[i]/1000000);
     }
     if (ctx.percpu_thread_siblings) {
-        if (p >= 7)
-            printf(",");
-        else
-            printf("%-*s", 7-p, "");
+        printf(", ");
         for (i = 0; i < ctx.nr_cpus; i++) {
             if (map->map[i] > 0)
                 printf("%d ", ctx.percpu_thread_siblings[i]);
@@ -188,7 +185,7 @@ static void oncpu_interval(void)
     print_time(stdout);
     printf("\n");
     if (ctx.env->perins) {
-        printf("THREAD %-16s CPUS %s\n", "COMM", ctx.env->detail ? ", SIBLINGS" : "");
+        printf("THREAD %-16s CPUS(ms) %s\n", "COMM", ctx.env->detail ? ", SIBLINGS" : "");
         for (i = 0; i < ctx.nr_ins; i++) {
             print_cpumap(i, (void *)ctx.maps + i * ctx.size_perins_cpumap);
         }
@@ -211,12 +208,14 @@ static void oncpu_sample(union perf_event *event, int instance)
             __u32    cpu;
             __u32    reserved;
         }    cpu_entry;
+        __u64		period;
     } *data = (void *)event->sample.array;
     struct perins_cpumap *map = (void *)ctx.maps + instance * ctx.size_perins_cpumap;
+
     map->nr++;
-    map->map[data->cpu_entry.cpu]++;
+    map->map[data->cpu_entry.cpu] += data->period;
     ctx.all_ins->nr++;
-    ctx.all_ins->map[data->cpu_entry.cpu]++;
+    ctx.all_ins->map[data->cpu_entry.cpu] += data->period;
 }
 
 static profiler oncpu = {
