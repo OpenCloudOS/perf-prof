@@ -10,6 +10,12 @@
 #include <monitor.h>
 #include <tep.h>
 
+#define min(x, y) ({                \
+    typeof(x) _min1 = (x);          \
+    typeof(y) _min2 = (y);          \
+    (void) (&_min1 == &_min2);      \
+    _min1 < _min2 ? _min1 : _min2; })
+
 
 static profiler oncpu;
 
@@ -30,6 +36,7 @@ static struct oncpu_ctx {
     struct perins_cpumap *all_ins;
     struct perins_info *infos;
     int *percpu_thread_siblings;
+    int *perins_vmf_sib;
     struct env *env;
 } ctx;
 
@@ -69,6 +76,28 @@ static int read_cpu_thread_sibling(int cpu)
     free(cpu_list);
     return thread_sibling;
 }
+
+static int read_sched_vmf_sib(int ins)
+{
+    char path[64];
+    char buf[32];
+    int fd, len, vmf_sib;
+
+    snprintf(path, sizeof(path), "/proc/%d/sched_vmf_sib", monitor_instance_thread(ins));
+    fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    len = (int)read(fd, buf, sizeof(buf));
+    close(fd);
+    if (len <= 0) return -1;
+    len--;
+    if (buf[len] == '\n' || len == sizeof(buf)-1)
+        buf[len] = '\0';
+
+    vmf_sib = atoi(buf);
+
+    return perf_thread_map__idx(current_monitor()->threads, vmf_sib);
+}
+
 
 
 static int oncpu_init(struct perf_evlist *evlist, struct env *env)
@@ -135,6 +164,13 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
                 break;
             }
         }
+
+        ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
+        if (!ctx.perins_vmf_sib)
+            return -1;
+        for (i = 0; i < ctx.nr_ins; i++) {
+            ctx.perins_vmf_sib[i] = read_sched_vmf_sib(i);
+        }
     }
 
     attr.config = tep__event_id("sched", "sched_stat_runtime");
@@ -164,6 +200,17 @@ static void print_cpumap(int ins, struct perins_cpumap *map)
     if (ins >= 0) {
         printf("%-6d %-16s %-7lu ", monitor_instance_thread(ins), ctx.infos[ins].comm, map->nr/1000000);
     }
+    if (ctx.percpu_thread_siblings) {
+        u64 co = 0;
+        if (ctx.perins_vmf_sib[ins] >= 0)
+        for (i = 0; i < ctx.nr_cpus; i++) {
+            if (map->map[i] > 0) {
+                struct perins_cpumap *sib = (void *)ctx.maps + ctx.perins_vmf_sib[ins] * ctx.size_perins_cpumap;
+                co += min(map->map[i], sib->map[ctx.percpu_thread_siblings[i]]);
+            }
+        }
+        printf("%-6lu %-5lu  ", co/1000000, co*100/map->nr);
+    }
     for (i = 0; i < ctx.nr_cpus; i++) {
         if (map->map[i] > 0)
             p += printf("%d(%lums) ", i, map->map[i]/1000000);
@@ -185,7 +232,9 @@ static void oncpu_interval(void)
     print_time(stdout);
     printf("\n");
     if (ctx.env->perins) {
-        printf("THREAD %-16s %-7s CPUS(ms) %s\n", "COMM", "SUM(ms)", ctx.env->detail ? ", SIBLINGS" : "");
+        printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
+                ctx.env->detail ? "CO(ms) CO(%)  " : "",
+                ctx.env->detail ? ", SIBLINGS" : "");
         for (i = 0; i < ctx.nr_ins; i++) {
             print_cpumap(i, (void *)ctx.maps + i * ctx.size_perins_cpumap);
         }
