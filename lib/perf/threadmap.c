@@ -92,3 +92,15 @@ pid_t perf_thread_map__pid(struct perf_thread_map *map, int thread)
 
     return -1;
 }
+
+int perf_thread_map__idx(struct perf_thread_map *map, int pid)
+{
+    int i;
+
+    for (i = 0; i < map->nr; i++) {
+        if (map->map[i].pid == pid)
+            return i;
+    }
+	return -1;
+}
+
