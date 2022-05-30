@@ -1,6 +1,11 @@
 #ifndef __STACK_HELPERS_H
 #define __STACK_HELPERS_H
 
+void function_resolver_ref(void);
+void function_resolver_unref(void);
+char *function_resolver(void *priv, unsigned long long *addrp, char **modp);
+
+
 struct callchain {
     __u64   nr;
     __u64   ips[0];

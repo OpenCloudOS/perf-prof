@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <monitor.h>
 #include <tep.h>
+#include <stack_helpers.h>
 
 #define PLUGINS_DIR "/usr/lib64/perf-prof-traceevent/plugins"
 
@@ -22,6 +23,8 @@ struct tep_handle *tep__ref(void)
     tep = tep_alloc();
     tep_add_plugin_path(tep, (char *)PLUGINS_DIR, TEP_PLUGIN_FIRST);
     plugins = tep_load_plugins(tep);
+    function_resolver_ref();
+    tep_set_function_resolver(tep, function_resolver, NULL);
     return tep;
 }
 
@@ -31,6 +34,8 @@ void tep__unref(void)
         return;
 
     if (tep_get_ref(tep) == 1) {
+        tep_reset_function_resolver(tep);
+        function_resolver_unref();
         tep_unload_plugins(plugins, tep);
         tep_free(tep);
         tep = NULL;

@@ -82,6 +82,29 @@ static void global_syms_unref(bool kernel, bool user)
     }
 }
 
+void function_resolver_ref(void)
+{
+    global_syms_ref(true, false);
+}
+
+void function_resolver_unref(void)
+{
+    global_syms_unref(true, false);
+}
+
+char *function_resolver(void *priv, unsigned long long *addrp, char **modp)
+{
+    unsigned long addr = *(unsigned long *)addrp;
+    if (ctx.ksyms) {
+        const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, addr);
+        if (ksym) {
+            *addrp = ksym->addr;
+            return (char *)ksym->name;
+        }
+    }
+    return NULL;
+}
+
 static void callchain_ctx_debug_init(struct callchain_ctx *cc, bool kernel, bool user, FILE *fout)
 {
     cc->kernel = kernel;
