@@ -22,6 +22,9 @@ void callchain_ctx_config(struct callchain_ctx *cc, bool addr, bool symbol, bool
         bool dso, bool reverse, char sep, char end);
 void callchain_ctx_free(struct callchain_ctx *cc);
 void print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
+typedef void (*callchain_cbs)(void *opaque, u64 perf_context);
+void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *callchain, u32 pid,
+            callchain_cbs kernel_cb, callchain_cbs user_cb, void *opaque);
 void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
 void task_exit_free_syms(union perf_event *event);
 

@@ -20,6 +20,7 @@ perf-prof-y += multi-trace.o two-event.o
 perf-prof-y += oncpu.o
 perf-prof-y += help.o
 perf-prof-y += ldlat-loads.o
+perf-prof-y += page-faults.o
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
