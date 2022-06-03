@@ -318,7 +318,8 @@ void print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 
         fprintf(cc->fout, "%c", cc->end);
 }
 
-void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid)
+void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *callchain, u32 pid,
+            callchain_cbs kernel_cb, callchain_cbs user_cb, void *opaque)
 {
     __u64 i;
     bool kernel = false, user = false;
@@ -336,6 +337,8 @@ void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchai
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = cc->kernel;
             user = false;
+            if (kernel_cb) 
+                kernel_cb(opaque, PERF_CONTEXT_KERNEL);
             if (cc->debug)
                 fprintf(cc->fout, "    %016llx PERF_CONTEXT_KERNEL\n", ip);
             continue;
@@ -347,6 +350,8 @@ void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchai
                 if (syms)
                     user = cc->user;
             }
+            if (user_cb)
+                user_cb(opaque, PERF_CONTEXT_USER);
             if (cc->debug)
                 fprintf(cc->fout, "    %016llx PERF_CONTEXT_USER\n", ip);
             continue;
@@ -368,6 +373,11 @@ void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchai
         } else
             fprintf(cc->fout, "    %016llx\n", ip);
     }
+}
+
+void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid)
+{
+    print_callchain_common_cbs(cc, callchain, pid, NULL, NULL, NULL);
 }
 
 static void print2string_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid,

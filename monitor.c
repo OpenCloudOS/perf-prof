@@ -124,6 +124,7 @@ const char argp_program_doc[] =
 "  perf-prof llcstat\n"
 "  perf-prof sched-migrate [-d] [--filter filter] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof oncpu -p PID [--perins] [--detail]\n"
+"  perf-prof page-faults [-g]\n"
 "\n"
 "Event selector. use 'perf list tracepoint' to list available tp events.\n"
 "  EVENT,EVENT,...\n"
