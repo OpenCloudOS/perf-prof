@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <linux/rblist.h>
 #include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
@@ -19,26 +20,116 @@
 
 static profiler oncpu;
 
-struct perins_cpumap {
-    u64 nr;
-    u64 map[0];
-};
-
-struct perins_info {
+struct runtime {
+    struct rb_node rbn;
+    int instance;
+    union {
+        int another;
+        int cpu;
+        int tid;
+    };
+    u64 runtime;
     char comm[16];
 };
 
 static struct oncpu_ctx {
     int nr_ins;
     int nr_cpus;
-    int size_perins_cpumap;
-    struct perins_cpumap *maps;
-    struct perins_cpumap *all_ins;
-    struct perins_info *infos;
+    struct rblist runtimes;
     int *percpu_thread_siblings;
     int *perins_vmf_sib;
     struct env *env;
 } ctx;
+
+struct sched_stat_runtime {
+    unsigned short common_type; //       offset:0;       size:2; signed:0;
+    unsigned char common_flags; //       offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count; //       offset:3;       size:1; signed:0;
+    int common_pid; //   offset:4;       size:4; signed:1;
+
+    char comm[16];  //   offset:8;       size:16;        signed:1;
+    pid_t pid;      //   offset:24;      size:4; signed:1;
+    u64 runtime;    //   offset:32;      size:8; signed:0;
+    u64 vruntime;   //   offset:40;      size:8; signed:0;
+};
+
+// in linux/perf_event.h
+// PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
+struct sample_type_data {
+    struct {
+        u32    pid;
+        u32    tid;
+    }    tid_entry;
+    struct {
+        u32    cpu;
+        u32    reserved;
+    }    cpu_entry;
+    u64       period;
+    //PERF_SAMPLE_RAW
+    struct {
+        u32   size;
+        union {
+            __u8    data[0];
+            struct sched_stat_runtime runtime;
+        } __packed;
+    } raw;
+};
+
+struct runtime_entry {
+    int instance;
+    union {
+        int another;
+        int cpu;
+        int tid;
+    };
+};
+
+static int runtime_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct runtime *run = rb_entry(rbn, struct runtime, rbn);
+    const struct runtime_entry *e = entry;
+
+    if (run->instance > e->instance)
+        return 1;
+    else if (run->instance < e->instance)
+        return -1;
+
+    if (run->another > e->another)
+        return 1;
+    else if (run->another < e->another)
+        return -1;
+
+    return 0;
+}
+
+static int runtime_instance_cmp(const void *entry, const struct rb_node *rbn)
+{
+    const struct runtime_entry *e = entry;
+    struct runtime *run = rb_entry(rbn, struct runtime, rbn);
+
+    return e->instance - run->instance;
+}
+
+static struct rb_node *runtime_node_new(struct rblist *rlist, const void *new_entry)
+{
+    const struct runtime_entry *e = new_entry;
+    struct runtime *run = malloc(sizeof(*run));
+    if (run) {
+        RB_CLEAR_NODE(&run->rbn);
+        run->instance = e->instance;
+        run->another = e->another;
+        run->runtime = 0;
+        memset(run->comm, 0, 16);
+        return &run->rbn;
+    }
+    return NULL;
+}
+
+static void runtime_node_delete(struct rblist *rblist, struct rb_node *rb_node)
+{
+    struct runtime *run = rb_entry(rb_node, struct runtime, rbn);
+    free(run);
+}
 
 static int read_cpu_thread_sibling(int cpu)
 {
@@ -99,7 +190,6 @@ static int read_sched_vmf_sib(int ins)
 }
 
 
-
 static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
@@ -107,7 +197,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
@@ -127,34 +217,14 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     ctx.env = env;
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_cpus = get_present_cpus();
-    ctx.size_perins_cpumap = sizeof(struct perins_cpumap) + ctx.nr_cpus * sizeof(u64);
-    ctx.maps = malloc((ctx.nr_ins + 1) * ctx.size_perins_cpumap);
-    if (!ctx.maps)
-        return -1;
-    ctx.all_ins = (void *)ctx.maps + ctx.nr_ins * ctx.size_perins_cpumap;
-    memset(ctx.maps, 0, (ctx.nr_ins + 1) * ctx.size_perins_cpumap);
-
-    ctx.infos = calloc(ctx.nr_ins, sizeof(struct perins_info));
-    if (!ctx.infos)
-        return -1;
-    for (i = 0; i < ctx.nr_ins; i++) {
-        char path[64];
-        int fd, len;
-
-        snprintf(path, sizeof(path), "/proc/%d/comm", monitor_instance_thread(i));
-        fd = open(path, O_RDONLY);
-        if (fd < 0) return -1;
-        len = (int)read(fd, ctx.infos[i].comm, 16);
-        close(fd);
-        if (len <= 0) return -1;
-        len--;
-        if (ctx.infos[i].comm[len] == '\n' || len == 15)
-            ctx.infos[i].comm[len] = '\0';
-    }
+    rblist__init(&ctx.runtimes);
+    ctx.runtimes.node_cmp = runtime_node_cmp;
+    ctx.runtimes.node_new = runtime_node_new;
+    ctx.runtimes.node_delete = runtime_node_delete;
 
     if (env->detail) {
         ctx.percpu_thread_siblings = calloc(ctx.nr_cpus, sizeof(int));
-        if (!ctx.infos)
+        if (!ctx.percpu_thread_siblings)
             return -1;
         for (i = 0; i < ctx.nr_cpus; i++) {
             ctx.percpu_thread_siblings[i] = read_cpu_thread_sibling(i);
@@ -184,87 +254,126 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 
 static void oncpu_exit(struct perf_evlist *evlist)
 {
-    free(ctx.maps);
-    free(ctx.infos);
+    rblist__exit(&ctx.runtimes);
     if (ctx.percpu_thread_siblings)
         free(ctx.percpu_thread_siblings);
+    if (ctx.perins_vmf_sib)
+        free(ctx.perins_vmf_sib);
 }
 
-static void print_cpumap(int ins, struct perins_cpumap *map)
+static struct runtime *find_first_sib(int instance)
 {
-    int i, p = 0;
+    struct rb_node *rbn;
+    struct runtime_entry entry = {.instance = instance,};
 
-    if (!map->nr)
-        return;
+    rbn = rb_find_first(&entry, &ctx.runtimes.entries.rb_root, runtime_instance_cmp);
+    return rb_entry_safe(rbn, struct runtime, rbn);
+}
 
-    if (ins >= 0) {
-        printf("%-6d %-16s %-7lu ", monitor_instance_thread(ins), ctx.infos[ins].comm, map->nr/1000000);
-    }
+#define for_each_runtime(first, run, member, cmp_member) \
+    for(run = first; \
+        run && run->cmp_member == first->cmp_member; \
+        run = rb_entry_safe((rb_next(&run->member)), typeof(*run), member))
+
+static void print_cpumap(struct runtime *first)
+{
+    struct runtime *run;
+    u64 sum = 0;
+
+    for_each_runtime(first, run, rbn, instance)
+        sum += run->runtime;
+
+    printf("%-6d %-16s %-7lu ", monitor_instance_thread(first->instance), first->comm, sum/1000000);
+
     if (ctx.percpu_thread_siblings) {
         u64 co = 0;
-        if (ctx.perins_vmf_sib[ins] >= 0)
-        for (i = 0; i < ctx.nr_cpus; i++) {
-            if (map->map[i] > 0) {
-                struct perins_cpumap *sib = (void *)ctx.maps + ctx.perins_vmf_sib[ins] * ctx.size_perins_cpumap;
-                co += min(map->map[i], sib->map[ctx.percpu_thread_siblings[i]]);
+        if (ctx.perins_vmf_sib[first->instance] >= 0) {
+            for_each_runtime(first, run, rbn, instance) {
+                struct runtime *first_sib = find_first_sib(ctx.perins_vmf_sib[run->instance]);
+                struct runtime *sib;
+                for_each_runtime(first_sib, sib, rbn, instance) {
+                    if (ctx.percpu_thread_siblings[sib->cpu] == run->cpu) {
+                        co += min(run->runtime, sib->runtime);
+                        break;
+                    }
+                }
             }
         }
-        printf("%-6lu %-5lu  ", co/1000000, co*100/map->nr);
+        printf("%-6lu %-5lu  ", co/1000000, co*100/sum);
     }
-    for (i = 0; i < ctx.nr_cpus; i++) {
-        if (map->map[i] > 0)
-            p += printf("%d(%lums) ", i, map->map[i]/1000000);
-    }
+
+    for_each_runtime(first, run, rbn, instance)
+        printf("%d(%lums) ", run->cpu, run->runtime/1000000);
+
     if (ctx.percpu_thread_siblings) {
         printf(", ");
-        for (i = 0; i < ctx.nr_cpus; i++) {
-            if (map->map[i] > 0)
-                printf("%d ", ctx.percpu_thread_siblings[i]);
-        }
+        for_each_runtime(first, run, rbn, instance)
+            printf("%d ", ctx.percpu_thread_siblings[run->cpu]);
     }
     printf("\n");
 }
 
 static void oncpu_interval(void)
 {
-    int i;
+    struct rb_node *next = rb_first_cached(&ctx.runtimes.entries);
+    struct runtime *first, *run;
+
+    if (rblist__empty(&ctx.runtimes))
+        return ;
 
     print_time(stdout);
     printf("\n");
-    if (ctx.env->perins) {
-        printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
-                ctx.env->detail ? "CO(ms) CO(%)  " : "",
-                ctx.env->detail ? ", SIBLINGS" : "");
-        for (i = 0; i < ctx.nr_ins; i++) {
-            print_cpumap(i, (void *)ctx.maps + i * ctx.size_perins_cpumap);
-        }
-    } else {
-        print_cpumap(-1, ctx.all_ins);
+    printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
+            ctx.env->detail ? "CO(ms) CO(%)  " : "",
+            ctx.env->detail ? ", SIBLINGS" : "");
+    first = rb_entry_safe(next, struct runtime, rbn);
+    while (first) {
+        print_cpumap(first);
+        for_each_runtime(first, run, rbn, instance);
+        first = run;
     }
-    memset(ctx.maps, 0, (ctx.nr_ins + 1) * ctx.size_perins_cpumap);
+    rblist__exit(&ctx.runtimes);
 }
 
 static void oncpu_sample(union perf_event *event, int instance)
 {
-    // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_CPU
-    struct sample_type_data {
-        struct {
-            __u32    pid;
-            __u32    tid;
-        }    tid_entry;
-        struct {
-            __u32    cpu;
-            __u32    reserved;
-        }    cpu_entry;
-        __u64		period;
-    } *data = (void *)event->sample.array;
-    struct perins_cpumap *map = (void *)ctx.maps + instance * ctx.size_perins_cpumap;
+    struct sample_type_data *data = (void *)event->sample.array;
+    struct runtime_entry entry;
+    struct rb_node *rbn;
+    struct runtime *run;
 
-    map->nr += data->period;
-    map->map[data->cpu_entry.cpu] += data->period;
-    ctx.all_ins->nr += data->period;
-    ctx.all_ins->map[data->cpu_entry.cpu] += data->period;
+	/*
+	 * CPU 24/KVM  89720 d... [179] 4925560.039977: sched:sched_stat_runtime: comm=CPU 90/KVM pid=89786 runtime=951502 [ns] vruntime=52818652842246 [ns]
+	 *	ffffffff810d6157 update_curr+0x167 ([kernel.kallsyms])
+	 *	ffffffff810d804d enqueue_entity+0x3d ([kernel.kallsyms])
+	 *	ffffffff810d8bc9 enqueue_task_fair+0x59 ([kernel.kallsyms])
+	 *	ffffffff810c67b6 enqueue_task+0x56 ([kernel.kallsyms])
+	 *	ffffffff810c9543 activate_task+0x23 ([kernel.kallsyms])
+	 *	ffffffff810c9893 ttwu_do_activate.constprop.119+0x33 ([kernel.kallsyms])
+	 *	ffffffff810ccb3d try_to_wake_up+0x18d ([kernel.kallsyms])
+	 *	ffffffff810cce22 default_wake_function+0x12 ([kernel.kallsyms])
+	 *	ffffffff810b7938 autoremove_wake_function+0x18 ([kernel.kallsyms])
+	 *	ffffffff810c04bb __wake_up_common+0x5b ([kernel.kallsyms])
+	 *	ffffffff810c55c9 __wake_up+0x39 ([kernel.kallsyms])
+	 *
+	 * When a process is woken up to the specified cpu x, update_curr will be called on
+	 * the current cpu, and sched:sched_stat_runtime will be recorded on the current cpu
+	 * instead of cpu x. Will cause data->tid_entry.tid != data->raw.runtime.pid.
+	 * As in the above example, 89720 != 89786.
+	**/
+    if (data->tid_entry.tid != data->raw.runtime.pid) //TODO
+        return;
+
+    entry.instance = instance;
+    entry.cpu = data->cpu_entry.cpu;
+    rbn = rblist__findnew(&ctx.runtimes, &entry);
+    if (rbn) {
+        run = rb_entry(rbn, struct runtime, rbn);
+        run->runtime += data->raw.runtime.runtime;
+        if (run->comm[0] == 0) {
+            memcpy(run->comm, data->raw.runtime.comm, 16);
+        }
+    }
 }
 
 static profiler oncpu = {
