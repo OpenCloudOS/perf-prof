@@ -33,6 +33,7 @@ struct runtime {
 };
 
 static struct oncpu_ctx {
+    bool instance_oncpu;
     int nr_ins;
     int nr_cpus;
     struct rblist runtimes;
@@ -207,14 +208,11 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
-    if (monitor_instance_oncpu()) {
-        fprintf(stderr, "Need to specify -p PID parameter\n");
-        return -1;
-    }
     if (!env->interval)
         env->interval = 1000;
 
     ctx.env = env;
+    ctx.instance_oncpu = monitor_instance_oncpu();
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_cpus = get_present_cpus();
     rblist__init(&ctx.runtimes);
@@ -235,11 +233,14 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
             }
         }
 
-        ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
-        if (!ctx.perins_vmf_sib)
-            return -1;
-        for (i = 0; i < ctx.nr_ins; i++) {
-            ctx.perins_vmf_sib[i] = read_sched_vmf_sib(i);
+        // on thread
+        if (!ctx.instance_oncpu) {
+            ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
+            if (!ctx.perins_vmf_sib)
+                return -1;
+            for (i = 0; i < ctx.nr_ins; i++) {
+                ctx.perins_vmf_sib[i] = read_sched_vmf_sib(i);
+            }
         }
     }
 
@@ -313,6 +314,22 @@ static void print_cpumap(struct runtime *first)
     printf("\n");
 }
 
+static void print_tidmap(struct runtime *first)
+{
+    struct runtime *run;
+    u64 sum = 0;
+
+    for_each_runtime(first, run, rbn, instance)
+        sum += run->runtime;
+
+    printf("%03d %-7lu ", monitor_instance_cpu(first->instance), sum/1000000);
+
+    for_each_runtime(first, run, rbn, instance)
+        printf("%s:%d(%lums) ", run->comm, run->tid, run->runtime/1000000);
+
+    printf("\n");
+}
+
 static void oncpu_interval(void)
 {
     struct rb_node *next = rb_first_cached(&ctx.runtimes.entries);
@@ -323,12 +340,16 @@ static void oncpu_interval(void)
 
     print_time(stdout);
     printf("\n");
-    printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
+    if (!ctx.instance_oncpu)
+        printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
             ctx.env->detail ? "CO(ms) CO(%)  " : "",
             ctx.env->detail ? ", SIBLINGS" : "");
+    else
+        printf("CPU %-7s COMM:TID(ms)\n", "SUM(ms)");
+
     first = rb_entry_safe(next, struct runtime, rbn);
     while (first) {
-        print_cpumap(first);
+        ((!ctx.instance_oncpu) ? print_cpumap : print_tidmap)(first);
         for_each_runtime(first, run, rbn, instance);
         first = run;
     }
@@ -365,7 +386,10 @@ static void oncpu_sample(union perf_event *event, int instance)
         return;
 
     entry.instance = instance;
-    entry.cpu = data->cpu_entry.cpu;
+    if (!ctx.instance_oncpu)
+        entry.cpu = data->cpu_entry.cpu;
+    else
+        entry.tid = data->tid_entry.tid;
     rbn = rblist__findnew(&ctx.runtimes, &entry);
     if (rbn) {
         run = rb_entry(rbn, struct runtime, rbn);
