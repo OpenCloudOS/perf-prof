@@ -137,6 +137,21 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
 	trace_seq_destroy(&s);
 }
 
+bool tep__event_has_field(int id, const char *field)
+{
+    bool has_field = false;
+    struct tep_event *event;
+
+    tep__ref();
+    event = tep_find_event(tep, id);
+    if (event) {
+        has_field = !!tep_find_any_field(event, field);
+    }
+    tep__unref();
+
+    return has_field;
+}
+
 
 void monitor_tep__comm(union perf_event *event, int instance)
 {
