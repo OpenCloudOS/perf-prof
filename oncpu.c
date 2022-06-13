@@ -258,6 +258,20 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static int oncpu_filter(struct perf_evlist *evlist, struct env *env)
+{
+    struct perf_evsel *evsel;
+    int err;
+    if (env->filter && env->filter[0]) {
+        perf_evlist__for_each_evsel(evlist, evsel) {
+            err = perf_evsel__apply_filter(evsel, env->filter);
+            if (err < 0)
+                return err;
+        }
+    }
+    return 0;
+}
+
 static void oncpu_exit(struct perf_evlist *evlist)
 {
     rblist__exit(&ctx.runtimes);
@@ -398,7 +412,7 @@ static void oncpu_sample(union perf_event *event, int instance)
         data->tid_entry.tid != data->raw.runtime.pid) { //TODO
     __print_return:
         if (ctx.instance_oncpu) {
-            if (data->raw.runtime.runtime >= ctx.env->greater_than)
+            if (ctx.env->verbose && data->raw.runtime.runtime >= ctx.env->greater_than)
                 tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
             return;
         }
@@ -431,6 +445,7 @@ static profiler oncpu = {
     .name = "oncpu",
     .pages = 4,
     .init = oncpu_init,
+    .filter = oncpu_filter,
     .deinit = oncpu_exit,
     .interval = oncpu_interval,
     .sample = oncpu_sample,
