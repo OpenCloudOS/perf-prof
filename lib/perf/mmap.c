@@ -242,6 +242,21 @@ static union perf_event *perf_mmap__read(struct perf_mmap *map,
 		}
 
 		*startp += size;
+
+		if (map->overwrite) {
+			u64 head = perf_mmap__read_head(map);
+			unsigned long size;
+
+			end = *startp;
+			size = end - head;
+			/* In overwrite mode, when reading the end position, backward ring buffer may be full,
+			 * and the kernel may overwrite the data at the end position.
+			**/
+			if (size > (unsigned long)(map->mask) + 1) {
+				pr_debug2("%s: end=%"PRIx64", head=%"PRIx64"\n", __func__, end, head);
+				return NULL;
+			}
+		}
 	}
 
 	return event;
