@@ -91,6 +91,7 @@ struct env {
     bool detail;
     char *device;
     int ldlat;
+    bool overwrite;
 
     /* order */
     bool order;

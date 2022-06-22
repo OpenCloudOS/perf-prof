@@ -86,6 +86,12 @@ static int trace_init(struct perf_evlist *evlist, struct env *env)
     if (monitor_ctx_init(env) < 0)
         return -1;
 
+    if (env->overwrite) {
+        attr.write_backward = 1,
+        attr.watermark      = 1,
+        attr.wakeup_watermark = trace.pages;
+    }
+
     for (i = 0; i < ctx.tp_list->nr_tp; i++) {
         struct tp *tp = &ctx.tp_list->tp[i];
 
