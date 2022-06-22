@@ -51,7 +51,8 @@ static void order_deinit(struct perf_evlist *evlist)
 static void order_interval(void)
 {
     ordered_events__flush(&ctx.oe, OE_FLUSH__ROUND);
-    ctx.base->interval();
+    if (ctx.base->interval)
+        ctx.base->interval();
 }
 
 static void order_sample(union perf_event *event, int instance)
@@ -86,7 +87,7 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
     ctx.order.init = order_init;
     ctx.order.deinit = order_deinit;
     ctx.order.sample = order_sample;
-    if (env->interval && ctx.base->interval)
+    if (env->interval && (ctx.base->interval || env->overwrite))
         ctx.order.interval = order_interval;
 
     ordered_events__init(&ctx.oe, ordered_events__deliver, NULL);

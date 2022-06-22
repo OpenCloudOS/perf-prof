@@ -102,7 +102,7 @@ const char argp_program_args_doc[] =
 const char argp_program_doc[] =
 "\nProfiling based on perf_event\n\n"
 "Most Used Profilers:\n"
-"  perf-prof trace -e EVENT[...] [-g [--flame-graph file [-i INT]]]\n"
+"  perf-prof trace -e EVENT[...] [--overwrite] [-g [--flame-graph file [-i INT]]]\n"
 "  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]\n"
 "  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
@@ -124,7 +124,7 @@ const char argp_program_doc[] =
 "  perf-prof signal [--filter comm] [-g]\n"
 "  perf-prof watchdog [-F freq] [-g]\n"
 "  perf-prof llcstat\n"
-"  perf-prof sched-migrate [-d] [--filter filter] [-g [--flame-graph file]] [-v]\n"
+"  perf-prof sched-migrate [--detail] [--filter filter] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof oncpu -p PID [--detail] [--filter filter]\n"
 "  perf-prof page-faults [-g]\n"
 "\n"
@@ -164,6 +164,7 @@ enum {
     LONG_OPT_detail,
     LONG_OPT_impl,
     LONG_OPT_ldlat,
+    LONG_OPT_overwrite,
 };
 static const struct argp_option opts[] = {
     { NULL, 0, NULL, 0, "OPTION:" },
@@ -210,6 +211,7 @@ static const struct argp_option opts[] = {
     { "detail", LONG_OPT_detail, NULL, 0, "More detailed information output" },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
     { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency, Unit: cycles" },
+    { "overwrite", LONG_OPT_overwrite, NULL, 0, "use overwrite mode" },
 
     { "version", 'V', NULL, 0, "Version info" },
     { NULL, 'h', NULL, OPTION_HIDDEN, "" },
@@ -421,6 +423,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_ldlat:
         env.ldlat = strtol(arg, NULL, 10);
+        break;
+    case LONG_OPT_overwrite:
+        env.overwrite = true;
         break;
     case 'v':
         env.verbose++;
@@ -717,6 +722,8 @@ static int perf_event_process_record(union perf_event *event, int instance)
 static int libperf_print(enum libperf_print_level level,
                          const char *fmt, va_list ap)
 {
+    if (level > LIBPERF_WARN)
+        return 0;
     return vfprintf(stderr, fmt, ap);
 }
 
@@ -841,12 +848,16 @@ reinit:
     while (!exiting && !monitor->reinit) {
         struct perf_mmap *map;
         union perf_event *event;
-        int fds;
+        int fds = 0;
 
-        fds = perf_evlist__poll(evlist, time_left);
+        if (env.overwrite == false)
+            fds = perf_evlist__poll(evlist, time_left);
+        else if (time_left) {
+            usleep(time_left * 1000);
+        }
 
         if (monitor->pages && (fds || time_left == 0 || exiting))
-        perf_evlist__for_each_mmap(evlist, map, false) {
+        perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
             if (perf_mmap__read_init(map) < 0)
                 continue;
             while ((event = perf_mmap__read_event(map)) != NULL) {
