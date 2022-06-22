@@ -12,7 +12,9 @@
 #include <sys/time.h>
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
+#if defined(__i386__) || defined(__x86_64__)
 #include <cpuid.h>
+#endif
 #include <linux/thread_map.h>
 #include <trace_helpers.h>
 #include <monitor.h>
@@ -511,6 +513,7 @@ int get_tsc_khz(void)
 
 int get_cpuinfo(struct cpuinfo_x86 *info)
 {
+#if defined(__i386__) || defined(__x86_64__)
     __u32 eax, ebx, ecx, edx;
 
     eax = ebx = ecx = edx = 0;
@@ -556,17 +559,27 @@ int get_cpuinfo(struct cpuinfo_x86 *info)
         return X86_VENDOR_HYGON;
     } else
         return -1;
+#else
+    if (info)
+        memset(info, 0, sizeof(*info));
+    return -1;
+#endif
 }
 
 #define CPUID_EXT_HYPERVISOR  (1U << 31)
 int in_guest(void)
 {
+#if defined(__i386__) || defined(__x86_64__)
+
     __u32 eax, ebx, ecx, edx;
 
     eax = ebx = ecx = edx = 0;
     __get_cpuid(1, &eax, &ebx, &ecx, &edx);
 
     return !!(ecx & CPUID_EXT_HYPERVISOR);
+#else
+    return 0;
+#endif
 }
 
 void print_time(FILE *fp)

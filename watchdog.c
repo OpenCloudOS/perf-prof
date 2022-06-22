@@ -5,7 +5,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <cpuid.h>
 #include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
