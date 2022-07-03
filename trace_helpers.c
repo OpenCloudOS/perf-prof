@@ -865,7 +865,9 @@ static const struct sym *obj__find_sym(struct object *obj, uint64_t offset)
             end = mid - 1;
     }
 
-    if (start == end && obj->syms[start].start <= offset)
+    if (start == end &&
+        obj->syms[start].start <= offset &&
+        obj->syms[start].start + obj->syms[start].size >= offset)
         return &obj->syms[start];
     return NULL;
 }
