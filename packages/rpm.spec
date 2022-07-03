@@ -20,6 +20,10 @@ ExclusiveArch:  x86_64
 
 Requires:       elfutils-libelf
 Requires:       glibc
+Requires:       xz-libs
+
+BuildRequires:  elfutils-libelf-devel
+BuildRequires:  xz-devel
 
 # source files
 Source:         https://github.com/OpenCloudOS/perf-prof/archive/refs/tags/%{version}.tar.gz
