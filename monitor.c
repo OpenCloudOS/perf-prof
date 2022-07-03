@@ -94,7 +94,7 @@ struct env env = {
 static volatile bool exiting;
 
 
-const char *argp_program_version = PROGRAME " 0.4";
+const char *argp_program_version = PROGRAME " 0.5";
 const char *argp_program_bug_address = "<corcpp@foxmail.com>";
 const char argp_program_args_doc[] =
     "profiler [PROFILER OPTION...] [help]\n"
