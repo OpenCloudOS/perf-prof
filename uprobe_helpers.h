@@ -13,6 +13,7 @@ int resolve_binary_path(const char *binary, pid_t pid, char *path, size_t path_s
 off_t get_elf_func_offset(const char *path, const char *func);
 Elf *open_elf(const char *path, int *fd_close);
 Elf *open_elf_by_fd(int fd);
+Elf *open_elf_memory(char *image, size_t size);
 void close_elf(Elf *e, int fd_close);
 
 #endif /* __UPROBE_HELPERS_H */
