@@ -20,6 +20,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <limits.h>
+#include <lzma.h>
 #include "trace_helpers.h"
 #include "uprobe_helpers.h"
 
@@ -601,9 +602,119 @@ static void obj__free_fields(struct object *obj)
     obj->syms_cap = 0;
 }
 
-static int obj__load_sym_table_from_elf(struct object *obj, int fd)
+#define MAGIC		"\xFD" "7zXZ\0" /* XZ file format.  */
+#define MAGIC2		"\x5d\0"	/* Raw LZMA format.  */
+static int unlzma(void *input, size_t input_size, void **output, size_t *output_size)
+{
+    lzma_stream strm = LZMA_STREAM_INIT;
+    lzma_action action = LZMA_RUN;
+    lzma_ret ret;
+    void *buffer = NULL;
+    size_t size = 0;
+
+    *output = NULL;
+    *output_size = 0;
+
+    #define NOMAGIC(magic) \
+      (input_size <= sizeof magic || \
+       memcmp (input, magic, sizeof magic - 1))
+    if (NOMAGIC (MAGIC) && NOMAGIC (MAGIC2))
+        return -1;
+
+    ret = lzma_stream_decoder(&strm, 1UL << 30, 0);
+    if (ret != LZMA_OK)
+        return -1;
+
+    strm.next_in = input;
+	strm.avail_in = input_size;
+
+    do {
+        if (strm.avail_out == 0) {
+            ptrdiff_t pos = (void *) strm.next_out - buffer;
+            size_t more = size ? size * 2 : input_size;
+            char *b = realloc (buffer, more);
+            while (unlikely (b == NULL) && more >= size + 1024)
+                b = realloc (buffer, more -= 1024);
+            if (unlikely (b == NULL)) {
+                ret = LZMA_MEM_ERROR;
+                break;
+            }
+            buffer = b;
+            size = more;
+            strm.next_out = buffer + pos;
+            strm.avail_out = size - pos;
+        }
+    } while ((ret = lzma_code(&strm, action)) == LZMA_OK);
+
+    size = strm.total_out;
+    buffer = realloc (buffer, size) ?: size == 0 ? NULL : buffer;
+
+    lzma_end(&strm);
+
+    if (ret == LZMA_STREAM_END) {
+        *output = buffer;
+        *output_size = size;
+        return 0;
+    }
+
+    free(buffer);
+    return -1;
+}
+
+static int obj__load_sym_table_elf(struct object *obj, Elf *e)
 {
     Elf_Scn *section = NULL;
+    size_t shstrndx;
+    void *buffer = NULL;
+    size_t size = 0;
+
+    if (elf_getshdrstrndx(e, &shstrndx) < 0)
+        return -1;
+
+    while ((section = elf_nextscn(e, section)) != 0) {
+        GElf_Shdr header;
+        const char *name;
+
+        if (!gelf_getshdr(section, &header))
+            continue;
+
+        name = elf_strptr(e, shstrndx, header.sh_name);
+        if (name == NULL)
+            continue;
+
+        if (header.sh_type == SHT_SYMTAB ||
+            header.sh_type == SHT_DYNSYM) {
+            if (obj__add_syms(obj, e, section, header.sh_link,
+                      header.sh_entsize))
+                goto err_out;
+            continue;
+        }
+
+        if (!strcmp (name, ".gnu_debugdata")) {
+            /* Uncompress LZMA data found in a minidebug file.  The minidebug
+             * format is described at
+             * https://sourceware.org/gdb/current/onlinedocs/gdb/MiniDebugInfo.html.
+             */
+            Elf_Data *rawdata = elf_rawdata(section, NULL);
+            if (rawdata != NULL &&
+                unlzma(rawdata->d_buf, rawdata->d_size, &buffer, &size) == 0) {
+                Elf *debuginfo = open_elf_memory(buffer, size);
+                if (debuginfo &&
+                    obj__load_sym_table_elf(obj, debuginfo) == 0) {
+                    close_elf(debuginfo, 0);
+                }
+            }
+        }
+    }
+
+    return 0;
+
+err_out:
+    return -1;
+}
+
+static int obj__load_sym_table_from_elf(struct object *obj, int fd)
+{
     Elf *e;
     int i;
     void *tmp;
@@ -612,20 +723,8 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
     if (!e)
         return -1;
 
-    while ((section = elf_nextscn(e, section)) != 0) {
-        GElf_Shdr header;
-
-        if (!gelf_getshdr(section, &header))
-            continue;
-
-        if (header.sh_type != SHT_SYMTAB &&
-            header.sh_type != SHT_DYNSYM)
-            continue;
-
-        if (obj__add_syms(obj, e, section, header.sh_link,
-                  header.sh_entsize))
-            goto err_out;
-    }
+    if (obj__load_sym_table_elf(obj, e) < 0)
+        goto err_out;
 
     tmp = realloc(obj->strs, obj->strs_sz);
     if (!tmp)
@@ -635,7 +734,7 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 
     tmp = realloc(obj->syms, sizeof(*obj->syms) * obj->syms_sz);
     if (!tmp)
-        return -1;
+        goto err_out;
     obj->syms = tmp;
     obj->syms_cap = obj->syms_sz;
 

@@ -215,10 +215,33 @@ Elf *open_elf_by_fd(int fd)
 	return e;
 }
 
+Elf *open_elf_memory(char *image, size_t size)
+{
+	Elf *e;
+
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		warn("elf init failed\n");
+		return NULL;
+	}
+	e = elf_memory(image, size);
+	if (!e) {
+		warn("elf_begin failed: %s\n", elf_errmsg(-1));
+		return NULL;
+	}
+	if (elf_kind(e) != ELF_K_ELF) {
+		warn("elf kind %d is not ELF_K_ELF\n", elf_kind(e));
+		elf_end(e);
+		return NULL;
+	}
+	return e;
+}
+
+
 void close_elf(Elf *e, int fd_close)
 {
 	elf_end(e);
-	close(fd_close);
+	if (fd_close > 0)
+		close(fd_close);
 }
 
 /* Returns the offset of a function in the elf file `path`, or -1 on failure. */
