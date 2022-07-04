@@ -51,9 +51,9 @@ static int monitor_ctx_init(struct env *env)
     ctx.time_str[0] = '\0';
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
         else {
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL, env->flame_graph);
+            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
             if (env->interval) {
                 profile_interval();
                 profile.interval = profile_interval;
@@ -96,7 +96,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = 0,
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
@@ -216,9 +216,9 @@ static void profile_sample(union perf_event *event, int instance)
                         data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
         if (ctx.env->callchain) {
             if (!ctx.env->flame_graph)
-                print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+                print_callchain_common(ctx.cc, &data->callchain, data->tid_entry.pid);
             else
-                flame_graph_add_callchain_at_time(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL, ctx.time, ctx.time_str);
+                flame_graph_add_callchain_at_time(ctx.flame, &data->callchain, data->tid_entry.pid, NULL, ctx.time, ctx.time_str);
         }
     }
 }
