@@ -75,9 +75,23 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
     pthread_t t;
     int vendor = get_cpu_vendor();
 
-    if (vendor != X86_VENDOR_INTEL) {
-        fprintf(stderr, "split-lock exists only on intel platforms\n");
+    if (vendor != X86_VENDOR_INTEL && vendor != X86_VENDOR_AMD) {
+        fprintf(stderr, "split-lock exists only on intel/amd platforms\n");
         return -1;
+    }
+
+    if (vendor == X86_VENDOR_AMD) {
+        // PMCx025 [Retired Lock Instructions] (Core::X86::Pmc::Core::LsLocks)
+        // UnitMask events are ORed.
+        // PMCx025
+        // Bits Description
+        // 7:4  Reserved.
+        // 3    SpecLockHiSpec. Read-write. Reset: 0. High speculative cacheable lock speculation succeeded.
+        // 2    SpecLockLoSpec. Read-write. Reset: 0. Low speculative cacheable lock speculation succeeded.
+        // 1    NonSpecLock. Read-write. Reset: 0. Non speculative cacheable lock.
+        // 0    BusLock. Read-write. Reset: 0. Non-cacheable or cacheline-misaligned lock.
+        //      Comparable to legacy bus lock.
+        attr.config = 0x125;
     }
 
     if (env->test)
