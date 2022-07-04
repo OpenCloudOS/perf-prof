@@ -703,6 +703,7 @@ static int obj__load_sym_table_elf(struct object *obj, Elf *e)
                     obj__load_sym_table_elf(obj, debuginfo) == 0) {
                     close_elf(debuginfo, 0);
                 }
+                free(buffer);
             }
         }
     }
