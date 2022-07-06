@@ -985,9 +985,10 @@ const char *dso__name(struct dso *dso)
     return dso ? dso->obj->name : NULL;
 }
 
-static struct syms *__syms__load_file(FILE *f, char *line, int size)
+static struct syms *__syms__load_file(FILE *f, char *line, int size, pid_t tgid)
 {
     char buf[PATH_MAX], perm[5];
+    char deleted[128];
     struct syms *syms;
     struct map map;
     char *s;
@@ -997,6 +998,9 @@ static struct syms *__syms__load_file(FILE *f, char *line, int size)
     syms = calloc(1, sizeof(*syms));
     if (!syms)
         goto err_out;
+
+    if (tgid)
+        snprintf(deleted, sizeof(deleted), "/proc/%ld/exe", (long)tgid);
 
     while (true) {
         s = fgets(line, size, f);
@@ -1020,6 +1024,10 @@ static struct syms *__syms__load_file(FILE *f, char *line, int size)
         if (!is_file_backed(name))
             continue;
 
+        if (tgid &&
+            strncmp(name + strlen(name) - 10, " (deleted)", 10) == 0)
+            name = deleted;
+
         if (syms__add_dso(syms, &map, name))
             goto err_out;
     }
@@ -1031,7 +1039,7 @@ err_out:
     return NULL;
 }
 
-struct syms *syms__load_file(const char *fname)
+struct syms *syms__load_file(const char *fname, pid_t tgid)
 {
     FILE *f;
     struct syms *syms;
@@ -1040,7 +1048,7 @@ struct syms *syms__load_file(const char *fname)
     f = fopen(fname, "r");
     if (!f)
         return NULL;
-    syms = __syms__load_file(f, line, PATH_MAX);
+    syms = __syms__load_file(f, line, PATH_MAX, tgid);
     fclose(f);
     return syms;
 }
@@ -1050,7 +1058,7 @@ struct syms *syms__load_pid(pid_t tgid)
     char fname[128];
 
     snprintf(fname, sizeof(fname), "/proc/%ld/maps", (long)tgid);
-    return syms__load_file(fname);
+    return syms__load_file(fname, tgid);
 }
 
 void syms__free(struct syms *syms)
@@ -1092,7 +1100,7 @@ void syms__convert(FILE *fin, FILE *fout)
     int ret;
     unsigned long addr;
 
-    syms = __syms__load_file(fin, line, PATH_MAX);
+    syms = __syms__load_file(fin, line, PATH_MAX, 0);
     if (!syms)
         return;
 
