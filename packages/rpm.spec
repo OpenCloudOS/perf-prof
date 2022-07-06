@@ -9,7 +9,7 @@
 Name:           %{name}
 Version:        %{version}
 Release:        %{release}
-License:        MulanPSL2
+License:        GPL2
 Group:          Unspecified
 Summary:        Profiling based on perf_event
 Distribution:   OpenCloudOS
