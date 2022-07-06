@@ -32,7 +32,7 @@ struct dso;
 void obj__stat(FILE *fp);
 
 struct syms *syms__load_pid(int tgid);
-struct syms *syms__load_file(const char *fname);
+struct syms *syms__load_file(const char *fname, int tgid);
 void syms__free(struct syms *syms);
 const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr);
 struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
