@@ -16,7 +16,8 @@
 #include <gelf.h>
 #include "uprobe_helpers.h"
 
-#define warn(...) fprintf(stderr, __VA_ARGS__)
+//#define warn(...) fprintf(stderr, __VA_ARGS__)
+#define warn(...)
 
 /*
  * Returns 0 on success; -1 on failure.  On sucess, returns via `path` the full
