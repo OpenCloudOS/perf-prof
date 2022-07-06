@@ -661,7 +661,7 @@ static int unlzma(void *input, size_t input_size, void **output, size_t *output_
     return -1;
 }
 
-static int obj__load_sym_table_elf(struct object *obj, Elf *e)
+static int elf__load_sym_table(struct object *obj, Elf *e)
 {
     Elf_Scn *section = NULL;
     size_t shstrndx;
@@ -700,7 +700,7 @@ static int obj__load_sym_table_elf(struct object *obj, Elf *e)
                 unlzma(rawdata->d_buf, rawdata->d_size, &buffer, &size) == 0) {
                 Elf *debuginfo = open_elf_memory(buffer, size);
                 if (debuginfo &&
-                    obj__load_sym_table_elf(obj, debuginfo) == 0) {
+                    elf__load_sym_table(obj, debuginfo) == 0) {
                     close_elf(debuginfo, 0);
                 }
                 free(buffer);
@@ -714,6 +714,106 @@ err_out:
     return -1;
 }
 
+typedef struct
+{
+  uint32_t namesz;
+  uint32_t descsz;
+  uint32_t type;
+  char name[1];
+} b_elf_note;
+
+#define NT_GNU_BUILD_ID 3
+#define SYSTEM_BUILD_ID_DIR "/usr/lib/debug/.build-id/"
+
+/*
+ * Open a separate debug info file, using the build ID to find it.
+ * The GDB manual says that the only place gdb looks for a debug file
+ * when the build ID is known is in /usr/lib/debug/.build-id.
+ * https://sourceware.org/gdb/onlinedocs/gdb/Separate-Debug-Files.html
+ */
+static Elf *open_elf_debugfile_by_buildid(Elf *e, int *fd_close)
+{
+    const char * const prefix = SYSTEM_BUILD_ID_DIR;
+    const size_t prefix_len = strlen (prefix);
+    const char * const suffix = ".debug";
+    const size_t suffix_len = strlen (suffix);
+    size_t len;
+    char *bd_filename, *t;
+    size_t i;
+
+    const char *buildid_data = NULL;
+    uint32_t buildid_size;
+    Elf_Scn *section = NULL;
+    size_t shstrndx;
+    Elf *debug;
+    int debug_fd;
+
+    if (elf_getshdrstrndx(e, &shstrndx) < 0)
+        return e;
+
+    while ((section = elf_nextscn(e, section)) != 0) {
+        GElf_Shdr header;
+        const char *name;
+
+        if (!gelf_getshdr(section, &header))
+            continue;
+
+        name = elf_strptr(e, shstrndx, header.sh_name);
+        if (name == NULL)
+            continue;
+
+        if (!strcmp (name, ".note.gnu.build-id")) {
+            const b_elf_note *note;
+            Elf_Data *rawdata = elf_rawdata(section, NULL);
+
+            note = (const b_elf_note *)rawdata->d_buf;
+            if (note->type == NT_GNU_BUILD_ID &&
+                note->namesz == 4 &&
+                strncmp (note->name, "GNU", 4) == 0 &&
+                header.sh_size <= 12 + ((note->namesz + 3) & ~3) + note->descsz)
+            {
+                buildid_data = &note->name[0] + ((note->namesz + 3) & ~3);
+                buildid_size = note->descsz;
+                goto found;
+            }
+        }
+    }
+    return e;
+
+found:
+    len = prefix_len + buildid_size * 2 + suffix_len + 2;
+    bd_filename = malloc(len);
+    if (bd_filename == NULL)
+        return e;
+
+    t = bd_filename;
+    memcpy(t, prefix, prefix_len);
+    t += prefix_len;
+    for (i = 0; i < buildid_size; i++) {
+        unsigned char b;
+        unsigned char nib;
+
+        b = (unsigned char) buildid_data[i];
+        nib = (b & 0xf0) >> 4;
+        *t++ = nib < 10 ? '0' + nib : 'a' + nib - 10;
+        nib = b & 0x0f;
+        *t++ = nib < 10 ? '0' + nib : 'a' + nib - 10;
+        if (i == 0)
+            *t++ = '/';
+    }
+    memcpy (t, suffix, suffix_len);
+    t[suffix_len] = '\0';
+
+    debug = open_elf(bd_filename, &debug_fd);
+    if (debug) {
+        close_elf(e, *fd_close);
+        e = debug;
+        *fd_close = debug_fd;
+    }
+    free(bd_filename);
+    return e;
+}
+
 static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 {
     Elf *e;
@@ -724,7 +824,9 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
     if (!e)
         return -1;
 
-    if (obj__load_sym_table_elf(obj, e) < 0)
+    e = open_elf_debugfile_by_buildid(e, &fd);
+
+    if (elf__load_sym_table(obj, e) < 0)
         goto err_out;
 
     tmp = realloc(obj->strs, obj->strs_sz);
