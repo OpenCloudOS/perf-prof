@@ -120,7 +120,7 @@ const char argp_program_doc[] =
 "  perf-prof ldlat-stores [-T trigger]\n"
 "Use Fewer Profilers:\n"
 "  perf-prof split-lock [-T trigger] [-G] [--test]\n"
-"  perf-prof irq-off [-L lat] [-g] [--precise]\n"
+"  perf-prof irq-off [--than ns] [-g] [--precise]\n"
 "  perf-prof signal [--filter comm] [-g]\n"
 "  perf-prof watchdog [-F freq] [-g]\n"
 "  perf-prof llcstat\n"

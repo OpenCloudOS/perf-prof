@@ -130,7 +130,7 @@ static void irq_off_sample(union perf_event *event, int instance)
         ctx.counter[data->cpu_entry.cpu] = data->counter;
     }
 
-    if (counter > ctx.env->latency * 1000UL + 1000UL) {
+    if (counter > ctx.env->greater_than) {
         print_time(stdout);
         printf("cpu %d pid %d tid %d irq-off %lu ns\n", data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid, counter);
         if (ctx.env->callchain) {
