@@ -163,7 +163,7 @@ struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance,
     return NULL;
 }
 
-void latency_dist_print(struct latency_dist *dist, print_node print_node, void *opaque)
+void latency_dist_print(struct latency_dist *dist, print_node printnode, void *opaque)
 {
     struct rb_node *node = NULL, *next = NULL, *rbn;
     struct latency_node *ln = NULL;
@@ -194,7 +194,7 @@ void latency_dist_print(struct latency_dist *dist, print_node print_node, void *
         next = rb_next(node);
         ln = rb_entry(node, struct latency_node, rbnode);
 
-        print_node(opaque, ln);
+        printnode(opaque, ln);
         rblist__remove_node(&sorted, node);
     }
 

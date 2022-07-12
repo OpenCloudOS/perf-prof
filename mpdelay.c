@@ -334,19 +334,19 @@ static void mpdelay_sample(union perf_event *event, int instance)
     }
 }
 
-static void mpdelay_help(struct help_ctx *ctx)
+static void mpdelay_help(struct help_ctx *hctx)
 {
     int i, j;
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
 
     printf(PROGRAME " %s ", mpdelay.name);
     printf("-e \"");
-    for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+    for (i = 0; i < hctx->nr_list; i++) {
+        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/delay=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
                              tp->delay?:".");
-            if (i != ctx->nr_list - 1)
+            if (i != hctx->nr_list - 1)
                 printf(",");
         }
     }
@@ -358,7 +358,7 @@ static void mpdelay_help(struct help_ctx *ctx)
         printf("--than %lu ", env->greater_than);
     if (env->heatmap)
         printf("--heatmap %s ", env->heatmap);
-    common_help(ctx, true, true, true, true, false, false, true);
+    common_help(hctx, true, true, true, true, false, false, true);
 
     if (!env->perins)
         printf("[--perins] ");
@@ -366,7 +366,7 @@ static void mpdelay_help(struct help_ctx *ctx)
         printf("[--than .] ");
     if (!env->heatmap)
         printf("[--heatmap .] ");
-    common_help(ctx, false, true, true, true, false, false, true);
+    common_help(hctx, false, true, true, true, false, false, true);
     printf("\n");
 }
 

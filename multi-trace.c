@@ -424,20 +424,20 @@ found:
         goto free_dup_event;
 }
 
-static void __help_events(struct help_ctx *ctx, const char *impl, bool *has_key)
+static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key)
 {
     int i, j;
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
 
     if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0) {
         printf("-e raw_syscalls:sys_enter/./ -e raw_syscalls:sys_exit/./ ");
         return;
     }
 
-    for (i = 0; i < ctx->nr_list; i++) {
+    for (i = 0; i < hctx->nr_list; i++) {
         printf("-e \"");
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (!env->key || tp->key)
                 printf("key=%s/", tp->key?:".");
@@ -447,25 +447,25 @@ static void __help_events(struct help_ctx *ctx, const char *impl, bool *has_key)
                 printf("ptr=%s/size=%s/", tp->mem_ptr?:".", tp->mem_size?:".");
             if (strcmp(impl, TWO_EVENT_PAIR_IMPL) != 0)
                 printf("stack/");
-            if (j != ctx->tp_list[i]->nr_tp - 1)
+            if (j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
         printf("\" ");
     }
 }
 
-static void __multi_trece_help(struct help_ctx *ctx, const char *common, const char *impl, bool impl_default)
+static void __multi_trece_help(struct help_ctx *hctx, const char *common, const char *impl, bool impl_default)
 {
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
     bool has_key = false;
 
-    if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) && ctx->nr_list < 2)
+    if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) && hctx->nr_list < 2)
         return;
     if (env->impl && strcmp(env->impl, impl))
         return;
 
     printf("%s ", common);
-    __help_events(ctx, impl, &has_key);
+    __help_events(hctx, impl, &has_key);
 
     if (env->key)
         printf("-k %s --order --order-mem . ", env->key);
@@ -482,7 +482,7 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
         if (env->heatmap)
             printf("--heatmap %s ", env->heatmap);
     }
-    common_help(ctx, true, true, true, true, false, true, true);
+    common_help(hctx, true, true, true, true, false, true, true);
 
     if (!env->key && !has_key)
         printf("[-k . --order --order-mem .] ");
@@ -497,20 +497,20 @@ static void __multi_trece_help(struct help_ctx *ctx, const char *common, const c
         if (!env->heatmap)
             printf("[--heatmap .] ");
     }
-    common_help(ctx, false, true, true, true, false, true, true);
+    common_help(hctx, false, true, true, true, false, true, true);
 
     printf("\n");
 }
 
 #define NUM(ary) (sizeof(ary)/sizeof(ary[0]))
-static void multi_trece_help(struct help_ctx *ctx)
+static void multi_trece_help(struct help_ctx *hctx)
 {
     const char *common = PROGRAME " multi-trace";
     const char *impl_str[] = {TWO_EVENT_DELAY_IMPL, TWO_EVENT_PAIR_IMPL, TWO_EVENT_MEM_PROFILE, TWO_EVENT_SYSCALLS_IMPL};
     int impl;
 
     for (impl = 0; impl < NUM(impl_str); impl++)
-        __multi_trece_help(ctx, common, impl_str[impl], false);
+        __multi_trece_help(hctx, common, impl_str[impl], false);
 }
 
 static profiler multi_trace = {
@@ -534,13 +534,13 @@ static int kmemprof_init(struct perf_evlist *evlist, struct env *env)
     return multi_trace_init(evlist, env);
 }
 
-static void kmemprof_help(struct help_ctx *ctx)
+static void kmemprof_help(struct help_ctx *hctx)
 {
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
     const char *common = PROGRAME " kmemprof";
     char *oldimpl = env->impl;
     env->impl = strdup(TWO_EVENT_MEM_PROFILE);
-    __multi_trece_help(ctx, common, TWO_EVENT_MEM_PROFILE, true);
+    __multi_trece_help(hctx, common, TWO_EVENT_MEM_PROFILE, true);
     free(env->impl);
     env->impl = oldimpl;
 }
@@ -566,13 +566,13 @@ static int syscalls_init(struct perf_evlist *evlist, struct env *env)
     return multi_trace_init(evlist, env);
 }
 
-static void syscalls_help(struct help_ctx *ctx)
+static void syscalls_help(struct help_ctx *hctx)
 {
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
     const char *common = PROGRAME " syscalls";
     char *oldimpl = env->impl;
     env->impl = strdup(TWO_EVENT_SYSCALLS_IMPL);
-    __multi_trece_help(ctx, common, TWO_EVENT_SYSCALLS_IMPL, true);
+    __multi_trece_help(hctx, common, TWO_EVENT_SYSCALLS_IMPL, true);
     free(env->impl);
     env->impl = oldimpl;
 }

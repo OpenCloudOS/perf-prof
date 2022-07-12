@@ -679,17 +679,17 @@ static void kmemleak_sigusr1(int signum)
     report_kmemleak_stat(true);
 }
 
-static void kmemleak_help(struct help_ctx *ctx)
+static void kmemleak_help(struct help_ctx *hctx)
 {
     int j;
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
     struct tp_list *tp_alloc, *tp_free;
 
-    if (ctx->nr_list != 2)
+    if (hctx->nr_list != 2)
         return ;
 
-    tp_alloc = ctx->tp_list[0];
-    tp_free = ctx->tp_list[1];
+    tp_alloc = hctx->tp_list[0];
+    tp_free = hctx->tp_list[1];
     printf(PROGRAME " %s ", kmemleak.name);
     printf("--alloc \"");
     for (j = 0; j < tp_alloc->nr_tp; j++) {
@@ -721,13 +721,13 @@ static void kmemleak_help(struct help_ctx *ctx)
         printf("-g ");
     if (env->flame_graph)
         printf("--flame-graph %s ", env->flame_graph);
-    common_help(ctx, true, true, true, false, true, true, true);
+    common_help(hctx, true, true, true, false, true, true, true);
 
     if (!env->callchain)
         printf("[-g] ");
     if (!env->flame_graph)
         printf("[--flame-graph .] ");
-    common_help(ctx, false, true, true, false, true, true, true);
+    common_help(hctx, false, true, true, false, true, true, true);
     printf("\n");
 }
 
