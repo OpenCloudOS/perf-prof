@@ -245,7 +245,6 @@ static union perf_event *perf_mmap__read(struct perf_mmap *map,
 
 		if (map->overwrite) {
 			u64 head = perf_mmap__read_head(map);
-			unsigned long size;
 
 			end = *startp;
 			size = end - head;

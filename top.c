@@ -447,16 +447,16 @@ static void top_interval(void)
     ctx.pid_list.node_delete = sorted.node_delete;
 }
 
-static void top_help(struct help_ctx *ctx)
+static void top_help(struct help_ctx *hctx)
 {
     int i, j, k;
     bool top_by, top_add;
 
     printf(PROGRAME " %s ", top.name);
     printf("-e \"");
-    for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+    for (i = 0; i < hctx->nr_list; i++) {
+        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             top_by = false;
             top_add = false;
@@ -484,14 +484,14 @@ static void top_help(struct help_ctx *ctx)
                 printf("top-add=./");
             if (!tp->alias || !top_by || !top_add)
                 printf("]");
-            if (i != ctx->nr_list - 1)
+            if (i != hctx->nr_list - 1)
                 printf(",");
         }
     }
     printf("\" ");
 
-    common_help(ctx, true, true, true, true, false, true, true);
-    common_help(ctx, false, true, true, true, false, true, true);
+    common_help(hctx, true, true, true, true, false, true, true);
+    common_help(hctx, false, true, true, true, false, true, true);
     printf("\n");
 }
 

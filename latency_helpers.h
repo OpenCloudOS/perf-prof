@@ -18,7 +18,7 @@ struct latency_dist *latency_dist_new(bool perins, bool perkey, int extra_size);
 void latency_dist_free(struct latency_dist *dist);
 struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance, u64 key, u64 lat);
 typedef void (*print_node)(void *opaque, struct latency_node *node);
-void latency_dist_print(struct latency_dist *dist, print_node print_node, void *opaque);
+void latency_dist_print(struct latency_dist *dist, print_node printnode, void *opaque);
 bool latency_dist_empty(struct latency_dist *dist);
 
 #endif

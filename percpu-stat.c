@@ -326,22 +326,22 @@ static int stat_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void stat_help(struct help_ctx *ctx)
+static void stat_help(struct help_ctx *hctx)
 {
     int i, j;
-    struct env *env = ctx->env;
+    struct env *env = hctx->env;
 
     printf(PROGRAME " %s ", stat.name);
     printf("-e \"");
-    for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+    for (i = 0; i < hctx->nr_list; i++) {
+        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (tp->alias)
                 printf("alias=%s/", tp->alias);
             else
                 printf("[alias=./]");
-            if (i != ctx->nr_list - 1)
+            if (i != hctx->nr_list - 1)
                 printf(",");
         }
     }
@@ -349,11 +349,11 @@ static void stat_help(struct help_ctx *ctx)
 
     if (env->perins)
         printf("--perins ");
-    common_help(ctx, true, true, false, true, false, false, true);
+    common_help(hctx, true, true, false, true, false, false, true);
 
     if (!env->perins)
         printf("[--perins] ");
-    common_help(ctx, false, true, false, true, false, false, true);
+    common_help(hctx, false, true, false, true, false, false, true);
     printf("\n");
 }
 
