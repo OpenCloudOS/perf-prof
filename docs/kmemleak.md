@@ -16,20 +16,37 @@
 共监控2个事件：
 
 - **alloc**，需要自己指定，可以是`kmem:kmalloc、pcpu_alloc`等分配内存点。alloc点需要获取内核栈。可以指定多个alloc点。
+  - alloc点可以指定一些属性信息：`ptr=filed`内存分配指针字段，`size=field`内存分配大小字段。通过指定的这些字段可以读取指针和大小。
 - **free**，需要自己指定，与alloc相对应。可以是`kmem:kfree、free_percpu`等释放内存点。free点不需要栈信息。可以指定多个free点。
 
 ```
 用法:
-    perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-p PID] [--order] [--order-mem=B] [-m pages] [-g [--flame-graph file]] [-v]
+perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]
+
+Event selector. use 'perf list tracepoint' to list available tp events.
+  EVENT,EVENT,...
+  EVENT: sys:name[/filter/ATTR/ATTR/.../]
+  filter: ftrace filter
+  ATTR:
+      stack: sample_type PERF_SAMPLE_CALLCHAIN
+      max-stack=int : sample_max_stack
+      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr
+      size=field: kmemleak, size field, Dflt: size=bytes_alloc
+
+ OPTION:
+  -C, --cpu=CPU[-CPU],...    Monitor the specified CPU, Dflt: all cpu
+  -i, --interval=ms          Interval, Unit: ms
+  -m, --mmap-pages=pages     Number of mmap data pages and AUX area tracing mmap pages
+      --order                Order events by timestamp.
+      --order-mem=Bytes      Maximum memory used by ordering events. Unit: GB/MB/KB/*B.
+  -p, --pids=PID,...         Attach to processes
+  -t, --tids=TID,...         Attach to thread
+  -v, --verbose              Verbose debug output
 
       --alloc=EVENT,...      Memory alloc tracepoint/kprobe
       --free=EVENT,...       memory free tracepoint/kprobe
-  -p, --pids=PID,PID         Attach to processes
-      --order                Order events by timestamp.
-      --order-mem=B          Maximum memory used by ordering events. Unit: GB/MB/KB/*B.
       --flame-graph=file     Specify the folded stack file.
   -g, --call-graph           Enable call-graph recording
-  -m, --mmap-pages=pages     number of mmap data pages and AUX area tracing mmap pages
   -v, --verbose              Verbose debug output
 ```
 
@@ -116,7 +133,7 @@ free_percpu，增加free_percpu kprobe点，使用ptr参数接收释放的指针
 5. 启动perf-prof
 
    ```
-   perf-prof kmemleak --alloc uprobes:NewHook --free uprobes:DeleteHook -p 213597 -g # 213597为leak进程PID。
+   perf-prof kmemleak --alloc "uprobes:NewHook//size=len/" --free uprobes:DeleteHook -p 213597 -g # 213597为leak进程PID。
    ```
 
 
@@ -143,4 +160,78 @@ kernel                  命中uprobe:DeleteHook tracepoint点     |
                         内存释放信息传到到perf ringbuffer        |
                             `----------------------------------
 ```
+
+
+
+# 泄露栈报告
+
+```bash
+[root@VM ~]# perf-prof kmemleak --alloc "uprobes:NewHook" --free uprobes:DeleteHook -p 20215 -g
+^C2022-04-22 19:52:32.756241 
+KMEMLEAK STATS:
+TOTAL alloc 6 free 9
+
+KMEMLEAK REPORT: 3
+            leak  20215 .... [005] 35171405.038116: uprobes:NewHook: (7f12bf3767d5) ptr=1cd4b80 len=80
+    00007f12bf3767d5 NewHook+0x0 (/tmp/trace/malloc_hook.so)
+    00007f12bf5af5d4 _ZN8tcmalloc24allocate_full_malloc_oomEm+0x154 (/tmp/trace/libtcmalloc.so.4.5.9)
+    000000000040061b main+0xe (/tmp/trace/leak)
+    00007f12befc9575 __libc_start_main+0xf5 (/usr/lib64/libc-2.17.so)
+            leak  20215 .... [005] 35171406.038246: uprobes:NewHook: (7f12bf3767d5) ptr=1cd4c00 len=80
+    00007f12bf3767d5 NewHook+0x0 (/tmp/trace/malloc_hook.so)
+    00007f12bf5af5d4 _ZN8tcmalloc24allocate_full_malloc_oomEm+0x154 (/tmp/trace/libtcmalloc.so.4.5.9)
+    000000000040061b main+0xe (/tmp/trace/leak)
+    00007f12befc9575 __libc_start_main+0xf5 (/usr/lib64/libc-2.17.so)
+            leak  20215 .... [005] 35171407.038375: uprobes:NewHook: (7f12bf3767d5) ptr=1cd4c80 len=80
+    00007f12bf3767d5 NewHook+0x0 (/tmp/trace/malloc_hook.so)
+    00007f12bf5af5d4 _ZN8tcmalloc24allocate_full_malloc_oomEm+0x154 (/tmp/trace/libtcmalloc.so.4.5.9)
+    000000000040061b main+0xe (/tmp/trace/leak)
+    00007f12befc9575 __libc_start_main+0xf5 (/usr/lib64/libc-2.17.so)
+```
+
+默认情况下，会报告泄露的栈。按照内存分配的时间先后顺序汇报。
+
+这种场景报告的栈会比较多，可以通过`--flame-graph`启用火焰图，利用把相同的栈聚合起来。
+
+
+
+# 泄露字节报告
+
+```bash
+[root@VM ~]# cat /sys/kernel/debug/tracing/events/uprobes/NewHook/format 
+name: NewHook
+ID: 1305
+format:
+        field:unsigned short common_type;       offset:0;       size:2; signed:0;
+        field:unsigned char common_flags;       offset:2;       size:1; signed:0;
+        field:unsigned char common_preempt_count;       offset:3;       size:1; signed:0;
+        field:int common_pid;   offset:4;       size:4; signed:1;
+
+        field:unsigned long __probe_ip; offset:8;       size:8; signed:0;
+        field:u64 ptr;  offset:16;      size:8; signed:0;
+        field:u64 len;  offset:24;      size:8; signed:0;
+
+print fmt: "(%lx) ptr=%llx len=%llx", REC->__probe_ip, REC->ptr, REC->len
+[root@VM ~]# perf-prof kmemleak --alloc "uprobes:NewHook//size=len/" --free uprobes:DeleteHook -p 20215 -g
+^C2022-04-22 18:03:41.696534 
+KMEMLEAK STATS:
+TOTAL alloc 48 free 72
+
+LEAKED BYTES REPORT:
+Leak of 3072 bytes in 24 objects allocated from:
+    00007f12bf3767d5 NewHook+0x0 (/tmp/trace/malloc_hook.so)
+    00007f12bf5af5d4 _ZN8tcmalloc24allocate_full_malloc_oomEm+0x154 (/tmp/trace/libtcmalloc.so.4.5.9)
+    000000000040061b main+0xe (/tmp/trace/leak)
+    00007f12befc9575 __libc_start_main+0xf5 (/usr/lib64/libc-2.17.so)
+```
+
+通过`uprobes:NewHook`可以发现ptr存放内存分配的指针，len存放内存分配大小。通过指定`--alloc "uprobes:NewHook//size=len/"`size=属性可以启用泄露字节报告。
+
+泄露字节报告，会把相同的栈聚合起来，报告泄露的总字节数、分配的对象数量，以及栈信息。
+
+- 相同的栈只报告一次。
+- 按照泄露字节数量，从大到下排序。
+- 不支持火焰图。栈相对较少，不再支持火焰图。
+
+只需要重点分析泄露字节最多的栈。
 
