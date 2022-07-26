@@ -205,9 +205,49 @@ static void hrtimer_sample(union perf_event *event, int instance)
     }
 }
 
+static void hrtimer_help(struct help_ctx *hctx)
+{
+    int i, j;
+    struct env *env = hctx->env;
+
+    printf(PROGRAME " %s ", hrtimer.name);
+    printf("-e \"");
+    for (i = 0; i < hctx->nr_list; i++) {
+        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &hctx->tp_list[i]->tp[j];
+            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
+            if (i != hctx->nr_list - 1)
+                printf(",");
+        }
+    }
+    printf("\" ");
+
+    if (env->sample_period)
+        printf("--period %lu ", env->sample_period);
+    if (env->freq)
+        printf("-F %d ", env->freq);
+    if (env->callchain)
+        printf("-g ");
+    if (env->precise)
+        printf("--precise ");
+    common_help(hctx, true, true, false, false, true, true, false);
+
+    if (!env->sample_period)
+        printf("[--period ns] ");
+    if (!env->freq)
+        printf("[-F freq] ");
+    if (!env->callchain)
+        printf("[-g] ");
+    if (!env->precise)
+        printf("[--precise] ");
+    common_help(hctx, false, true, false, false, true, true, false);
+    printf("\n");
+}
+
 static profiler hrtimer = {
     .name = "hrtimer",
     .pages = 2,
+    .help = hrtimer_help,
     .init = hrtimer_init,
     .filter = hrtimer_filter,
     .deinit = hrtimer_exit,
