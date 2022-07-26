@@ -110,6 +110,7 @@ const char argp_program_doc[] =
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
 "  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]\n"
+"  perf-prof hrtimer [-e EVENT[...]] [-F freq] [--period ns] [-g] [--precise]\n"
 "  perf-prof percpu-stat [--syscalls]\n"
 "  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"
@@ -165,6 +166,7 @@ enum {
     LONG_OPT_impl,
     LONG_OPT_ldlat,
     LONG_OPT_overwrite,
+    LONG_OPT_period,
 };
 static const struct argp_option opts[] = {
     { NULL, 0, NULL, 0, "OPTION:" },
@@ -184,6 +186,7 @@ static const struct argp_option opts[] = {
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, Unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
+    { "period", LONG_OPT_period, "ns", 0, "Sample period, Unit: s/ms/us/*ns" },
     { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter", },
     { "key", 'k', "str", 0, "Key for series events" },
     { "impl", LONG_OPT_impl, "impl", 0, "Implementation of two-event analysis class. Dflt: delay.\n"
@@ -426,6 +429,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_overwrite:
         env.overwrite = true;
+        break;
+    case LONG_OPT_period:
+        env.sample_period = nsparse(arg, NULL);
         break;
     case 'v':
         env.verbose++;
