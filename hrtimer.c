@@ -24,7 +24,7 @@ static int monitor_ctx_init(struct env *env)
         if (!ctx.tp_list)
             return -1;
 
-        ctx.counters = calloc(1, monitor_nr_instance() * ctx.tp_list->nr_tp * sizeof(u64));
+        ctx.counters = calloc(1, monitor_nr_instance() * (ctx.tp_list->nr_tp + 1) * sizeof(u64));
         if (!ctx.counters)
             return -1;
     }
@@ -58,7 +58,7 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         .size          = sizeof(struct perf_event_attr),
         .sample_period = env->sample_period ?   : env->freq, //ns
         .freq          = env->sample_period ? 0 : 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ |
                          (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID | PERF_FORMAT_GROUP,
         .pinned        = 0,
@@ -158,6 +158,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
             u32    pid;
             u32    tid;
         }    tid_entry;
+        u64  time;
         struct {
             u32    cpu;
             u32    reserved;
@@ -171,11 +172,20 @@ static void hrtimer_sample(union perf_event *event, int instance)
         } groups;
     } *data = (void *)event->sample.array;
     struct callchain *callchain;
-    u64 *jcounter = ctx.counters + instance * ctx.tp_list->nr_tp;
-    u64 counter;
+    int n = ctx.tp_list->nr_tp;
+    u64 *jcounter = ctx.counters + instance * (n + 1);
+    u64 counter, cpu_clock;
     u64 i;
     int j;
     int print = 0;
+    int verbose = ctx.env->verbose;
+    int header_end = 0;
+
+    if (verbose) {
+        print_time(stdout);
+        printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock:", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL);
+    }
 
     for (i = 0; i < data->groups.nr; i++) {
         struct perf_evsel *evsel;
@@ -183,13 +193,29 @@ static void hrtimer_sample(union perf_event *event, int instance)
         if (!evsel)
             continue;
         if (evsel == ctx.leader) {
+            cpu_clock = data->groups.ctnr[i].value - jcounter[n];
+            jcounter[n] = data->groups.ctnr[i].value;
+            if (verbose) {
+                if (!header_end) {
+                    printf(" %lu ns\n", cpu_clock);
+                    header_end = 1;
+                } else
+                    printf("  cpu-clock: %lu ns\n", cpu_clock);
+            }
             continue;
         }
-        for (j = 0; j < ctx.tp_list->nr_tp; j++) {
+        for (j = 0; j < n; j++) {
             struct tp *tp = &ctx.tp_list->tp[j];
             if (tp->evsel == evsel) {
                 counter = data->groups.ctnr[i].value - jcounter[j];
                 jcounter[j] = data->groups.ctnr[i].value;
+                if (verbose) {
+                    if (!header_end) {
+                        printf("\n");
+                        header_end = 1;
+                    }
+                    printf("  %s:%s %lu\n", tp->sys, tp->name, counter);
+                }
                 if (counter == 0)
                     print ++;
                 break;
@@ -197,9 +223,12 @@ static void hrtimer_sample(union perf_event *event, int instance)
         }
     }
 
-    if (print) {
-        print_time(stdout);
-        printf("cpu %d pid %d tid %d\n", data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid);
+    if (print || verbose) {
+        if (!verbose) {
+            print_time(stdout);
+            printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, cpu_clock);
+        }
         if (ctx.env->callchain) {
             callchain = (struct callchain *)&data->groups.ctnr[data->groups.nr];
             print_callchain_common(ctx.cc, callchain, 0/*only kernel stack*/);
