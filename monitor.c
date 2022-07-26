@@ -110,7 +110,7 @@ const char argp_program_doc[] =
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
 "  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]\n"
-"  perf-prof hrtimer [-e EVENT[...]] [-F freq] [--period ns] [-g] [--precise]\n"
+"  perf-prof hrtimer [-e EVENT[...]] [-F freq] [--period ns] [-g] [--precise] [-v]\n"
 "  perf-prof percpu-stat [--syscalls]\n"
 "  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"
