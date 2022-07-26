@@ -92,6 +92,7 @@ struct env {
     char *device;
     int ldlat;
     bool overwrite;
+    unsigned long sample_period;
 
     /* order */
     bool order;
