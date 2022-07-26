@@ -126,6 +126,22 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static int hrtimer_filter(struct perf_evlist *evlist, struct env *env)
+{
+    int i, err;
+
+    if (ctx.env->event)
+    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_list->tp[i];
+        if (tp->filter && tp->filter[0]) {
+            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+            if (err < 0)
+                return err;
+        }
+    }
+    return 0;
+}
+
 static void hrtimer_exit(struct perf_evlist *evlist)
 {
     monitor_ctx_exit();
@@ -193,6 +209,7 @@ static profiler hrtimer = {
     .name = "hrtimer",
     .pages = 2,
     .init = hrtimer_init,
+    .filter = hrtimer_filter,
     .deinit = hrtimer_exit,
     .sample = hrtimer_sample,
 };
