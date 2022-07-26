@@ -82,6 +82,8 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
+    if (!monitor_instance_oncpu())
+        return -1;
     if (env->sample_period == 0 && env->freq == 0)
         return -1;
 
