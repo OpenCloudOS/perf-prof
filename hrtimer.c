@@ -5,6 +5,16 @@
 #include "stack_helpers.h"
 
 static profiler hrtimer;
+typedef int (*analyzer)(int instance, int nr_tp, u64 *counters);
+
+static int __analyzer_eqzero(int instance, int nr_tp, u64 *counters)
+{
+    int i;
+    for (i = 0; i < nr_tp; i++) // exclude counters[nr_tp]
+        if (counters[i] != 0)
+            return 0;
+    return 1;
+}
 
 struct monitor_ctx {
     struct perf_evlist *evlist;
@@ -12,6 +22,8 @@ struct monitor_ctx {
     struct perf_evsel *leader;
     struct tp_list *tp_list;
     u64 *counters;
+    u64 *ins_counters;
+    analyzer analyzer;
     struct env *env;
 } ctx;
 
@@ -27,6 +39,12 @@ static int monitor_ctx_init(struct env *env)
         ctx.counters = calloc(1, monitor_nr_instance() * (ctx.tp_list->nr_tp + 1) * sizeof(u64));
         if (!ctx.counters)
             return -1;
+
+        ctx.ins_counters = malloc((ctx.tp_list->nr_tp + 1) * sizeof(u64));
+        if (!ctx.ins_counters)
+            return -1;
+
+        ctx.analyzer = __analyzer_eqzero;
     }
 
     if (env->callchain) {
@@ -195,6 +213,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
         if (evsel == ctx.leader) {
             cpu_clock = data->groups.ctnr[i].value - jcounter[n];
             jcounter[n] = data->groups.ctnr[i].value;
+            ctx.ins_counters[n] = cpu_clock;
             if (verbose) {
                 if (!header_end) {
                     printf(" %lu ns\n", cpu_clock);
@@ -209,6 +228,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
             if (tp->evsel == evsel) {
                 counter = data->groups.ctnr[i].value - jcounter[j];
                 jcounter[j] = data->groups.ctnr[i].value;
+                ctx.ins_counters[j] = counter;
                 if (verbose) {
                     if (!header_end) {
                         printf("\n");
@@ -216,12 +236,12 @@ static void hrtimer_sample(union perf_event *event, int instance)
                     }
                     printf("  %s:%s %lu\n", tp->sys, tp->name, counter);
                 }
-                if (counter == 0)
-                    print ++;
                 break;
             }
         }
     }
+
+    print = ctx.analyzer(instance, n, ctx.ins_counters);
 
     if (print || verbose) {
         if (!verbose) {
