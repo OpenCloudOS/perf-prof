@@ -15,8 +15,8 @@
 
 static profiler multi_trace;
 
-struct perf_event_backup {
-    struct rb_node rbnode;
+struct timeline_node {
+    struct rb_node key_node;
     u64    key;
     struct tp *tp;
     union perf_event *event;
@@ -36,8 +36,8 @@ static struct multi_trace_ctx {
 
 static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 {
-    struct perf_event_backup *b = container_of(rbn, struct perf_event_backup, rbnode);
-    const struct perf_event_backup *e = entry;
+    struct timeline_node *b = container_of(rbn, struct timeline_node, key_node);
+    const struct timeline_node *e = entry;
 
     if (b->key > e->key)
         return 1;
@@ -49,23 +49,23 @@ static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 
 static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const void *new_entry)
 {
-    const struct perf_event_backup *e = new_entry;
+    const struct timeline_node *e = new_entry;
     union perf_event *event = e->event;
     union perf_event *new_event = multi_trace.dup ? event : memdup(event, event->header.size);
-    struct perf_event_backup *b = malloc(sizeof(*b));
+    struct timeline_node *b = malloc(sizeof(*b));
     if (b && new_event) {
         b->key = e->key;
         b->tp = e->tp;
         b->event = new_event;
-        RB_CLEAR_NODE(&b->rbnode);
-        return &b->rbnode;
+        RB_CLEAR_NODE(&b->key_node);
+        return &b->key_node;
     } else
         return NULL;
 }
 
 static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
-    struct perf_event_backup *b = container_of(rb_node, struct perf_event_backup, rbnode);
+    struct timeline_node *b = container_of(rb_node, struct timeline_node, key_node);
     free(b->event);
     free(b);
 }
@@ -263,11 +263,11 @@ static void multi_trace_interval(void)
 static void multi_trace_handle_remaining(void)
 {
     struct rb_node *next = rb_first_cached(&ctx.backup.entries);
-    struct perf_event_backup *left;
+    struct timeline_node *left;
     struct two_event *two;
 
 	while (next) {
-        left = rb_entry(next, struct perf_event_backup, rbnode);
+        left = rb_entry(next, struct timeline_node, key_node);
         two = ctx.impl->object_find(ctx.class, left->tp, NULL);
         if (two) {
             ctx.class->remaining(two, left->event, left->key);
@@ -376,14 +376,14 @@ found:
 
     // find prev event
     if (i != 0) {
-        struct perf_event_backup backup = {
+        struct timeline_node backup = {
             .key = key,
         };
         struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
         if (rbn) {
-            struct perf_event_backup *prev;
+            struct timeline_node *prev;
             struct two_event *two;
-            prev = container_of(rbn, struct perf_event_backup, rbnode);
+            prev = container_of(rbn, struct timeline_node, key_node);
             two = ctx.impl->object_find(ctx.class, prev->tp, tp);
             if (two)
                 ctx.class->two(two, prev->event, event, key);
@@ -393,7 +393,7 @@ found:
 
     // backup event
     if (i != ctx.nr_list - 1) {
-        struct perf_event_backup backup = {
+        struct timeline_node backup = {
             .key = key,
             .tp = tp,
             .event = event,
@@ -402,8 +402,8 @@ found:
         if (multi_trace.dup) {
             struct rb_node *rbn = rblist__findnew(&ctx.backup, &backup);
             if (rbn) {
-                struct perf_event_backup *new;
-                new = rb_entry(rbn, struct perf_event_backup, rbnode);
+                struct timeline_node *new;
+                new = rb_entry(rbn, struct timeline_node, key_node);
                 if (new->event != event) {
                     free(new->event);
                     new->event = event;
@@ -414,7 +414,7 @@ found:
             int err = rblist__add_node(&ctx.backup, &backup);
             if (err == -EEXIST) {
                 struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
-                struct perf_event_backup *new = rb_entry(rbn, struct perf_event_backup, rbnode);
+                struct timeline_node *new = rb_entry(rbn, struct timeline_node, key_node);
                 free(new->event);
                 new->event = memdup(event, event->header.size);
                 new->tp = tp;
