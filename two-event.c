@@ -238,6 +238,15 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
             if (opts->greater_than && delta > opts->greater_than) {
                 multi_trace_print(event1, two->tp1);
+                if (iter) {
+                    bool first = true;
+                    char buff[32];
+                    snprintf(buff, sizeof(buff), " %12.3f us", delta/1000.0);
+                    while (event_iter_next(iter)) {
+                        event_iter_print(iter, first ? buff : NULL);
+                        first = false;
+                    }
+                }
                 multi_trace_print(event2, two->tp2);
             }
         }

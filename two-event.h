@@ -131,7 +131,7 @@ void multi_trace_print(union perf_event *event, struct tp *tp);
  *     event_iter_print(iter);
  * }
  */
-void event_iter_print(struct event_iter *iter);
+void event_iter_print(struct event_iter *iter, const char *title);
 int event_iter_next(struct event_iter *iter);
 
 
