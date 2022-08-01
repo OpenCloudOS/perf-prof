@@ -40,6 +40,8 @@ static inline int get_cpu_vendor(void) {
 };
 int in_guest(void);
 
+void print_lost_fn(union perf_event *event, int ins);
+
 
 #define PROFILER_REGISTER_NAME(p, name) \
 __attribute__((constructor)) static void __monitor_register_##name(void) \

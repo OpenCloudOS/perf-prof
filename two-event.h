@@ -19,6 +19,12 @@ struct two_event_options {
     unsigned int first_n;
 };
 
+struct event_iter {
+    void *curr;
+    union perf_event *event;
+    struct tp *tp;
+};
+
 struct two_event {
     /* object */
     struct two_event_class *class;
@@ -35,7 +41,10 @@ struct two_event_class {
     struct rblist two_events;
 
     /* object function */
-    void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key);
+    /*
+     * iter, On the timeline, the events between event1 and event2 can be iterated through iter.
+     */
+    void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter);
     void (*remaining)(struct two_event *two, union perf_event *event, u64 key);
     int (*print_header)(struct two_event *two);
     void (*print)(struct two_event *two);
@@ -54,6 +63,7 @@ struct two_event_impl {
     void (*object_delete)(struct two_event_class *class, struct two_event *two);
     struct two_event *(*object_find)(struct two_event_class *class, struct tp *tp1, struct tp *tp2);
 };
+
 
 /* delay analysis:
  * syscall delay
@@ -112,6 +122,17 @@ struct multi_trace_type_raw {
 
 void multi_trace_raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp);
 void multi_trace_print(union perf_event *event, struct tp *tp);
+
+
+/*
+ * while (event_iter_next(iter)) {
+ *     event_iter_print(iter->event, iter->tp);
+ *     or
+ *     event_iter_print(iter);
+ * }
+ */
+void event_iter_print(struct event_iter *iter);
+int event_iter_next(struct event_iter *iter);
 
 
 #endif

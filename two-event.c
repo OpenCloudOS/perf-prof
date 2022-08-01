@@ -104,7 +104,7 @@ static struct two_event *two_event_find(struct two_event_class *class, struct tp
     return two;
 }
 
-static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key) {}
+static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter) {}
 static void dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {}
 static int dummy_print_header(struct two_event *two) {return 0;}
 static void dummy_print(struct two_event *two) {}
@@ -214,7 +214,7 @@ static void delay_delete(struct two_event_class *class, struct two_event *two)
     }
 }
 
-static void delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+static void delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter)
 {
     struct delay *delay = NULL;
     struct delay_class *delay_class = NULL;
@@ -398,7 +398,7 @@ static struct two_event *syscalls_new(struct two_event_class *class, struct tp *
     return delay_new(class, tp1, tp2);
 }
 
-static void syscalls_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+static void syscalls_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter)
 {
     struct delay *delay = NULL;
     struct delay_class *delay_class = NULL;
@@ -541,7 +541,7 @@ struct pair_class {
     struct two_event_class base;
 };
 
-static void pair_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+static void pair_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter)
 {
     struct pair *pair;
 
@@ -655,7 +655,7 @@ static void mem_profile_delete(struct two_event_class *class, struct two_event *
     }
 }
 
-static void mem_profile_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key)
+static void mem_profile_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter)
 {
     struct mem_profile *profile = NULL;
     struct multi_trace_type_callchain *data;
@@ -710,7 +710,7 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
 
 static void mem_profile_remaining(struct two_event *two, union perf_event *event, u64 key)
 {
-    mem_profile_two(two, event, NULL, key);
+    mem_profile_two(two, event, NULL, key, NULL);
 }
 
 static int mem_profile_print_header(struct two_event *two)

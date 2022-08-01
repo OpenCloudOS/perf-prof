@@ -106,7 +106,7 @@ const char argp_program_doc[] =
 "  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]\n"
 "  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
-"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--perins] [--heatmap file]\n"
+"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]\n"
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
 "  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]\n"
@@ -609,7 +609,7 @@ static uint64_t time_ms(void)
     return tv.tv_sec * 1000LL + tv.tv_usec / 1000;
 }
 
-static void print_lost_fn(union perf_event *event, int ins)
+void print_lost_fn(union perf_event *event, int ins)
 {
     int oncpu = monitor_instance_oncpu();
     print_time(stderr);
