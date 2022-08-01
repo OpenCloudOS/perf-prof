@@ -13,7 +13,7 @@
 #include <stack_helpers.h>
 #include <two-event.h>
 
-static profiler multi_trace;
+static profiler *base_profiler;
 
 struct timeline_node {
     struct rb_node key_node;
@@ -51,7 +51,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
 {
     const struct timeline_node *e = new_entry;
     union perf_event *event = e->event;
-    union perf_event *new_event = multi_trace.dup ? event : memdup(event, event->header.size);
+    union perf_event *new_event = base_profiler->dup ? event : memdup(event, event->header.size);
     struct timeline_node *b = malloc(sizeof(*b));
     if (b && new_event) {
         b->key = e->key;
@@ -86,6 +86,8 @@ static int monitor_ctx_init(struct env *env)
     if (env->nr_events < 2)
         return -1;
 
+    base_profiler = current_base_profiler();
+
     tep = tep__ref();
 
     ctx.nr_ins = monitor_nr_instance();
@@ -118,7 +120,7 @@ static int monitor_ctx_init(struct env *env)
 
     if (stacks) {
         ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
-        multi_trace.pages *= 2;
+        base_profiler->pages *= 2;
     } else
         ctx.cc = NULL;
 
@@ -181,11 +183,11 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
     if (monitor_ctx_init(env) < 0)
         return -1;
 
-    if (using_order(&multi_trace)) {
-        multi_trace.dup = true;
+    if (using_order(base_profiler)) {
+        base_profiler->dup = true;
     }
 
-    reduce_wakeup_times(&multi_trace, &attr);
+    reduce_wakeup_times(base_profiler, &attr);
 
     for (i = 0; i < ctx.nr_list; i++) {
         for (j = 0; j < ctx.tp_list[i]->nr_tp; j++) {
@@ -338,7 +340,7 @@ static void multi_trace_sample(union perf_event *event, int instance)
     }
 
 free_dup_event:
-    if (multi_trace.dup)
+    if (base_profiler->dup)
         free(event);
     return;
 
@@ -399,7 +401,7 @@ found:
             .event = event,
         };
 
-        if (multi_trace.dup) {
+        if (base_profiler->dup) {
             struct rb_node *rbn = rblist__findnew(&ctx.backup, &backup);
             if (rbn) {
                 struct timeline_node *new;
