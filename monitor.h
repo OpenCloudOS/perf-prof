@@ -162,6 +162,7 @@ typedef struct monitor {
 
 profiler *order(profiler *p);
 bool current_is_order(void);
+profiler *current_base_profiler(void);
 bool using_order(profiler *p);
 void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr);
 
