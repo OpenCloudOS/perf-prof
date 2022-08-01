@@ -504,7 +504,7 @@ int event_iter_next(struct event_iter *iter)
     return 1;
 }
 
-void event_iter_print(struct event_iter *iter)
+void event_iter_print(struct event_iter *iter, const char *title)
 {
     union perf_event *event;
     struct tp *tp;
@@ -521,7 +521,10 @@ void event_iter_print(struct event_iter *iter)
 
     multi_trace_raw_size(event, &raw, &size, tp);
 
-    printf("%-27s", "|");
+    if (title)
+        printf("|%-26s", title);
+    else
+        printf("%-27s", "|");
     tep__update_comm(NULL, data->h.tid_entry.tid);
     tep__print_event(data->h.time/1000, data->h.cpu_entry.cpu, raw, size);
 
