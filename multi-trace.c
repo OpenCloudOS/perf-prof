@@ -227,6 +227,7 @@ static int monitor_ctx_init(struct env *env)
         .first_n = 10,
     };
     bool key_attr = false;
+    bool untraced = false;
 
     if (env->nr_events < 2)
         return -1;
@@ -251,6 +252,10 @@ static int monitor_ctx_init(struct env *env)
             struct tp *tp = &ctx.tp_list[i]->tp[j];
             if (env->verbose)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
+            if (tp->untraced) {
+                untraced = true;
+                continue;
+            }
             if (env->key && !tp->key) {
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
                 if (!tep_find_any_field(event, env->key)) {
@@ -295,6 +300,10 @@ static int monitor_ctx_init(struct env *env)
     ctx.timeline.node_delete = timeline_node_delete;
 
     ctx.need_timeline = env->detail;
+
+    if (untraced && !ctx.need_timeline) {
+        fprintf(stderr, "WARN: --detail parameter is not enabled. No need to add untrace events.\n");
+    }
 
     ctx.env = env;
     return 0;
@@ -367,8 +376,12 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
     for (k = 0; k < ctx.nr_list - 1; k++) {
         for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
+            if (tp1->untraced)
+                continue;
             for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
                 struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
+                if (tp2->untraced)
+                    continue;
                 if (!ctx.impl->object_new(ctx.class, tp1, tp2))
                     return -1;
             }
@@ -404,9 +417,14 @@ static void multi_trace_interval(void)
     for (k = 0; k < ctx.nr_list - 1; k++) {
         for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
+            if (tp1->untraced)
+                continue;
             for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
                 struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
-                struct two_event *two = ctx.impl->object_find(ctx.class, tp1, tp2);
+                struct two_event *two;
+                if (tp2->untraced)
+                    continue;
+                two = ctx.impl->object_find(ctx.class, tp1, tp2);
                 if (!header) {
                     header = ctx.class->print_header(two);
                 }
@@ -565,6 +583,9 @@ found:
         multi_trace_print(event, tp);
     }
 
+    if (tp->untraced)
+        goto untraced_processing;
+
     //get key
     key = monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance);
     if (ctx.env->key || tp->key) {
@@ -615,13 +636,15 @@ found:
         }
     }
 
-    // backup events to Timeline
+untraced_processing:
+
+    // backup events to Timeline, include untraced events.
     if (ctx.need_timeline) {
         struct timeline_node backup = {
             .time = hdr->time,
             .key = key,
             .tp = tp,
-            .unneeded = (i == ctx.nr_list - 1),
+            .unneeded = (i == ctx.nr_list - 1) || tp->untraced, // untraced means unneeded
             .event = event,
         };
         struct rb_node *rbn;
@@ -637,8 +660,8 @@ found:
         } else
             goto free_dup_event;
 
-        // backup event
-        if (i != ctx.nr_list - 1) {
+        // backup events, exclude untraced events.
+        if (i != ctx.nr_list - 1 && !tp->untraced) {
             struct rb_node *rbn;
         retry:
             rbn = rblist__findnew(&ctx.backup, tl_event);
@@ -672,8 +695,8 @@ found:
     }
     else
     {
-        // backup event
-        if (i != ctx.nr_list - 1) {
+        // backup events, exclude untraced events.
+        if (i != ctx.nr_list - 1 && !tp->untraced) {
             struct timeline_node backup = {
                 .time = hdr->time,
                 .key = key,

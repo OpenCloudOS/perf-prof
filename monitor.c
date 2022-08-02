@@ -143,6 +143,7 @@ const char argp_program_doc[] =
 "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
 "      delay=field: mpdelay, delay field\n"
 "      key=field: multi-trace, key for two-event\n"
+"      untraced: multi-trace, auxiliary, no two-event analysis\n"
 ;
 
 enum {

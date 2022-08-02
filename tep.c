@@ -305,6 +305,8 @@ struct tp_list *tp_list_new(char *event_str)
                         goto err_out;
                     }
                     tp->key = value;
+                } else if (strcmp(attr, "untraced") == 0) {
+                    tp->untraced = true;
                 }
             }
         }
