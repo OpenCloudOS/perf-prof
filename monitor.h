@@ -172,4 +172,20 @@ void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr);
 void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool interval, bool order, bool pages, bool verbose);
 
 
+// filter.c
+struct perf_event_filter {
+    void *obj;
+    int perf_event_prog_fd;
+    // args
+    bool filter_irqs_disabled;
+    bool irqs_disabled;
+    bool filter_nr_running;
+    u32 nr_running_min;
+    u32 nr_running_max;
+    bool filter_tif_need_resched;
+    bool tif_need_resched;
+};
+int perf_event_filter_open(struct perf_event_filter *filter);
+void perf_event_filter_close(struct perf_event_filter *filter);
+
 #endif
