@@ -392,6 +392,18 @@ int perf_evsel__apply_filter(struct perf_evsel *evsel, const char *filter)
 	return err;
 }
 
+int perf_evsel__set_bpf(struct perf_evsel *evsel, unsigned int prog_fd)
+{
+	int err = 0, i;
+
+	for (i = 0; i < evsel->cpus->nr && !err; i++)
+		err = perf_evsel__run_ioctl(evsel,
+				     PERF_EVENT_IOC_SET_BPF,
+				     (void *)(unsigned long)prog_fd, i);
+	return err;
+}
+
+
 struct perf_cpu_map *perf_evsel__cpus(struct perf_evsel *evsel)
 {
 	return evsel->cpus;
