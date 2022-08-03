@@ -19,7 +19,6 @@ MAKEFLAGS += --no-print-directory
 ifndef building_out_of_srctree
 srctree := $(patsubst %/,%,$(dir $(CURDIR)))
 srctree := $(patsubst %/,%,$(dir $(srctree)))
-srctree := $(patsubst %/,%,$(dir $(srctree)))
 #$(info Determined 'srctree' to be $(srctree))
 endif
 
@@ -32,7 +31,7 @@ INSTALL = install
 DESTDIR ?=
 DESTDIR_SQ = '$(subst ','\'',$(DESTDIR))'
 
-include $(srctree)/tools/scripts/Makefile.arch
+include $(srctree)/scripts/Makefile.arch
 
 ifeq ($(LP64), 1)
   libdir_relative = lib64
@@ -48,7 +47,7 @@ man_dir_SQ = '$(subst ','\'',$(man_dir))'
 export man_dir man_dir_SQ INSTALL
 export DESTDIR DESTDIR_SQ
 
-include $(srctree)/tools/scripts/Makefile.include
+include $(srctree)/scripts/Makefile.include
 
 # copy a bit from Linux kbuild
 
@@ -59,7 +58,7 @@ ifndef VERBOSE
   VERBOSE = 0
 endif
 
-INCLUDES = -I. -I$(srctree)/tools/include -I$(srctree)/tools/include/uapi
+INCLUDES = -I. -I$(srctree)/include -I$(srctree)/include/uapi
 
 export prefix libdir src obj
 
@@ -83,7 +82,7 @@ endif
 
 # Append required CFLAGS
 override CFLAGS += $(EXTRA_WARNINGS) -Wno-switch-enum
-override CFLAGS += -Werror -Wall
+override CFLAGS += -Werror -Wall -Wno-maybe-uninitialized
 override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
 override CFLAGS += -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
@@ -105,7 +104,7 @@ MAKEOVERRIDES=
 all:
 
 export srctree OUTPUT CC LD CFLAGS V
-include $(srctree)/tools/build/Makefile.include
+include $(srctree)/build/Makefile.include
 
 SHARED_OBJDIR	:= $(OUTPUT)sharedobjs/
 STATIC_OBJDIR	:= $(OUTPUT)staticobjs/
@@ -126,7 +125,7 @@ GLOBAL_SYM_COUNT = $(shell readelf -s --wide $(BPF_IN_SHARED) | \
 			   sort -u | wc -l)
 VERSIONED_SYM_COUNT = $(shell readelf --dyn-syms --wide $(OUTPUT)libbpf.so | \
 			      sed 's/\[.*\]//' | \
-			      awk '/GLOBAL/ && /DEFAULT/ && !/UND/ {print $$NF}' | \
+			      awk '/GLOBAL/ && /DEFAULT/ && !/UND|ABS/ {print $$NF}' | \
 			      grep -Eo '[^ ]+@LIBBPF_' | cut -d@ -f1 | sort -u | wc -l)
 
 CMD_TARGETS = $(LIB_TARGET) $(PC_FILE)
@@ -157,9 +156,9 @@ $(BPF_IN_SHARED): force $(BPF_HELPER_DEFS)
 $(BPF_IN_STATIC): force $(BPF_HELPER_DEFS)
 	$(Q)$(MAKE) $(build)=libbpf OUTPUT=$(STATIC_OBJDIR)
 
-$(BPF_HELPER_DEFS): $(srctree)/tools/include/uapi/linux/bpf.h
+$(BPF_HELPER_DEFS): $(srctree)/include/uapi/linux/bpf.h
 	$(QUIET_GEN)$(srctree)/scripts/bpf_doc.py --header \
-		--file $(srctree)/tools/include/uapi/linux/bpf.h > $(BPF_HELPER_DEFS)
+		--file $(srctree)/include/uapi/linux/bpf.h > $(BPF_HELPER_DEFS)
 
 $(OUTPUT)libbpf.so: $(OUTPUT)libbpf.so.$(LIBBPF_VERSION)
 
@@ -195,7 +194,7 @@ check_abi: $(OUTPUT)libbpf.so $(VERSION_SCRIPT)
 		    sort -u > $(OUTPUT)libbpf_global_syms.tmp;		 \
 		readelf --dyn-syms --wide $(OUTPUT)libbpf.so |		 \
 		    sed 's/\[.*\]//' |					 \
-		    awk '/GLOBAL/ && /DEFAULT/ && !/UND/ {print $$NF}'|  \
+		    awk '/GLOBAL/ && /DEFAULT/ && !/UND|ABS/ {print $$NF}'|  \
 		    grep -Eo '[^ ]+@LIBBPF_' | cut -d@ -f1 |		 \
 		    sort -u > $(OUTPUT)libbpf_versioned_syms.tmp; 	 \
 		diff -u $(OUTPUT)libbpf_global_syms.tmp			 \
