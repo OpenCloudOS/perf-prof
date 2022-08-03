@@ -39,6 +39,9 @@ override CFLAGS += $(EXTRA_WARNINGS)
 override CFLAGS += -Werror -Wall
 override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
+ifdef CONFIG_LIBBPF
+    override CFLAGS += -D CONFIG_LIBBPF=1
+endif
 
 export srctree OUTPUT CFLAGS V
 
