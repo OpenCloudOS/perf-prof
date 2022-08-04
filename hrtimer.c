@@ -127,6 +127,8 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     }
     attr.wakeup_watermark = (hrtimer.pages << 12) / 2;
 
+    reduce_wakeup_times(&hrtimer, &attr);
+
     ctx.leader = evsel = perf_evsel__new(&attr);
     if (!evsel) {
         return -1;
