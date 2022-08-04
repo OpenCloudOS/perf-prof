@@ -117,7 +117,7 @@ const char argp_program_doc[] =
 "  perf-prof top -e EVENT[...] [-i INT] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"
 "  perf-prof blktrace -d device [--than ns]\n"
-"  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--exclude-*] [-G] [--than PCT]\n"
+"  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--than PCT] [FILTER OPTION...]\n"
 "  perf-prof cpu-util [--exclude-*] [-G]\n"
 "  perf-prof ldlat-loads [--ldlat cycles] [-T trigger]\n"
 "  perf-prof ldlat-stores [-T trigger]\n"
