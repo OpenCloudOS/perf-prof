@@ -27,18 +27,6 @@ const volatile bool irqs_disabled = false;
 #endif
 
 
-// nr_running
-//   nr_running is greater than `nr_running_min', less than `nr_running_max', continue.
-//
-// if (nr_running_min < nr_running < nr_running_max)
-//     continue;
-// else
-//     break;
-const volatile bool filter_nr_running = false;
-const volatile u32 nr_running_min = 0;
-const volatile u32 nr_running_max = 0xffffffff;
-
-
 // tif_need_resched
 //   tif_need_resched = true,  TIF_NEED_RESCHED set, continue.
 //   tif_need_resched = false, TIF_NEED_RESCHED not set, continue.
@@ -58,13 +46,23 @@ const volatile bool tif_need_resched = false;
 #endif
 
 
+// nr_running
+//   nr_running is greater than `nr_running_min', less than `nr_running_max', continue.
+//
+// if (nr_running_min < nr_running < nr_running_max)
+//     continue;
+// else
+//     break;
+const volatile bool filter_nr_running = false;
+const volatile u32 nr_running_min = 0;
+const volatile u32 nr_running_max = 0xffffffff;
+
+
 int perf_event_do_filter(struct bpf_perf_event_data *ctx)
 {
     struct task_struct *task;
-    struct sched_entity *parent;
-    struct cfs_rq *cfs_rq;
     struct rq *rq;
-    u32 nr_running;
+    u32 nr_running = 0;
     unsigned long flags;
 
     if (filter_irqs_disabled) {
@@ -74,26 +72,22 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
 
     task = (void*)bpf_get_current_task();
 
-    if (filter_nr_running) {
-        parent = BPF_CORE_READ(task, se.parent);
-        if (parent) {
-            nr_running = BPF_CORE_READ(task, se.cfs_rq, nr_running);
-            parent = BPF_CORE_READ(parent, parent); // autogroup, level-1 cgroup
-        }
-        if (!parent) {
-            cfs_rq = BPF_CORE_READ(task, se.cfs_rq);
-            rq = container_of(cfs_rq, struct rq, cfs);
-            nr_running = BPF_CORE_READ(rq, nr_running);
-        }
-        if (nr_running < nr_running_min)
-            return BREAK;
-        if (nr_running > nr_running_max)
-            return BREAK;
-    }
-
     if (filter_tif_need_resched) {
         flags = BPF_CORE_READ(task, thread_info.flags);
         if (((flags >> TIF_NEED_RESCHED) & 1) != tif_need_resched)
+            return BREAK;
+    }
+
+    if (filter_nr_running) {
+        rq = BPF_CORE_READ(task, se.cfs_rq, rq);
+        if (rq)
+            nr_running = BPF_CORE_READ(rq, nr_running);
+        else
+            nr_running = BPF_CORE_READ(task, se.cfs_rq, nr_running);
+
+        if (nr_running < nr_running_min)
+            return BREAK;
+        if (nr_running > nr_running_max)
             return BREAK;
     }
 
