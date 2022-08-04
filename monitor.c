@@ -87,7 +87,10 @@ struct env env = {
     .trigger_freq = 1000,
     .latency = 20000,
     .freq = 100,
-    .verbose = 0,
+    .irqs_disabled = -1,
+    .tif_need_resched = -1,
+    .nr_running_min = -1,
+    .nr_running_max = -1,
 };
 
 static volatile bool exiting;
@@ -167,6 +170,11 @@ enum {
     LONG_OPT_ldlat,
     LONG_OPT_overwrite,
     LONG_OPT_period,
+    //ebpf
+    LONG_OPT_irqs_disabled,
+    LONG_OPT_tif_need_resched,
+    LONG_OPT_nr_running_min,
+    LONG_OPT_nr_running_max,
 };
 static const struct argp_option opts[] = {
     { NULL, 0, NULL, 0, "OPTION:" },
@@ -184,6 +192,10 @@ static const struct argp_option opts[] = {
     { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
     { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
     { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
+    { "irqs_disabled", LONG_OPT_irqs_disabled, "0|1", OPTION_ARG_OPTIONAL, "ebpf, irqs disabled or not." },
+    { "tif_need_resched", LONG_OPT_tif_need_resched, "0|1", OPTION_ARG_OPTIONAL, "ebpf, TIF_NEED_RESCHED is set or not." },
+    { "nr_running_min", LONG_OPT_nr_running_min, "N", 0, "ebpf, minimum number of running processes for CPU runqueue." },
+    { "nr_running_max", LONG_OPT_nr_running_max, "N", 0, "ebpf, maximum number of running processes for CPU runqueue." },
 
     { NULL, 0, NULL, 0, "PROFILER OPTION:" },
     { "event", 'e', "EVENT,...", 0, "Event selector" },
@@ -313,6 +325,17 @@ static unsigned long nsparse(const char *ptr, char **retptr)
     return ret;
 }
 
+static void libbpf_support(void)
+{
+#ifndef CONFIG_LIBBPF
+    static bool printed = 0;
+    if (!printed) {
+        fprintf(stderr, "WARN: An option that requires ebpf was used. Please recompile `make CONFIG_LIBBPF=y`\n");
+        printed = true;
+    }
+#endif
+}
+
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
     int latency;
@@ -380,6 +403,26 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'G':
         env.exclude_host = 1;
+        break;
+    case LONG_OPT_irqs_disabled:
+        env.irqs_disabled = arg ? atoi(arg) : 1;
+        if (env.irqs_disabled > 1)
+            env.irqs_disabled = 1;
+        libbpf_support();
+        break;
+    case LONG_OPT_tif_need_resched:
+        env.tif_need_resched = arg ? atoi(arg) : 1;
+        if (env.tif_need_resched > 1)
+            env.tif_need_resched = 1;
+        libbpf_support();
+        break;
+    case LONG_OPT_nr_running_min:
+        env.nr_running_min = strtol(arg, NULL, 10);
+        libbpf_support();
+        break;
+    case LONG_OPT_nr_running_max:
+        env.nr_running_max = strtol(arg, NULL, 10);
+        libbpf_support();
         break;
     case LONG_OPT_than:
         env.greater_than = nsparse(arg, NULL);
