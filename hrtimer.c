@@ -24,6 +24,7 @@ struct monitor_ctx {
     u64 *counters;
     u64 *ins_counters;
     analyzer analyzer;
+    struct perf_event_filter filter;
     struct env *env;
 } ctx;
 
@@ -45,6 +46,9 @@ static int monitor_ctx_init(struct env *env)
             return -1;
 
         ctx.analyzer = __analyzer_eqzero;
+
+        if (perf_event_filter_init(&ctx.filter, env))
+            perf_event_filter_open(&ctx.filter);
     }
 
     if (env->callchain) {
@@ -61,6 +65,7 @@ static void monitor_ctx_exit(void)
         callchain_ctx_free(ctx.cc);
     }
     if (ctx.env->event) {
+        perf_event_filter_close(&ctx.filter);
         if (ctx.counters)
             free(ctx.counters);
         tp_list_free(ctx.tp_list);
@@ -81,8 +86,10 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID | PERF_FORMAT_GROUP,
         .pinned        = 0,
         .disabled      = 1,
-        .exclude_user  = env->precise ? 0 : 1,
-        .exclude_idle  = env->precise ? 0 : 1,
+        .exclude_user  = env->exclude_user,
+        .exclude_kernel = env->exclude_kernel,
+        .exclude_guest = env->exclude_guest,
+        .exclude_host = env->exclude_host,
         .exclude_callchain_user = 1,
         .watermark     = 1,
     };
@@ -150,11 +157,17 @@ static int hrtimer_filter(struct perf_evlist *evlist, struct env *env)
 {
     int i, err;
 
-    if (ctx.env->event)
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+    if (ctx.env->event) {
+        for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+            struct tp *tp = &ctx.tp_list->tp[i];
+            if (tp->filter && tp->filter[0]) {
+                err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+                if (err < 0)
+                    return err;
+            }
+        }
+        if (ctx.filter.perf_event_prog_fd >= 0) {
+            err = perf_evsel__set_bpf(ctx.leader, ctx.filter.perf_event_prog_fd);
             if (err < 0)
                 return err;
         }
@@ -279,8 +292,6 @@ static void hrtimer_help(struct help_ctx *hctx)
         printf("-F %d ", env->freq);
     if (env->callchain)
         printf("-g ");
-    if (env->precise)
-        printf("--precise ");
     common_help(hctx, true, true, false, false, true, true, false);
 
     if (!env->sample_period)
@@ -289,8 +300,6 @@ static void hrtimer_help(struct help_ctx *hctx)
         printf("[-F freq] ");
     if (!env->callchain)
         printf("[-g] ");
-    if (!env->precise)
-        printf("[--precise] ");
     common_help(hctx, false, true, false, false, true, true, false);
     printf("\n");
 }
