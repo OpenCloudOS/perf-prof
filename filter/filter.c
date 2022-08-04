@@ -32,11 +32,11 @@ int perf_event_filter_open(struct perf_event_filter *filter)
     #define ASSIGN(a) obj->rodata->a = filter->a
     ASSIGN(filter_irqs_disabled);
     ASSIGN(irqs_disabled);
+    ASSIGN(filter_tif_need_resched);
+    ASSIGN(tif_need_resched);
     ASSIGN(filter_nr_running);
     ASSIGN(nr_running_min);
     ASSIGN(nr_running_max);
-    ASSIGN(filter_tif_need_resched);
-    ASSIGN(tif_need_resched);
 
     err = perf_event_bpf__load(obj);
     if (err) {

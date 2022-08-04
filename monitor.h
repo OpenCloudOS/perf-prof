@@ -185,11 +185,11 @@ struct perf_event_filter {
     // args
     bool filter_irqs_disabled;
     bool irqs_disabled;
+    bool filter_tif_need_resched;
+    bool tif_need_resched;
     bool filter_nr_running;
     u32 nr_running_min;
     u32 nr_running_max;
-    bool filter_tif_need_resched;
-    bool tif_need_resched;
 };
 int perf_event_filter_open(struct perf_event_filter *filter);
 void perf_event_filter_close(struct perf_event_filter *filter);
