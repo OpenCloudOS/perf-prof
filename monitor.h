@@ -81,6 +81,12 @@ struct env {
     bool exclude_kernel;
     bool exclude_guest;
     bool exclude_host;
+    // ebpf
+    int  irqs_disabled;
+    int  tif_need_resched;
+    int  nr_running_min;
+    int  nr_running_max;
+    // ebpf end
     char *tp_alloc;
     char *tp_free;
     char *symbols;
