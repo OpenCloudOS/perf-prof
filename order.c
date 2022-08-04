@@ -141,8 +141,10 @@ void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr)
         return;
 
     if (!using_order(p)) {
-        attr->watermark = 0;
-        attr->wakeup_events = 1;
+        if (attr->watermark) {
+            if (attr->wakeup_watermark == 0)
+                attr->wakeup_watermark = (p->pages << 12) / 2;
+        }
         return;
     }
 
