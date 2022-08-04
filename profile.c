@@ -137,6 +137,8 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         printf("tsc_khz = %d\n", ctx.tsc_khz);
     }
 
+    reduce_wakeup_times(current_base_profiler(), &attr);
+
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         return -1;
