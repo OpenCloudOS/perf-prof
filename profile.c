@@ -99,12 +99,12 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
-        .exclude_host = env->guest,
+        .exclude_host = env->exclude_host,
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
 
-    if (env->exclude_guest && env->guest)
+    if (env->exclude_guest && env->exclude_host)
         return -1;
     if (env->exclude_user && env->exclude_kernel)
         return -1;
@@ -156,7 +156,7 @@ static void profile_read(struct perf_evsel *evsel, struct perf_counts_values *co
         ctx.cycles[cpu] = count->val;
     }
     if (cycles) {
-        in = (ctx.env->guest << 1) | ctx.env->exclude_guest;
+        in = (ctx.env->exclude_host << 1) | ctx.env->exclude_guest;
         mode = (ctx.env->exclude_user << 1) | ctx.env->exclude_kernel;
         print_time(stdout);
         if (ctx.tsc_khz > 0 && ctx.vendor == X86_VENDOR_INTEL)

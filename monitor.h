@@ -60,7 +60,6 @@ struct hist {
 
 struct env {
     int trigger_freq;
-    bool guest;
     char *cpumask;
     int interval;
     int latency;  // unit: us
@@ -81,6 +80,7 @@ struct env {
     bool exclude_user;
     bool exclude_kernel;
     bool exclude_guest;
+    bool exclude_host;
     char *tp_alloc;
     char *tp_free;
     char *symbols;

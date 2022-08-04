@@ -66,7 +66,7 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
         .sample_period = env->trigger_freq,  //每trigger_freq个split_lock发起一个PMI中断, 发起1个采样.
         .sample_type = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ,
         .read_format = 0,
-        .exclude_host = env->guest,  //是否只采样guest模式.
+        .exclude_host = env->exclude_host,  //是否只采样guest模式.
         .pinned        = 0,
         .disabled    = 1,
         .wakeup_events = 1, //1个事件
