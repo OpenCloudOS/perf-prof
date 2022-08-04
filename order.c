@@ -148,7 +148,10 @@ void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr)
         return;
     }
 
-    pages_watermark = (p->pages << 12) / 4;
+    if (attr->watermark && attr->wakeup_watermark)
+        pages_watermark = attr->wakeup_watermark;
+    else
+        pages_watermark = (p->pages << 12) / 4;
     /*
      * When order-mem is enabled and perf-prof is woken up, all perf_events must be
      * read, so order-mem needs enough space to store perf_events.
