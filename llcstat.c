@@ -38,7 +38,7 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
         .sample_period = 0, //env->trigger_freq,  //每trigger_freq个计数发起一个PMI中断, 发起1个采样.
         .sample_type = 0, //PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ,
         .read_format = 0,
-        .exclude_host = env->guest,  //only guest
+        .exclude_host = env->exclude_host,  //only guest
         .pinned        = 0,
         .disabled      = 1,
         .wakeup_events = 1,

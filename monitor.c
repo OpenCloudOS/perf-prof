@@ -85,7 +85,6 @@ perf-prof argc argv
 
 struct env env = {
     .trigger_freq = 1000,
-    .guest = 0,
     .latency = 20000,
     .freq = 100,
     .verbose = 0,
@@ -180,10 +179,15 @@ static const struct argp_option opts[] = {
     { "mmap-pages", 'm', "pages", 0, "Number of mmap data pages and AUX area tracing mmap pages" },
     { "verbose", 'v', NULL, 0, "Verbose debug output" },
 
+    { NULL, 0, NULL, 0, "FILTER OPTION:" },
+    { "exclude-host", 'G', NULL, 0, "Monitor GUEST, exclude host" },
+    { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
+    { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
+    { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
+
     { NULL, 0, NULL, 0, "PROFILER OPTION:" },
     { "event", 'e', "EVENT,...", 0, "Event selector" },
     { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
-    { "guest", 'G', NULL, 0, "Monitor GUEST, Dflt: false" },
     { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
     { "latency", 'L', "LAT", 0, "Interrupt off latency, Unit: us, Dflt: 20ms" },
     { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
@@ -198,9 +202,6 @@ static const struct argp_option opts[] = {
                                         },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
-    { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
-    { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
-    { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
     { "than", LONG_OPT_than, "ns", 0, "Greater than specified time, Unit: s/ms/us/*ns/percent" },
     { "alloc", LONG_OPT_alloc, "EVENT,...", 0, "Memory alloc tracepoint/kprobe" },
     { "free", LONG_OPT_free, "EVENT,...", 0, "Memory free tracepoint/kprobe" },
@@ -326,9 +327,6 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case 'C':
         env.cpumask = strdup(arg);
         break;
-    case 'G':
-        env.guest = 1;
-        break;
     case 'i':
         env.interval = strtol(arg, NULL, 10);
         break;
@@ -379,6 +377,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_exclude_guest:
         env.exclude_guest = 1;
+        break;
+    case 'G':
+        env.exclude_host = 1;
         break;
     case LONG_OPT_than:
         env.greater_than = nsparse(arg, NULL);
