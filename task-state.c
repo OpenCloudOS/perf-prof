@@ -118,6 +118,8 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
     if (monitor_ctx_init(env) < 0)
         return -1;
 
+    reduce_wakeup_times(&task_state, &attr);
+
     id = tep__event_id("sched", "sched_switch");
     if (id < 0)
         return -1;
