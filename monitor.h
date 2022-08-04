@@ -193,5 +193,6 @@ struct perf_event_filter {
 };
 int perf_event_filter_open(struct perf_event_filter *filter);
 void perf_event_filter_close(struct perf_event_filter *filter);
+int perf_event_filter_init(struct perf_event_filter *filter, struct env *env);
 
 #endif
