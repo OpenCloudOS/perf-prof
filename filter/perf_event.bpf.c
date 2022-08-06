@@ -46,6 +46,16 @@ const volatile bool tif_need_resched = false;
 #endif
 
 
+// exclude_pid
+//
+// if (pid == exclude_pid)
+//     break;
+// else
+//     continue;
+const volatile bool filter_exclude_pid = false;
+const volatile u32  exclude_pid = 0;
+
+
 // nr_running
 //   nr_running is greater than `nr_running_min', less than `nr_running_max', continue.
 //
@@ -64,6 +74,7 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
     struct rq *rq;
     u32 nr_running = 0;
     unsigned long flags;
+    u32 pid;
 
     if (filter_irqs_disabled) {
         if (((ctx->regs.EFLAGS >> EFLAGS_IF_BIT) & 1) == irqs_disabled)
@@ -75,6 +86,12 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
     if (filter_tif_need_resched) {
         flags = BPF_CORE_READ(task, thread_info.flags);
         if (((flags >> TIF_NEED_RESCHED) & 1) != tif_need_resched)
+            return BREAK;
+    }
+
+    if (filter_exclude_pid) {
+        pid = bpf_get_current_pid_tgid() >> 32;
+        if (pid == exclude_pid)
             return BREAK;
     }
 

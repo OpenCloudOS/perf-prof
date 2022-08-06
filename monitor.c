@@ -89,6 +89,7 @@ struct env env = {
     .freq = 100,
     .irqs_disabled = -1,
     .tif_need_resched = -1,
+    .exclude_pid = -1,
     .nr_running_min = -1,
     .nr_running_max = -1,
 };
@@ -173,6 +174,7 @@ enum {
     //ebpf
     LONG_OPT_irqs_disabled,
     LONG_OPT_tif_need_resched,
+    LONG_OPT_exclude_pid,
     LONG_OPT_nr_running_min,
     LONG_OPT_nr_running_max,
 };
@@ -194,6 +196,7 @@ static const struct argp_option opts[] = {
     { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
     { "irqs_disabled", LONG_OPT_irqs_disabled, "0|1", OPTION_ARG_OPTIONAL, "ebpf, irqs disabled or not." },
     { "tif_need_resched", LONG_OPT_tif_need_resched, "0|1", OPTION_ARG_OPTIONAL, "ebpf, TIF_NEED_RESCHED is set or not." },
+    { "exclude_pid", LONG_OPT_exclude_pid, "PID", 0, "ebpf, exclude pid" },
     { "nr_running_min", LONG_OPT_nr_running_min, "N", 0, "ebpf, minimum number of running processes for CPU runqueue." },
     { "nr_running_max", LONG_OPT_nr_running_max, "N", 0, "ebpf, maximum number of running processes for CPU runqueue." },
 
@@ -414,6 +417,10 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         env.tif_need_resched = arg ? atoi(arg) : 1;
         if (env.tif_need_resched > 1)
             env.tif_need_resched = 1;
+        libbpf_support();
+        break;
+    case LONG_OPT_exclude_pid:
+        env.exclude_pid = strtol(arg, NULL, 10);
         libbpf_support();
         break;
     case LONG_OPT_nr_running_min:

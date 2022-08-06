@@ -34,6 +34,8 @@ int perf_event_filter_open(struct perf_event_filter *filter)
     ASSIGN(irqs_disabled);
     ASSIGN(filter_tif_need_resched);
     ASSIGN(tif_need_resched);
+    ASSIGN(filter_exclude_pid);
+    ASSIGN(exclude_pid);
     ASSIGN(filter_nr_running);
     ASSIGN(nr_running_min);
     ASSIGN(nr_running_max);
@@ -94,6 +96,12 @@ int perf_event_filter_init(struct perf_event_filter *filter, struct env *env)
     if (env->tif_need_resched >= 0) {
         filter->filter_tif_need_resched = true;
         filter->tif_need_resched = env->tif_need_resched;
+        need_bpf ++;
+    }
+
+    if (env->exclude_pid >= 0) {
+        filter->filter_exclude_pid = true;
+        filter->exclude_pid = env->exclude_pid;
         need_bpf ++;
     }
 

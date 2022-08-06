@@ -84,6 +84,7 @@ struct env {
     // ebpf
     int  irqs_disabled;
     int  tif_need_resched;
+    int  exclude_pid;
     int  nr_running_min;
     int  nr_running_max;
     // ebpf end
@@ -187,6 +188,8 @@ struct perf_event_filter {
     bool irqs_disabled;
     bool filter_tif_need_resched;
     bool tif_need_resched;
+    bool filter_exclude_pid;
+    u32 exclude_pid;
     bool filter_nr_running;
     u32 nr_running_min;
     u32 nr_running_max;
