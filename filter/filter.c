@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/resource.h>
 #include <monitor.h>
 
 #ifdef CONFIG_LIBBPF
@@ -17,6 +20,9 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 int perf_event_filter_open(struct perf_event_filter *filter)
 {
     struct perf_event_bpf *obj = NULL;
+    struct rlimit old_rlim;
+    struct rlimit new_rlim;
+    bool restore = false;
     int err;
 
     libbpf_set_print(libbpf_print_fn);
@@ -40,7 +46,22 @@ int perf_event_filter_open(struct perf_event_filter *filter)
     ASSIGN(nr_running_min);
     ASSIGN(nr_running_max);
 
+    // Bump memlock so we can get reasonably sized bpf maps or progs.
+    if (getrlimit(RLIMIT_MEMLOCK, &old_rlim) == 0) {
+        new_rlim.rlim_cur = RLIM_INFINITY;
+        new_rlim.rlim_max = RLIM_INFINITY;
+        if (setrlimit(RLIMIT_MEMLOCK, &new_rlim) == 0)
+            restore = true;
+        else {
+            fprintf(stderr, "Couldn't bump rlimit(MEMLOCK), %s(%d)\n", strerror(errno), errno);
+        }
+    }
+
     err = perf_event_bpf__load(obj);
+
+    if (restore)
+        setrlimit(RLIMIT_MEMLOCK, &old_rlim);
+
     if (err) {
         fprintf(stderr, "failed to load BPF object: %d\n", err);
         goto cleanup;
