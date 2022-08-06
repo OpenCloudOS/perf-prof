@@ -662,7 +662,6 @@ untraced_processing:
 
         // backup events, exclude untraced events.
         if (i != ctx.nr_list - 1 && !tp->untraced) {
-            struct rb_node *rbn;
         retry:
             rbn = rblist__findnew(&ctx.backup, tl_event);
             if (rbn) {
