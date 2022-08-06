@@ -238,8 +238,12 @@ static void profile_sample(union perf_event *event, int instance)
         if (ctx.env->callchain) {
             if (!ctx.env->flame_graph)
                 print_callchain_common(ctx.cc, &data->callchain, data->tid_entry.pid);
-            else
-                flame_graph_add_callchain_at_time(ctx.flame, &data->callchain, data->tid_entry.pid, NULL, ctx.time, ctx.time_str);
+            else {
+                const char *comm = tep__pid_to_comm((int)data->tid_entry.pid);
+                flame_graph_add_callchain_at_time(ctx.flame, &data->callchain, data->tid_entry.pid,
+                                                  !strcmp(comm, "<...>") ? NULL : comm,
+                                                  ctx.time, ctx.time_str);
+            }
         }
     }
 }
