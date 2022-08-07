@@ -200,8 +200,12 @@ void perf_mmap__read_done(struct perf_mmap *map)
 	 */
 	if (!refcount_read(&map->refcnt))
 		return;
-
-	map->prev = perf_mmap__read_head(map);
+	if (map->overwrite)
+		map->prev = perf_mmap__read_head(map);
+	else if (map->prev != map->end) {
+		pr_err("%s: prev != end\n", __func__);
+		map->prev = map->end;
+	}
 }
 
 /* When check_messup is true, 'end' must points to a good entry */
