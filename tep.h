@@ -23,6 +23,7 @@ struct tp {
     int stack;
     int max_stack;
     char *alias;
+    unsigned long *counters; // Counter per instance
 
     // top profiler
     struct {
