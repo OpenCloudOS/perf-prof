@@ -11,133 +11,32 @@
 
 ![perf-prof框架](docs/images/perf-prof_framework.png)
 
+
+
 ## 1 框架介绍
 
-```
-# ./perf-prof  --help
-Usage: perf-prof [OPTION...] profiler [PROFILER OPTION...] [help]
-  or:  perf-prof [OPTION...] --symbols /path/to/bin
+内核态，采样事件经过`filter`过滤之后，存放到`ringbuffer`上，并递增`counter`计数器。只有经过filter过滤出来的事件才会放到ringbuffer。
 
-Profiling based on perf_event
+- 过滤器filter包含ebpf过滤器、pmu过滤器、ftrace过滤器(tracepoint)，过滤可以减少事件量，筛选出感兴趣的事件。
+- 每个perf_event都有独立的ringbuffer，多个perf_event可以共用ringbuffer。ringbuffer上存放采样事件，包含一些基础数据，cpu、time、callchain等。采样默认关闭，通过`perf_event_attr.sample_period`参数开启采样。
+- 每个perf_event都有独立counter，不能共享。counter默认开启，不能关闭。计数和采样可以同时开启。
 
-Most Used Profilers:
-  perf-prof trace -e EVENT[...] [--overwrite] [-g [--flame-graph file [-i INT]]]
-  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]
-  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file]
-  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]
-  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]
-  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]
-  perf-prof kmemprof -e EVENT [-e ...] [-k str]
-  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]
-  perf-prof hrtimer [-e EVENT[...]] [-F freq] [--period ns] [-g] [--precise] [-v]
-  perf-prof percpu-stat [--syscalls]
-  perf-prof top -e EVENT[...] [-i INT] [-v]
-  perf-prof stat -e EVENT[...] [--perins]
-  perf-prof blktrace -d device [--than ns]
-  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--exclude-*] [-G] [--than PCT]
-  perf-prof cpu-util [--exclude-*] [-G]
-  perf-prof ldlat-loads [--ldlat cycles] [-T trigger]
-  perf-prof ldlat-stores [-T trigger]
-Use Fewer Profilers:
-  perf-prof split-lock [-T trigger] [-G] [--test]
-  perf-prof irq-off [--than ns] [-g] [--precise]
-  perf-prof signal [--filter comm] [-g]
-  perf-prof watchdog [-F freq] [-g]
-  perf-prof llcstat
-  perf-prof sched-migrate [--detail] [--filter filter] [-g [--flame-graph file]] [-v]
-  perf-prof oncpu -p PID [--detail] [--filter filter]
-  perf-prof page-faults [-g]
+用户态，**perf-prof**框架不断读取`ringbuffer`的采样事件和`counter`，经过`order`排序事件，最后送到`profiler`处理事件。
 
-Event selector. use 'perf list tracepoint' to list available tp events.
-  EVENT,EVENT,...
-  EVENT: sys:name[/filter/ATTR/ATTR/.../]
-  filter: ftrace filter
-  ATTR:
-      stack: sample_type PERF_SAMPLE_CALLCHAIN
-      max-stack=int : sample_max_stack
-      alias=str: event alias
-      top-by=field: add to top, sort by this field
-      top-add=field: add to top
-      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr
-      size=field: kmemleak, size field, Dflt: size=bytes_alloc
-      delay=field: mpdelay, delay field
-      key=field: multi-trace, key for two-event
-      untraced: multi-trace, auxiliary, no two-event analysis
+- order，按时间顺序排序事件，单个perf_event的ringbuffer上的事件是有序的，多个perf_event的ringbuffer不能保证顺序，需要排序合并起来。简化profiler的处理。order是可选项。
 
- OPTION:
-  -C, --cpu=CPU[-CPU],...    Monitor the specified CPU, Dflt: all cpu
-  -i, --interval=ms          Interval, Unit: ms
-  -m, --mmap-pages=pages     Number of mmap data pages and AUX area tracing mmap pages
-      --order                Order events by timestamp.
-      --order-mem=Bytes      Maximum memory used by ordering events. Unit: GB/MB/KB/*B.
-  -p, --pids=PID,...         Attach to processes
-  -t, --tids=TID,...         Attach to thread
-  -v, --verbose              Verbose debug output
+profiler，处理事件。决定打开哪些事件，如何处理事件。
 
- PROFILER OPTION:
-      --alloc=EVENT,...      Memory alloc tracepoint/kprobe
-      --detail               More detailed information output
-  -d, --device=device        Block device, /dev/sdx
-  -D, --uninterruptible      TASK_UNINTERRUPTIBLE
-  -e, --event=EVENT,...      Event selector
-      --exclude-guest        exclude guest
-      --exclude-kernel       exclude kernel
-      --exclude-user         exclude user
-      --filter=filter        Event filter/comm filter
-      --flame-graph=file     Specify the folded stack file.
-      --free=EVENT,...       Memory free tracepoint/kprobe
-  -F, --freq=n               Profile at this frequency, Dflt: 100, No profile: 0
-  -g, --call-graph           Enable call-graph recording
-  -G, --guest                Monitor GUEST, Dflt: false
-      --heatmap=file         Specify the output latency file.
-      --impl=impl            Implementation of two-event analysis class. Dflt: delay.
-                                 delay: latency distribution between two events
-                                 pair: determine if two events are paired
-                                 kmemprof: profile memory allocated and freed bytes
-                                 syscalls: syscall delay
-  -k, --key=str              Key for series events
-      --ldlat=cycles         mem-loads latency, Unit: cycles
-  -L, --latency=LAT          Interrupt off latency, Unit: us, Dflt: 20ms
-      --overwrite            use overwrite mode
-      --perins               Print per instance stat
-      --period=ns            Sample period, Unit: s/ms/us/*ns
-      --precise              Generate precise interrupt
-      --symbols=symbols      Maps addresses to symbol names.
-                             Similar to pprof --symbols.
-      --syscalls             Trace syscalls
-  -S, --interruptible        TASK_INTERRUPTIBLE
-      --test                 Split-lock test verification
-      --than=ns              Greater than specified time, Unit: s/ms/us/*ns/percent
-  -T, --trigger=T            Trigger Threshold, Dflt: 1000, No trigger: 0
-
-  -?, --help                 Give this help list
-      --usage                Give a short usage message
-  -V, --version              Version info
-
-Mandatory or optional arguments to long options are also mandatory or optional for any corresponding short options.
-```
-
-监控框架采用模块化设计，目前支持一些基础的监控模块：
-
-- split-lock，监控硬件pmu，发生split-lock的次数，以及触发情况。
-- irq-off，监控中断关闭的情况。
-- profile，分析采样栈，可以分析内核态CPU利用率超过一定百分比抓取内核态栈。
-- cpu-util，cpu利用率监控，可以监控到guest模式的CPU利用率。派生自profile。
-- trace，读取某个tracepoint事件。
-- signal，监控给特定进程发送的信号。
-- task-state，监控进程处于D、S状态的时间，超过指定时间可以打印栈。
-- watchdog，监控hard、soft lockup的情况，在将要发生时，预先打印出内核栈。
-- kmemleak，监控alloc、free的情况，判断可能的内存泄露。
-- kvm-exit，监控虚拟化指令的延迟。
-
-每个监控模块都需要定义一个`struct monitor `结构，来指定如何初始化、过滤、释放监控事件，以及如何处理采样到的监控事件。
+- **profiler.init** 初始化`perf_event_attr`打开对应的evsel，添加到evlist上，最终由`libperf`库调用`perf_event_open`系统调用打开perf_event。perf_event_attr.exclude_相关属性，用来配置pmu过滤器。
+- **profiler.filter**设置ebpf过滤器、ftrace过滤器。最终由libperf库通过ioctl设置到内核。
+- **profiler.sample**不断处理采样事件，完成分析工作。
 
 ## 2 Example: signal
 
 一个最简单demo例子。
 
 ```
-struct monitor monitor_signal = {
+static profiler monitor_signal = {
     .name = "signal",
     .pages = 2,
     .init = signal_init,
@@ -145,12 +44,12 @@ struct monitor monitor_signal = {
     .deinit = signal_exit,
     .sample = signal_sample,
 };
-ONITOR_REGISTER(monitor_signal)
+PROFILER_REGISTER(monitor_signal)
 ```
 
 定义模块初始化、过滤、销毁、处理采样等接口。
 
-## 3 monitor.init
+## 3 profiler.init
 
 ```
 static int signal_init(struct perf_evlist *evlist, struct env *env)
@@ -261,7 +160,7 @@ perf_evlist__add(evlist, evsel)，加到evlist。一个evlist表示一组evsel�
   	记录进程切换信息
   ```
 
-## 4 monitor.sample
+## 4 profiler.sample
 
 ```
 static void signal_sample(union perf_event *event)
@@ -294,7 +193,7 @@ static void signal_sample(union perf_event *event)
 
 tep__print_event，打印tracepoint事件。
 
-## 5 其他功能
+## 5 基础功能
 
 ### 5.1 模块化
 
@@ -396,4 +295,86 @@ $ perf-prof mpdelay -e "kvm:kvm_exit,kvm:kvm_entry" -C 1 --heatmap mpdelay
 $ trace2heatmap.pl --unitstime=ns --unitslabel=ns --grid mpdelay-kvm_exit-kvm_entry.lat > mpdelay-kvm_exit-kvm_entry.svg
 ```
 
+### 5.9 filter
+
+目前支持3类过滤器：ebpf过滤器、pmu过滤器、ftrace过滤器。
+
+通过`perf-prof -h`可以看到过滤器的选项：
+
+```
+Event selector. use 'perf list tracepoint' to list available tp events.
+  EVENT,EVENT,...
+  EVENT: sys:name[/filter/ATTR/ATTR/.../]
+  filter: ftrace filter
+  ATTR:
+      ...
+FILTER OPTION:
+      --exclude-guest        exclude guest
+      --exclude-kernel       exclude kernel
+      --exclude-user         exclude user
+      --exclude_pid=PID      ebpf, exclude pid
+  -G, --exclude-host         Monitor GUEST, exclude host
+      --irqs_disabled[=0|1]  ebpf, irqs disabled or not.
+      --nr_running_max=N     ebpf, maximum number of running processes for CPU runqueue.
+      --nr_running_min=N     ebpf, minimum number of running processes for CPU runqueue.
+      --tif_need_resched[=0|1]   ebpf, TIF_NEED_RESCHED is set or not.
+```
+
+其中ebpf开头的是ebpf过滤器，其他的是pmu过滤器。ftrace过滤器，只能用于tracepoint事件。
+
+#### 5.9.1 ebpf过滤器
+
+内核perf_event可以通过`ioctl(PERF_EVENT_IOC_SET_BPF)`来设置bpf程序。bpf程序返回1，可以继续采样；bpf程序返回0，终止采样。可以依据这样的策略，来给每个perf_event增加一个过滤器。过滤不需要的采样点。
+
+当前支持4个ebpf过滤器。
+
+- `--irqs_disabled`，判断中断是否关闭。`--irqs_disabled, --irqs_disabled=1`中断关闭继续采样，中断打开终止采样。`--irqs_disabled=0`中断打开继续采样，中断关闭终止采样。
+- `--tif_need_resched`，判断TIF_NEED_RESCHED标记是否设置。`--tif_need_resched, --tif_need_resched=1`标记设置继续采样，标记未设置终止采样。`--tif_need_resched=0`标记未设置继续采样，标记设置终止采样。
+- `--nr_running_min,--nr_running_max`，判断runqueue中nr_running进程的数量。`nr_running_min <= nr_running <= nr_running_max`条件满足继续采样，否则终止采样。
+- `--exclude_pid`，过滤掉进程pid。当前进程等于PID终止采样，否则继续采样。
+
+#### 5.9.2 pmu过滤器
+
+内核perf框架默认会带一些简单的过滤器，主要是基于perf_event_attr属性来设置。
+
+当前支持4个pmu过滤器。
+
+- `--exclude-guest`，过滤掉guest模式。
+- `--exclude-host`，过滤掉host，只采样guest。一般用于硬件PMU。
+- `--exclude-kernel`，过滤掉内核态。
+- `--exclude-user`，过滤掉用户态。
+
+#### 5.9.3 ftrace过滤器
+
+每个tracepoint事件都可以设置ftrace过滤器。
+
+```
+$ perf-prof trace -e 'sched:sched_stat_runtime help
+
+perf-prof trace -e "sched:sched_stat_runtime/./[stack/]" [-g] [--flame-graph .] [-C .] [-p .] [-i .] [--order] [--order-mem .] [-m .] 
+
+sched:sched_stat_runtime
+name: sched_stat_runtime
+ID: 237
+format:
+        field:unsigned short common_type;       offset:0;       size:2; signed:0;
+        field:unsigned char common_flags;       offset:2;       size:1; signed:0;
+        field:unsigned char common_preempt_count;       offset:3;       size:1; signed:0;
+        field:int common_pid;   offset:4;       size:4; signed:1;
+
+        field:char comm[16];    offset:8;       size:16;        signed:1;
+        field:pid_t pid;        offset:24;      size:4; signed:1;
+        field:u64 runtime;      offset:32;      size:8; signed:0;
+        field:u64 vruntime;     offset:40;      size:8; signed:0;
+
+print fmt: "comm=%s pid=%d runtime=%Lu [ns] vruntime=%Lu [ns]", REC->comm, REC->pid, (unsigned long long)REC->runtime, (unsigned long long)REC->vruntime
+```
+
+通过在命令末尾加上`help`可以查看详细的帮助信息，其中包含tracepoint点的格式，可以找到可以作为过滤器的参数。
+
+```
+perf-prof trace -e 'sched:sched_stat_runtime/runtime>1000000/'
+```
+
+过滤出`runtime>1000000`的数据，放到ringbuffer，再由profiler进一步处理。
 
