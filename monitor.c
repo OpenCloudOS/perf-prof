@@ -700,13 +700,15 @@ static void print_comm_fn(union perf_event *event, int ins)
 
 static void print_throttle_unthrottle_fn(union perf_event *event, int ins, int unthrottle)
 {
-    int oncpu = monitor_instance_oncpu();
-    print_time(stderr);
-    fprintf(stderr, "%llu.%06llu: %s events on %s #%d\n",
-                    event->throttle.time / NSEC_PER_SEC, (event->throttle.time % NSEC_PER_SEC)/1000,
-                    unthrottle ? "unthrottle" : "throttle",
-                    oncpu ? "CPU" : "thread",
-                    oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
+    if (env.verbose >= 2) {
+        int oncpu = monitor_instance_oncpu();
+        print_time(stderr);
+        fprintf(stderr, "%llu.%06llu: %s events on %s #%d\n",
+                        event->throttle.time / NSEC_PER_SEC, (event->throttle.time % NSEC_PER_SEC)/1000,
+                        unthrottle ? "unthrottle" : "throttle",
+                        oncpu ? "CPU" : "thread",
+                        oncpu ? monitor_instance_cpu(ins) : monitor_instance_thread(ins));
+    }
 }
 
 static void print_context_switch_fn(union perf_event *event, int ins)
