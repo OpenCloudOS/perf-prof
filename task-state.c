@@ -12,8 +12,25 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 
+#define TASK_RUNNING		0
 #define TASK_INTERRUPTIBLE	1
 #define TASK_UNINTERRUPTIBLE	2
+#define __TASK_STOPPED		4
+#define __TASK_TRACED		8
+/* in tsk->exit_state */
+#define EXIT_ZOMBIE		16
+#define EXIT_DEAD		32
+/* in tsk->state again */
+#define TASK_DEAD		64
+#define TASK_WAKEKILL		128
+#define TASK_WAKING		256
+#define TASK_PARKED		512
+#define TASK_STATE_MAX		1024
+
+/* Convenience macros for the sake of set_task_state */
+#define TASK_KILLABLE		(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
+#define TASK_STOPPED		(TASK_WAKEKILL | __TASK_STOPPED)
+#define TASK_TRACED		(TASK_WAKEKILL | __TASK_TRACED)
 
 
 struct monitor task_state;
@@ -155,18 +172,24 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
         if (attr->config == ctx.sched_switch) {
             if (env->interruptible && env->uninterruptible) {
                 if (env->filter)
-                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d)",
-                            env->filter, TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE);
+                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d || prev_state==%d)",
+                            env->filter, TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
                 else
-                    snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d",
-                            TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE);
-            } else if (env->interruptible || env->uninterruptible) {
+                    snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d || prev_state==%d",
+                            TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
+            } else if (env->interruptible) {
                 if (env->filter)
                     snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && prev_state==%d",
-                            env->filter, env->interruptible ? TASK_INTERRUPTIBLE:TASK_UNINTERRUPTIBLE);
+                            env->filter, TASK_INTERRUPTIBLE);
                 else
-                    snprintf(filter, sizeof(filter), "prev_state==%d",
-                            env->interruptible ? TASK_INTERRUPTIBLE:TASK_UNINTERRUPTIBLE);
+                    snprintf(filter, sizeof(filter), "prev_state==%d", TASK_INTERRUPTIBLE);
+            } else if (env->uninterruptible) {
+                if (env->filter)
+                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d)",
+                            env->filter, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
+                else
+                    snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d",
+                            TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
             } else
                 return -1;
 
