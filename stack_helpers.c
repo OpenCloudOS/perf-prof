@@ -323,7 +323,7 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
 {
     __u64 i;
     bool kernel = false, user = false;
-    struct syms *syms;
+    struct syms *syms = NULL;
 
     if (cc == NULL ||
         callchain == NULL || callchain->nr == 0)
@@ -676,7 +676,7 @@ static struct rb_node *unique_string_node_new(struct rblist *rlist, const void *
         RB_CLEAR_NODE(&s->rbnode);
         s->n = 0;
         s->len = len;
-        strncpy(s->str, str, len);
+        strcpy(s->str, str);
         return &s->rbnode;
     } else
         return NULL;

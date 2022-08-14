@@ -350,7 +350,8 @@ static void top_sample(union perf_event *event, int instance)
     rbn = rblist__find(&ctx.pid_list, &info);
     if (rbn == NULL) {
         comm = tep_get_field_raw(&s, e, "comm", &record, &len, 0);
-        strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm));
+        strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
+        info.comm[TASK_COMM_LEN-1] = '\0';
         rbn = rblist__findnew(&ctx.pid_list, &info);
         if (rbn == NULL)
             goto destroy;
