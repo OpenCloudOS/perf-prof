@@ -97,6 +97,28 @@ struct rb_node *rblist__findnew(struct rblist *rblist, const void *entry)
 	return __rblist__findnew(rblist, entry, true);
 }
 
+struct rb_node *rblist__find_first(struct rblist *rblist, const void *entry)
+{
+	struct rb_node *node = rblist->entries.rb_root.rb_node;
+	struct rb_node *first = rb_first_cached(&rblist->entries);
+	struct rb_node *match = NULL;
+	int rc = rblist->node_cmp(first, entry);
+
+	if (rc >= 0)
+		return first;
+
+	while (node != NULL) {
+		rc = rblist->node_cmp(node, entry);
+		if (rc >= 0) {
+			match = node;
+			node = node->rb_left;
+		} else if (rc < 0)
+			node = node->rb_right;
+	}
+
+	return match;
+}
+
 void rblist__init(struct rblist *rblist)
 {
 	if (rblist != NULL) {
