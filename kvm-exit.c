@@ -246,7 +246,7 @@ static void kvm_exit_deinit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason, u32 *isa, unsigned long *guest_rip)
+static inline int __exit_reason(struct sample_type_raw *raw, unsigned int *exit_reason, u32 *isa, unsigned long *guest_rip)
 {
     unsigned short common_type = raw->raw.common_type;
 
@@ -284,14 +284,15 @@ static void __print_raw(struct sample_type_raw *raw, const char *str)
 
 static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type_raw *rkvm_entry, int instance)
 {
-    unsigned int exit_reason, hlt = EXIT_REASON_HLT;
-    u32 isa;
-    unsigned long guest_rip;
+    unsigned int exit_reason = -1, hlt = EXIT_REASON_HLT;
+    u32 isa = KVM_ISA_VMX;
+    unsigned long guest_rip = 0;
     __u64 delta = rkvm_entry->time - rkvm_exit->time;
     u64 key = 0;
     struct latency_node *node;
 
-    __exit_reason(rkvm_exit, &exit_reason, &isa, &guest_rip);
+    if (__exit_reason(rkvm_exit, &exit_reason, &isa, &guest_rip) < 0)
+        return;
     if (isa == KVM_ISA_SVM) {
         hlt = SVM_EXIT_HLT;
     }

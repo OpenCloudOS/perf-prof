@@ -45,10 +45,10 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
     };
     struct perf_evsel *evsel;
     int type;
-    __u64 l3_cache_reference;
-    __u64 l3_cache_miss;
-    __u64 l3_cache_miss_latency;
-    __u64 l3_misses_by_request_type;
+    __u64 l3_cache_reference = 0;
+    __u64 l3_cache_miss = 0;
+    __u64 l3_cache_miss_latency = 0;
+    __u64 l3_misses_by_request_type = 0;
 
     if (get_cpuinfo(&ctx.cpuinfo) < 0)
         return -1;

@@ -207,7 +207,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
     struct callchain *callchain;
     int n = ctx.tp_list->nr_tp;
     u64 *jcounter = ctx.counters + instance * (n + 1);
-    u64 counter, cpu_clock;
+    u64 counter, cpu_clock = 0;
     u64 i;
     int j;
     int print = 0;
