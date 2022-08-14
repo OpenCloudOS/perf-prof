@@ -34,17 +34,18 @@ INCLUDES = \
 -I$(srctree)/arch/$(SRCARCH)/include/uapi \
 -I$(srctree)/
 
+EXTRA_CFLAGS := -O3 -g
+
 # Append required CFLAGS
-override CFLAGS += $(EXTRA_WARNINGS)
+override CFLAGS += $(EXTRA_WARNINGS) $(EXTRA_CFLAGS)
 override CFLAGS += -Werror -Wall
 override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
-override CFLAGS += -O2 -g
 ifdef CONFIG_LIBBPF
     override CFLAGS += -D CONFIG_LIBBPF=1
 endif
 
-export srctree OUTPUT CFLAGS V
+export srctree OUTPUT CFLAGS V EXTRA_CFLAGS
 
 __build clean:
 	$(Q)$(MAKE) -f $(srctree)/build/Makefile.bin dir=. $@
