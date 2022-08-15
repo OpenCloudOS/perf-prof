@@ -20,6 +20,8 @@ struct two_event_options {
 };
 
 struct event_iter {
+    void *start;
+    void *event1;
     void *curr;
     union perf_event *event;
     struct tp *tp;
@@ -121,18 +123,32 @@ struct multi_trace_type_raw {
 };
 
 void multi_trace_raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp);
-void multi_trace_print(union perf_event *event, struct tp *tp);
+void multi_trace_print_title(union perf_event *event, struct tp *tp, const char *title);
+static inline void multi_trace_print(union perf_event *event, struct tp *tp)
+{
+    multi_trace_print_title(event, tp, NULL);
+}
 
 
 /*
- * while (event_iter_next(iter)) {
- *     event_iter_print(iter->event, iter->tp);
- *     or
- *     event_iter_print(iter);
+ * while (event_iter_cmd(iter, CMD_NEXT)) {
+ *     multi_trace_print_title(iter->event, iter->tp, title);
  * }
  */
-void event_iter_print(struct event_iter *iter, const char *title);
-int event_iter_next(struct event_iter *iter);
+enum event_iter_cmd {
+    // locate to start
+    CMD_RESET,
+
+    // locate to event1
+    CMD_EVENT1,
+
+    // prev and next
+    CMD_PREV,
+    CMD_NEXT,
+
+    CMD_MAX,
+};
+int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd);
 
 
 #endif

@@ -237,16 +237,45 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 heatmap_write(delay->heatmap, e2->time, delta);
 
             if (opts->greater_than && delta > opts->greater_than) {
+
+                // print events before event1
+                if (iter && iter->start && iter->start != iter->event1) {
+                    struct multi_trace_type_header *e;
+                    bool first = true;
+                    char buff[32];
+                    s64  neg;
+
+                    event_iter_cmd(iter, CMD_RESET);
+
+                    e = (void *)iter->event->sample.array;
+                    neg = e->time - e1->time;
+                    snprintf(buff, sizeof(buff), "Previous %.3f us", neg/1000.0);
+                    printf("\n");
+
+                    do {
+                        multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
+                        first = false;
+                        if (!event_iter_cmd(iter, CMD_NEXT))
+                            break;
+                    } while (iter->curr != iter->event1);
+                }
+
+                // print event1
                 multi_trace_print(event1, two->tp1);
+
+                // print event1 to event2
                 if (iter) {
                     bool first = true;
                     char buff[32];
-                    snprintf(buff, sizeof(buff), " %12.3f us", delta/1000.0);
-                    while (event_iter_next(iter)) {
-                        event_iter_print(iter, first ? buff : NULL);
+                    snprintf(buff, sizeof(buff), "| %12.3f us", delta/1000.0);
+                    event_iter_cmd(iter, CMD_EVENT1);
+                    while (event_iter_cmd(iter, CMD_NEXT)) {
+                        multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
                         first = false;
                     }
                 }
+
+                // print event2
                 multi_trace_print(event2, two->tp2);
             }
         }

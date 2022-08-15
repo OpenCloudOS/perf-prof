@@ -98,6 +98,8 @@ struct env {
     bool test;
     bool precise;
     bool detail;
+    unsigned long before_event1;// unit: ns
+    unsigned long after_event2; // unit: ns
     char *device;
     int ldlat;
     bool overwrite;
