@@ -25,7 +25,7 @@ struct termios save;
 static struct monitor_ctx {
     struct perf_evlist *evlist;
     struct tp_list *tp_list;
-    struct rblist pid_list;
+    struct rblist top_list;
     unsigned long nr_events;
 
     char *EVENT; //toupper(env->event)
@@ -36,6 +36,9 @@ static struct monitor_ctx {
         int len;
         bool top_by;
     } *fields;
+    bool only_key; // don't show COMM
+    char *key_name;// toupper(env->key)
+    int  key_len;
 
     int ws_row;
     int ws_col;
@@ -45,7 +48,7 @@ static struct monitor_ctx {
 
 struct top_info {
     struct rb_node rbnode;
-    int pid;
+    unsigned long long key; //int pid;
     char comm[TASK_COMM_LEN];
     unsigned long long counter[0];
 };
@@ -55,9 +58,9 @@ static int top_info_node_cmp(struct rb_node *rbn, const void *entry)
     struct top_info *t = container_of(rbn, struct top_info, rbnode);
     const struct top_info *e = entry;
 
-    if (t->pid > e->pid)
+    if (t->key > e->key)
         return 1;
-    else if (t->pid < e->pid)
+    else if (t->key < e->key)
         return -1;
     else
         return 0;
@@ -138,13 +141,16 @@ static void sig_winch(int sig)
 
 static int monitor_ctx_init(struct env *env)
 {
+    struct tep_handle *tep;
     int i, j, f = 0;
     int len;
+    int key_attr = 0;
+    char *key_name = NULL;
 
     if (!env->event)
         return -1;
 
-    tep__ref();
+    tep = tep__ref();
 
     ctx.EVENT = strdup(env->event);
     len = strlen(ctx.EVENT);
@@ -173,12 +179,42 @@ static int monitor_ctx_init(struct env *env)
                 ctx.nr_top_by ++;
             f ++;
         }
+        if (env->key && !tp->key) {
+            struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
+            if (!tep_find_any_field(event, env->key)) {
+                fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
+                return -1;
+            }
+        }
+        if (tp->key) {
+            key_attr ++;
+            if (!key_name)
+                key_name = strdup(tp->key);
+        }
     }
+    ctx.only_key = (!!env->key) || (key_attr == ctx.tp_list->nr_tp);
+    if (!key_name && env->key) {
+        key_name = strdup(env->key);
+    }
+    if (key_name) {
+        len = strlen(key_name);
+        for (i = 0; i < len; i++)
+            key_name[i] = (char)toupper(key_name[i]);
+    }
+    if (ctx.only_key)
+        ctx.key_name = key_name;
+    else {
+        ctx.key_name = strdup("PID");
+        if (key_name) free(key_name);
+    }
+    ctx.key_len = strlen(ctx.key_name);
+    if (ctx.key_len < 8)
+        ctx.key_len = 8;
 
-    rblist__init(&ctx.pid_list);
-    ctx.pid_list.node_cmp = top_info_node_cmp;
-    ctx.pid_list.node_new = top_info_node_new;
-    ctx.pid_list.node_delete = top_info_node_delete;
+    rblist__init(&ctx.top_list);
+    ctx.top_list.node_cmp = top_info_node_cmp;
+    ctx.top_list.node_new = top_info_node_new;
+    ctx.top_list.node_delete = top_info_node_delete;
 
     ctx.ws_row = ctx.ws_col = 0;
     ctx.tty = false;
@@ -203,9 +239,10 @@ static void monitor_ctx_exit(void)
         tcsetattr(0, TCSANOW, &save);
         printf("\033[?25h\n\033[?1049l");
     }
-    rblist__exit(&ctx.pid_list);
+    rblist__exit(&ctx.top_list);
     free(ctx.fields);
     free(ctx.EVENT);
+    free(ctx.key_name);
     tp_list_free(ctx.tp_list);
     tep__unref();
 }
@@ -306,6 +343,7 @@ static void top_sample(union perf_event *event, int instance)
     struct tep_handle *tep;
     struct trace_seq s;
     struct tep_event *e;
+    const char *key = "pid";
     char *comm;
     int len, i;
     struct top_info info;
@@ -314,7 +352,7 @@ static void top_sample(union perf_event *event, int instance)
 
     tep = tep__ref();
 
-    if (!tep_is_pid_registered(tep, raw->tid_entry.tid))
+    if (!ctx.only_key && !tep_is_pid_registered(tep, raw->tid_entry.tid))
         tep__update_comm(NULL, raw->tid_entry.tid);
 
     if (ctx.env->verbose) {
@@ -343,16 +381,24 @@ static void top_sample(union perf_event *event, int instance)
     record.data = data;
 
     e = tep_find_event_by_record(tep, &record);
-    if (tep_get_field_val(&s, e, "pid", &record, (unsigned long long *)&info.pid, 0) < 0) {
-        info.pid = raw->tid_entry.tid;
+
+    if (tp->key)
+        key = tp->key;
+    else if (ctx.env->key)
+        key = ctx.env->key;
+    if (tep_get_field_val(&s, e, key, &record, &info.key, 0) < 0) {
+        info.key = raw->tid_entry.tid;
     }
 
-    rbn = rblist__find(&ctx.pid_list, &info);
+    rbn = rblist__find(&ctx.top_list, &info);
     if (rbn == NULL) {
-        comm = tep_get_field_raw(&s, e, "comm", &record, &len, 0);
-        strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
-        info.comm[TASK_COMM_LEN-1] = '\0';
-        rbn = rblist__findnew(&ctx.pid_list, &info);
+        if (!ctx.only_key) {
+            comm = tep_get_field_raw(&s, e, "comm", &record, &len, 0);
+            strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
+            info.comm[TASK_COMM_LEN-1] = '\0';
+        } else
+            info.comm[0] = '\0';
+        rbn = rblist__findnew(&ctx.top_list, &info);
         if (rbn == NULL)
             goto destroy;
     }
@@ -405,53 +451,58 @@ static void top_interval(void)
     printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
 
     // PID FIELD FIELD ... COMM
-    printed = printf("%8s ", "PID");
+    printed = printf("%*s ", ctx.key_len, ctx.key_name);
     for (i = 0; i < ctx.nr_fields; i++)
         printed += printf("%*s ", ctx.fields[i].len, ctx.fields[i].field);
-    printed += printf("%-*s", TASK_COMM_LEN, "COMM");
+    if (!ctx.only_key)
+        printed += printf("%-*s", TASK_COMM_LEN, "COMM");
     printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
 
     if (ctx.tty) printf("\033[0m");
 
     //pid_list is empty still print header
-    if (rblist__empty(&ctx.pid_list))
+    if (rblist__empty(&ctx.top_list))
         return;
 
     rblist__init(&sorted);
     sorted.node_cmp = top_info_sorted_node_cmp;
     sorted.node_new = top_info_sorted_node_new;
-    sorted.node_delete = ctx.pid_list.node_delete;
-    ctx.pid_list.node_delete = top_info_node_delete_empty; //empty, not really delete
+    sorted.node_delete = ctx.top_list.node_delete;
+    ctx.top_list.node_delete = top_info_node_delete_empty; //empty, not really delete
 
     /* sort, remove from `ctx.pid_list', add to `sorted'. */
     do {
-        rbn = rblist__entry(&ctx.pid_list, 0);
+        rbn = rblist__entry(&ctx.top_list, 0);
         t = container_of(rbn, struct top_info, rbnode);
-        rblist__remove_node(&ctx.pid_list, rbn);
+        rblist__remove_node(&ctx.top_list, rbn);
         rblist__add_node(&sorted, t);
-    } while (!rblist__empty(&ctx.pid_list));
+    } while (!rblist__empty(&ctx.top_list));
 
     do {
         rbn = rblist__entry(&sorted, 0);
 
         if (!ctx.tty || !ctx.ws_row || ++row < ctx.ws_row) {
             t = container_of(rbn, struct top_info, rbnode);
-            printf("%8d ", t->pid);
+            printf("%*llu ", ctx.key_len, t->key);
             for (i = 0; i < ctx.nr_fields; i++)
                 printf("%*llu ", ctx.fields[i].len, t->counter[i]);
-            printf("%-s\n", *(u64*)t->comm == 0x3e2e2e2e3c /*<...>*/ ? tep__pid_to_comm(t->pid) : t->comm);
+            if (!ctx.only_key)
+                printf("%-s", *(u64*)t->comm == 0x3e2e2e2e3c /*<...>*/ ? tep__pid_to_comm(t->key) : t->comm);
+            printf("\n");
         }
 
         rblist__remove_node(&sorted, rbn);
     } while (!rblist__empty(&sorted));
 
-    ctx.pid_list.node_delete = sorted.node_delete;
+    ctx.top_list.node_delete = sorted.node_delete;
 }
 
 static void top_help(struct help_ctx *hctx)
 {
+    struct env *env = hctx->env;
     int i, j, k;
     bool top_by, top_add;
+    bool has_key = false;
 
     printf(PROGRAME " %s ", top.name);
     printf("-e \"");
@@ -475,7 +526,11 @@ static void top_help(struct help_ctx *hctx)
                         }
                     }
             }
-            if (!tp->alias || !top_by || !top_add)
+            if (tp->key) {
+                has_key = true;
+                printf("key=%s/", tp->key);
+            }
+            if (!tp->alias || !top_by || !top_add || !tp->key)
                 printf("[");
             if (!tp->alias)
                 printf("alias=./");
@@ -483,7 +538,9 @@ static void top_help(struct help_ctx *hctx)
                 printf("top-by=./");
             if (!top_add)
                 printf("top-add=./");
-            if (!tp->alias || !top_by || !top_add)
+            if (!tp->key)
+                printf("key=./");
+            if (!tp->alias || !top_by || !top_add || !tp->key)
                 printf("]");
             if (i != hctx->nr_list - 1)
                 printf(",");
@@ -491,7 +548,12 @@ static void top_help(struct help_ctx *hctx)
     }
     printf("\" ");
 
+    if (env->key)
+        printf("-k %s ", env->key);
     common_help(hctx, true, true, true, true, false, true, true);
+
+    if (!env->key && !has_key)
+        printf("[-k .] ");
     common_help(hctx, false, true, true, true, false, true, true);
     printf("\n");
 }
