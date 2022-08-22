@@ -110,8 +110,8 @@ static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *
         .freq          = 0,
         .sample_type   = 0,
         .read_format   = 0,
-        .pinned        = 1,
-        .disabled      = 1,
+        .pinned        = 0,
+        .disabled      = 0,
     };
     struct perf_evsel *evsel;
     int id;
@@ -132,6 +132,7 @@ static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *
 
 static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
 {
+    static bool leader = true;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_SOFTWARE,
         .config        = 0,
@@ -140,8 +141,8 @@ static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
         .freq          = 0,
         .sample_type   = 0,
         .read_format   = 0,
-        .pinned        = 1,
-        .disabled      = 1,
+        .pinned        = 0,
+        .disabled      = leader ? 1 : 0,
     };
     struct perf_evsel *evsel;
 
@@ -151,7 +152,7 @@ static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
         return NULL;
     }
     perf_evlist__add(evlist, evsel);
-
+    leader = false;
     return evsel;
 }
 
@@ -204,6 +205,8 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
     evsel_name(perf_tp_event(evlist, "writeback", "wbc_writepage"), " WB pages");
     //cpu_idle
     __evsel_name(perf_tp_event(evlist, "power", "cpu_idle"), " idle", true);
+
+    perf_evlist__set_leader(evlist);
 
     return 0;
 }
