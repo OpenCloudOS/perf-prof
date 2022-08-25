@@ -414,8 +414,9 @@ static void oncpu_sample(union perf_event *event, int instance)
         if (ctx.instance_oncpu) {
             if (ctx.env->verbose && data->raw.runtime.runtime >= ctx.env->greater_than)
                 tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
-            return;
         }
+        // A similar problem exists with attaching to a process.
+        return;
     }
 
     tid = data->raw.runtime.pid;
