@@ -143,10 +143,11 @@ const char argp_program_doc[] =
 "      alias=str: event alias\n"
 "      top-by=field: add to top, sort by this field\n"
 "      top-add=field: add to top\n"
+"      comm=field: top, show COMM\n"
 "      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
 "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
 "      delay=field: mpdelay, delay field\n"
-"      key=field: multi-trace, key for two-event\n"
+"      key=field: key for multiple events: top, multi-trace\n"
 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
 ;
 

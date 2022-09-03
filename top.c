@@ -36,9 +36,9 @@ static struct monitor_ctx {
         int len;
         bool top_by;
     } *fields;
-    bool only_key; // don't show COMM
     char *key_name;// toupper(env->key)
     int  key_len;
+    bool show_comm; // show COMM
 
     int ws_row;
     int ws_col;
@@ -72,9 +72,10 @@ static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_e
     const struct top_info *e = new_entry;
     struct top_info *t = malloc(size);
     if (t) {
-        memcpy(t, e, sizeof(struct top_info));
-        memset((void *)t + sizeof(struct top_info), 0, size - sizeof(struct top_info));
         RB_CLEAR_NODE(&t->rbnode);
+        t->key = e->key;
+        memset(t->comm, 0, sizeof(t->comm));
+        memset((void *)t + sizeof(struct top_info), 0, size - sizeof(struct top_info));
         return &t->rbnode;
     } else
         return NULL;
@@ -120,14 +121,14 @@ static struct rb_node *top_info_sorted_node_new(struct rblist *rlist, const void
 }
 static void set_term_quiet_input(struct termios *old)
 {
-	struct termios tc;
+    struct termios tc;
 
-	tcgetattr(0, old);
-	tc = *old;
-	tc.c_lflag &= ~(ICANON | ECHO);
-	tc.c_cc[VMIN] = 0;
-	tc.c_cc[VTIME] = 0;
-	tcsetattr(0, TCSANOW, &tc);
+    tcgetattr(0, old);
+    tc = *old;
+    tc.c_lflag &= ~(ICANON | ECHO);
+    tc.c_cc[VMIN] = 0;
+    tc.c_cc[VTIME] = 0;
+    tcsetattr(0, TCSANOW, &tc);
 }
 
 static void sig_winch(int sig)
@@ -144,7 +145,6 @@ static int monitor_ctx_init(struct env *env)
     struct tep_handle *tep;
     int i, j, f = 0;
     int len;
-    int key_attr = 0;
     char *key_name = NULL;
 
     if (!env->event)
@@ -186,13 +186,10 @@ static int monitor_ctx_init(struct env *env)
                 return -1;
             }
         }
-        if (tp->key) {
-            key_attr ++;
-            if (!key_name)
-                key_name = strdup(tp->key);
+        if (tp->key && !key_name) {
+            key_name = strdup(tp->key);
         }
     }
-    ctx.only_key = (!!env->key) || (key_attr == ctx.tp_list->nr_tp);
     if (!key_name && env->key) {
         key_name = strdup(env->key);
     }
@@ -200,12 +197,15 @@ static int monitor_ctx_init(struct env *env)
         len = strlen(key_name);
         for (i = 0; i < len; i++)
             key_name[i] = (char)toupper(key_name[i]);
-    }
-    if (ctx.only_key)
         ctx.key_name = key_name;
-    else {
+
+        // key!=PID, whether to display COMM is determined by the comm attr.
+        ctx.show_comm = !!ctx.tp_list->nr_comm;
+    } else {
         ctx.key_name = strdup("PID");
-        if (key_name) free(key_name);
+
+        // key=PID can display COMM
+        ctx.show_comm = true;
     }
     ctx.key_len = strlen(ctx.key_name);
     if (ctx.key_len < 8)
@@ -321,7 +321,7 @@ struct sample_type_raw {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
-    __u64		period;
+    __u64       period;
     struct {
         __u32   size;
         union {
@@ -344,7 +344,7 @@ static void top_sample(union perf_event *event, int instance)
     struct trace_seq s;
     struct tep_event *e;
     const char *key = "pid";
-    char *comm;
+    bool raw_comm = true;
     int len, i;
     struct top_info info;
     struct rb_node *rbn;
@@ -352,7 +352,7 @@ static void top_sample(union perf_event *event, int instance)
 
     tep = tep__ref();
 
-    if (!ctx.only_key && !tep_is_pid_registered(tep, raw->tid_entry.tid))
+    if (ctx.show_comm && !tep_is_pid_registered(tep, raw->tid_entry.tid))
         tep__update_comm(NULL, raw->tid_entry.tid);
 
     if (ctx.env->verbose) {
@@ -382,28 +382,36 @@ static void top_sample(union perf_event *event, int instance)
 
     e = tep_find_event_by_record(tep, &record);
 
+    /*
+     * tp->key:  show_comm = !!nr_comm, raw_comm = true;
+     * env->key: show_comm = !!nr_comm, raw_comm = true;
+     * "pid":    show_comm = true,      raw_comm = true;
+     * raw->tid: show_comm = true,      raw_comm = false;
+    **/
     if (tp->key)
         key = tp->key;
     else if (ctx.env->key)
         key = ctx.env->key;
     if (tep_get_field_val(&s, e, key, &record, &info.key, 0) < 0) {
         info.key = raw->tid_entry.tid;
+        raw_comm = false;
     }
 
-    rbn = rblist__find(&ctx.top_list, &info);
-    if (rbn == NULL) {
-        if (!ctx.only_key) {
-            comm = tep_get_field_raw(&s, e, "comm", &record, &len, 0);
-            strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
-            info.comm[TASK_COMM_LEN-1] = '\0';
+    rbn = rblist__findnew(&ctx.top_list, &info);
+    if (rbn) {
+        p = container_of(rbn, struct top_info, rbnode);
+        if (ctx.show_comm) {
+            if (p->comm[0] == 0) {
+                char *comm = NULL;
+                if (tp->comm || raw_comm)
+                    comm = tep_get_field_raw(&s, e, tp->comm?:"comm", &record, &len, 0);
+                strncpy(p->comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
+                p->comm[TASK_COMM_LEN-1] = '\0';
+            }
         } else
-            info.comm[0] = '\0';
-        rbn = rblist__findnew(&ctx.top_list, &info);
-        if (rbn == NULL)
-            goto destroy;
-    }
-
-    p = container_of(rbn, struct top_info, rbnode);
+            p->comm[0] = '\0';
+    } else
+        goto destroy;
 
     for (i = 0; i < tp->nr_top; i++, field++) {
         unsigned long long counter;
@@ -454,7 +462,7 @@ static void top_interval(void)
     printed = printf("%*s ", ctx.key_len, ctx.key_name);
     for (i = 0; i < ctx.nr_fields; i++)
         printed += printf("%*s ", ctx.fields[i].len, ctx.fields[i].field);
-    if (!ctx.only_key)
+    if (ctx.show_comm)
         printed += printf("%-*s", TASK_COMM_LEN, "COMM");
     printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
 
@@ -486,7 +494,7 @@ static void top_interval(void)
             printf("%*llu ", ctx.key_len, t->key);
             for (i = 0; i < ctx.nr_fields; i++)
                 printf("%*llu ", ctx.fields[i].len, t->counter[i]);
-            if (!ctx.only_key)
+            if (ctx.show_comm)
                 printf("%-s", *(u64*)t->comm == 0x3e2e2e2e3c /*<...>*/ ? tep__pid_to_comm(t->key) : t->comm);
             printf("\n");
         }
@@ -530,7 +538,10 @@ static void top_help(struct help_ctx *hctx)
                 has_key = true;
                 printf("key=%s/", tp->key);
             }
-            if (!tp->alias || !top_by || !top_add || !tp->key)
+            if (tp->comm) {
+                printf("comm=%s/", tp->comm);
+            }
+            if (!tp->alias || !top_by || !top_add || !tp->key || !tp->comm)
                 printf("[");
             if (!tp->alias)
                 printf("alias=./");
@@ -540,7 +551,9 @@ static void top_help(struct help_ctx *hctx)
                 printf("top-add=./");
             if (!tp->key)
                 printf("key=./");
-            if (!tp->alias || !top_by || !top_add || !tp->key)
+            if (!tp->comm)
+                printf("comm=./");
+            if (!tp->alias || !top_by || !top_add || !tp->key || !tp->comm)
                 printf("]");
             if (i != hctx->nr_list - 1)
                 printf(",");

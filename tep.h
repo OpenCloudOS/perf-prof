@@ -32,6 +32,7 @@ struct tp {
         bool top_by;
     } *top_add;
     int nr_top;
+    const char *comm;
 
     // kmemleak profiler
     const char *mem_ptr;
@@ -50,6 +51,7 @@ struct tp_list {
     int nr_need_stack;
     bool need_stream_id;
     int nr_top;
+    int nr_comm;
     int nr_mem_size;
     int nr_delay;
     struct tp tp[0];

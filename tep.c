@@ -115,14 +115,14 @@ const char *tep__pid_to_comm(int pid)
 void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
 {
     struct tep_record record;
-	struct trace_seq s;
+    struct trace_seq s;
     struct tep_event *e;
 
-	memset(&record, 0, sizeof(record));
+    memset(&record, 0, sizeof(record));
     record.ts = ts;
-	record.cpu = cpu;
-	record.size = size;
-	record.data = data;
+    record.cpu = cpu;
+    record.size = size;
+    record.data = data;
 
     tep__ref();
     e = tep_find_event_by_record(tep, &record);
@@ -133,8 +133,8 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
     if (e) trace_seq_printf(&s, "%s:", e->system);
     tep_print_event(tep, &s, &record, "%s: %s\n", TEP_PRINT_NAME, TEP_PRINT_INFO);
     tep__unref();
-	trace_seq_do_fprintf(&s, stdout);
-	trace_seq_destroy(&s);
+    trace_seq_do_fprintf(&s, stdout);
+    trace_seq_destroy(&s);
 }
 
 bool tep__event_has_field(int id, const char *field)
@@ -279,6 +279,12 @@ struct tp_list *tp_list_new(char *event_str)
                     tp->top_add[tp->nr_top-1].field = value;
                     tp->top_add[tp->nr_top-1].event = false;
                     tp->top_add[tp->nr_top-1].top_by = top_by;
+                } else if (strcmp(attr, "comm") == 0) {
+                    if (!tep_find_any_field(event, value)) {
+                        fprintf(stderr, "Attr comm: cannot find %s field at %s:%s\n", value, sys, name);
+                        goto err_out;
+                    }
+                    tp->comm = value;
                 } else if (strcmp(attr, "alias") == 0) {
                     alias = value;
                 } else if (strcmp(attr, "ptr") == 0) {
@@ -326,6 +332,7 @@ struct tp_list *tp_list_new(char *event_str)
             tp->top_add[0].event = true;
             tp->top_add[0].top_by = false;
         }
+
         if (!tp->mem_ptr && tep_find_any_field(event, "ptr"))
             tp->mem_ptr = "ptr";
         if (!tp->mem_size && tep_find_any_field(event, "bytes_alloc"))
@@ -333,6 +340,7 @@ struct tp_list *tp_list_new(char *event_str)
 
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;
+        tp_list->nr_comm += !!tp->comm;
         tp_list->nr_mem_size += !!tp->mem_size;
         tp_list->nr_delay += !!tp->delay;
     }
