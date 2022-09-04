@@ -93,6 +93,14 @@ static int event_lost_filter(struct perf_evlist *evlist, struct env *env)
 
 static void event_lost_exit(struct perf_evlist *evlist)
 {
+    int i;
+
+    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx.tp_list->tp[i];
+        if (tp->counters)
+            free(tp->counters);
+    }
+
     monitor_ctx_exit();
 }
 
