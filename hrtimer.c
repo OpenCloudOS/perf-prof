@@ -68,6 +68,8 @@ static void monitor_ctx_exit(void)
         perf_event_filter_close(&ctx.filter);
         if (ctx.counters)
             free(ctx.counters);
+        if (ctx.ins_counters)
+            free(ctx.ins_counters);
         tp_list_free(ctx.tp_list);
         tep__unref();
     }
@@ -185,7 +187,7 @@ static void hrtimer_exit(struct perf_evlist *evlist)
 static void hrtimer_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
+    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
     struct sample_type_data {
         struct {
             u32    pid;
