@@ -6,8 +6,6 @@
 #include "tep.h"
 
 static profiler percpu_stat;
-static profiler stat;
-
 
 struct swevent_stat {
     uint64_t count;
@@ -283,93 +281,4 @@ static profiler percpu_stat = {
     .sample = percpu_stat_sample,
 };
 PROFILER_REGISTER(percpu_stat);
-
-static int stat_init(struct perf_evlist *evlist, struct env *env)
-{
-    int i;
-
-    if (!env->event)
-        return -1;
-    if (monitor_ctx_init(env) < 0)
-        return -1;
-
-    if (env->interval == 0)
-        env->interval = 1000;
-
-    ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
-        return -1;
-
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
-        tp->evsel = perf_tp_event(evlist, tp->sys, tp->name);
-        evsel_name(tp->evsel, tp->alias && tp->alias[0] ? tp->alias : tp->name);
-    }
-    return 0;
-}
-
-static void stat_exit(struct perf_evlist *evlist)
-{
-    tp_list_free(ctx.tp_list);
-    monitor_ctx_exit();
-}
-
-static int stat_filter(struct perf_evlist *evlist, struct env *env)
-{
-    int i, err;
-
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
-        if (tp->evsel && tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
-}
-
-static void stat_help(struct help_ctx *hctx)
-{
-    int i, j;
-    struct env *env = hctx->env;
-
-    printf(PROGRAME " %s ", stat.name);
-    printf("-e \"");
-    for (i = 0; i < hctx->nr_list; i++) {
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
-            if (tp->alias)
-                printf("alias=%s/", tp->alias);
-            else
-                printf("[alias=./]");
-            if (i != hctx->nr_list - 1)
-                printf(",");
-        }
-    }
-    printf("\" ");
-
-    if (env->perins)
-        printf("--perins ");
-    common_help(hctx, true, true, false, true, false, false, true);
-
-    if (!env->perins)
-        printf("[--perins] ");
-    common_help(hctx, false, true, false, true, false, false, true);
-    printf("\n");
-}
-
-static profiler stat = {
-    .name = "stat",
-    .pages = 0,
-    .help = stat_help,
-    .init = stat_init,
-    .filter = stat_filter,
-    .deinit = stat_exit,
-    .interval = percpu_stat_interval,
-    .read   = percpu_stat_read,
-    .sample = percpu_stat_sample,
-};
-PROFILER_REGISTER(stat);
 

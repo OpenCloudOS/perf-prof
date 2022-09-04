@@ -8,8 +8,8 @@
 #include <monitor.h>
 #include <count_helpers.h>
 
-
 static profiler hrcount;
+static profiler stat;
 
 struct monitor_ctx {
     struct perf_evlist *evlist;
@@ -134,7 +134,7 @@ static int hrcount_init(struct perf_evlist *evlist, struct env *env)
         .pinned        = 0,
         .disabled      = 1,
         .watermark     = 1,
-        .wakeup_watermark = (hrcount.pages << 12) / 2,
+        .wakeup_watermark = (current_monitor()->pages << 12) / 2,
     };
     struct perf_event_attr tp_attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -373,12 +373,12 @@ static void hrcount_sample(union perf_event *event, int instance)
     }
 }
 
-static void hrcount_help(struct help_ctx *hctx)
+static void __common_help(struct help_ctx *hctx, const char *name)
 {
     int i, j;
     struct env *env = hctx->env;
 
-    printf(PROGRAME " %s ", hrcount.name);
+    printf(PROGRAME " %s ", name);
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
@@ -400,6 +400,11 @@ static void hrcount_help(struct help_ctx *hctx)
     printf("\n");
 }
 
+static void hrcount_help(struct help_ctx *hctx)
+{
+    __common_help(hctx, hrcount.name);
+}
+
 static profiler hrcount = {
     .name = "hrcount",
     .pages = 2,
@@ -412,4 +417,20 @@ static profiler hrcount = {
 };
 PROFILER_REGISTER(hrcount);
 
+static void stat_help(struct help_ctx *hctx)
+{
+    __common_help(hctx, stat.name);
+}
+
+static profiler stat = {
+    .name = "stat",
+    .pages = 2,
+    .help = stat_help,
+    .init = hrcount_init,
+    .filter = hrcount_filter,
+    .deinit = hrcount_exit,
+    .interval = hrcount_interval,
+    .sample = hrcount_sample,
+};
+PROFILER_REGISTER(stat);
 
