@@ -104,7 +104,7 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         .sample_type   = 0,
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 0,
-        .disabled      = 1,
+        .disabled      = 0,
     };
     struct perf_evsel *evsel;
     int i;
