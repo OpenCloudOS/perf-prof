@@ -45,7 +45,7 @@ static void sig_winch(int sig)
         int i, len = 0;
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
             struct tp *tp = &ctx.tp_list->tp[i];
-            len += strlen(tp->name) + 1;
+            len += strlen(tp->alias ?: tp->name) + 1;
         }
         if (len-1 > ctx.ws_col)
             ctx.packed_display = false;
@@ -100,7 +100,7 @@ static int monitor_ctx_init(struct env *env)
         int i;
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
             struct tp *tp = &ctx.tp_list->tp[i];
-            ctx.pertp_counter_max_len[i] = strlen(tp->name);
+            ctx.pertp_counter_max_len[i] = strlen(tp->alias ?: tp->name);
         }
     }
 
@@ -208,7 +208,12 @@ static void direct_print(void *opaque, struct count_node *node)
     char buf[64];
     static u32 max_len = 0;
     struct tp *tp = &ctx.tp_list->tp[node->id];
-    int len = snprintf(buf, sizeof(buf), "%s:%s", tp->sys, tp->name);
+    int len;
+
+    if (tp->alias)
+        len = snprintf(buf, sizeof(buf), "%s", tp->alias);
+    else
+        len = snprintf(buf, sizeof(buf), "%s:%s", tp->sys, tp->name);
 
     if (len > max_len)
         max_len = len;
@@ -296,9 +301,9 @@ static void hrcount_interval(void)
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
             struct tp *tp = &ctx.tp_list->tp[i];
             if (i + 1 != ctx.tp_list->nr_tp)
-                printf("%-*s ", ctx.pertp_counter_max_len[i], tp->name);
+                printf("%-*s ", ctx.pertp_counter_max_len[i], tp->alias ?: tp->name);
             else
-                printf("%s\n", tp->name);
+                printf("%s\n", tp->alias ?: tp->name);
         }
         iter.ins = ~0UL;
         iter.id = 0;
@@ -384,6 +389,14 @@ static void __common_help(struct help_ctx *hctx, const char *name)
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
+            if (tp->alias)
+                printf("alias=%s/", tp->alias);
+            if (!tp->alias)
+                printf("[");
+            if (!tp->alias)
+                printf("alias=./");
+            if (!tp->alias)
+                printf("]");
             if (i != hctx->nr_list - 1)
                 printf(",");
         }
