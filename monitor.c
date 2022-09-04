@@ -114,6 +114,7 @@ const char argp_program_doc[] =
 "  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
 "  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]\n"
 "  perf-prof hrtimer [-e EVENT[...]] [-F freq] [--period ns] [-g] [FILTER OPTION...] [-v]\n"
+"  perf-prof hrcount [-e EVENT[...]] [--period ns] [--perins] [-v]\n"
 "  perf-prof percpu-stat [--syscalls]\n"
 "  perf-prof top -e EVENT[...] [-i INT] [-k str] [-v]\n"
 "  perf-prof stat -e EVENT[...] [--perins]\n"
