@@ -546,6 +546,22 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
     }
 }
 
+bool event_need_to_print(union perf_event *event, union perf_event *event1, union perf_event *event2)
+{
+    struct multi_trace_type_header *e  = (void *)event ->sample.array;
+    struct multi_trace_type_header *e1 = (void *)event1->sample.array;
+    struct multi_trace_type_header *e2 = (void *)event2->sample.array;
+
+    if (!ctx.env->samecpu)
+        return true;
+
+    if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
+        e->cpu_entry.cpu == e2->cpu_entry.cpu)
+        return true;
+
+    return false;
+}
+
 int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
 {
     struct timeline_node *curr;

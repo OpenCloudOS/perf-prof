@@ -231,11 +231,12 @@ static const struct argp_option opts[] = {
                                                  "Similar to pprof --symbols." },
     { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
     { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
-    { "detail", LONG_OPT_detail, "-N|+N", OPTION_ARG_OPTIONAL,
+    { "detail", LONG_OPT_detail, "-N,", OPTION_ARG_OPTIONAL,
                                           "More detailed information output.\n"
                                           "For multi-trace profiler:\n"
                                           "   -N: Before event1, print events within N nanoseconds.\n"
-                                          "   +N: After event2, print events within N nanoseconds."
+                                          "   +N: After event2, print events within N nanoseconds.\n"
+                                          "samecpu: Only show events with the same cpu as event1 or event2."
                                           },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
     { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency, Unit: cycles" },
@@ -334,6 +335,16 @@ static unsigned long nsparse(const char *ptr, char **retptr)
         *retptr = endptr;
 
     return ret;
+}
+
+static void detail_parse(const char *s)
+{
+    if (strcmp(s, "samecpu") == 0)
+        env.samecpu = true;
+    else if (s[0] == '-')
+        env.before_event1 = nsparse(s+1, NULL);
+    else
+        env.after_event2 = nsparse(s, NULL);
 }
 
 static void libbpf_support(void)
@@ -481,10 +492,16 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case LONG_OPT_detail:
         env.detail = true;
         if (arg) {
-            if (arg[0] == '-')
-                env.before_event1 = nsparse(arg+1, NULL);
-            else
-                env.after_event2 = nsparse(arg, NULL);
+            char *ss = strdup(arg);
+            char *sep, *s = ss;
+            while ((sep = strchr(s, ',')) != NULL) {
+                *sep = '\0';
+                detail_parse(s);
+                s = sep + 1;
+            }
+            if (*s)
+                detail_parse(s);
+            free(ss);
         }
         break;
     case 'd':
