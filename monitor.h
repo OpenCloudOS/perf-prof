@@ -98,8 +98,10 @@ struct env {
     bool test;
     bool precise;
     bool detail;
-    unsigned long before_event1;// unit: ns
-    unsigned long after_event2; // unit: ns
+    // detail_arg
+        unsigned long before_event1;// unit: ns
+        unsigned long after_event2; // unit: ns
+        bool samecpu;
     char *device;
     int ldlat;
     bool overwrite;
