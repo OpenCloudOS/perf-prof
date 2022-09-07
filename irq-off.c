@@ -7,7 +7,7 @@
 struct monitor irq_off;
 static void irq_off_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
 
-struct monitor_ctx {
+static struct monitor_ctx {
     int nr_cpus;
     uint64_t *counter;
     uint64_t *temp;
@@ -78,7 +78,7 @@ static int irq_off_init(struct perf_evlist *evlist, struct env *env)
     }
     perf_evlist__add(evlist, evsel);
     return 0;
-    
+
 }
 
 static void irq_off_exit(struct perf_evlist *evlist)

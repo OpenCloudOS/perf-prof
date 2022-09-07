@@ -8,7 +8,7 @@
 
 struct monitor profile;
 
-struct monitor_ctx {
+static struct monitor_ctx {
     int nr_cpus;
     uint64_t *counter;
     uint64_t *cycles;

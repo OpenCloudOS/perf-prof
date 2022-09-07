@@ -13,7 +13,7 @@
 
 struct monitor monitor_signal;
 static void signal_sample_callchain(union perf_event *event, int instance);
-struct monitor_ctx {
+static struct monitor_ctx {
     struct callchain_ctx *cc;
     struct env *env;
 } ctx;

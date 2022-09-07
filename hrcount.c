@@ -11,7 +11,7 @@
 static profiler hrcount;
 static profiler stat;
 
-struct monitor_ctx {
+static struct monitor_ctx {
     struct perf_evlist *evlist;
     struct perf_evsel *leader;
     struct tp_list *tp_list;

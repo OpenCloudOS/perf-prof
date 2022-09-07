@@ -27,7 +27,7 @@
 struct monitor kvm_exit;
 struct sample_type_raw;
 
-struct monitor_ctx {
+static struct monitor_ctx {
     int nr_ins;
     struct sample_type_raw *perins_kvm_exit;
     int *perins_kvm_exit_valid;
