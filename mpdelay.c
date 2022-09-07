@@ -13,7 +13,7 @@
 
 static profiler mpdelay;
 
-struct monitor_ctx {
+static struct monitor_ctx {
     int nr_ins;
     int nr_points;
     struct tp_list *tp_list;

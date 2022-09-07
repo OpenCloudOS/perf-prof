@@ -16,7 +16,7 @@ static int __analyzer_eqzero(int instance, int nr_tp, u64 *counters)
     return 1;
 }
 
-struct monitor_ctx {
+static struct monitor_ctx {
     struct perf_evlist *evlist;
     struct callchain_ctx *cc;
     struct perf_evsel *leader;

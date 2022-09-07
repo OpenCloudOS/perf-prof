@@ -31,7 +31,7 @@ static void *do_split_lock(void *unused) {
 /******************************************************
 split-lock ctx
 ******************************************************/
-struct monitor_ctx {
+static struct monitor_ctx {
     int nr_cpus;
     uint64_t *counter;
     uint64_t *polling;
@@ -99,7 +99,7 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
 
     if (!env->interval)
         split_lock.read = NULL;
-    
+
     if (monitor_ctx_init() < 0)
         return -1;
 
