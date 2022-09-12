@@ -72,6 +72,7 @@ struct env {
     char *filter;
     char *key;
     char *impl;
+    char *output;
     bool interruptible;
     bool uninterruptible;
     unsigned long greater_than; // unit: ns, percent

@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
+#include <sys/prctl.h>
 #if defined(__i386__) || defined(__x86_64__)
 #include <cpuid.h>
 #endif
@@ -95,12 +96,15 @@ struct env env = {
 };
 
 static volatile bool exiting;
+static volatile bool child_finished;
+int remaining_argc = 0;
+char **remaining_argv = NULL;
 
 
 const char *argp_program_version = PROGRAME " 0.9";
 const char *argp_program_bug_address = "<corcpp@foxmail.com>";
 const char argp_program_args_doc[] =
-    "profiler [PROFILER OPTION...] [help]\n"
+    "profiler [PROFILER OPTION...] [help] [cmd [args...]]\n"
     "--symbols /path/to/bin";
 const char argp_program_doc[] =
 "\nProfiling based on perf_event\n\n"
@@ -187,6 +191,7 @@ static const struct argp_option opts[] = {
     { "pids", 'p', "PID,...", 0, "Attach to processes" },
     { "tids", 't', "TID,...", 0, "Attach to thread" },
     { "interval", 'i', "ms", 0, "Interval, Unit: ms" },
+    { "output", 'o', "file", 0, "Output file name" },
     { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
     { "order-mem", LONG_OPT_order_mem, "Bytes", 0, "Maximum memory used by ordering events. Unit: GB/MB/KB/*B." },
     { "mmap-pages", 'm', "pages", 0, "Number of mmap data pages and AUX area tracing mmap pages" },
@@ -375,6 +380,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
     case 'i':
         env.interval = strtol(arg, NULL, 10);
         break;
+    case 'o':
+        env.output = strdup(arg);
+        break;
     case 'p':
         env.pids = strdup(arg);
         break;
@@ -533,12 +541,20 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
             case 1:
                 env.help_monitor = monitor;
                 monitor = monitor_find(arg);
-                if (monitor)
+                if (monitor && strcmp(monitor->name, "help") == 0) {
                     break;
+                } else {
+                    monitor = env.help_monitor;
+                    env.help_monitor = NULL;
+                    return ARGP_ERR_UNKNOWN;
+                }
             default:
-                argp_usage (state);
-                break;
+                return ARGP_ERR_UNKNOWN;
         };
+        break;
+    case ARGP_KEY_ARGS:
+        remaining_argv = state->argv + state->next;
+        remaining_argc = state->argc - state->next;
         break;
     case ARGP_KEY_END:
         if (env.symbols == NULL && state->arg_num < 1)
@@ -551,6 +567,8 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 }
 static void sig_handler(int sig)
 {
+    if (sig == SIGCHLD)
+        child_finished = 1;
     exiting = 1;
 }
 
@@ -674,6 +692,121 @@ int in_guest(void)
 #else
     return 0;
 #endif
+}
+
+struct workload {
+    int cork_fd;
+    pid_t pid;
+};
+
+static int workload_prepare(struct workload *workload, char *argv[])
+{
+    int child_ready_pipe[2], go_pipe[2];
+    char bf;
+
+    if (pipe(child_ready_pipe) < 0) {
+        perror("failed to create 'ready' pipe");
+        return -1;
+    }
+
+    if (pipe(go_pipe) < 0) {
+        perror("failed to create 'go' pipe");
+        goto out_close_ready_pipe;
+    }
+
+    workload->pid = fork();
+    if (workload->pid < 0) {
+        perror("failed to fork");
+        goto out_close_pipes;
+    }
+
+    if (!workload->pid) {
+        int ret;
+
+        signal(SIGTERM, SIG_DFL);
+
+        close(child_ready_pipe[0]);
+        close(go_pipe[1]);
+        fcntl(go_pipe[0], F_SETFD, FD_CLOEXEC);
+
+        /*
+         * Change the name of this process not to confuse --exclude-perf users
+         * that sees 'perf' in the window up to the execvp() and thinks that
+         * perf samples are not being excluded.
+         */
+        prctl(PR_SET_NAME, "perf-exec");
+
+        /*
+         * Tell the parent we're ready to go
+         */
+        close(child_ready_pipe[1]);
+
+        /*
+         * Wait until the parent tells us to go.
+         */
+        ret = read(go_pipe[0], &bf, 1);
+        /*
+         * The parent will ask for the execvp() to be performed by
+         * writing exactly one byte, in workload.cork_fd, usually via
+         * evlist__start_workload().
+         *
+         * For cancelling the workload without actually running it,
+         * the parent will just close workload.cork_fd, without writing
+         * anything, i.e. read will return zero and we just exit()
+         * here.
+         */
+        if (ret != 1) {
+            if (ret == -1)
+                perror("unable to read pipe");
+            exit(ret);
+        }
+
+        execvp(argv[0], (char **)argv);
+
+        exit(-1);
+    }
+
+    close(child_ready_pipe[1]);
+    close(go_pipe[0]);
+    /*
+     * wait for child to settle
+     */
+    if (read(child_ready_pipe[0], &bf, 1) == -1) {
+        perror("unable to read pipe");
+        goto out_close_pipes;
+    }
+
+    fcntl(go_pipe[1], F_SETFD, FD_CLOEXEC);
+    workload->cork_fd = go_pipe[1];
+    close(child_ready_pipe[0]);
+    return 0;
+
+out_close_pipes:
+    close(go_pipe[0]);
+    close(go_pipe[1]);
+out_close_ready_pipe:
+    close(child_ready_pipe[0]);
+    close(child_ready_pipe[1]);
+    return -1;
+}
+
+static int workload_start(struct workload *workload)
+{
+    if (workload->cork_fd > 0) {
+        char bf = 0;
+        int ret;
+        /*
+         * Remove the cork, let it rip!
+         */
+        ret = write(workload->cork_fd, &bf, 1);
+        if (ret < 0)
+            perror("unable to write to pipe");
+
+        close(workload->cork_fd);
+        return ret;
+    }
+
+    return 0;
 }
 
 void print_time(FILE *fp)
@@ -842,6 +975,7 @@ int main(int argc, char *argv[])
         .doc = argp_program_doc,
     };
     int err;
+    struct workload workload = {0, 0};
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
     struct perf_thread_map *threads = NULL;
@@ -865,6 +999,17 @@ int main(int argc, char *argv[])
     if (env.symbols) {
         syms__convert(stdin, stdout);
         return 0;
+    }
+
+    if (remaining_argc) {
+        workload_prepare(&workload, remaining_argv);
+    }
+
+    // workload output to stdout & stderr
+    // perf-prof output to env.output file
+    if (env.output) {
+        freopen(env.output, "w+", stdout);
+        freopen(env.output, "a", stderr);
     }
 
     if (env.order || monitor->order)
@@ -891,6 +1036,14 @@ reinit:
         cpus = perf_cpu_map__dummy_new();
         if (!threads || !cpus) {
             fprintf(stderr, "failed to create pids\n");
+            goto out_delete;
+        }
+    } else if (workload.pid) {
+        // attach to workload
+        threads = thread_map__new_by_pid(workload.pid);
+        cpus = perf_cpu_map__dummy_new();
+        if (!threads || !cpus) {
+            fprintf(stderr, "failed attach to workload\n");
             goto out_delete;
         }
     } else {
@@ -945,9 +1098,12 @@ reinit:
 
     perf_evlist__enable(evlist);
 
+    signal(SIGCHLD, sig_handler);
     signal(SIGINT, sig_handler);
     if (monitor->sigusr1)
         signal(SIGUSR1, monitor->sigusr1);
+
+    workload_start(&workload);
 
     time_end = env.interval ? time_ms() + env.interval : -1;
     time_left = env.interval ? : -1;
@@ -1029,6 +1185,9 @@ out_delete:
 
     if (monitor->reinit)
         goto reinit;
+
+    if (workload.pid && !child_finished)
+        kill(workload.pid, SIGTERM);
 
     return err;
 }
