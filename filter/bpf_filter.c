@@ -17,7 +17,7 @@ static int libbpf_print_fn(enum libbpf_print_level level,
     return vfprintf(stderr, format, args);
 }
 
-int perf_event_filter_open(struct perf_event_filter *filter)
+int bpf_filter_open(struct bpf_filter *filter)
 {
     struct perf_event_bpf *obj = NULL;
     struct rlimit old_rlim;
@@ -68,45 +68,45 @@ int perf_event_filter_open(struct perf_event_filter *filter)
     }
 
     filter->obj = obj;
-    filter->perf_event_prog_fd = bpf_program__fd(obj->progs.perf_event_do_filter);
+    filter->bpf_fd = bpf_program__fd(obj->progs.perf_event_do_filter);
 
     return 0;
 
 cleanup:
     perf_event_bpf__destroy(obj);
     filter->obj = NULL;
-    filter->perf_event_prog_fd = -1;
+    filter->bpf_fd = -1;
     return err;
 }
 
-void perf_event_filter_close(struct perf_event_filter *filter)
+void bpf_filter_close(struct bpf_filter *filter)
 {
     if (filter && filter->obj) {
         perf_event_bpf__destroy(filter->obj);
         filter->obj = NULL;
-        filter->perf_event_prog_fd = -1;
+        filter->bpf_fd = -1;
     }
 }
 
 #else
 
-int perf_event_filter_open(struct perf_event_filter *filter)
+int bpf_filter_open(struct bpf_filter *filter)
 {
     filter->obj = NULL;
-    filter->perf_event_prog_fd = -1;
+    filter->bpf_fd = -1;
     return 0;
 }
-void perf_event_filter_close(struct perf_event_filter *filter) {}
+void bpf_filter_close(struct bpf_filter *filter) {}
 
 #endif
 
 
-int perf_event_filter_init(struct perf_event_filter *filter, struct env *env)
+int bpf_filter_init(struct bpf_filter *filter, struct env *env)
 {
     int need_bpf = 0;
 
     filter->obj = NULL;
-    filter->perf_event_prog_fd = -1;
+    filter->bpf_fd = -1;
 
     if (env->irqs_disabled >= 0) {
         filter->filter_irqs_disabled = true;
