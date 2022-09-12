@@ -18,7 +18,7 @@ static struct monitor_ctx {
     }*stat;
     struct callchain_ctx *cc;
     struct flame_graph *flame;
-    struct perf_event_filter filter;
+    struct bpf_filter filter;
     struct perf_evsel *evsel;
     time_t time;
     char time_str[32];
@@ -62,8 +62,8 @@ static int monitor_ctx_init(struct env *env)
         }
     }
 
-    if (perf_event_filter_init(&ctx.filter, env))
-        perf_event_filter_open(&ctx.filter);
+    if (bpf_filter_init(&ctx.filter, env))
+        bpf_filter_open(&ctx.filter);
 
     ctx.in_guest = in_guest();
     ctx.tsc_khz = ctx.in_guest ? 0 : get_tsc_khz();
@@ -77,7 +77,7 @@ static void monitor_ctx_exit(void)
     free(ctx.counter);
     free(ctx.cycles);
     free(ctx.stat);
-    perf_event_filter_close(&ctx.filter);
+    bpf_filter_close(&ctx.filter);
     if (ctx.env->callchain) {
         if (!ctx.env->flame_graph)
             callchain_ctx_free(ctx.cc);
@@ -152,8 +152,8 @@ static int profile_filter(struct perf_evlist *evlist, struct env *env)
 {
     int err;
 
-    if (ctx.filter.perf_event_prog_fd >= 0) {
-        err = perf_evsel__set_bpf(ctx.evsel, ctx.filter.perf_event_prog_fd);
+    if (ctx.filter.bpf_fd >= 0) {
+        err = perf_evsel__set_bpf(ctx.evsel, ctx.filter.bpf_fd);
         if (err < 0)
             return err;
     }

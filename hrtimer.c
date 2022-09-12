@@ -24,7 +24,7 @@ static struct monitor_ctx {
     u64 *counters;
     u64 *ins_counters;
     analyzer analyzer;
-    struct perf_event_filter filter;
+    struct bpf_filter filter;
     struct env *env;
 } ctx;
 
@@ -47,8 +47,8 @@ static int monitor_ctx_init(struct env *env)
 
         ctx.analyzer = __analyzer_eqzero;
 
-        if (perf_event_filter_init(&ctx.filter, env))
-            perf_event_filter_open(&ctx.filter);
+        if (bpf_filter_init(&ctx.filter, env))
+            bpf_filter_open(&ctx.filter);
     }
 
     if (env->callchain) {
@@ -65,7 +65,7 @@ static void monitor_ctx_exit(void)
         callchain_ctx_free(ctx.cc);
     }
     if (ctx.env->event) {
-        perf_event_filter_close(&ctx.filter);
+        bpf_filter_close(&ctx.filter);
         if (ctx.counters)
             free(ctx.counters);
         if (ctx.ins_counters)
@@ -170,8 +170,8 @@ static int hrtimer_filter(struct perf_evlist *evlist, struct env *env)
                     return err;
             }
         }
-        if (ctx.filter.perf_event_prog_fd >= 0) {
-            err = perf_evsel__set_bpf(ctx.leader, ctx.filter.perf_event_prog_fd);
+        if (ctx.filter.bpf_fd >= 0) {
+            err = perf_evsel__set_bpf(ctx.leader, ctx.filter.bpf_fd);
             if (err < 0)
                 return err;
         }
