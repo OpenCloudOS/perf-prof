@@ -37,6 +37,7 @@ struct monitor task_state;
 static struct monitor_ctx {
     struct callchain_ctx *cc;
     struct flame_graph *flame;
+    struct perf_thread_map *thread_map;
     __u64 sched_switch;
     __u64 sched_wakeup;
     struct rblist backup;
@@ -102,6 +103,7 @@ static int monitor_ctx_init(struct env *env)
 
 static void monitor_ctx_exit(void)
 {
+    perf_thread_map__put(ctx.thread_map);
     rblist__exit(&ctx.backup);
     if (ctx.env->callchain) {
         if (!ctx.env->flame_graph)
@@ -137,6 +139,16 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
 
     reduce_wakeup_times(&task_state, &attr);
 
+    /**
+     * sched:sched_switch and sched:sched_wakeup are not suitable for binding to threads
+    **/
+    if (!monitor_instance_oncpu()) {
+        ctx.thread_map = task_state.threads;
+        perf_cpu_map__put(task_state.cpus);
+        task_state.cpus = perf_cpu_map__new(NULL);
+        task_state.threads = perf_thread_map__new_dummy();
+    }
+
     id = tep__event_id("sched", "sched_switch");
     if (id < 0)
         return -1;
@@ -163,45 +175,67 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
 
 static int task_state_filter(struct perf_evlist *evlist, struct env *env)
 {
-    char filter[128];
+    char filter[1024];
     struct perf_evsel *evsel;
     int err;
 
     perf_evlist__for_each_evsel(evlist, evsel) {
         struct perf_event_attr *attr = perf_evsel__attr(evsel);
         if (attr->config == ctx.sched_switch) {
+            struct tp_filter *prev_filter = NULL;
+            struct tp_filter *next_filter = NULL;
+
+            prev_filter = tp_filter_new(ctx.thread_map, "prev_pid", env->filter, "prev_comm");
+            next_filter = tp_filter_new(ctx.thread_map, "next_pid", env->filter, "next_comm");
+
             if (env->interruptible && env->uninterruptible) {
-                if (env->filter)
-                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d || prev_state==%d)",
-                            env->filter, TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
-                else
+                if (prev_filter) {
+                    snprintf(filter, sizeof(filter), "(%s) && (prev_state==%d || prev_state==%d || prev_state==%d)",
+                            prev_filter->filter, TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
+                } else
                     snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d || prev_state==%d",
                             TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
             } else if (env->interruptible) {
-                if (env->filter)
-                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && prev_state==%d",
-                            env->filter, TASK_INTERRUPTIBLE);
+                if (prev_filter)
+                    snprintf(filter, sizeof(filter), "(%s) && prev_state==%d",
+                            prev_filter->filter, TASK_INTERRUPTIBLE);
                 else
                     snprintf(filter, sizeof(filter), "prev_state==%d", TASK_INTERRUPTIBLE);
             } else if (env->uninterruptible) {
-                if (env->filter)
-                    snprintf(filter, sizeof(filter), "prev_comm~\"%s\" && (prev_state==%d || prev_state==%d)",
-                            env->filter, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
+                if (prev_filter)
+                    snprintf(filter, sizeof(filter), "(%s) && (prev_state==%d || prev_state==%d)",
+                            prev_filter->filter, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
                 else
                     snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d",
                             TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
-            } else
-                return -1;
+            } else if (prev_filter && next_filter) {
+                snprintf(filter, sizeof(filter), "(%s) || (%s)", prev_filter->filter, next_filter->filter);
+            } else {
+                err = -1;
+                goto error_free;
+            }
 
             err = perf_evsel__apply_filter(evsel, filter);
-            if (err < 0)
+
+        error_free:
+            tp_filter_free(prev_filter);
+            tp_filter_free(next_filter);
+            if (err < 0) {
+                fprintf(stderr, "sched:sched_switch filter \"%s\"\n", filter);
                 return err;
+            }
         } else if (attr->config == ctx.sched_wakeup) {
-            if (env->filter) {
-                snprintf(filter, sizeof(filter), "comm~\"%s\"", env->filter);
-                err = perf_evsel__apply_filter(evsel, filter);
-                if (err < 0)
+            struct tp_filter *tp_filter = NULL;
+
+            tp_filter = tp_filter_new(ctx.thread_map, "pid", env->filter, "comm");
+            if (tp_filter) {
+                err = perf_evsel__apply_filter(evsel, tp_filter->filter);
+                if (err < 0) {
+                    fprintf(stderr, "sched:sched_wakeup filter \"%s\"\n", tp_filter->filter);
+                    tp_filter_free(tp_filter);
                     return err;
+                }
+                tp_filter_free(tp_filter);
             }
         }
     }
@@ -274,7 +308,7 @@ static void task_state_sample(union perf_event *event, int instance)
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
     struct sample_type_header *data = (void *)event->sample.array, *data0;
-    struct perf_event_entry entry;    
+    struct perf_event_entry entry;
     struct tep_record record;
     struct tep_handle *tep;
     struct trace_seq s;
@@ -306,7 +340,7 @@ static void task_state_sample(union perf_event *event, int instance)
 
     tep = tep__ref();
     type = tep_data_type(tep, &record);
-    
+
     e = tep_find_event_by_record(tep, &record);
     if (type == ctx.sched_switch) {
         if (tep_get_field_val(&s, e, "prev_pid", &record, &pid, 1) < 0) {

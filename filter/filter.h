@@ -1,6 +1,8 @@
 #ifndef __FILTER_H
 #define __FILTER_H
 
+#include <perf/threadmap.h>
+
 struct bpf_filter {
     void *obj;
     int bpf_fd;
@@ -20,5 +22,18 @@ struct bpf_filter {
 int bpf_filter_open(struct bpf_filter *filter);
 void bpf_filter_close(struct bpf_filter *filter);
 int bpf_filter_init(struct bpf_filter *filter, struct env *env);
+
+
+struct tp_filter {
+    char *filter;
+    char *comm; // comm ~ "xyz*" || comm ~ "abc?"
+    char *pid;  //perf_thread_map, pid==x || pid==y || pid==z
+};
+
+struct tp_filter *tp_filter_new(struct perf_thread_map *threads, const char *pid_field,
+                                     const char *filter, const char *comm_field);
+void tp_filter_free(struct tp_filter *tp_filter);
+
+
 
 #endif

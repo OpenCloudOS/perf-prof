@@ -1,1 +1,2 @@
 perf-prof-y += bpf_filter.o
+perf-prof-y += tp_filter.o
