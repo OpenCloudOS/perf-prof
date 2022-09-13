@@ -9,7 +9,7 @@
 struct monitor profile;
 
 static struct monitor_ctx {
-    int nr_cpus;
+    int nr_ins;
     uint64_t *counter;
     uint64_t *cycles;
     struct {
@@ -32,17 +32,17 @@ static void profile_interval(void);
 static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
-    ctx.nr_cpus = get_present_cpus();
-    ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
+    ctx.nr_ins = monitor_nr_instance();
+    ctx.counter = calloc(ctx.nr_ins, sizeof(uint64_t));
     if (!ctx.counter) {
         return -1;
     }
-    ctx.cycles = calloc(ctx.nr_cpus, sizeof(uint64_t));
+    ctx.cycles = calloc(ctx.nr_ins, sizeof(uint64_t));
     if (!ctx.cycles) {
         free(ctx.counter);
         return -1;
     }
-    ctx.stat = calloc(ctx.nr_cpus, sizeof(*ctx.stat));
+    ctx.stat = calloc(ctx.nr_ins, sizeof(*ctx.stat));
     if (!ctx.stat) {
         free(ctx.counter);
         free(ctx.cycles);
@@ -167,26 +167,29 @@ static void profile_exit(struct perf_evlist *evlist)
 
 static void profile_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
-    int cpu = monitor_instance_cpu(instance);
     uint64_t cycles = 0;
     const char *str_in[] = {"host,guest", "host", "guest", "error"};
     const char *str_mode[] = {"all", "usr", "sys", "error"};
     int in, mode;
 
-    if (count->val > ctx.cycles[cpu]) {
-        cycles = count->val - ctx.cycles[cpu];
-        ctx.cycles[cpu] = count->val;
+    if (count->val > ctx.cycles[instance]) {
+        cycles = count->val - ctx.cycles[instance];
+        ctx.cycles[instance] = count->val;
     }
     if (cycles) {
         in = (ctx.env->exclude_host << 1) | ctx.env->exclude_guest;
         mode = (ctx.env->exclude_user << 1) | ctx.env->exclude_kernel;
         print_time(stdout);
         if (ctx.tsc_khz > 0 && ctx.vendor == X86_VENDOR_INTEL)
-            printf("cpu %d [%s] %.2f%% [%s] %lu cycles\n", cpu, str_in[in],
+            printf("%s %d [%s] %.2f%% [%s] %lu cycles\n", monitor_instance_oncpu() ? "cpu" : "thread",
+                    monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance),
+                    str_in[in],
                     (float)cycles * 100 / (ctx.tsc_khz * (__u64)ctx.env->interval),
                     str_mode[mode], cycles);
         else
-            printf("cpu %d [%s] [%s] %lu cycles\n", cpu, str_in[in], str_mode[mode], cycles);
+            printf("%s %d [%s] [%s] %lu cycles\n", monitor_instance_oncpu() ? "cpu" : "thread",
+                    monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance),
+                    str_in[in], str_mode[mode], cycles);
     }
 }
 
@@ -210,22 +213,21 @@ static void profile_sample(union perf_event *event, int instance)
     uint64_t counter = 0;
     int print = 1;
 
-    if (data->counter > ctx.counter[data->cpu_entry.cpu]) {
-        counter = data->counter - ctx.counter[data->cpu_entry.cpu];
-        ctx.counter[data->cpu_entry.cpu] = data->counter;
+    if (data->counter > ctx.counter[instance]) {
+        counter = data->counter - ctx.counter[instance];
+        ctx.counter[instance] = data->counter;
     }
 
     if (ctx.env->greater_than) {
-        __u32 cpu = data->cpu_entry.cpu;
-        uint64_t time = ctx.stat[cpu].start_time;
-        ctx.stat[cpu].num ++;
+        uint64_t time = ctx.stat[instance].start_time;
+        ctx.stat[instance].num ++;
         if (data->time - time >= NSEC_PER_SEC) {
             print = 0;
-            ctx.stat[cpu].start_time = data->time;
-            ctx.stat[cpu].num = 1;
+            ctx.stat[instance].start_time = data->time;
+            ctx.stat[instance].num = 1;
         } else {
             int x = (ctx.env->freq * ctx.env->greater_than + 99) / 100;
-            if (ctx.stat[cpu].num < x)
+            if (ctx.stat[instance].num < x)
                 print = 0;
         }
     }
