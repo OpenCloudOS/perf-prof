@@ -103,6 +103,7 @@ struct env {
         unsigned long before_event1;// unit: ns
         unsigned long after_event2; // unit: ns
         bool samecpu;
+        bool samepid;
     char *device;
     int ldlat;
     bool overwrite;
