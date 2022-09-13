@@ -552,11 +552,17 @@ bool event_need_to_print(union perf_event *event, union perf_event *event1, unio
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     struct multi_trace_type_header *e2 = (void *)event2->sample.array;
 
-    if (!ctx.env->samecpu)
+    if (!(ctx.env->samecpu || ctx.env->samepid))
         return true;
 
+    if (ctx.env->samecpu)
     if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
         e->cpu_entry.cpu == e2->cpu_entry.cpu)
+        return true;
+
+    if (ctx.env->samepid)
+    if (e->tid_entry.pid == e1->tid_entry.pid ||
+        e->tid_entry.pid == e2->tid_entry.pid)
         return true;
 
     return false;

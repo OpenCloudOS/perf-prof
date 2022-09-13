@@ -241,7 +241,8 @@ static const struct argp_option opts[] = {
                                           "For multi-trace profiler:\n"
                                           "   -N: Before event1, print events within N nanoseconds.\n"
                                           "   +N: After event2, print events within N nanoseconds.\n"
-                                          "samecpu: Only show events with the same cpu as event1 or event2."
+                                          "samecpu: Only show events with the same cpu as event1 or event2.\n"
+                                          "samepid: Only show events with the same pid as event1 or event2."
                                           },
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
     { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency, Unit: cycles" },
@@ -346,6 +347,8 @@ static void detail_parse(const char *s)
 {
     if (strcmp(s, "samecpu") == 0)
         env.samecpu = true;
+    else if (strcmp(s, "samepid") == 0)
+        env.samepid = true;
     else if (s[0] == '-')
         env.before_event1 = nsparse(s+1, NULL);
     else
