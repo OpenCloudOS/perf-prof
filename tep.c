@@ -158,6 +158,19 @@ void monitor_tep__comm(union perf_event *event, int instance)
     tep__update_comm(event->comm.comm, event->comm.tid);
 }
 
+static char *next_sep(char *s, int c)
+{
+    while (*s) {
+        if (*s == (char)c)
+            return (char *)s;
+        if (*s == '\'' || *s == '"') {
+            int quote = *s++;
+            while (*s && *s++ != quote);
+        } else
+            s++;
+    }
+    return NULL;
+}
 
 struct tp_list *tp_list_new(char *event_str)
 {
@@ -227,7 +240,7 @@ struct tp_list *tp_list_new(char *event_str)
         *sep = '\0';
 
         name = s = sep + 1;
-        sep = strchr(s, '/');
+        sep = next_sep(s, '/');
         if (sep)
             *sep = '\0';
 
@@ -240,13 +253,13 @@ struct tp_list *tp_list_new(char *event_str)
 
         if (sep) {
             filter = s = sep + 1;
-            sep = strchr(s, '/');
+            sep = next_sep(s, '/');
             if (!sep)
                 goto err_out;
             *sep = '\0';
 
             s = sep + 1;
-            while ((sep = strchr(s, '/')) != NULL) {
+            while ((sep = next_sep(s, '/')) != NULL) {
                 char *attr = s;
                 char *value = NULL;
                 *sep = '\0';
