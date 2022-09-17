@@ -13,7 +13,7 @@
 
 
 
-## 1 框架介绍
+# 1 框架介绍
 
 内核态，采样事件经过`filter`过滤之后，存放到`ringbuffer`上，并递增`counter`计数器。只有经过filter过滤出来的事件才会放到ringbuffer。
 
@@ -31,7 +31,7 @@ profiler，处理事件。决定打开哪些事件，如何处理事件。
 - **profiler.filter**设置ebpf过滤器、ftrace过滤器。最终由libperf库通过ioctl设置到内核。
 - **profiler.sample**不断处理采样事件，完成分析工作。
 
-## 2 Example: signal
+# 2 Example: signal
 
 一个最简单demo例子。
 
@@ -49,7 +49,7 @@ PROFILER_REGISTER(monitor_signal)
 
 定义模块初始化、过滤、销毁、处理采样等接口。
 
-## 3 profiler.init
+# 3 profiler.init
 
 ```
 static int signal_init(struct perf_evlist *evlist, struct env *env)
@@ -95,7 +95,7 @@ perf_evsel__new(&attr)，根据perf事件，创建evsel。1个evsel表示一个�
 
 perf_evlist__add(evlist, evsel)，加到evlist。一个evlist表示一组evsel事件。
 
-### 3.1 perf_event_attr
+## 3.1 perf_event_attr
 
 定义event的属性。可以指定perf命令定义的所有事件。
 
@@ -160,7 +160,7 @@ perf_evlist__add(evlist, evsel)，加到evlist。一个evlist表示一组evsel�
   	记录进程切换信息
   ```
 
-## 4 profiler.sample
+# 4 profiler.sample
 
 ```
 static void signal_sample(union perf_event *event)
@@ -193,13 +193,13 @@ static void signal_sample(union perf_event *event)
 
 tep__print_event，打印tracepoint事件。
 
-## 5 基础功能
+# 5 基础功能
 
-### 5.1 模块化
+## 5.1 模块化
 
 每个profiler都是独立的模块文件，可扩展，可裁减，损耗低。适合高性能监控场景。
 
-### 5.2 栈
+## 5.2 栈
 
   - 栈及符号打印。可控制内核态、用户态、地址、符号、偏移量、dso、正向栈、反向栈，每个栈帧的分隔符、栈的分隔符。
   - 支持解析内核符号(/proc/kallsyms)，用户态符号(.symtab/.dynsym)、MiniDebugInfo解析(.gnu_debugdata)。
@@ -207,7 +207,7 @@ tep__print_event，打印tracepoint事件。
   - key-value栈。以栈做为key，可以过滤重复栈，并能唯一寻址value。
   - 生成火焰图折叠栈格式。
 
-### 5.3 用户态符号表
+## 5.3 用户态符号表
 
 用户态符号表，使用`syms_cache`结构表示，通过pid找到特定于进程的`syms`符号集合。
 
@@ -223,7 +223,7 @@ sym表示一个特定的符号。由符号名字，起始地址，大小组成�
 syms_cache --> syms --> dso --> object --> sym
 ```
 
-### 5.4 用户态内存泄露检测
+## 5.4 用户态内存泄露检测
 
 ```
 LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-prof /path/to/bin
@@ -235,7 +235,7 @@ LD_PRELOAD=/lib64/libtcmalloc.so HEAPCHECK=draconian PPROF_PATH=./perf-prof /pat
 - **HEAPCHECK=**，内存泄露检测。draconian检测所有的内存泄露。
 - **PPROF_PATH=**，指定符号解析命令。`perf-prof --symbols`具备跟`pprof --symbols`一样的符号解析能力。
 
-### 5.5 栈的处理
+## 5.5 栈的处理
 
 栈的处理方式各种各样，如perf top风格的栈负载处理，火焰图风格的栈处理。
 
@@ -245,7 +245,7 @@ perf-prof目前支持的栈处理。
 - key-value栈。以栈做为key，可以过滤重复栈，并能唯一寻址value。用`key_value_paires`结构表示，一般相同的栈都有类似的作用，如内存分配栈，可以分析相同的栈分配的总内存量，未释放的总内存量。类似于gperftools提供的HEAPCHECKE功能，最后报告的内存泄露是以栈为基准的。
 - 火焰图。把相同的栈以及栈的每一帧聚合到一起。用`flame_graph`结构表示，能够生成折叠栈格式：反向栈、每帧以";"分隔、末尾是栈的数量。例子：`swapper;start_kernel;rest_init;cpu_idle;default_idle;native_safe_halt 1`。使用[flamegraph.pl](https://github.com/brendangregg/FlameGraph/blob/master/flamegraph.pl)生成火焰图。
 
-### 5.6 火焰图
+## 5.6 火焰图
 
 perf-prof仅输出折叠栈格式，并对输出栈比较多的模块做了支持。目前已支持：`profile, task-state, kmemleak, trace`
 
@@ -256,7 +256,7 @@ $ perf-prof task-state -S --than 100 --filter cat -g --flame-graph cat
 $ flamegraph.pl cat.folded > cat.svg
 ```
 
-#### 5.6.1 按时间的火焰图
+### 5.6.1 按时间的火焰图
 
 是以固定间隔输出折叠栈，折叠栈包含时间戳。最终生成的火焰图是按时间排序的。对于长时间的监控，可以根据时间戳查找问题。
 
@@ -264,7 +264,7 @@ $ flamegraph.pl cat.folded > cat.svg
 $ grep "15:46:33" cat.folded | flamegraph.pl > cat.svg #生成15:46:33秒开始的火焰图
 ```
 
-#### 5.6.2 网络丢包火焰图
+### 5.6.2 网络丢包火焰图
 
 ```
 $ perf-prof trace -e skb:kfree_skb -g --flame-graph kfree_skb -m 128 #监控丢包
@@ -272,7 +272,7 @@ $ perf-prof trace -e skb:kfree_skb -g --flame-graph kfree_skb -i 600000 -m 128 #
 $ flamegraph.pl --reverse  kfree_skb.folded > kfree_skb.svg #生成火焰图
 ```
 
-#### 5.6.3 CPU性能火焰图
+### 5.6.3 CPU性能火焰图
 
 ```
 $ perf-prof profile -F 1000 -C 0,1 --exclude-user -g --flame-graph profile #采样内核态CPU利用率的火焰图
@@ -280,7 +280,7 @@ $ perf-prof profile -F 1000 -C 0,1 --exclude-user -g --flame-graph profile -i 60
 $ grep "15:46:33" profile.folded | flamegraph.pl > profile.svg #生成15:46:33秒开始600秒的火焰图
 ```
 
-### 5.7 延迟处理
+## 5.7 延迟处理
 
 perf-prof目前支持的延迟处理。
 
@@ -288,14 +288,14 @@ perf-prof目前支持的延迟处理。
 - 直方图。log2和linear直方图，使用`print_log2_hist`和`print_linear_hist`函数打印。
 - 热图。横坐标是时间轴，纵坐标是延迟信息。目前支持：`kvm-exit, mpdelay, multi-trace`
 
-### 5.8 热图
+## 5.8 热图
 
 ```
 $ perf-prof mpdelay -e "kvm:kvm_exit,kvm:kvm_entry" -C 1 --heatmap mpdelay
 $ trace2heatmap.pl --unitstime=ns --unitslabel=ns --grid mpdelay-kvm_exit-kvm_entry.lat > mpdelay-kvm_exit-kvm_entry.svg
 ```
 
-### 5.9 filter
+## 5.9 filter
 
 目前支持3类过滤器：ebpf过滤器、pmu过滤器、ftrace过滤器。
 
@@ -378,7 +378,7 @@ perf-prof trace -e 'sched:sched_stat_runtime/runtime>1000000/'
 
 过滤出`runtime>1000000`的数据，放到ringbuffer，再由profiler进一步处理。
 
-### 5.10 Attach to
+## 5.10 Attach to
 
 perf-prof 使用一些公共参数来控制perf_event附加到CPU、线程、cgroup上。
 
@@ -393,13 +393,13 @@ Usage: perf-prof [OPTION...] profiler [PROFILER OPTION...] [help] [cmd [args...]
 
 可以使用逗号分隔多个CPU、PID、TID、cgroup。
 
-#### 5.10.1 Attach to CPU
+### 5.10.1 Attach to CPU
 
 附加到CPU，只能监控指定的CPU上发生的事件。
 
 perf-prof trace -e sched:sched_stat_runtime `-C 0-1,3`
 
-#### 5.10.2 Attach to PID/TID
+### 5.10.2 Attach to PID/TID
 
 附加到PID/TID，只能监控指定的线程上发生的事件。
 
@@ -409,7 +409,7 @@ perf-prof trace -e sched:sched_stat_runtime `-t 205835,205982`
 
 附加到PID，会读取该pid下的所有线程，转换成附加到TID。
 
-#### 5.10.3 Attach to workload
+### 5.10.3 Attach to workload
 
 附加到workload，监控workload执行过程中的事件。
 
@@ -419,7 +419,7 @@ perf-prof task-state `ip link show eth0`
 
 可以使用`--`强制分隔perf-prof的参数和workload的参数。
 
-#### 5.10.4 Attach to cgroups
+### 5.10.4 Attach to cgroups
 
 附加到cgroups，监控cgroup内所有进程发生的事件。如果附加的PID太多，可以把这些PID放到perf_event cgroup内，附加到该cgroup，就能够监控到所有这些进程的事件。
 
