@@ -17,6 +17,7 @@
 #include <cpuid.h>
 #endif
 #include <linux/thread_map.h>
+#include <linux/cgroup.h>
 #include <trace_helpers.h>
 #include <monitor.h>
 #include <tep.h>
@@ -178,6 +179,7 @@ enum {
     LONG_OPT_ldlat,
     LONG_OPT_overwrite,
     LONG_OPT_period,
+    LONG_OPT_cgroups,
     //ebpf
     LONG_OPT_irqs_disabled,
     LONG_OPT_tif_need_resched,
@@ -189,7 +191,8 @@ static const struct argp_option opts[] = {
     { NULL, 0, NULL, 0, "OPTION:" },
     { "cpu", 'C', "CPU[-CPU],...", 0, "Monitor the specified CPU, Dflt: all cpu" },
     { "pids", 'p', "PID,...", 0, "Attach to processes" },
-    { "tids", 't', "TID,...", 0, "Attach to thread" },
+    { "tids", 't', "TID,...", 0, "Attach to threads" },
+    { "cgroups", LONG_OPT_cgroups, "cgroup,...", 0, "Attach to cgroups, support regular expression." },
     { "interval", 'i', "ms", 0, "Interval, Unit: ms" },
     { "output", 'o', "file", 0, "Output file name" },
     { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
@@ -391,6 +394,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 't':
         env.tids = strdup(arg);
+        break;
+    case LONG_OPT_cgroups:
+        env.cgroups = strdup(arg);
         break;
     case LONG_OPT_test:
         env.test = 1;
@@ -1052,7 +1058,11 @@ reinit:
     } else {
         // attach to cpus
         cpus = perf_cpu_map__new(env.cpumask);
-        threads = perf_thread_map__new_dummy();
+        if (env.cgroups)
+            // attach to cgroups
+            threads = thread_map__cgroups(env.cgroups);
+        else
+            threads = perf_thread_map__new_dummy();
         if (!cpus || !threads) {
             fprintf(stderr, "failed to create cpus\n");
             goto out_delete;
@@ -1188,6 +1198,8 @@ out_delete:
 
     if (monitor->reinit)
         goto reinit;
+
+    cgroup_list__delete();
 
     if (workload.pid && !child_finished)
         kill(workload.pid, SIGTERM);

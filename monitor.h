@@ -66,6 +66,7 @@ struct env {
     int freq;
     char *pids;
     char *tids;
+    char *cgroups;
     char *event;
     char **events;
     int nr_events;
