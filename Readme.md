@@ -378,3 +378,67 @@ perf-prof trace -e 'sched:sched_stat_runtime/runtime>1000000/'
 
 过滤出`runtime>1000000`的数据，放到ringbuffer，再由profiler进一步处理。
 
+### 5.10 Attach to
+
+perf-prof 使用一些公共参数来控制perf_event附加到CPU、线程、cgroup上。
+
+```
+Usage: perf-prof [OPTION...] profiler [PROFILER OPTION...] [help] [cmd [args...]]
+ OPTION:
+      --cgroups=cgroup,...   Attach to cgroups, support regular expression.
+  -C, --cpu=CPU[-CPU],...    Monitor the specified CPU, Dflt: all cpu
+  -p, --pids=PID,...         Attach to processes
+  -t, --tids=TID,...         Attach to threads
+```
+
+可以使用逗号分隔多个CPU、PID、TID、cgroup。
+
+#### 5.10.1 Attach to CPU
+
+附加到CPU，只能监控指定的CPU上发生的事件。
+
+perf-prof trace -e sched:sched_stat_runtime `-C 0-1,3`
+
+#### 5.10.2 Attach to PID/TID
+
+附加到PID/TID，只能监控指定的线程上发生的事件。
+
+perf-prof trace -e sched:sched_stat_runtime `-p 205835,205982`
+
+perf-prof trace -e sched:sched_stat_runtime `-t 205835,205982`
+
+附加到PID，会读取该pid下的所有线程，转换成附加到TID。
+
+#### 5.10.3 Attach to workload
+
+附加到workload，监控workload执行过程中的事件。
+
+会通过fork、execvp来执行workload，并得到workload的pid。转换成附加到PID。
+
+perf-prof task-state `ip link show eth0`
+
+可以使用`--`强制分隔perf-prof的参数和workload的参数。
+
+#### 5.10.4 Attach to cgroups
+
+附加到cgroups，监控cgroup内所有进程发生的事件。如果附加的PID太多，可以把这些PID放到perf_event cgroup内，附加到该cgroup，就能够监控到所有这些进程的事件。
+
+```bash
+# Example 1:
+mkdir /sys/fs/cgroup/perf_event/prof
+echo 205835 > /sys/fs/cgroup/perf_event/prof/tasks
+cat /proc/205835/cgroup | grep perf_event
+  5:perf_event:/prof
+perf-prof trace -e sched:sched_stat_runtime --cgroups 'prof' # prof
+perf-prof trace -e sched:sched_stat_runtime --cgroups 'pro*' # 正则表达式
+
+# Example 2:
+mkdir /sys/fs/cgroup/perf_event/prof1
+echo 205845 > /sys/fs/cgroup/perf_event/prof/tasks
+perf-prof trace -e sched:sched_stat_runtime --cgroups 'prof,prof1'
+perf-prof trace -e sched:sched_stat_runtime --cgroups 'prof*' # prof, prof1
+```
+
+perf_event cgroup 需要手动把需要观察的进程放进去。
+
+cgroup的指定相对于`/sys/fs/cgroup/perf_event/`目录，同时可以使用正则表达式，匹配多个perf_event cgroup。
