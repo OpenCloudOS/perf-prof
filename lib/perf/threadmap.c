@@ -37,6 +37,11 @@ void perf_thread_map__set_pid(struct perf_thread_map *map, int thread, pid_t pid
 	map->map[thread].pid = pid;
 }
 
+void perf_thread_map__pid_cgroup(struct perf_thread_map *map, int thread)
+{
+	map->map[thread].cgroup = 1;
+}
+
 char *perf_thread_map__comm(struct perf_thread_map *map, int thread)
 {
 	return map->map[thread].comm;

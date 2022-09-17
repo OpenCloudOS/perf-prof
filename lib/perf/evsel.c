@@ -110,7 +110,6 @@ int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 		     struct perf_thread_map *threads)
 {
 	int cpu, thread, err = 0;
-	unsigned long flags = PERF_FLAG_FD_CLOEXEC;
 
 	if (cpus == NULL) {
 		static struct perf_cpu_map *empty_cpu_map;
@@ -143,6 +142,7 @@ int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 	for (cpu = 0; cpu < cpus->nr; cpu++) {
 		for (thread = 0; thread < threads->nr; thread++) {
 			int fd, group_fd, *evsel_fd;
+			unsigned long flags = PERF_FLAG_FD_CLOEXEC;
 
 			evsel_fd = FD(evsel, cpu, thread);
 			if (evsel_fd == NULL)
@@ -151,6 +151,9 @@ int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 			err = get_group_fd(evsel, cpu, thread, &group_fd);
 			if (err < 0)
 				return err;
+
+			if (threads->map[thread].cgroup)
+				flags |= PERF_FLAG_PID_CGROUP;
 
 			fd = sys_perf_event_open(&evsel->attr,
 						 threads->map[thread].pid,

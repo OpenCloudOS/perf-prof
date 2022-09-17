@@ -8,6 +8,7 @@
 
 struct thread_map_data {
 	pid_t	 pid;
+	int	 cgroup;  // PERF_FLAG_PID_CGROUP
 	char	*comm;
 };
 
