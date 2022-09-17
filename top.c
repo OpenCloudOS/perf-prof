@@ -304,8 +304,10 @@ static int top_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static void top_interval(void);
 static void top_exit(struct perf_evlist *evlist)
 {
+    top_interval();
     monitor_ctx_exit();
 }
 
