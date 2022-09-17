@@ -289,6 +289,8 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
 
     if (ctx.tp_alloc->nr_mem_size == ctx.tp_alloc->nr_tp) {
         ctx.report_leaked_bytes = true;
+        if (!env->verbose && !env->callchain)
+            fprintf(stderr, "Support LEAKED BYTES REPORT, need -g to enable callchain.\n");
         if (!env->verbose && env->callchain && env->flame_graph)
             fprintf(stderr, "Support LEAKED BYTES REPORT, will disable flame graph.\n");
     }
