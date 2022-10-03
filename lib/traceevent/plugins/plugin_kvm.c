@@ -417,7 +417,7 @@ static int kvm_mmu_print_role(struct trace_seq *s, struct tep_record *record,
 	if (tep_get_field_val(s, event, "unsync", record, &val, 1) < 0)
 		return -1;
 
-	trace_seq_printf(s, "%s%c",  val ? "unsync" : "sync", 0);
+	trace_seq_printf(s, "%s",  val ? "unsync" : "sync");
 	return 0;
 }
 
