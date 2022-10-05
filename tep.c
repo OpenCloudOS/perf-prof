@@ -152,6 +152,23 @@ bool tep__event_has_field(int id, const char *field)
     return has_field;
 }
 
+bool tep__event_field_size(int id, const char *field)
+{
+    struct tep_event *event;
+    struct tep_format_field *format;
+    int size = -1;
+
+    tep__ref();
+    event = tep_find_event(tep, id);
+    if (event) {
+        format = tep_find_any_field(event, field);
+        if (format)
+            size = format->size;
+    }
+    tep__unref();
+
+    return size;
+}
 
 void monitor_tep__comm(union perf_event *event, int instance)
 {
