@@ -240,6 +240,24 @@ static void kvm_exit_interval(void)
     print_latency_interval();
 }
 
+static int kvm_exit_filter(struct perf_evlist *evlist, struct env *env)
+{
+    struct perf_evsel *evsel;
+    int err = 0;
+
+    if (env->filter) {
+        perf_evlist__for_each_evsel(evlist, evsel) {
+            struct perf_event_attr *attr = perf_evsel__attr(evsel);
+            if (attr->config == ctx.kvm_exit) {
+                err = perf_evsel__apply_filter(evsel, env->filter);
+                if (err < 0)
+                    return err;
+            }
+        }
+    }
+    return 0;
+}
+
 static void kvm_exit_deinit(struct perf_evlist *evlist)
 {
     kvm_exit_interval();
@@ -356,6 +374,7 @@ struct monitor kvm_exit = {
     .name = "kvm-exit",
     .pages = 64,
     .init = kvm_exit_init,
+    .filter = kvm_exit_filter,
     .deinit = kvm_exit_deinit,
     .interval = kvm_exit_interval,
     .sample = kvm_exit_sample,
