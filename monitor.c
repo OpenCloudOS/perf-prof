@@ -112,7 +112,7 @@ const char argp_program_doc[] =
 "Most Used Profilers:\n"
 "  perf-prof trace -e EVENT[...] [--overwrite] [-g [--flame-graph file [-i INT]]]\n"
 "  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]\n"
-"  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file]\n"
+"  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file] [--filter filter]\n"
 "  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]\n"
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
@@ -134,6 +134,7 @@ const char argp_program_doc[] =
 "  perf-prof signal [--filter comm] [-g]\n"
 "  perf-prof watchdog [-F freq] [-g]\n"
 "  perf-prof llcstat\n"
+"  perf-prof kvmmmu [--spte] [--mmio] [--detail]\n"
 "  perf-prof sched-migrate [--detail] [--filter filter] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof oncpu -p PID [--detail] [--filter filter]\n"
 "  perf-prof page-faults [-g]\n"
@@ -180,6 +181,8 @@ enum {
     LONG_OPT_overwrite,
     LONG_OPT_period,
     LONG_OPT_cgroups,
+    LONG_OPT_spte,
+    LONG_OPT_mmio,
     //ebpf
     LONG_OPT_irqs_disabled,
     LONG_OPT_tif_need_resched,
@@ -250,6 +253,8 @@ static const struct argp_option opts[] = {
     { "device", 'd', "device", 0, "Block device, /dev/sdx" },
     { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency, Unit: cycles" },
     { "overwrite", LONG_OPT_overwrite, NULL, 0, "use overwrite mode" },
+    { "spte", LONG_OPT_spte, NULL, 0, "kvmmmu: enable kvmmmu:kvm_mmu_set_spte" },
+    { "mmio", LONG_OPT_mmio, NULL, 0, "kvmmmu: enable kvmmmu:mark_mmio_spte" },
 
     { "version", 'V', NULL, 0, "Version info" },
     { NULL, 'h', NULL, OPTION_HIDDEN, "" },
@@ -532,6 +537,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case LONG_OPT_period:
         env.sample_period = nsparse(arg, NULL);
+        break;
+    case LONG_OPT_spte:
+        env.spte = true;
+        break;
+    case LONG_OPT_mmio:
+        env.mmio = true;
         break;
     case 'v':
         env.verbose++;

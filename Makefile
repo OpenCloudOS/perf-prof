@@ -45,7 +45,7 @@ ifdef CONFIG_LIBBPF
     override CFLAGS += -D CONFIG_LIBBPF=1
 endif
 
-export srctree OUTPUT CFLAGS V EXTRA_CFLAGS
+export srctree OUTPUT CFLAGS V EXTRA_CFLAGS SRCARCH
 
 __build clean:
 	$(Q)$(MAKE) -f $(srctree)/build/Makefile.bin dir=. $@

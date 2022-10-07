@@ -26,6 +26,9 @@ perf-prof-y += page-faults.o
 perf-prof-y += hrtimer.o
 perf-prof-y += event-lost.o
 perf-prof-y += hrcount.o
+ifeq ($(SRCARCH),x86)
+perf-prof-y += kvmmmu.o
+endif
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a

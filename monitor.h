@@ -25,9 +25,9 @@ int get_present_cpus(void);
 void print_time(FILE *fp);
 int get_tsc_khz(void);
 
-#define X86_VENDOR_INTEL	0
-#define X86_VENDOR_AMD		1
-#define X86_VENDOR_HYGON	2
+#define X86_VENDOR_INTEL    0
+#define X86_VENDOR_AMD      1
+#define X86_VENDOR_HYGON    2
 struct cpuinfo_x86 {
     int vendor;
     int family;
@@ -110,6 +110,10 @@ struct env {
     bool overwrite;
     unsigned long sample_period;
 
+    /* kvmmmu */
+    bool spte;
+    bool mmio;
+
     /* order */
     bool order;
     unsigned long order_mem;
@@ -147,32 +151,32 @@ typedef struct monitor {
 
     /* PERF_RECORD_* */
 
-    //PERF_RECORD_LOST			= 2,
+    //PERF_RECORD_LOST          = 2,
     void (*lost)(union perf_event *event, int instance);
 
-    //PERF_RECORD_COMM			= 3,
+    //PERF_RECORD_COMM          = 3,
     void (*comm)(union perf_event *event, int instance);
 
-    //PERF_RECORD_EXIT			= 4,
+    //PERF_RECORD_EXIT          = 4,
     void (*exit)(union perf_event *event, int instance);
 
-    //PERF_RECORD_THROTTLE			= 5,
-	//PERF_RECORD_UNTHROTTLE			= 6,
+    //PERF_RECORD_THROTTLE          = 5,
+    //PERF_RECORD_UNTHROTTLE            = 6,
     void (*throttle)(union perf_event *event, int instance);
     void (*unthrottle)(union perf_event *event, int instance);
 
-    //PERF_RECORD_FORK			= 7,
+    //PERF_RECORD_FORK          = 7,
     void (*fork)(union perf_event *event, int instance);
 
-    //PERF_RECORD_SAMPLE			= 9,
+    //PERF_RECORD_SAMPLE            = 9,
     void (*sample)(union perf_event *event, int instance);
 
-    //PERF_RECORD_SWITCH			= 14,
-    //PERF_RECORD_SWITCH_CPU_WIDE		= 15,
+    //PERF_RECORD_SWITCH            = 14,
+    //PERF_RECORD_SWITCH_CPU_WIDE       = 15,
     void (*context_switch)(union perf_event *event, int instance);
     void (*context_switch_cpu)(union perf_event *event, int instance);
 
-    //PERF_RECORD_NAMESPACES			= 16,
+    //PERF_RECORD_NAMESPACES            = 16,
     void (*namespace)(union perf_event *event, int instance);
 }profiler;
 
