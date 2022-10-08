@@ -325,6 +325,7 @@ static void task_state_sample(union perf_event *event, int instance)
 
     if (ctx.env->greater_than == 0) {
         tep__update_comm(NULL, data->tid_entry.tid);
+        print_time(stdout);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
         __print_callchain(event);
         return;
