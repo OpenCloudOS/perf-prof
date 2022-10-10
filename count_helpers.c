@@ -125,7 +125,7 @@ void count_dist_input(struct count_dist *dist, u64 ins, u64 id, u64 key, u64 cou
     }
 }
 
-void count_dist_insert(struct count_dist *dist, u64 ins, u64 id, u64 key, int i, u64 count)
+void count_dist_insert(struct count_dist *dist, u64 ins, u64 id, u64 key, u64 i, u64 count)
 {
     struct count_node e = {
         .dist = dist,

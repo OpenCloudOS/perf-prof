@@ -15,12 +15,17 @@ static struct monitor_ctx {
     struct perf_evlist *evlist;
     struct perf_evsel *leader;
     struct tp_list *tp_list;
+    int nr_ins;
     u64 *counters;
-    int *perins_pos;
+    u64 *perins_pos;
     struct count_dist *count_dist;
     int hist_size;
     u64 period;
     bool packed_display;
+
+    u64 rounds;
+    int slots;
+    int round_nr;
 
     int all_counters_max_len;
     int *pertp_counter_max_len;
@@ -68,16 +73,21 @@ static int monitor_ctx_init(struct env *env)
     if (!ctx.tp_list)
         return -1;
 
-    ctx.counters = calloc(monitor_nr_instance(), (ctx.tp_list->nr_tp + 1) * sizeof(u64));
+    ctx.nr_ins = monitor_nr_instance();
+    ctx.counters = calloc(ctx.nr_ins, (ctx.tp_list->nr_tp + 1) * sizeof(u64));
     if (!ctx.counters)
         return -1;
 
-    ctx.perins_pos = calloc(monitor_nr_instance(), sizeof(int));
+    ctx.perins_pos = calloc(ctx.nr_ins, sizeof(u64));
     if (!ctx.perins_pos)
         return -1;
 
+    ctx.rounds = 0;
+    ctx.slots = 2;
+    ctx.round_nr = 0;
+
     ctx.hist_size = env->interval * 1000000UL / env->sample_period;
-    ctx.count_dist = count_dist_new(env->perins, true, false, ctx.hist_size);
+    ctx.count_dist = count_dist_new(env->perins, true, false, ctx.hist_size * ctx.slots);
     if (!ctx.count_dist)
         return -1;
 
@@ -133,8 +143,7 @@ static int hrcount_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID | PERF_FORMAT_GROUP,
         .pinned        = 0,
         .disabled      = 1,
-        .watermark     = 1,
-        .wakeup_watermark = (current_monitor()->pages << 12) / 2,
+        .watermark     = 0,
     };
     struct perf_event_attr tp_attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -157,6 +166,7 @@ static int hrcount_init(struct perf_evlist *evlist, struct env *env)
         return -1;
 
     attr.sample_period = ctx.period;
+    attr.wakeup_events = ctx.hist_size; // Wake up every N events
     ctx.leader = evsel = perf_evsel__new(&attr);
     if (!evsel) {
         return -1;
@@ -204,7 +214,7 @@ static void hrcount_exit(struct perf_evlist *evlist)
 
 static void direct_print(void *opaque, struct count_node *node)
 {
-    int i;
+    int i, h;
     char buf[64];
     static u32 max_len = 0;
     struct tp *tp = &ctx.tp_list->tp[node->id];
@@ -221,16 +231,19 @@ static void direct_print(void *opaque, struct count_node *node)
         printf("[%03d] ", monitor_instance_cpu(node->ins));
     printf("%*s ", max_len, buf);
 
-    printf("%*lu", ctx.all_counters_max_len, node->hist[0]);
-    for (i = 1; i <= node->hist_len; i++) {
-        printf("|%*lu", ctx.all_counters_max_len, node->hist[i]);
+    h = (ctx.rounds % ctx.slots) * ctx.hist_size;
+    printf("%*lu", ctx.all_counters_max_len, node->hist[h++]);
+    for (i = 1; i < ctx.hist_size; i++) {
+        printf("|%*lu", ctx.all_counters_max_len, node->hist[h++]);
     }
+    h = (ctx.rounds % ctx.slots) * ctx.hist_size;
+    memset(&node->hist[h], 0, sizeof(u64) * ctx.hist_size);
     printf("\n");
 }
 
 static void packed_print(void *opaque, struct count_node *node)
 {
-    int i, len = 0;
+    int i, h, len = 0;
     u64 max = node->max;
     struct {
         u64 ins;
@@ -238,8 +251,9 @@ static void packed_print(void *opaque, struct count_node *node)
         int line_len;
     } *iter = opaque;
 
-    len = 0;
-    while (max != 0) {
+    node->max = 0;
+    len = 1;
+    while (max >= 10) {
         max /= 10;
         len ++;
     }
@@ -257,10 +271,13 @@ static void packed_print(void *opaque, struct count_node *node)
         iter->id ++;
     }
 
-    len = printf("%lu", node->hist[0]);
-    for (i = 1; i <= node->hist_len; i++) {
-        len += printf("|%lu", node->hist[i]);
+    h = (ctx.rounds % ctx.slots) * ctx.hist_size;
+    len = printf("%lu", node->hist[h++]);
+    for (i = 1; i < ctx.hist_size; i++) {
+        len += printf("|%lu", node->hist[h++]);
     }
+    h = (ctx.rounds % ctx.slots) * ctx.hist_size;
+    memset(&node->hist[h], 0, sizeof(u64) * ctx.hist_size);
     iter->line_len += len;
 
     if (iter->id + 1 != ctx.tp_list->nr_tp) {
@@ -275,11 +292,18 @@ static void packed_print(void *opaque, struct count_node *node)
 
 static void hrcount_interval(void)
 {
-    int len;
-    u64 max = count_dist_max(ctx.count_dist);
+    int len, i;
+    u64 max;
+    u64 print_pos = (ctx.rounds + 1) * ctx.hist_size;
 
-    len = 0;
-    while (max != 0) {
+    // Determine if all instances are complete
+    for (i = 0; i < ctx.nr_ins; i++)
+        if (ctx.perins_pos[i] < print_pos)
+            return ;
+
+    len = 1;
+    max = count_dist_max(ctx.count_dist);
+    while (max >= 10) {
         max /= 10;
         len ++;
     }
@@ -290,7 +314,6 @@ static void hrcount_interval(void)
     printf("\n");
 
     if (ctx.packed_display) {
-        int i;
         struct {
             u64 ins;
             u64 id;
@@ -312,8 +335,7 @@ static void hrcount_interval(void)
     } else
         count_dist_print(ctx.count_dist, direct_print, NULL);
 
-    count_dist_reset(ctx.count_dist);
-    memset(ctx.perins_pos, 0, sizeof(int) * monitor_nr_instance());
+    ctx.rounds ++;
 }
 
 static void hrcount_sample(union perf_event *event, int instance)
@@ -343,6 +365,7 @@ static void hrcount_sample(union perf_event *event, int instance)
     u64 counter, cpu_clock = 0;
     u64 i, j;
     int verbose = ctx.env->verbose;
+    u64 print_pos = (ctx.rounds + 1) * ctx.hist_size;
 
     for (i = 0; i < data->groups.nr; i++) {
         struct perf_evsel *evsel;
@@ -352,8 +375,8 @@ static void hrcount_sample(union perf_event *event, int instance)
         if (evsel == ctx.leader) {
             cpu_clock = data->groups.ctnr[i].value - ins_counter[n];
             ins_counter[n] = data->groups.ctnr[i].value;
-            if (cpu_clock > ctx.period * 11 / 10) {
-                ctx.perins_pos[instance] += cpu_clock / ctx.period;
+            if (cpu_clock >= ctx.period * 2) {
+                ctx.perins_pos[instance] += cpu_clock / ctx.period - 1;
                 verbose = 1;
             }
             continue;
@@ -375,6 +398,24 @@ static void hrcount_sample(union perf_event *event, int instance)
         print_time(stdout);
         printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, cpu_clock);
+    }
+
+    /* KERNEL BUG: maybe stuck
+     *
+     * perf_swevent_hrtimer ->
+     *   __perf_event_overflow(throttle=1) ->
+     *     __perf_event_account_interrupt ->
+     *       perf_log_throttle
+     *
+     * After the perf event is throttled, it needs to wait for a tick to resume.
+     * However, tick may be closed by nohz. It takes a long time to be unthrottled.
+    **/
+    if (ctx.perins_pos[instance] >= print_pos) {
+        ctx.round_nr ++;
+        if (ctx.round_nr >= ctx.nr_ins) {
+            ctx.round_nr = 0;
+            hrcount_interval();
+        }
     }
 }
 
