@@ -373,6 +373,7 @@ struct tp_list *tp_list_new(char *event_str)
         tp_list->nr_comm += !!tp->comm;
         tp_list->nr_mem_size += !!tp->mem_size;
         tp_list->nr_delay += !!tp->delay;
+        tp_list->nr_untraced += !!tp->untraced;
     }
 
     tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);

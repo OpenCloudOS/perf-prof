@@ -45,6 +45,7 @@ static struct multi_trace_ctx {
     struct rblist timeline;
     struct list_head needed_list;
     bool need_timeline;
+    bool nested;
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
     struct env *env;
@@ -255,7 +256,7 @@ static int monitor_ctx_init(struct env *env)
     bool key_attr = false;
     bool untraced = false;
 
-    if (env->nr_events < 2)
+    if (env->nr_events < (ctx.nested ? 1 : 2))
         return -1;
 
     base_profiler = current_base_profiler();
@@ -366,7 +367,7 @@ static void monitor_ctx_exit(void)
     tep__unref();
 }
 
-static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
+static int __multi_trace_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -380,7 +381,7 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
         .exclude_callchain_user = 1,
         .watermark     = 1,
     };
-    int i, j, k;
+    int i, j;
 
     if (monitor_ctx_init(env) < 0)
         return -1;
@@ -411,6 +412,18 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
             tp->evsel = evsel;
         }
     }
+    ctx.evlist = evlist;
+
+    return 0;
+}
+
+static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
+{
+    int i, j, k;
+
+    ctx.nested = 0;
+    if (__multi_trace_init(evlist, env) < 0)
+        return -1;
 
     for (k = 0; k < ctx.nr_list - 1; k++) {
         for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
@@ -426,8 +439,6 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
             }
         }
     }
-    ctx.evlist = evlist;
-
     return 0;
 }
 
@@ -614,10 +625,11 @@ int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
 static void multi_trace_sample(union perf_event *event, int instance)
 {
     struct multi_trace_type_header *hdr = (void *)event->sample.array;
-    struct tp *tp = NULL;
+    struct tp *tp = NULL, *tp1 = NULL;
     struct timeline_node *tl_event = NULL;
     struct perf_evsel *evsel;
     int i, j;
+    bool need_find_prev, need_backup;
     __u64 key;
 
     evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
@@ -625,10 +637,13 @@ static void multi_trace_sample(union perf_event *event, int instance)
         goto free_dup_event;
 
     for (i = 0; i < ctx.nr_list; i++) {
+        tp1 = NULL;
         for (j = 0; j < ctx.tp_list[i]->nr_tp; j++) {
             tp = &ctx.tp_list[i]->tp[j];
             if (tp->evsel == evsel)
                 goto found;
+            if (!tp->untraced)
+                tp1 = tp;
         }
     }
 
@@ -641,6 +656,14 @@ found:
 
     if (ctx.env->verbose) {
         multi_trace_print(event, tp);
+    }
+
+    if (!ctx.nested) {
+        need_find_prev = i != 0;
+        need_backup = i != ctx.nr_list - 1;
+    } else {
+        need_find_prev = tp1 != NULL;
+        need_backup = tp1 == NULL;
     }
 
     // get key, include untraced events.
@@ -675,9 +698,10 @@ found:
         goto untraced_processing;
 
     // find prev event
-    if (i != 0) {
+    if (need_find_prev) {
         struct timeline_node backup = {
             .key = key,
+            .tp = tp1,
         };
         struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
         if (rbn) {
@@ -717,7 +741,7 @@ untraced_processing:
             .time = hdr->time,
             .key = key,
             .tp = tp,
-            .unneeded = (i == ctx.nr_list - 1) || tp->untraced, // untraced means unneeded
+            .unneeded = (!need_backup) || tp->untraced, // untraced means unneeded
             .event = event,
         };
         struct rb_node *rbn;
@@ -734,7 +758,7 @@ untraced_processing:
             goto free_dup_event;
 
         // backup events, exclude untraced events.
-        if (i != ctx.nr_list - 1 && !tp->untraced) {
+        if (need_backup && !tp->untraced) {
         retry:
             rbn = rblist__findnew(&ctx.backup, tl_event);
             if (rbn) {
@@ -768,7 +792,7 @@ untraced_processing:
     else
     {
         // backup events, exclude untraced events.
-        if (i != ctx.nr_list - 1 && !tp->untraced) {
+        if (need_backup && !tp->untraced) {
             struct timeline_node backup = {
                 .time = hdr->time,
                 .key = key,
@@ -827,6 +851,10 @@ static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key
                 printf("ptr=%s/size=%s/", tp->mem_ptr?:".", tp->mem_size?:".");
             if (strcmp(impl, TWO_EVENT_PAIR_IMPL) != 0)
                 printf("stack/");
+            if (tp->untraced)
+                printf("untraced/");
+            else
+                printf("[untraced/]");
             if (j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
@@ -839,7 +867,7 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
     struct env *env = hctx->env;
     bool has_key = false;
 
-    if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) && hctx->nr_list < 2)
+    if (!ctx.nested && strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) && hctx->nr_list < 2)
         return;
     if (env->impl && strcmp(env->impl, impl))
         return;
@@ -860,9 +888,17 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
         if (env->greater_than)
             printf("--than %lu ", env->greater_than);
         if (env->detail) {
-            if (env->before_event1)
-                printf("--detail=-%lu ", env->before_event1);
-            else
+            if (env->before_event1 || env->samecpu || env->samepid) {
+                int len = 0;
+                printf("--detail=");
+                if (env->before_event1)
+                    len += printf("-%lu", env->before_event1);
+                if (env->samecpu)
+                    len += printf("%ssamecpu", len > 0 ? "," : "");
+                if (env->samepid)
+                    len += printf("%ssamepid", len > 0 ? "," : "");
+                printf(" ");
+            } else
                 printf("--detail ");
         }
         if (env->heatmap)
@@ -881,7 +917,7 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
         if (!env->greater_than)
             printf("[--than .] ");
         if (!env->detail)
-            printf("[--detail[=-N|+N]] ");
+            printf("[--detail[=-N,+N,samecpu,samepid]] ");
         if (!env->heatmap)
             printf("[--heatmap .] ");
     }
@@ -983,4 +1019,129 @@ static profiler syscalls = {
 };
 PROFILER_REGISTER(syscalls);
 
+
+static int nested_perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct timeline_node *b = container_of(rbn, struct timeline_node, key_node);
+    const struct timeline_node *e = entry;
+
+    if (b->key > e->key)
+        return 1;
+    else if (b->key < e->key)
+        return -1;
+
+    if (b->tp > e->tp)
+        return 1;
+    else if (b->tp < e->tp)
+        return -1;
+
+    return 0;
+}
+
+static int nested_trace_init(struct perf_evlist *evlist, struct env *env)
+{
+    int i, k;
+
+    ctx.nested = 1;
+    if (__multi_trace_init(evlist, env) < 0)
+        return -1;
+
+    ctx.backup.node_cmp = nested_perf_event_backup_node_cmp;
+
+    for (k = 0; k < ctx.nr_list; k++) {
+        struct tp *tp1 = NULL;
+        struct tp *tp2 = NULL;
+
+        /*
+         * f1 --------> f1_ret
+         *    f2 -> f2_ret
+         *       ..
+         *
+         * -e f1,f1_ret -e f2,f2_ret ..
+        **/
+        if (ctx.tp_list[k]->nr_tp - ctx.tp_list[k]->nr_untraced != 2) {
+            fprintf(stderr, "-e ");
+            for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
+                struct tp *tp = &ctx.tp_list[k]->tp[i];
+                fprintf(stderr, "%s%s:%s%s", i == 0 ? "" : ",", tp->sys, tp->name, tp->untraced ? "//untraced/" : "");
+            }
+            fprintf(stderr, " are unpaired\n");
+            return -1;
+        }
+
+        for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
+            struct tp *tp = &ctx.tp_list[k]->tp[i];
+            if (tp->untraced)
+                continue;
+            if (!tp1)
+                tp1 = tp;
+            else if (!tp2)
+                tp2 = tp;
+        }
+
+        if (!ctx.impl->object_new(ctx.class, tp1, tp2))
+            return -1;
+    }
+    return 0;
+}
+
+static void nested_trace_interval(void)
+{
+    int i, k;
+    int header = 0;
+
+    for (k = 0; k < ctx.nr_list; k++) {
+        struct tp *tp1 = NULL;
+        struct tp *tp2 = NULL;
+        struct two_event *two;
+
+        for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
+            struct tp *tp = &ctx.tp_list[k]->tp[i];
+            if (tp->untraced)
+                continue;
+            if (!tp1)
+                tp1 = tp;
+            else if (!tp2)
+                tp2 = tp;
+        }
+        two = ctx.impl->object_find(ctx.class, tp1, tp2);
+        if (!header) {
+            header = ctx.class->print_header(two);
+        }
+        ctx.class->print(two);
+    }
+}
+
+static void nested_trace_exit(struct perf_evlist *evlist)
+{
+    multi_trace_handle_remaining();
+    nested_trace_interval();
+    monitor_ctx_exit();
+}
+
+static void nested_trace_help(struct help_ctx *hctx)
+{
+    struct env *env = hctx->env;
+    const char *common = PROGRAME " nested-trace";
+    char *oldimpl = env->impl;
+    env->impl = strdup(TWO_EVENT_DELAY_IMPL);
+    ctx.nested = 1;
+    __multi_trece_help(hctx, common, TWO_EVENT_DELAY_IMPL, true);
+    free(env->impl);
+    env->impl = oldimpl;
+}
+
+static profiler nested_trace = {
+    .name = "nested-trace",
+    .pages = 64,
+    .help = nested_trace_help,
+    .init = nested_trace_init,
+    .filter = multi_trace_filter,
+    .deinit = nested_trace_exit,
+    .sigusr1 = multi_trace_sigusr1,
+    .interval = nested_trace_interval,
+    .lost = multi_trace_lost,
+    .sample = multi_trace_sample,
+};
+PROFILER_REGISTER(nested_trace);
 

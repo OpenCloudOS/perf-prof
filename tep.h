@@ -54,6 +54,7 @@ struct tp_list {
     int nr_comm;
     int nr_mem_size;
     int nr_delay;
+    int nr_untraced;
     struct tp tp[0];
 };
 

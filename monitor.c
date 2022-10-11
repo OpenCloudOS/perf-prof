@@ -115,6 +115,7 @@ const char argp_program_doc[] =
 "  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file] [--filter filter]\n"
 "  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
 "  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]\n"
+"  perf-prof nested-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]\n"
 "  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
 "  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
 "  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]\n"
