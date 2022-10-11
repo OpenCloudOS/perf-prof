@@ -604,6 +604,13 @@ static void pair_remaining(struct two_event *two, union perf_event *event, u64 k
     }
 }
 
+static int pair_print_header(struct two_event *two)
+{
+    print_time(stdout);
+    printf("\n");
+    return 1;
+}
+
 static void pair_print(struct two_event *two)
 {
     struct pair *pair;
@@ -622,6 +629,7 @@ static struct two_event_class *pair_class_new(struct two_event_impl *impl, struc
     if (class) {
         class->two = pair_two;
         class->remaining = pair_remaining;
+        class->print_header = pair_print_header;
         class->print = pair_print;
     }
     return class;
