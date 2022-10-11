@@ -942,7 +942,9 @@ static profiler kmemprof = {
     .init = kmemprof_init,
     .filter = multi_trace_filter,
     .deinit = multi_trace_exit,
+    .sigusr1 = multi_trace_sigusr1,
     .interval = multi_trace_interval,
+    .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(kmemprof);
@@ -974,7 +976,9 @@ static profiler syscalls = {
     .init = syscalls_init,
     .filter = multi_trace_filter,
     .deinit = multi_trace_exit,
+    .sigusr1 = multi_trace_sigusr1,
     .interval = multi_trace_interval,
+    .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(syscalls);
