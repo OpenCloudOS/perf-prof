@@ -252,7 +252,8 @@ static void direct_print(void *opaque, struct count_node *node)
     }
     h = (ctx.rounds % ctx.slots) * ctx.hist_size;
     memset(&node->hist[h], 0, sizeof(u64) * ctx.hist_size);
-    printf("\n");
+    printf(" | total %lu\n", node->sum);
+    node->sum = 0;
 }
 
 static void packed_print(void *opaque, struct count_node *node)
