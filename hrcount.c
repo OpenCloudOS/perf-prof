@@ -27,6 +27,8 @@ static struct monitor_ctx {
     int slots;
     int round_nr;
 
+    bool need_reset;
+
     int all_counters_max_len;
     int *pertp_counter_max_len;
 
@@ -212,6 +214,18 @@ static void hrcount_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
+static void hrcount_reset(void)
+{
+    print_time(stdout);
+    printf("hrcount reset\n");
+    perf_evsel__disable(ctx.leader);
+    perf_evsel__enable(ctx.leader);
+    count_dist_reset(ctx.count_dist);
+    memset(ctx.perins_pos, 0, ctx.nr_ins * sizeof(u64));
+    ctx.rounds = 0;
+    ctx.round_nr = 0;
+}
+
 static void direct_print(void *opaque, struct count_node *node)
 {
     int i, h;
@@ -290,16 +304,23 @@ static void packed_print(void *opaque, struct count_node *node)
     }
 }
 
-static void hrcount_interval(void)
+static void __hrcount_interval(void)
 {
     int len, i;
     u64 max;
     u64 print_pos = (ctx.rounds + 1) * ctx.hist_size;
+    u64 max_pos = 0;
 
     // Determine if all instances are complete
-    for (i = 0; i < ctx.nr_ins; i++)
+    for (i = 0; i < ctx.nr_ins; i++) {
         if (ctx.perins_pos[i] < print_pos)
             return ;
+        if (ctx.perins_pos[i] > max_pos)
+            max_pos = ctx.perins_pos[i];
+    }
+    if (ctx.nr_ins >= 2 && ctx.hist_size >= 2 &&
+        max_pos - print_pos >= ctx.hist_size/2)
+        ctx.need_reset = true;
 
     len = 1;
     max = count_dist_max(ctx.count_dist);
@@ -336,6 +357,15 @@ static void hrcount_interval(void)
         count_dist_print(ctx.count_dist, direct_print, NULL);
 
     ctx.rounds ++;
+}
+
+static void hrcount_interval(void)
+{
+    __hrcount_interval();
+    if (ctx.need_reset) {
+        ctx.need_reset = false;
+        hrcount_reset();
+    }
 }
 
 static void hrcount_sample(union perf_event *event, int instance)
@@ -414,7 +444,7 @@ static void hrcount_sample(union perf_event *event, int instance)
         ctx.round_nr ++;
         if (ctx.round_nr >= ctx.nr_ins) {
             ctx.round_nr = 0;
-            hrcount_interval();
+            __hrcount_interval();
         }
     }
 }
