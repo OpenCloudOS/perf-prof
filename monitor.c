@@ -1000,6 +1000,7 @@ int main(int argc, char *argv[])
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
     struct perf_thread_map *threads = NULL;
+    int max_read_size;
     uint64_t time_end;
     int time_left;
     bool deinited;
@@ -1130,6 +1131,7 @@ reinit:
 
     workload_start(&workload);
 
+    max_read_size = perf_evlist__max_read_size(evlist);
     time_end = env.interval ? time_ms() + env.interval : -1;
     time_left = env.interval ? : -1;
     while (!exiting && !monitor->reinit) {
@@ -1161,9 +1163,17 @@ reinit:
             perf_cpu_map__for_each_cpu(cpu, ins, cpus) {
                 for (tins = 0; tins < perf_thread_map__nr(threads); tins++) {
                     perf_evlist__for_each_evsel(evlist, evsel) {
-                        struct perf_counts_values count;
-                        if (perf_evsel__read(evsel, ins, tins, &count) == 0)
-                            monitor->read(evsel, &count, cpu != -1 ? ins : tins);
+                        static struct perf_counts_values *count = NULL;
+                        static struct perf_counts_values static_count;
+                        if (!count) {
+                            if (max_read_size <= sizeof(static_count))
+                                count = &static_count;
+                            else
+                                count = malloc(max_read_size);
+                            memset(count, 0, max_read_size);
+                        }
+                        if (perf_evsel__read(evsel, ins, tins, count) == 0)
+                            monitor->read(evsel, count, cpu != -1 ? ins : tins);
                     }
                 }
             }
