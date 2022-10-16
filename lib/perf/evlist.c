@@ -690,3 +690,17 @@ void perf_evlist__set_leader(struct perf_evlist *evlist)
 		__perf_evlist__set_leader(&evlist->entries);
 	}
 }
+
+int perf_evlist__max_read_size(struct perf_evlist *evlist)
+{
+	struct perf_evsel *evsel;
+	int max_size = sizeof(struct perf_counts_values);
+	int read_size;
+
+	perf_evlist__for_each_evsel(evlist, evsel) {
+		read_size = perf_evsel__read_size(evsel);
+		if (read_size > max_size)
+			max_size = read_size;
+	}
+	return max_size;
+}

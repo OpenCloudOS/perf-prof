@@ -59,6 +59,7 @@ LIBPERF_0.0.1 {
 		perf_evlist__id_to_evsel;
 		perf_evlist__next_mmap;
 		perf_evlist__set_leader;
+		perf_evlist__max_read_size;
 		perf_mmap__idx;
 		perf_mmap__consume;
 		perf_mmap__read_init;
