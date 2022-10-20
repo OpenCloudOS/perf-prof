@@ -35,6 +35,19 @@ static int two_event_node_cmp(struct rb_node *rbn, const void *entry)
     }
 }
 
+static int two_event_node_cmp_byid(struct rb_node *rbn, const void *entry)
+{
+    struct two_event *two = container_of(rbn, struct two_event, rbnode);
+    const struct two_event *e = entry;
+
+    if (two->id > e->id)
+        return 1;
+    else if (two->id < e->id)
+        return -1;
+    else
+        return 0;
+}
+
 static struct rb_node *two_event_node_new(struct rblist *rlist, const void *new_entry)
 {
     struct two_event_class *class = container_of(rlist, struct two_event_class, two_events);
@@ -46,6 +59,7 @@ static struct rb_node *two_event_node_new(struct rblist *rlist, const void *new_
         two->class = class;
         two->tp1 = e->tp1;
         two->tp2 = e->tp2;
+        two->id = class->ids++;
         return &two->rbnode;
     } else
         return NULL;
@@ -104,6 +118,24 @@ static struct two_event *two_event_find(struct two_event_class *class, struct tp
     return two;
 }
 
+static struct two_event *two_event_find_byid(struct two_event_class *class, unsigned int id)
+{
+    struct two_event entry = {
+        .id = id,
+    };
+    struct rb_node *rbn = NULL;
+    struct two_event *two = NULL;
+
+    class->two_events.node_cmp = two_event_node_cmp_byid;
+    rbn = rblist__find(&class->two_events, &entry);
+    class->two_events.node_cmp = two_event_node_cmp;
+
+    if (rbn) {
+        two = container_of(rbn, struct two_event, rbnode);
+    }
+    return two;
+}
+
 static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter) {}
 static void dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {}
 static int dummy_print_header(struct two_event *two) {return 0;}
@@ -118,6 +150,7 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
 
     memset(class, 0, impl->class_size);
 
+    class->ids = 0;
     class->impl = impl;
     class->opts = *options;
     rblist__init(&class->two_events);
@@ -231,7 +264,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
         if (e2->time > e1->time) {
             delta = e2->time - e1->time;
 
-            latency_dist_input(delay_class->lat_dist, key, (u64)two, delta);
+            latency_dist_input(delay_class->lat_dist, key, (u64)two->id, delta);
 
             if (delay->heatmap)
                 heatmap_write(delay->heatmap, e2->time, delta);
@@ -290,7 +323,7 @@ static void delay_print_node(void *opaque, struct latency_node *node)
 {
     struct delay_class *delay_class = opaque;
     struct two_event_options *opts = &delay_class->base.opts;
-    struct two_event *two = (struct two_event *)node->key;
+    struct two_event *two = two_event_find_byid(&delay_class->base, node->key);
 
     if (opts->perins) {
         printf("[%*lu] ", opts->keytype == K_CPU ? 3 : 6, node->instance);
@@ -529,7 +562,6 @@ static int syscalls_print_header(struct two_event *two)
         for (i=0; i<20; i++) printf("-");
         printf(" %8s %16s %12s %12s %12s %6s\n",
                         "--------", "----------------", "------------", "------------", "------------", "------");
-
         latency_dist_print(delay_class->lat_dist, syscalls_print_node, delay_class);
         return 1;
     }
