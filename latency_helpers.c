@@ -165,6 +165,26 @@ struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance,
 
 void latency_dist_print(struct latency_dist *dist, print_node printnode, void *opaque)
 {
+    struct rb_node *node = NULL, *next = NULL;
+    struct latency_node *ln = NULL;
+
+    if (!dist)
+        return;
+    if (rblist__empty(&dist->lat))
+        return;
+
+    for (node = rb_first_cached(&dist->lat.entries); node;
+        node = next) {
+        next = rb_next(node);
+        ln = rb_entry(node, struct latency_node, rbnode);
+
+        printnode(opaque, ln);
+        rblist__remove_node(&dist->lat, node);
+    }
+}
+
+void latency_dist_print_sorted(struct latency_dist *dist, print_node printnode, void *opaque)
+{
     struct rb_node *node = NULL, *next = NULL, *rbn;
     struct latency_node *ln = NULL;
     struct letency_entry entry = {dist,};
