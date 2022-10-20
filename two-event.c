@@ -35,19 +35,6 @@ static int two_event_node_cmp(struct rb_node *rbn, const void *entry)
     }
 }
 
-static int two_event_node_cmp_byid(struct rb_node *rbn, const void *entry)
-{
-    struct two_event *two = container_of(rbn, struct two_event, rbnode);
-    const struct two_event *e = entry;
-
-    if (two->id > e->id)
-        return 1;
-    else if (two->id < e->id)
-        return -1;
-    else
-        return 0;
-}
-
 static struct rb_node *two_event_node_new(struct rblist *rlist, const void *new_entry)
 {
     struct two_event_class *class = container_of(rlist, struct two_event_class, two_events);
@@ -60,6 +47,7 @@ static struct rb_node *two_event_node_new(struct rblist *rlist, const void *new_
         two->tp1 = e->tp1;
         two->tp2 = e->tp2;
         two->id = class->ids++;
+        rblist__findnew(&class->two_events_byid, two);
         return &two->rbnode;
     } else
         return NULL;
@@ -77,7 +65,32 @@ static void two_event_node_delete(struct rblist *rblist, struct rb_node *rb_node
          */
         class->impl->object_delete(class, two);
     }
+    rblist__remove_node(&class->two_events_byid, &two->rbnode_byid);
     free(two);
+}
+
+static int two_event_node_cmp_byid(struct rb_node *rbn, const void *entry)
+{
+    struct two_event *two = container_of(rbn, struct two_event, rbnode_byid);
+    const struct two_event *e = entry;
+
+    if (two->id > e->id)
+        return 1;
+    else if (two->id < e->id)
+        return -1;
+    else
+        return 0;
+}
+
+static struct rb_node *two_event_node_new_byid(struct rblist *rlist, const void *new_entry)
+{
+    struct two_event *two = (struct two_event *)new_entry;
+    RB_CLEAR_NODE(&two->rbnode_byid);
+    return &two->rbnode_byid;
+}
+
+static void two_event_node_delete_byid(struct rblist *rblist, struct rb_node *rb_node)
+{
 }
 
 static struct two_event *two_event_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
@@ -126,12 +139,10 @@ static struct two_event *two_event_find_byid(struct two_event_class *class, unsi
     struct rb_node *rbn = NULL;
     struct two_event *two = NULL;
 
-    class->two_events.node_cmp = two_event_node_cmp_byid;
-    rbn = rblist__find(&class->two_events, &entry);
-    class->two_events.node_cmp = two_event_node_cmp;
+    rbn = rblist__find(&class->two_events_byid, &entry);
 
     if (rbn) {
-        two = container_of(rbn, struct two_event, rbnode);
+        two = container_of(rbn, struct two_event, rbnode_byid);
     }
     return two;
 }
@@ -157,6 +168,10 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
     class->two_events.node_cmp = two_event_node_cmp;
     class->two_events.node_new = two_event_node_new;
     class->two_events.node_delete = two_event_node_delete;
+    rblist__init(&class->two_events_byid);
+    class->two_events_byid.node_cmp = two_event_node_cmp_byid;
+    class->two_events_byid.node_new = two_event_node_new_byid;
+    class->two_events_byid.node_delete = two_event_node_delete_byid;
 
     class->two = dummy_two;
     class->remaining = dummy_remaining;

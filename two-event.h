@@ -34,6 +34,7 @@ struct two_event {
     struct rb_node rbnode;
     struct tp *tp1;
     struct tp *tp2;
+    struct rb_node rbnode_byid;
     unsigned int id;
     bool deleting;
 };
@@ -43,6 +44,7 @@ struct two_event_class {
     struct two_event_impl *impl;
     struct two_event_options opts;
     struct rblist two_events;
+    struct rblist two_events_byid;
     unsigned int ids;
 
     /* object function */
