@@ -330,7 +330,7 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     }
     printf("%*s", delay_class->max_len1, two->tp1->name);
     printf(" => %-*s", delay_class->max_len2, two->tp2->name);
-    printf(" %8lu %16.3f %9.3f %9.3f %12.3f\n",
+    printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
 }
 
@@ -359,15 +359,15 @@ static int delay_print_header(struct two_event *two)
             printf("[%s] ", str_keytype[opts->keytype]);
 
         printf("%*s => %-*s", delay_class->max_len1, "start", delay_class->max_len2, "end");
-        printf(" %8s %16s %9s %9s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
 
         if (opts->perins)
             printf(opts->keytype == K_CPU ? "----- " : "-------- ");
         for (i=0; i<delay_class->max_len1; i++) printf("-");
         printf("    ");
         for (i=0; i<delay_class->max_len2; i++) printf("-");
-        printf(" %8s %16s %9s %9s %12s\n",
-                        "--------", "----------------", "---------", "---------", "------------");
+        printf(" %8s %16s %12s %12s %12s\n",
+                        "--------", "----------------", "------------", "------------", "------------");
 
         if (!opts->sort_print)
             latency_dist_print(delay_class->lat_dist, delay_print_node, delay_class);
