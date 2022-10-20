@@ -655,7 +655,7 @@ free_dup_event:
 
 found:
 
-    if (ctx.env->verbose) {
+    if (ctx.env->verbose >= 2) {
         multi_trace_print(event, tp);
     }
 
@@ -770,6 +770,8 @@ untraced_processing:
                      * The same event occurs multiple times, only the last event is backed up.
                      * Previous events will be marked as unneeded and released on the timeline in time.
                     **/
+                    if (ctx.env->verbose >= 1)
+                        multi_trace_print_title(new->event, new->tp, "EEXIST");
                     rblist__remove_node(&ctx.backup, rbn);
                     need_free = true;
 
@@ -807,6 +809,8 @@ untraced_processing:
                     struct timeline_node *new;
                     new = rb_entry(rbn, struct timeline_node, key_node);
                     if (new->event != event) {
+                        if (ctx.env->verbose >= 1)
+                            multi_trace_print_title(new->event, new->tp, "EEXIST");
                         free(new->event);
                         new->event = event;
                     }
@@ -818,6 +822,8 @@ untraced_processing:
                 if (err == -EEXIST) {
                     struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
                     struct timeline_node *new = rb_entry(rbn, struct timeline_node, key_node);
+                    if (ctx.env->verbose >= 1)
+                        multi_trace_print_title(new->event, new->tp, "EEXIST");
                     free(new->event);
                     new->event = memdup(event, event->header.size);
                     new->tp = tp;
