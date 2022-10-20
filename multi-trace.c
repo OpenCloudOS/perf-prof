@@ -252,6 +252,7 @@ static int monitor_ctx_init(struct env *env)
         .greater_than = env->greater_than,
         .heatmap = env->heatmap,
         .first_n = 10,
+        .sort_print = ctx.nested ? false : true,
     };
     bool key_attr = false;
     bool untraced = false;

@@ -369,7 +369,10 @@ static int delay_print_header(struct two_event *two)
         printf(" %8s %16s %9s %9s %12s\n",
                         "--------", "----------------", "---------", "---------", "------------");
 
-        latency_dist_print(delay_class->lat_dist, delay_print_node, delay_class);
+        if (!opts->sort_print)
+            latency_dist_print(delay_class->lat_dist, delay_print_node, delay_class);
+        else
+            latency_dist_print_sorted(delay_class->lat_dist, delay_print_node, delay_class);
         return 1;
     }
     return 0;
@@ -562,7 +565,10 @@ static int syscalls_print_header(struct two_event *two)
         for (i=0; i<20; i++) printf("-");
         printf(" %8s %16s %12s %12s %12s %6s\n",
                         "--------", "----------------", "------------", "------------", "------------", "------");
-        latency_dist_print(delay_class->lat_dist, syscalls_print_node, delay_class);
+        if (!opts->sort_print)
+            latency_dist_print(delay_class->lat_dist, syscalls_print_node, delay_class);
+        else
+            latency_dist_print_sorted(delay_class->lat_dist, syscalls_print_node, delay_class);
         return 1;
     }
     return 0;
