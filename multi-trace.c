@@ -64,6 +64,19 @@ static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
         return 0;
 }
 
+static int perf_event_backup_node_find(const void *entry, const struct rb_node *rbn)
+{
+    struct timeline_node *b = container_of(rbn, struct timeline_node, key_node);
+    const struct timeline_node *e = entry;
+
+    if (b->key > e->key)
+        return -1;
+    else if (b->key < e->key)
+        return 1;
+    else
+        return 0;
+}
+
 static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const void *new_entry)
 {
     if (ctx.need_timeline) {
@@ -623,6 +636,22 @@ int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
     return 1;
 }
 
+static struct rb_node *multi_trace_find_prev(struct timeline_node *backup)
+{
+    struct rb_node *rbn;
+    rb_for_each(rbn, backup, &ctx.backup.entries.rb_root, perf_event_backup_node_find) {
+        if (!backup->tp)
+            return rbn;
+        else {
+            struct timeline_node *prev;
+            prev = container_of(rbn, struct timeline_node, key_node);
+            if (prev->tp == backup->tp)
+                return rbn;
+        }
+    }
+    return NULL;
+}
+
 static void multi_trace_sample(union perf_event *event, int instance)
 {
     struct multi_trace_type_header *hdr = (void *)event->sample.array;
@@ -662,6 +691,8 @@ found:
     if (!ctx.nested) {
         need_find_prev = i != 0;
         need_backup = i != ctx.nr_list - 1;
+        // no need to use tp1
+        tp1 = NULL;
     } else {
         need_find_prev = tp1 != NULL;
         need_backup = tp1 == NULL;
@@ -704,7 +735,7 @@ found:
             .key = key,
             .tp = tp1,
         };
-        struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
+        struct rb_node *rbn = multi_trace_find_prev(&backup);
         if (rbn) {
             struct timeline_node *prev;
             struct two_event *two;
@@ -1041,10 +1072,11 @@ static int nested_perf_event_backup_node_cmp(struct rb_node *rbn, const void *en
     else if (b->key < e->key)
         return -1;
 
-    if (b->tp > e->tp)
-        return 1;
-    else if (b->tp < e->tp)
+    //time reverse order
+    if (b->time > e->time)
         return -1;
+    else if (b->time < e->time)
+        return 1;
 
     return 0;
 }
