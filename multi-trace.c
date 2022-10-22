@@ -711,6 +711,10 @@ found:
             prev = container_of(rbn, struct timeline_node, key_node);
             two = ctx.impl->object_find(ctx.class, prev->tp, tp);
             if (two) {
+                struct event_info info;
+                info.tp1 = prev->tp;
+                info.tp2 = tp;
+                info.key = key;
                 if (ctx.need_timeline) {
                     struct event_iter iter;
                     if (ctx.env->before_event1) {
@@ -721,9 +725,9 @@ found:
                         iter.start = prev;
                     iter.event1 = prev;
                     iter.curr = iter.start;
-                    ctx.class->two(two, prev->event, event, key, &iter);
+                    ctx.class->two(two, prev->event, event, &info, &iter);
                 } else
-                    ctx.class->two(two, prev->event, event, key, NULL);
+                    ctx.class->two(two, prev->event, event, &info, NULL);
             }
             rblist__remove_node(&ctx.backup, rbn);
 

@@ -20,6 +20,12 @@ struct two_event_options {
     bool sort_print;
 };
 
+struct event_info {
+    struct tp *tp1;
+    struct tp *tp2;
+    u64 key;
+};
+
 struct event_iter {
     void *start;
     void *event1;
@@ -51,7 +57,7 @@ struct two_event_class {
     /*
      * iter, On the timeline, the events between event1 and event2 can be iterated through iter.
      */
-    void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, u64 key, struct event_iter *iter);
+    void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter);
     void (*remaining)(struct two_event *two, union perf_event *event, u64 key);
     int (*print_header)(struct two_event *two);
     void (*print)(struct two_event *two);
