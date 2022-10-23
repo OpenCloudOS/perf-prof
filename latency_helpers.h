@@ -20,7 +20,9 @@ struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance,
 typedef void (*print_node)(void *opaque, struct latency_node *node);
 void latency_dist_print(struct latency_dist *dist, print_node printnode, void *opaque);
 void latency_dist_print_sorted(struct latency_dist *dist, print_node printnode, void *opaque);
+struct latency_node *latency_dist_find(struct latency_dist *dist, u64 instance, u64 key);
 bool latency_dist_empty(struct latency_dist *dist);
+void latency_dist_reset(struct latency_dist *dist);
 
 #endif
 

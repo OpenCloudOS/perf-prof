@@ -221,11 +221,35 @@ void latency_dist_print_sorted(struct latency_dist *dist, print_node printnode, 
     dist->lat.node_delete = latency_stat_node_delete;
 }
 
+struct latency_node *latency_dist_find(struct latency_dist *dist, u64 instance, u64 key)
+{
+    struct letency_entry e = {dist, NULL, instance, key};
+    struct rb_node *rbn = NULL;
+    struct latency_node *ln = NULL;
+
+    if (!dist)
+        return NULL;
+
+    rbn = rblist__find(&dist->lat, &e);
+    if (rbn) {
+        ln = rb_entry(rbn, struct latency_node, rbnode);
+        return ln;
+    }
+    return NULL;
+}
+
 bool latency_dist_empty(struct latency_dist *dist)
 {
     if (!dist)
         return true;
     return rblist__empty(&dist->lat);
+}
+
+void latency_dist_reset(struct latency_dist *dist)
+{
+    if (!dist)
+        return ;
+    rblist__exit(&dist->lat);
 }
 
 
