@@ -46,6 +46,7 @@ static struct multi_trace_ctx {
     struct list_head needed_list;
     bool need_timeline;
     bool nested;
+    bool impl_based_on_call;
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
     struct env *env;
@@ -327,6 +328,13 @@ static int monitor_ctx_init(struct env *env)
         ctx.nr_ins > 1 &&
         !using_order(base_profiler)) {
         fprintf(stderr, "Enable --detail=-N, also need to enable --order.\n");
+        return -1;
+    }
+
+    if (env->impl && impl_based_on_call(env->impl))
+        ctx.impl_based_on_call = true;
+    if (ctx.impl_based_on_call && !ctx.nested) {
+        fprintf(stderr, "Only nested-trace can enable --impl %s.\n", env->impl);
         return -1;
     }
 
@@ -659,7 +667,7 @@ static void multi_trace_sample(union perf_event *event, int instance)
     struct timeline_node *tl_event = NULL;
     struct perf_evsel *evsel;
     int i, j;
-    bool need_find_prev, need_backup;
+    bool need_find_prev, need_backup, need_remove_from_backup;
     __u64 key;
 
     evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
@@ -691,11 +699,13 @@ found:
     if (!ctx.nested) {
         need_find_prev = i != 0;
         need_backup = i != ctx.nr_list - 1;
+        need_remove_from_backup = 1;
         // no need to use tp1
         tp1 = NULL;
     } else {
-        need_find_prev = tp1 != NULL;
+        need_find_prev = ctx.impl_based_on_call || tp1 != NULL;
         need_backup = tp1 == NULL;
+        need_remove_from_backup = tp1 != NULL;
     }
 
     // get key, include untraced events.
@@ -729,7 +739,7 @@ found:
     if (tp->untraced)
         goto untraced_processing;
 
-    // find prev event
+    // find prev event, not include untraced
     if (need_find_prev) {
         struct timeline_node backup = {
             .key = key,
@@ -760,12 +770,15 @@ found:
                 } else
                     ctx.class->two(two, prev->event, event, &info, NULL);
             }
-            rblist__remove_node(&ctx.backup, rbn);
 
-            // ctx.backup no longer references an event, prev.unneeded = 1,
-            // releasing unneeded events on the timeline in time.
-            if (ctx.need_timeline)
-                timeline_free_unneeded(false);
+            if (need_remove_from_backup) {
+                rblist__remove_node(&ctx.backup, rbn);
+
+                // ctx.backup no longer references an event, prev.unneeded = 1,
+                // releasing unneeded events on the timeline in time.
+                if (ctx.need_timeline)
+                    timeline_free_unneeded(false);
+            }
         }
     }
 
@@ -848,6 +861,7 @@ untraced_processing:
                             multi_trace_print_title(new->event, new->tp, "EEXIST");
                         free(new->event);
                         new->event = event;
+                        new->time = backup.time;
                     }
                     new->tp = tp;
                 } else
@@ -861,6 +875,7 @@ untraced_processing:
                         multi_trace_print_title(new->event, new->tp, "EEXIST");
                     free(new->event);
                     new->event = memdup(event, event->header.size);
+                    new->time = backup.time;
                     new->tp = tp;
                 } else if (err != 0)
                     goto free_dup_event;

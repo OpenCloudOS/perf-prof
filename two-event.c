@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <linux/list.h>
 #include <linux/zalloc.h>
 #include <linux/rblist.h>
 #include <linux/compiler.h>
@@ -920,6 +921,171 @@ static struct two_event_impl mem_profile_impl = {
     .object_delete = mem_profile_delete,
 };
 
+
+
+/*
+ * Analyze function calls.
+ *
+ * two(A, B), in function A, call function B.
+ * A() {
+ *     B()
+ * }
+ *
+ * Print function calls.
+ *
+ * sys_perf_event_open
+ *   |-perf_event_alloc
+ *   |   |-perf_init_event
+ *   |   |   |-perf_try_init_event
+ *   |-perf_install_in_context
+ *
+**/
+
+struct caller {
+    struct two_event base;
+    u64 calls;
+    int depth;
+    struct list_head callee_head;
+    struct list_head caller_link;
+    struct list_head class_link;
+};
+
+struct call_class {
+    struct two_event_class base;
+    struct list_head caller_head;
+};
+
+static struct two_event *call_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
+{
+    struct two_event *two = two_event_new(class, tp1, NULL);
+    struct caller *caller = NULL;
+    struct call_class *call_class = NULL;
+
+    if (tp2) {
+        // tp2 is not used.
+    }
+
+    if (two) {
+        caller = container_of(two, struct caller, base);
+        call_class = container_of(two->class, struct call_class, base);
+
+        INIT_LIST_HEAD(&caller->callee_head);
+        INIT_LIST_HEAD(&caller->caller_link);
+        INIT_LIST_HEAD(&caller->class_link);
+        list_add_tail(&caller->class_link, &call_class->caller_head);
+    }
+    return two;
+}
+
+static void call_delete(struct two_event_class *class, struct two_event *two)
+{
+    struct caller *caller = NULL, *callee, *next;
+
+    if (two) {
+        caller = container_of(two, struct caller, base);
+        list_for_each_entry_safe(callee, next, &caller->callee_head, caller_link) {
+            list_del_init(&callee->caller_link);
+        }
+        list_del_init(&caller->caller_link);
+        list_del_init(&caller->class_link);
+        two_event_delete(class, two);
+    }
+}
+
+static struct two_event *call_find(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
+{
+    // tp2 is not used.
+    return two_event_find(class, tp1, NULL);
+}
+
+static void call_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
+{
+    struct caller *caller;
+    struct caller *callee;
+
+    // iter is not used.
+
+    if (two) {
+        caller = container_of(two, struct caller, base);
+        caller->calls ++;
+
+        /*
+         * two(A, B), in function A, call function B.
+         * Use tp2(B) to find the callee.
+        **/
+        two = two_event_find(two->class, info->tp2, NULL);
+        if (two) {
+            callee = container_of(two, struct caller, base);
+            callee->calls ++;
+            if (list_empty(&callee->caller_link)) {
+                list_add_tail(&callee->caller_link, &caller->callee_head);
+                list_del_init(&callee->class_link);
+            }
+        }
+    }
+}
+
+static void call_print(struct two_event *two)
+{
+    struct caller *caller = container_of(two, struct caller, base);
+    struct caller *callee;
+
+    if (caller->calls == 0)
+        return ;
+
+    if (caller->depth > 0) {
+        int i;
+        for (i = 0; i < caller->depth - 1; i++)
+            printf("  | ");
+        printf("  |-");
+    }
+    printf("%s\n", two->tp1->name);
+    caller->calls = 0;
+    list_for_each_entry(callee, &caller->callee_head, caller_link) {
+        callee->depth = caller->depth + 1;
+        call_print(&callee->base);
+    }
+}
+
+static int call_print_header(struct two_event *two)
+{
+    struct call_class *call_class = container_of(two->class, struct call_class, base);
+    struct caller *caller;
+
+    list_for_each_entry(caller, &call_class->caller_head, class_link) {
+        caller->depth = 0;
+        call_print(&caller->base);
+    }
+    return 1;
+}
+
+static struct two_event_class *call_class_new(struct two_event_impl *impl, struct two_event_options *options)
+{
+    struct two_event_class *class = two_event_class_new(impl, options);
+    struct call_class *call_class = NULL;
+
+    if (class) {
+        call_class = container_of(class, struct call_class, base);
+        class->two = call_two;
+        class->print_header = call_print_header;
+
+        INIT_LIST_HEAD(&call_class->caller_head);
+    }
+    return class;
+}
+
+static struct two_event_impl call_impl = {
+    .name = TWO_EVENT_CALL_IMPL,
+    .class_size = sizeof(struct call_class),
+    .class_new = call_class_new,
+
+    .instance_size = sizeof(struct caller),
+    .object_new = call_new,
+    .object_delete = call_delete,
+    .object_find = call_find,
+};
+
+
 struct two_event_impl *impl_get(const char *name)
 {
     struct two_event_impl *impl = NULL;
@@ -932,9 +1098,15 @@ struct two_event_impl *impl_get(const char *name)
         impl = &mem_profile_impl;
     else if (strcmp(name, syscalls_impl.name) == 0)
         impl = &syscalls_impl;
+    else if (strcmp(name, call_impl.name) == 0)
+        impl = &call_impl;
 
     if (impl)
         impl_init(impl);
     return impl;
 }
 
+bool impl_based_on_call(const char *name)
+{
+    return strcmp(name, TWO_EVENT_CALL_IMPL) == 0;
+}

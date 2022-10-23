@@ -102,8 +102,14 @@ struct two_event_impl {
 #define TWO_EVENT_SYSCALLS_IMPL "syscalls"
 extern const char *syscalls_table[];
 
+/*
+ * Analyze function calls.
+ */
+#define TWO_EVENT_CALL_IMPL "call"
+
 
 struct two_event_impl *impl_get(const char *name);
+bool impl_based_on_call(const char *name);
 
 
 // in linux/perf_event.h
