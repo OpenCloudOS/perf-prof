@@ -1086,6 +1086,274 @@ static struct two_event_impl call_impl = {
 };
 
 
+
+/*
+ * Analyze function calls. Also analyze function time.
+ *
+ * two(A, B), in function A, call function B.
+ * two(B, B_ret), B to B_ret, get function time.
+ *
+ * A() {
+ *     B() {retirn;}
+ * }
+ *
+ * Print function calls and time statistics.
+ *
+ *                       function call    calls        total(us)      min(us)      avg(us)      max(us)
+ * ----------------------------------- -------- ---------------- ------------ ------------ ------------
+ * sys_perf_event_open                        8         1503.710      102.922      187.963      477.550
+ *   |-perf_event_alloc                       8         1263.778       76.350      157.972      439.987
+ *   |   |-perf_init_event                    8         1238.025       73.837      154.753      433.907
+ *   |   |   |-perf_try_init_event          504          929.110        0.407        1.843      354.204
+ *   |-perf_install_in_context                8          184.217       17.710       23.027       27.144
+ *
+**/
+
+struct call_delay {
+    struct caller base;
+    struct two_event *delay;
+};
+
+struct call_delay_class {
+    struct call_class base;
+    int max_depth;
+    struct two_event_class *delay_class;
+};
+
+static struct two_event *call_delay_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
+{
+    struct two_event *two = call_new(class, tp1, tp2);
+    struct call_delay *call_delay;
+    struct call_delay_class *call_delay_class = NULL;
+
+    if (two) {
+        call_delay = container_of(two, struct call_delay, base.base);
+        call_delay_class = container_of(class, struct call_delay_class, base.base);
+        call_delay->delay = delay_impl.object_new(call_delay_class->delay_class, tp1, tp2);
+        if (!call_delay->delay) {
+            call_delete(class, two);
+            two = NULL;
+        }
+    }
+    return two;
+}
+
+static void call_delay_delete(struct two_event_class *class, struct two_event *two)
+{
+    struct call_delay *call_delay;
+    struct call_delay_class *call_delay_class = NULL;
+
+    if (two) {
+        call_delay = container_of(two, struct call_delay, base.base);
+        call_delay_class = container_of(class, struct call_delay_class, base.base);
+        delay_impl.object_delete(call_delay_class->delay_class, call_delay->delay);
+    }
+    call_delete(class, two);
+}
+
+static struct two_event *call_delay_find(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
+{
+    return call_find(class, tp1, tp2);
+}
+
+static void call_delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
+{
+    struct caller *caller;
+    struct caller *callee;
+    struct call_delay *call_delay;
+    struct call_delay_class *call_delay_class;
+
+    if (two) {
+        caller = container_of(two, struct caller, base);
+        call_delay = container_of(caller, struct call_delay, base);
+        call_delay_class = container_of(two->class, struct call_delay_class, base.base);
+        caller->calls ++;
+
+        /*
+         * two(A, B), in function A, call function B.
+         * Use tp2(B) to find the callee.
+         * `iter' is not used.
+         *
+         * two(B, B_ret), B to B_ret, get function time.
+         * Use tp2(B_ret) cannot find the callee, count the function time.
+         * `iter' is used.
+        **/
+        two = two_event_find(two->class, info->tp2, NULL);
+        if (two) {
+            callee = container_of(two, struct caller, base);
+            callee->calls ++;
+            if (list_empty(&callee->caller_link)) {
+                list_add_tail(&callee->caller_link, &caller->callee_head);
+                list_del_init(&callee->class_link);
+            }
+        } else {
+            if (delay_impl.object_find(call_delay_class->delay_class, info->tp1, info->tp2) != call_delay->delay) {
+                fprintf(stderr, "BUG: in %s, %s:%s and %s:%s are mismatched.\n", __FUNCTION__,
+                        info->tp1->sys, info->tp1->name, info->tp2->sys, info->tp2->name);
+                return;
+            }
+            call_delay_class->delay_class->two(call_delay->delay, event1, event2, info, iter);
+        }
+    }
+}
+
+static int call_delay_max_depth(struct two_event *two)
+{
+    struct caller *caller = container_of(two, struct caller, base);
+    struct caller *callee;
+    struct call_delay_class *call_delay_class;
+    int print = 0;
+
+    if (caller->calls == 0)
+        return 0;
+
+    print = 1;
+    call_delay_class = container_of(two->class, struct call_delay_class, base.base);
+
+    list_for_each_entry(callee, &caller->callee_head, caller_link) {
+        callee->depth = caller->depth + 1;
+        if (callee->depth > call_delay_class->max_depth)
+            call_delay_class->max_depth = callee->depth;
+        print += call_delay_max_depth(&callee->base);
+    }
+    return print;
+}
+
+static int call_delay_class_max_depth(struct two_event *two)
+{
+    struct call_class *call_class = container_of(two->class, struct call_class, base);
+    struct caller *caller;
+    int print = 0;
+
+    list_for_each_entry(caller, &call_class->caller_head, class_link) {
+        caller->depth = 0;
+        print += call_delay_max_depth(&caller->base);
+    }
+    return print;
+}
+
+static void call_delay_print(struct two_event *two)
+{
+    struct call_delay *call_delay;
+    struct call_delay_class *call_delay_class;
+    struct delay_class *delay_class;
+    struct latency_node *node;
+    struct caller *caller = container_of(two, struct caller, base);
+    struct caller *callee;
+    int len = 0, flen;
+
+    if (caller->calls == 0)
+        return ;
+
+    call_delay = container_of(two, struct call_delay, base.base);
+    call_delay_class = container_of(two->class, struct call_delay_class, base.base);
+    delay_class = container_of(call_delay_class->delay_class, struct delay_class, base);
+    node = latency_dist_find(delay_class->lat_dist, 0/*unused*/, call_delay->delay->id);
+
+    if (caller->depth > 0) {
+        int i;
+        for (i = 0; i < caller->depth - 1; i++)
+            len += printf("  | ");
+        len += printf("  |-");
+    }
+    flen = call_delay_class->max_depth * 4 + delay_class->max_len1;
+    printf("%-*s", flen-len, two->tp1->name);
+
+    if (node)
+        printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
+            node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
+
+    caller->calls = 0;
+    list_for_each_entry(callee, &caller->callee_head, caller_link) {
+        callee->depth = caller->depth + 1;
+        call_delay_print(&callee->base);
+    }
+}
+
+static int call_delay_print_header(struct two_event *two)
+{
+    struct call_delay_class *call_delay_class;
+    struct delay_class *delay_class;
+    struct call_class *call_class;
+    struct caller *caller;
+    int i, flen, print;
+
+    if (two) {
+        print = call_delay_class_max_depth(two);
+        if (!print)
+            return 1;
+
+        call_delay_class = container_of(two->class, struct call_delay_class, base.base);
+        delay_class = container_of(call_delay_class->delay_class, struct delay_class, base);
+        call_class = &call_delay_class->base;
+
+        print_time(stdout);
+        printf("\n");
+
+        flen = call_delay_class->max_depth * 4 + delay_class->max_len1;
+        printf("%*s", flen, "function call");
+        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+
+        for (i=0; i<flen; i++) printf("-");
+        printf(" %8s %16s %12s %12s %12s\n",
+                        "--------", "----------------", "------------", "------------", "------------");
+
+        list_for_each_entry(caller, &call_class->caller_head, class_link) {
+            caller->depth = 0;
+            call_delay_print(&caller->base);
+        }
+
+        latency_dist_reset(delay_class->lat_dist);
+        return 1;
+    } else
+        return 0;
+}
+
+static struct two_event_class *call_delay_class_new(struct two_event_impl *impl, struct two_event_options *options)
+{
+    struct two_event_class *class = call_class_new(impl, options);
+    struct call_delay_class *call_delay_class = NULL;
+
+    if (class) {
+        call_delay_class = container_of(class, struct call_delay_class, base.base);
+        class->two = call_delay_two;
+        class->print_header = call_delay_print_header;
+
+        /*
+         * call_delay does not support per-instance display.
+        **/
+        class->opts.perins = false;
+        call_delay_class->delay_class = delay_impl.class_new(&delay_impl, &class->opts);
+    }
+    return class;
+}
+
+static void call_delay_class_delete(struct two_event_class *class)
+{
+    struct call_delay_class *call_delay_class;
+    struct two_event_class *delay_class;
+
+    if (class) {
+        call_delay_class = container_of(class, struct call_delay_class, base.base);
+        delay_class = call_delay_class->delay_class;
+        two_event_class_delete(class);
+        delay_impl.class_delete(delay_class);
+    }
+}
+
+static struct two_event_impl call_delay_impl = {
+    .name = TWO_EVENT_CALL_DELAY_IMPL,
+    .class_size = sizeof(struct call_delay_class),
+    .class_new = call_delay_class_new,
+    .class_delete = call_delay_class_delete,
+
+    .instance_size = sizeof(struct call_delay),
+    .object_new = call_delay_new,
+    .object_delete = call_delay_delete,
+    .object_find = call_delay_find,
+};
+
+
 struct two_event_impl *impl_get(const char *name)
 {
     struct two_event_impl *impl = NULL;
@@ -1100,6 +1368,10 @@ struct two_event_impl *impl_get(const char *name)
         impl = &syscalls_impl;
     else if (strcmp(name, call_impl.name) == 0)
         impl = &call_impl;
+    else if (strcmp(name, call_delay_impl.name) == 0) {
+        impl_init(&delay_impl);
+        impl = &call_delay_impl;
+    }
 
     if (impl)
         impl_init(impl);
@@ -1108,5 +1380,7 @@ struct two_event_impl *impl_get(const char *name)
 
 bool impl_based_on_call(const char *name)
 {
-    return strcmp(name, TWO_EVENT_CALL_IMPL) == 0;
+    return strcmp(name, TWO_EVENT_CALL_IMPL) == 0 ||
+           strcmp(name, TWO_EVENT_CALL_DELAY_IMPL) == 0;
 }
+

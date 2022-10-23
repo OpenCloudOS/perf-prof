@@ -229,7 +229,8 @@ static const struct argp_option opts[] = {
                                         "    pair: determine if two events are paired\n"
                                         "    kmemprof: profile memory allocated and freed bytes\n"
                                         "    syscalls: syscall delay\n"
-                                        "    call: analyze function calls, only for nested-trace."
+                                        "    call: analyze function calls, only for nested-trace.\n"
+                                        "    call-delay: call + delay, only for nested-trace."
                                         },
     { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
     { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },

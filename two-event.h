@@ -107,6 +107,11 @@ extern const char *syscalls_table[];
  */
 #define TWO_EVENT_CALL_IMPL "call"
 
+/*
+ * Analyze function calls. Also analyze function time.
+ * Print function calls and time statistics.
+ */
+#define TWO_EVENT_CALL_DELAY_IMPL "call-delay"
 
 struct two_event_impl *impl_get(const char *name);
 bool impl_based_on_call(const char *name);
