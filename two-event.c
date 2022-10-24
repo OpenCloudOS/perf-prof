@@ -945,6 +945,8 @@ struct caller {
     struct two_event base;
     u64 calls;
     int depth;
+    bool recursive;
+    struct caller *parent;
     struct list_head callee_head;
     struct list_head caller_link;
     struct list_head class_link;
@@ -959,7 +961,6 @@ static struct two_event *call_new(struct two_event_class *class, struct tp *tp1,
 {
     struct two_event *two = two_event_new(class, tp1, NULL);
     struct caller *caller = NULL;
-    struct call_class *call_class = NULL;
 
     if (tp2) {
         // tp2 is not used.
@@ -967,12 +968,11 @@ static struct two_event *call_new(struct two_event_class *class, struct tp *tp1,
 
     if (two) {
         caller = container_of(two, struct caller, base);
-        call_class = container_of(two->class, struct call_class, base);
 
+        caller->parent = NULL;
         INIT_LIST_HEAD(&caller->callee_head);
         INIT_LIST_HEAD(&caller->caller_link);
         INIT_LIST_HEAD(&caller->class_link);
-        list_add_tail(&caller->class_link, &call_class->caller_head);
     }
     return two;
 }
@@ -998,31 +998,61 @@ static struct two_event *call_find(struct two_event_class *class, struct tp *tp1
     return two_event_find(class, tp1, NULL);
 }
 
-static void call_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
+static inline bool call_recursive(struct caller *caller, struct caller *callee)
+{
+    // two(A, A), recursive call.
+    // two(A, B) .. two(B, A), recursive call.
+    while (caller) {
+        if (caller == callee)
+            return true;
+        caller = caller->parent;
+    }
+    return false;
+}
+
+static bool call_link(struct two_event *two, struct tp *tp2)
 {
     struct caller *caller;
     struct caller *callee;
-
-    // iter is not used.
+    struct call_class *call_class;
 
     if (two) {
         caller = container_of(two, struct caller, base);
+        call_class = container_of(two->class, struct call_class, base);
         caller->calls ++;
+
+        if (list_empty(&caller->class_link) && list_empty(&caller->caller_link))
+            list_add_tail(&caller->class_link, &call_class->caller_head);
 
         /*
          * two(A, B), in function A, call function B.
          * Use tp2(B) to find the callee.
         **/
-        two = two_event_find(two->class, info->tp2, NULL);
+        two = two_event_find(two->class, tp2, NULL);
         if (two) {
             callee = container_of(two, struct caller, base);
             callee->calls ++;
-            if (list_empty(&callee->caller_link)) {
-                list_add_tail(&callee->caller_link, &caller->callee_head);
+
+            caller->recursive = call_recursive(caller, callee);
+            /*
+             * callee->parent == NULL: first call.
+             * callee->parent != NULL: different parents call the same function.
+            **/
+            if (callee->parent != caller && !caller->recursive) {
+                list_move_tail(&callee->caller_link, &caller->callee_head);
                 list_del_init(&callee->class_link);
+                callee->parent = caller;
             }
+            return true;
         }
     }
+    return false;
+}
+
+static void call_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
+{
+    // iter is not used.
+    call_link(two, info->tp2);
 }
 
 static void call_print(struct two_event *two)
@@ -1039,7 +1069,7 @@ static void call_print(struct two_event *two)
             printf("  | ");
         printf("  |-");
     }
-    printf("%s\n", two->tp1->name);
+    printf("%s%s\n", two->tp1->name, caller->recursive ? " R" : "");
     caller->calls = 0;
     list_for_each_entry(callee, &caller->callee_head, caller_link) {
         callee->depth = caller->depth + 1;
@@ -1158,35 +1188,22 @@ static struct two_event *call_delay_find(struct two_event_class *class, struct t
 
 static void call_delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
 {
-    struct caller *caller;
-    struct caller *callee;
     struct call_delay *call_delay;
     struct call_delay_class *call_delay_class;
 
     if (two) {
-        caller = container_of(two, struct caller, base);
-        call_delay = container_of(caller, struct call_delay, base);
+        call_delay = container_of(two, struct call_delay, base.base);
         call_delay_class = container_of(two->class, struct call_delay_class, base.base);
-        caller->calls ++;
 
         /*
          * two(A, B), in function A, call function B.
          * Use tp2(B) to find the callee.
-         * `iter' is not used.
          *
          * two(B, B_ret), B to B_ret, get function time.
          * Use tp2(B_ret) cannot find the callee, count the function time.
          * `iter' is used.
         **/
-        two = two_event_find(two->class, info->tp2, NULL);
-        if (two) {
-            callee = container_of(two, struct caller, base);
-            callee->calls ++;
-            if (list_empty(&callee->caller_link)) {
-                list_add_tail(&callee->caller_link, &caller->callee_head);
-                list_del_init(&callee->class_link);
-            }
-        } else {
+        if(!call_link(two, info->tp2)) {
             if (delay_impl.object_find(call_delay_class->delay_class, info->tp1, info->tp2) != call_delay->delay) {
                 fprintf(stderr, "BUG: in %s, %s:%s and %s:%s are mismatched.\n", __FUNCTION__,
                         info->tp1->sys, info->tp1->name, info->tp2->sys, info->tp2->name);
@@ -1257,11 +1274,14 @@ static void call_delay_print(struct two_event *two)
         len += printf("  |-");
     }
     flen = call_delay_class->max_depth * 4 + delay_class->max_len1;
-    printf("%-*s", flen-len, two->tp1->name);
+    if (flen < 13) flen = 13;
+    printf("%-*s %s", flen-len, two->tp1->name, caller->recursive ? "R" : " ");
 
     if (node)
         printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
             node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
+    else
+        printf("\n");
 
     caller->calls = 0;
     list_for_each_entry(callee, &caller->callee_head, caller_link) {
@@ -1291,10 +1311,12 @@ static int call_delay_print_header(struct two_event *two)
         printf("\n");
 
         flen = call_delay_class->max_depth * 4 + delay_class->max_len1;
-        printf("%*s", flen, "function call");
+        if (flen < 13) flen = 13; // 13 is strlen("function call");
+        printf("%*s R", flen, "function call");
         printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
 
         for (i=0; i<flen; i++) printf("-");
+        printf(" -");
         printf(" %8s %16s %12s %12s %12s\n",
                         "--------", "----------------", "------------", "------------", "------------");
 
