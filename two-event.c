@@ -410,6 +410,8 @@ static struct two_event_class *delay_class_new(struct two_event_impl *impl, stru
         class->print = delay_print;
 
         delay_class = container_of(class, struct delay_class, base);
+        delay_class->max_len1 = 5; // 5 is strlen("start")
+        delay_class->max_len2 = 3; // 5 is strlen("end")
         delay_class->lat_dist = latency_dist_new(options->perins, true, 0);
     }
     return class;
