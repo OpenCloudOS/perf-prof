@@ -995,6 +995,16 @@ static void call_class_iterate(struct two_event *two, struct caller_iterator *it
         iter->end(iter);
 }
 
+static inline void call_class_print(struct two_event *two)
+{
+    struct call_class *call_class = container_of(two->class, struct call_class, base);
+
+    if (call_class->calls) {
+        call_class_iterate(two, &call_class->iter_print);
+        call_class->calls = 0;
+    }
+}
+
 static struct two_event *call_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
 {
     struct two_event *two = two_event_new(class, tp1, NULL);
@@ -1083,6 +1093,7 @@ static bool call_link(struct two_event *two, struct tp *tp2)
              * A is the root node, remove 'caller_link', add to 'caller_head'.
             **/
             if (!list_empty(&caller->caller_link)) {
+                call_class_print(two);
                 list_del_init(&caller->caller_link);
                 caller->parent = NULL;
                 call_update_depth(two);
@@ -1106,6 +1117,8 @@ static bool call_link(struct two_event *two, struct tp *tp2)
              * callee->parent != NULL: different parents call the same function.
             **/
             if (callee->parent != caller && !caller->recursive) {
+                if (callee->parent != NULL || !list_empty(&callee->class_link))
+                    call_class_print(two);
                 list_move_tail(&callee->caller_link, &caller->callee_head);
                 list_del_init(&callee->class_link);
                 callee->parent = caller;
@@ -1139,12 +1152,9 @@ static void call_iterator_print(struct caller_iterator *iter, struct two_event *
 
 static int call_print_header(struct two_event *two)
 {
-    struct call_class *call_class = container_of(two->class, struct call_class, base);
+    if (two)
+        call_class_print(two);
 
-    if (call_class->calls) {
-        call_class_iterate(two, &call_class->iter_print);
-        call_class->calls = 0;
-    }
     return 1;
 }
 
