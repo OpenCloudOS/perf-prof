@@ -745,10 +745,10 @@ found:
             .key = key,
             .tp = tp1,
         };
+        struct two_event *two;
         struct rb_node *rbn = multi_trace_find_prev(&backup);
         if (rbn) {
             struct timeline_node *prev;
-            struct two_event *two;
             prev = container_of(rbn, struct timeline_node, key_node);
             two = ctx.impl->object_find(ctx.class, prev->tp, tp);
             if (two) {
@@ -778,6 +778,16 @@ found:
                 // releasing unneeded events on the timeline in time.
                 if (ctx.need_timeline)
                     timeline_free_unneeded(false);
+            }
+        } else if (ctx.impl_based_on_call) {
+            two = ctx.impl->object_find(ctx.class, tp, NULL);
+            if (two) {
+                // two(A, NULL), first call A.
+                struct event_info info;
+                info.tp1 = tp;
+                info.tp2 = NULL;
+                info.key = key;
+                ctx.class->two(two, event, NULL, &info, NULL);
             }
         }
     }

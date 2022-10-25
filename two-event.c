@@ -1023,9 +1023,17 @@ static bool call_link(struct two_event *two, struct tp *tp2)
         call_class = container_of(two->class, struct call_class, base);
         caller->calls ++;
 
-        if (list_empty(&caller->class_link) && list_empty(&caller->caller_link))
-            list_add_tail(&caller->class_link, &call_class->caller_head);
-
+        if (!tp2) {
+            /*
+             * two(A, NULL), first call A.
+             * A is the root node, add to 'caller_head', remove 'caller_link'.
+            **/
+            if (list_empty(&caller->class_link))
+                list_add_tail(&caller->class_link, &call_class->caller_head);
+            list_del_init(&caller->caller_link);
+            caller->parent = NULL;
+            return true;
+        }
         /*
          * two(A, B), in function A, call function B.
          * Use tp2(B) to find the callee.
