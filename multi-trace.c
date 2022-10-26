@@ -949,7 +949,8 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
     if (!impl_default)
         printf("--impl %s ", impl);
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 ||
-        strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0) {
+        strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0 ||
+        strcmp(impl, TWO_EVENT_CALL_DELAY_IMPL) == 0) {
         if (env->perins)
             printf("--perins ");
         if (env->greater_than)
@@ -978,7 +979,8 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
     else if (!env->key)
         printf("[-k .] ");
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 ||
-        strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0) {
+        strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0 ||
+        strcmp(impl, TWO_EVENT_CALL_DELAY_IMPL) == 0) {
         if (!env->perins)
             printf("[--perins] ");
         if (!env->greater_than)
@@ -1087,6 +1089,27 @@ static profiler syscalls = {
 PROFILER_REGISTER(syscalls);
 
 
+/* nested-trace
+ *
+ * perf-prof nested-trace -e A,A_ret -e B,B_ret -e C,C_ret [--impl call|call-delay]
+ *
+ * A call B, B call C.
+ *
+ * timeline: A, B, C, C_ret, B_ret, A_ret
+ *
+ *  pid1 | pid2  | pid3
+ * ______|_C_B_A_|______
+ *       |
+ *       `stack-like. A comes first, B next, and C last.
+ *
+ * pid2 events:
+ *     two(A, NULL),  A comes first.   A is the root node.
+ *     two(A, B),     B next.          A call B, B is a descendant of A.
+ *     two(B, C),     C last.          B call C, C is a descendant of B.
+ *     two(C, C_ret), first remove C.  C return, get the execution time of C.
+ *     two(B, B_ret), then remove B.   B return, get the execution time of B.
+ *     two(A, A_ret), last remove A.   A return, get the execution time of A.
+**/
 static int nested_perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct timeline_node *b = container_of(rbn, struct timeline_node, key_node);
@@ -1189,14 +1212,13 @@ static void nested_trace_exit(struct perf_evlist *evlist)
 
 static void nested_trace_help(struct help_ctx *hctx)
 {
-    struct env *env = hctx->env;
     const char *common = PROGRAME " nested-trace";
-    char *oldimpl = env->impl;
-    env->impl = strdup(TWO_EVENT_DELAY_IMPL);
+    const char *impl_str[] = {TWO_EVENT_DELAY_IMPL, TWO_EVENT_CALL_IMPL, TWO_EVENT_CALL_DELAY_IMPL};
+    int impl;
+
     ctx.nested = 1;
-    __multi_trece_help(hctx, common, TWO_EVENT_DELAY_IMPL, true);
-    free(env->impl);
-    env->impl = oldimpl;
+    for (impl = 0; impl < NUM(impl_str); impl++)
+        __multi_trece_help(hctx, common, impl_str[impl], false);
 }
 
 static profiler nested_trace = {
