@@ -859,7 +859,7 @@ void print_lost_fn(union perf_event *event, int ins)
 
 static void print_fork_exit_fn(union perf_event *event, int ins, int exit)
 {
-    if (env.verbose >= 2) {
+    if (env.verbose >= VERBOSE_ALL) {
         int oncpu = monitor_instance_oncpu();
         print_time(stderr);
         fprintf(stderr, "%s ppid %u ptid %u pid %u tid %u on %s #%d\n",
@@ -873,7 +873,7 @@ static void print_fork_exit_fn(union perf_event *event, int ins, int exit)
 
 static void print_comm_fn(union perf_event *event, int ins)
 {
-    if (env.verbose >= 2) {
+    if (env.verbose >= VERBOSE_ALL) {
         int oncpu = monitor_instance_oncpu();
         print_time(stderr);
         fprintf(stderr, "comm pid %u tid %u %s on %s #%d\n",
@@ -886,7 +886,7 @@ static void print_comm_fn(union perf_event *event, int ins)
 
 static void print_throttle_unthrottle_fn(union perf_event *event, int ins, int unthrottle)
 {
-    if (env.verbose >= 2) {
+    if (env.verbose >= VERBOSE_NOTICE) {
         int oncpu = monitor_instance_oncpu();
         print_time(stderr);
         fprintf(stderr, "%llu.%06llu: %s events on %s #%d\n",
@@ -899,7 +899,7 @@ static void print_throttle_unthrottle_fn(union perf_event *event, int ins, int u
 
 static void print_context_switch_fn(union perf_event *event, int ins)
 {
-    if (env.verbose >= 2) {
+    if (env.verbose >= VERBOSE_ALL) {
         int oncpu = monitor_instance_oncpu();
         print_time(stderr);
         fprintf(stderr, "switch on %s #%d\n", oncpu ? "CPU" : "thread",
@@ -909,7 +909,7 @@ static void print_context_switch_fn(union perf_event *event, int ins)
 
 static void print_context_switch_cpu_fn(union perf_event *event, int ins)
 {
-    if (env.verbose >= 2) {
+    if (env.verbose >= VERBOSE_ALL) {
         int oncpu = monitor_instance_oncpu();
         print_time(stderr);
         fprintf(stderr, "switch next pid %u tid %u on %s #%d\n",

@@ -408,7 +408,7 @@ static void hrcount_sample(union perf_event *event, int instance)
             ins_counter[n] = data->groups.ctnr[i].value;
             if (cpu_clock >= ctx.period * 2) {
                 ctx.perins_pos[instance] += cpu_clock / ctx.period - 1;
-                verbose = 1;
+                verbose = VERBOSE_NOTICE;
             }
             continue;
         }

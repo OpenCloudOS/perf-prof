@@ -341,7 +341,7 @@ static void kvm_exit_sample(union perf_event *event, int instance)
     u32 isa;
     unsigned long guest_rip;
 
-    if (ctx.env->verbose >= 2) {
+    if (ctx.env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
         tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
     }
@@ -360,7 +360,7 @@ static void kvm_exit_sample(union perf_event *event, int instance)
                 ctx.perins_kvm_exit_valid[instance] = 0;
             } else {
                 if (raw->tid_entry.tid != raw_kvm_exit->tid_entry.tid) {
-                    if (ctx.env->verbose >= 1) {
+                    if (ctx.env->verbose >= VERBOSE_NOTICE) {
                         __print_raw(raw_kvm_exit, "WARN");
                         __print_raw(raw, "WARN");
                     }

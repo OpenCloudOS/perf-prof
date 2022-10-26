@@ -755,10 +755,10 @@ static void kvm_mmu_sample(union perf_event *event, int instance)
         ret = kvm_mmu_gen_set_spte(ctx.current_valid_gen, raw->raw.mark_mmio_spte.gfn,
                 1, SPTE_SET | SPTE_MMIO);
     } else {
-        verbose = 1;
+        verbose = VERBOSE_NOTICE;
     }
 
-    if ((verbose >= 1 && ret < 0) || verbose >= 2) {
+    if ((verbose >= VERBOSE_NOTICE && ret < 0) || verbose >= VERBOSE_EVENT) {
         print_time(stdout);
         tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
     }

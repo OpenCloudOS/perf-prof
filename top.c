@@ -357,7 +357,7 @@ static void top_sample(union perf_event *event, int instance)
     if (ctx.show_comm && !tep_is_pid_registered(tep, raw->tid_entry.tid))
         tep__update_comm(NULL, raw->tid_entry.tid);
 
-    if (ctx.env->verbose) {
+    if (ctx.env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
         tep__print_event(raw->time/1000, raw->cpu_entry.cpu, data, size);
     }

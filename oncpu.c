@@ -389,6 +389,9 @@ static void oncpu_sample(union perf_event *event, int instance)
     struct runtime *run;
     int tid, cpu;
 
+    if (ctx.env->verbose >= VERBOSE_EVENT && data->raw.runtime.runtime >= ctx.env->greater_than)
+        tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+
 	/*
 	 * CPU 24/KVM  89720 d... [179] 4925560.039977: sched:sched_stat_runtime: comm=CPU 90/KVM pid=89786 runtime=951502 [ns] vruntime=52818652842246 [ns]
 	 *	ffffffff810d6157 update_curr+0x167 ([kernel.kallsyms])
@@ -412,7 +415,7 @@ static void oncpu_sample(union perf_event *event, int instance)
         data->tid_entry.tid != data->raw.runtime.pid) { //TODO
     __print_return:
         if (ctx.instance_oncpu) {
-            if (ctx.env->verbose && data->raw.runtime.runtime >= ctx.env->greater_than)
+            if (ctx.env->verbose == VERBOSE_NOTICE && data->raw.runtime.runtime >= ctx.env->greater_than)
                 tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
         }
         // A similar problem exists with attaching to a process.

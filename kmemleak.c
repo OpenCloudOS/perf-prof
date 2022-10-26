@@ -608,7 +608,7 @@ static void kmemleak_sample(union perf_event *event, int instance)
     if (ctx.user && !tep_is_pid_registered(tep, data->tid_entry.tid))
         tep__update_comm(NULL, data->tid_entry.tid);
 
-    if (ctx.env->verbose >= 2) {
+    if (ctx.env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
         __print_callchain(event, is_alloc);

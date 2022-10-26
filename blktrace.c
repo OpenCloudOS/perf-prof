@@ -375,7 +375,7 @@ static void blktrace_sample(union perf_event *event, int instance)
         if (ctx.env->greater_than &&
             delta > ctx.env->greater_than) {
             print = "GREATER_THAN";
-            verbose = 1;
+            verbose = VERBOSE_NOTICE;
         }
 
         if (r.tp != BLOCK_RQ_COMPLETE) {
@@ -392,7 +392,7 @@ static void blktrace_sample(union perf_event *event, int instance)
         rblist__add_node(&ctx.rq_tracks, &r);
 
     if (verbose &&
-        (print || verbose >= 2)) {
+        (print || verbose >= VERBOSE_EVENT)) {
         tep__update_comm(NULL, data->tid_entry.tid);
         print_time(stdout);
         if (print)

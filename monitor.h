@@ -53,6 +53,11 @@ __attribute__((constructor)) static void __monitor_register_##name(void) \
 
 #define PROGRAME "perf-prof"
 
+#define VERBOSE_NOTICE 1 // -v
+#define VERBOSE_EVENT  2 // -vv
+#define VERBOSE_ALL    3 // -vvv
+
+
 #define MAX_SLOTS 26
 struct hist {
     unsigned int slots[MAX_SLOTS];

@@ -270,7 +270,7 @@ static void sched_migrate_sample(union perf_event *event, int instance)
         ctx.stat.same_l2 ++;
 
     if (!same_llc(migrate->orig_cpu, migrate->dest_cpu)) {
-        if (ctx.env->detail && !ctx.env->verbose) {
+        if (ctx.env->detail) {
             print = 1;
         }
     } else
@@ -278,7 +278,7 @@ static void sched_migrate_sample(union perf_event *event, int instance)
 
     ctx.stat.total ++;
 
-    if (print || ctx.env->verbose) {
+    if (print || ctx.env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
         print_time(stdout);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
