@@ -33,9 +33,10 @@ struct runtime {
 };
 
 static struct oncpu_ctx {
-    bool instance_oncpu;
+    bool tid_to_cpumap;
     int nr_ins;
     int nr_cpus;
+    u64 *last_time;
     struct rblist runtimes;
     int *percpu_thread_siblings;
     int *perins_vmf_sib;
@@ -54,13 +55,29 @@ struct sched_stat_runtime {
     u64 vruntime;   //   offset:40;      size:8; signed:0;
 };
 
+struct sched_switch {
+    unsigned short common_type; //       offset:0;       size:2; signed:0;
+    unsigned char common_flags; //       offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count; //       offset:3;       size:1; signed:0;
+    int common_pid; //   offset:4;       size:4; signed:1;
+
+    char prev_comm[16]; //       offset:8;       size:16;        signed:1;
+    pid_t prev_pid; //   offset:24;      size:4; signed:1;
+    int prev_prio; //    offset:28;      size:4; signed:1;
+    long prev_state; //  offset:32;      size:8; signed:1;
+    char next_comm[16]; //       offset:40;      size:16;        signed:1;
+    pid_t next_pid; //   offset:56;      size:4; signed:1;
+    int next_prio; //   offset:60;      size:4; signed:1;
+};
+
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct sample_type_data {
     struct {
         u32    pid;
         u32    tid;
     }    tid_entry;
+    u64  time;
     struct {
         u32    cpu;
         u32    reserved;
@@ -72,6 +89,7 @@ struct sample_type_data {
         union {
             __u8    data[0];
             struct sched_stat_runtime runtime;
+            struct sched_switch sched_switch;
         } __packed;
     } raw;
 };
@@ -131,6 +149,42 @@ static void runtime_node_delete(struct rblist *rblist, struct rb_node *rb_node)
     struct runtime *run = rb_entry(rb_node, struct runtime, rbn);
     free(run);
 }
+
+static void empty(struct rblist *rblist, struct rb_node *rb_node)
+{
+}
+
+static int runtime_sorted_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct runtime *run = rb_entry(rbn, struct runtime, rbn);
+    struct runtime *e = rb_entry(entry, struct runtime, rbn);
+
+    if (run->instance > e->instance)
+        return 1;
+    else if (run->instance < e->instance)
+        return -1;
+
+    if (run->runtime > e->runtime)
+        return -1;
+    else if (run->runtime < e->runtime)
+        return 1;
+
+    if (run->another > e->another)
+        return 1;
+    else if (run->another < e->another)
+        return -1;
+
+    return 0;
+}
+
+static struct rb_node *runtime_sorted_node_new(struct rblist *rlist, const void *new_entry)
+{
+    struct rb_node *n = (void *)new_entry;
+
+    RB_CLEAR_NODE(n);
+    return n;
+}
+
 
 static int read_cpu_thread_sibling(int cpu)
 {
@@ -198,7 +252,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
@@ -213,9 +267,13 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 
     tep__ref();
     ctx.env = env;
-    ctx.instance_oncpu = monitor_instance_oncpu();
+    ctx.tid_to_cpumap = !monitor_instance_oncpu();
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_cpus = get_present_cpus();
+    ctx.last_time = calloc(ctx.nr_ins, sizeof(u64));
+    if (!ctx.last_time)
+        return -1;
+
     rblist__init(&ctx.runtimes);
     ctx.runtimes.node_cmp = runtime_node_cmp;
     ctx.runtimes.node_new = runtime_node_new;
@@ -235,7 +293,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         }
 
         // on thread
-        if (!ctx.instance_oncpu) {
+        if (ctx.tid_to_cpumap) {
             ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
             if (!ctx.perins_vmf_sib)
                 return -1;
@@ -245,7 +303,10 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         }
     }
 
-    attr.config = tep__event_id("sched", "sched_stat_runtime");
+    if (ctx.tid_to_cpumap)
+        attr.config = tep__event_id("sched", "sched_stat_runtime");
+    else
+        attr.config = tep__event_id("sched", "sched_switch");
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         return -1;
@@ -272,6 +333,8 @@ static int oncpu_filter(struct perf_evlist *evlist, struct env *env)
 static void oncpu_exit(struct perf_evlist *evlist)
 {
     rblist__exit(&ctx.runtimes);
+    if (ctx.last_time)
+        free(ctx.last_time);
     if (ctx.percpu_thread_siblings)
         free(ctx.percpu_thread_siblings);
     if (ctx.perins_vmf_sib)
@@ -351,13 +414,33 @@ static void oncpu_interval(void)
 {
     struct rb_node *next = rb_first_cached(&ctx.runtimes.entries);
     struct runtime *first, *run;
+    struct rblist sorted;
 
     if (rblist__empty(&ctx.runtimes))
         return ;
 
+    if (!ctx.tid_to_cpumap) {
+        // sort by cpu(from small to big), runtime(from big to small), tid.
+
+        rblist__init(&sorted);
+        sorted.node_cmp = runtime_sorted_node_cmp;
+        sorted.node_new = runtime_sorted_node_new;
+        sorted.node_delete = runtime_node_delete;
+        ctx.runtimes.node_delete = empty; //empty, not really delete
+
+        /* sort, remove from `ctx.runtimes', add to `sorted'. */
+        do {
+            struct rb_node *rbn = rblist__entry(&ctx.runtimes, 0);
+            rblist__remove_node(&ctx.runtimes, rbn);
+            rblist__add_node(&sorted, rbn);
+        } while (!rblist__empty(&ctx.runtimes));
+
+        next = rblist__entry(&sorted, 0);
+    }
+
     print_time(stdout);
     printf("\n");
-    if (!ctx.instance_oncpu)
+    if (ctx.tid_to_cpumap)
         printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
             ctx.env->detail ? "CO(ms) CO(%)  " : "",
             ctx.env->detail ? ", SIBLINGS" : "");
@@ -366,11 +449,16 @@ static void oncpu_interval(void)
 
     first = rb_entry_safe(next, struct runtime, rbn);
     while (first) {
-        ((!ctx.instance_oncpu) ? print_cpumap : print_tidmap)(first);
+        (ctx.tid_to_cpumap ? print_cpumap : print_tidmap)(first);
         for_each_runtime(first, run, rbn, instance);
         first = run;
     }
-    rblist__exit(&ctx.runtimes);
+
+    if (!ctx.tid_to_cpumap) {
+        rblist__exit(&sorted);
+        ctx.runtimes.node_delete = runtime_node_delete;
+    } else
+        rblist__exit(&ctx.runtimes);
 }
 
 static void oncpu_sample(union perf_event *event, int instance)
@@ -379,9 +467,43 @@ static void oncpu_sample(union perf_event *event, int instance)
     struct runtime_entry entry;
     struct rb_node *rbn;
     struct runtime *run;
+    int tid, cpu;
+    u64 runtime;
+    char *comm;
 
-    if (ctx.env->verbose >= VERBOSE_EVENT && data->raw.runtime.runtime >= ctx.env->greater_than)
-        tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+    if (ctx.env->verbose >= VERBOSE_EVENT)
+        tep__print_event(data->time, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+
+    if (ctx.tid_to_cpumap) {
+        // sched:sched_stat_runtime
+
+        tid = data->tid_entry.tid;
+        cpu = data->cpu_entry.cpu;
+        runtime = data->raw.runtime.runtime;
+        comm = data->raw.runtime.comm;
+    } else {
+        /*
+         * sched:sched_switch
+         *
+         *        ps   1214 d... [000]  2359.771892: sched:sched_switch: ps:1214 [120] R ==> sap1001:112746 [120]
+         *   sap1001 112746 d... [000]  2359.772143: sched:sched_switch: sap1001:112746 [120] S ==> ps:1214 [120]
+         *
+         * The runtime of sap1001:112746 is equal to 2359.772143 minus 2359.771892.
+        **/
+        if (ctx.last_time[instance] == 0) {
+            ctx.last_time[instance] = data->time;
+            return;
+        }
+        tid = data->raw.sched_switch.prev_pid;
+        cpu = data->cpu_entry.cpu;
+        runtime = data->time - ctx.last_time[instance];
+        comm = data->raw.sched_switch.prev_comm;
+        ctx.last_time[instance] = data->time;
+
+        // exclude swapper
+        if (strncmp(comm, "swapper/", 8) == 0)
+            return;
+    }
 
 	/*
 	 * CPU 24/KVM  89720 d... [179] 4925560.039977: sched:sched_stat_runtime: comm=CPU 90/KVM pid=89786 runtime=951502 [ns] vruntime=52818652842246 [ns]
@@ -402,7 +524,8 @@ static void oncpu_sample(union perf_event *event, int instance)
 	 * instead of cpu x. Will cause data->tid_entry.tid != data->raw.runtime.pid.
 	 * As in the above example, 89720 != 89786.
 	**/
-    if (data->tid_entry.tid != data->raw.runtime.pid) { //TODO
+    if (ctx.tid_to_cpumap &&
+        data->tid_entry.tid != data->raw.runtime.pid) {
         // print unhandled event
         if (ctx.env->verbose == VERBOSE_NOTICE && data->raw.runtime.runtime >= ctx.env->greater_than)
             tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
@@ -412,16 +535,13 @@ static void oncpu_sample(union perf_event *event, int instance)
     }
 
     entry.instance = instance;
-    if (!ctx.instance_oncpu)
-        entry.cpu = data->cpu_entry.cpu;
-    else
-        entry.tid = data->tid_entry.tid;
+    entry.another = ctx.tid_to_cpumap ? cpu : tid;
     rbn = rblist__findnew(&ctx.runtimes, &entry);
     if (rbn) {
         run = rb_entry(rbn, struct runtime, rbn);
-        run->runtime += data->raw.runtime.runtime;
+        run->runtime += runtime;
         if (run->comm[0] == 0) {
-            memcpy(run->comm, data->raw.runtime.comm, 16);
+            memcpy(run->comm, comm, 16);
         }
     }
 }
