@@ -34,7 +34,6 @@ struct runtime {
 
 static struct oncpu_ctx {
     bool instance_oncpu;
-    bool sched_stat_runtime_has_cpu;
     int nr_ins;
     int nr_cpus;
     struct rblist runtimes;
@@ -51,7 +50,6 @@ struct sched_stat_runtime {
 
     char comm[16];  //   offset:8;       size:16;        signed:1;
     pid_t pid;      //   offset:24;      size:4; signed:1;
-    int cpu;        //   offset:28;      size:4; signed:1;
     u64 runtime;    //   offset:32;      size:8; signed:0;
     u64 vruntime;   //   offset:40;      size:8; signed:0;
 };
@@ -208,7 +206,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         .wakeup_watermark = (oncpu.pages << 12) / 2,
     };
     struct perf_evsel *evsel;
-    int i, id;
+    int i;
 
     if (!env->interval)
         env->interval = 1000;
@@ -247,14 +245,13 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         }
     }
 
-    attr.config = id = tep__event_id("sched", "sched_stat_runtime");
+    attr.config = tep__event_id("sched", "sched_stat_runtime");
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         return -1;
     }
     perf_evlist__add(evlist, evsel);
 
-    ctx.sched_stat_runtime_has_cpu = tep__event_has_field(id, "cpu");
     return 0;
 }
 
@@ -298,13 +295,8 @@ static struct runtime *find_first_sib(int instance)
 
 static void print_cpumap(struct runtime *first)
 {
-    struct runtime *run, *save = first;
+    struct runtime *run;
     u64 sum = 0;
-
-    if (first->cpu == -1) {
-        sum = first->runtime;
-        first = rb_entry_safe(rb_next(&first->rbn), struct runtime, rbn);
-    }
 
     for_each_runtime(first, run, rbn, instance)
         sum += run->runtime;
@@ -328,7 +320,7 @@ static void print_cpumap(struct runtime *first)
         printf("%-6lu %-5lu  ", co/1000000, co*100/sum);
     }
 
-    for_each_runtime(save, run, rbn, instance)
+    for_each_runtime(first, run, rbn, instance)
         printf("%d(%lums) ", run->cpu, run->runtime/1000000);
 
     if (ctx.percpu_thread_siblings) {
@@ -387,7 +379,6 @@ static void oncpu_sample(union perf_event *event, int instance)
     struct runtime_entry entry;
     struct rb_node *rbn;
     struct runtime *run;
-    int tid, cpu;
 
     if (ctx.env->verbose >= VERBOSE_EVENT && data->raw.runtime.runtime >= ctx.env->greater_than)
         tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
@@ -411,35 +402,25 @@ static void oncpu_sample(union perf_event *event, int instance)
 	 * instead of cpu x. Will cause data->tid_entry.tid != data->raw.runtime.pid.
 	 * As in the above example, 89720 != 89786.
 	**/
-    if (!ctx.sched_stat_runtime_has_cpu &&
-        data->tid_entry.tid != data->raw.runtime.pid) { //TODO
-    __print_return:
-        if (ctx.instance_oncpu) {
-            if (ctx.env->verbose == VERBOSE_NOTICE && data->raw.runtime.runtime >= ctx.env->greater_than)
-                tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
-        }
+    if (data->tid_entry.tid != data->raw.runtime.pid) { //TODO
+        // print unhandled event
+        if (ctx.env->verbose == VERBOSE_NOTICE && data->raw.runtime.runtime >= ctx.env->greater_than)
+            tep__print_event(0, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+
         // A similar problem exists with attaching to a process.
         return;
     }
 
-    tid = data->raw.runtime.pid;
-    cpu = data->tid_entry.tid != data->raw.runtime.pid ? -1 : data->cpu_entry.cpu;
-    if (ctx.sched_stat_runtime_has_cpu) {
-        cpu = data->raw.runtime.cpu;
-        if (ctx.instance_oncpu && cpu != data->cpu_entry.cpu) {
-            instance = perf_cpu_map__idx(oncpu.cpus, cpu); // maybe -1;
-            if (instance == -1)
-                goto __print_return;
-        }
-    }
-
     entry.instance = instance;
-    entry.another = ctx.instance_oncpu ? tid : cpu;
+    if (!ctx.instance_oncpu)
+        entry.cpu = data->cpu_entry.cpu;
+    else
+        entry.tid = data->tid_entry.tid;
     rbn = rblist__findnew(&ctx.runtimes, &entry);
     if (rbn) {
         run = rb_entry(rbn, struct runtime, rbn);
         run->runtime += data->raw.runtime.runtime;
-        if (run->comm[0] == 0 && data->tid_entry.tid == data->raw.runtime.pid) {
+        if (run->comm[0] == 0) {
             memcpy(run->comm, data->raw.runtime.comm, 16);
         }
     }
