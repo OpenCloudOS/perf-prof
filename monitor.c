@@ -103,7 +103,7 @@ int remaining_argc = 0;
 char **remaining_argv = NULL;
 
 
-const char *argp_program_version = PROGRAME " 0.9";
+const char *argp_program_version = PROGRAME " 0.10";
 const char *argp_program_bug_address = "<corcpp@foxmail.com>";
 const char argp_program_args_doc[] =
     "profiler [PROFILER OPTION...] [help] [cmd [args...]]\n"
