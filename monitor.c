@@ -13,6 +13,7 @@
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #if defined(__i386__) || defined(__x86_64__)
 #include <cpuid.h>
 #endif
@@ -595,6 +596,42 @@ static void sig_handler(int sig)
     exiting = 1;
 }
 
+static void sigusr2_handler(int sig)
+{
+    static unsigned long utime = 0, stime = 0;
+    static struct timeval tv;
+    static bool init = 0;
+    struct rusage usage;
+
+    if (init == 0) {
+        gettimeofday(&tv, NULL);
+        if (getrusage(RUSAGE_SELF, &usage) == 0) {
+            utime = usage.ru_utime.tv_sec * 1000000UL + usage.ru_utime.tv_usec;
+            stime = usage.ru_stime.tv_sec * 1000000UL + usage.ru_stime.tv_usec;
+        } else
+            return ;
+        init = 1;
+        return ;
+    }
+
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        unsigned long user, sys, us;
+        struct timeval t;
+
+        gettimeofday(&t, NULL);
+        us = t.tv_sec * 1000000UL + t.tv_usec - tv.tv_sec * 1000000UL - tv.tv_usec;
+        user = usage.ru_utime.tv_sec * 1000000UL + usage.ru_utime.tv_usec - utime;
+        sys = usage.ru_stime.tv_sec * 1000000UL + usage.ru_stime.tv_usec - stime;
+
+        print_time(stdout);
+        printf("CPU %%usr %.2f %%sys %.2f MAXRSS %luk\n", user*100.0/us, sys*100.0/us, usage.ru_maxrss);
+
+        utime += user;
+        stime += sys;
+        tv = t;
+    }
+}
+
 int get_present_cpus(void)
 {
     struct perf_cpu_map *cpumap = NULL;
@@ -1007,6 +1044,7 @@ int main(int argc, char *argv[])
     int time_left;
     bool deinited;
 
+    sigusr2_handler(0);
     if (isatty(STDOUT_FILENO)) {
         struct winsize size;
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0) {
@@ -1128,8 +1166,8 @@ reinit:
 
     signal(SIGCHLD, sig_handler);
     signal(SIGINT, sig_handler);
-    if (monitor->sigusr1)
-        signal(SIGUSR1, monitor->sigusr1);
+    signal(SIGUSR1, monitor->sigusr1 ? : SIG_IGN);
+    signal(SIGUSR2, sigusr2_handler);
 
     workload_start(&workload);
 
