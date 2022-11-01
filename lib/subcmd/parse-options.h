@@ -51,6 +51,7 @@ enum parse_opt_option_flags {
 	PARSE_OPT_NOEMPTY  = 128,
 	PARSE_OPT_NOBUILD  = 256,
 	PARSE_OPT_CANSKIP  = 512,
+	PARSE_OPT_CONST_VALUE = 1024,
 };
 
 struct option;
@@ -138,17 +139,17 @@ struct option {
 #define OPT_LONG(s, l, v, h)        { .type = OPTION_LONG, .short_name = (s), .long_name = (l), .value = check_vtype(v, long *), .help = (h) }
 #define OPT_ULONG(s, l, v, h)        { .type = OPTION_ULONG, .short_name = (s), .long_name = (l), .value = check_vtype(v, unsigned long *), .help = (h) }
 #define OPT_U64(s, l, v, h)         { .type = OPTION_U64, .short_name = (s), .long_name = (l), .value = check_vtype(v, u64 *), .help = (h) }
-#define OPT_STRING(s, l, v, a, h)   { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, const char **), .argh = (a), .help = (h) }
+#define OPT_STRING(s, l, v, a, h)   { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, const char **), .argh = (a), .help = (h), .flags = PARSE_OPT_CONST_VALUE }
 #define OPT_STRING_OPTARG(s, l, v, a, h, d) \
 	{ .type = OPTION_STRING,  .short_name = (s), .long_name = (l), \
 	  .value = check_vtype(v, const char **), .argh =(a), .help = (h), \
-	  .flags = PARSE_OPT_OPTARG, .defval = (intptr_t)(d) }
+	  .flags = PARSE_OPT_OPTARG | PARSE_OPT_CONST_VALUE, .defval = (intptr_t)(d) }
 #define OPT_STRING_OPTARG_SET(s, l, v, os, a, h, d) \
 	{ .type = OPTION_STRING, .short_name = (s), .long_name = (l), \
 	  .value = check_vtype(v, const char **), .argh = (a), .help = (h), \
-	  .flags = PARSE_OPT_OPTARG, .defval = (intptr_t)(d), \
+	  .flags = PARSE_OPT_OPTARG | PARSE_OPT_CONST_VALUE, .defval = (intptr_t)(d), \
 	  .set = check_vtype(os, bool *)}
-#define OPT_STRING_NOEMPTY(s, l, v, a, h)   { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, const char **), .argh = (a), .help = (h), .flags = PARSE_OPT_NOEMPTY}
+#define OPT_STRING_NOEMPTY(s, l, v, a, h)   { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, const char **), .argh = (a), .help = (h), .flags = PARSE_OPT_NOEMPTY | PARSE_OPT_CONST_VALUE }
 #define OPT_DATE(s, l, v, h) \
 	{ .type = OPTION_CALLBACK, .short_name = (s), .long_name = (l), .value = (v), .argh = "time", .help = (h), .callback = parse_opt_approxidate_cb }
 #define OPT_CALLBACK(s, l, v, a, h, f) \

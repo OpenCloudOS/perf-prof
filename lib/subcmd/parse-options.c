@@ -234,6 +234,11 @@ static int get_value(struct parse_opt_ctx_t *p,
 			}
 		}
 
+		if (!(opt->flags & PARSE_OPT_CONST_VALUE)) {
+			const char *val = *(const char **)opt->value;
+			if (val)
+				*(char **)opt->value = strdup(val);
+		}
 		return err;
 
 	case OPTION_CALLBACK:
