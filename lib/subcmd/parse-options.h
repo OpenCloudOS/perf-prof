@@ -160,7 +160,7 @@ struct option {
 	{ .type = OPTION_CALLBACK, .short_name = (s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .callback = (f), .defval = (intptr_t)d, .flags = PARSE_OPT_LASTARG_DEFAULT }
 #define OPT_CALLBACK_DEFAULT_NOOPT(s, l, v, a, h, f, d) \
 	{ .type = OPTION_CALLBACK, .short_name = (s), .long_name = (l),\
-	.value = (v), .arg = (a), .help = (h), .callback = (f), .defval = (intptr_t)d,\
+	.value = (v), .argh = (a), .help = (h), .callback = (f), .defval = (intptr_t)d,\
 	.flags = PARSE_OPT_LASTARG_DEFAULT | PARSE_OPT_NOARG}
 #define OPT_CALLBACK_OPTARG(s, l, v, d, a, h, f) \
 	{ .type = OPTION_CALLBACK, .short_name = (s), .long_name = (l), \
@@ -228,14 +228,14 @@ extern int parse_opt_verbosity_cb(const struct option *, const char *, int);
 #define OPT__VERBOSE(var)  OPT_BOOLEAN('v', "verbose", (var), "be verbose")
 #define OPT__QUIET(var)    OPT_BOOLEAN('q', "quiet",   (var), "be quiet")
 #define OPT__VERBOSITY(var) \
-	{ OPTION_CALLBACK, 'v', "verbose", (var), NULL, "be more verbose", \
+	{ OPTION_CALLBACK, 'v', "verbose", (var), NULL, "be more verbose", NULL, \
 	  PARSE_OPT_NOARG, &parse_opt_verbosity_cb, 0 }, \
-	{ OPTION_CALLBACK, 'q', "quiet", (var), NULL, "be more quiet", \
+	{ OPTION_CALLBACK, 'q', "quiet", (var), NULL, "be more quiet", NULL, \
 	  PARSE_OPT_NOARG, &parse_opt_verbosity_cb, 0 }
 #define OPT__DRY_RUN(var)  OPT_BOOLEAN('n', "dry-run", (var), "dry run")
 #define OPT__ABBREV(var)  \
 	{ OPTION_CALLBACK, 0, "abbrev", (var), "n", \
-	  "use <n> digits to display SHA-1s", \
+	  "use <n> digits to display SHA-1s", NULL, \
 	  PARSE_OPT_OPTARG, &parse_opt_abbrev_cb, 0 }
 
 extern const char *parse_options_fix_filename(const char *prefix, const char *file);
