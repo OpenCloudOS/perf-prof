@@ -700,7 +700,7 @@ int parse_options(int argc, const char **argv, const struct option *options,
 					(const char **) usagestr, flags);
 }
 
-#define USAGE_OPTS_WIDTH 24
+#define USAGE_OPTS_WIDTH 30
 #define USAGE_GAP         2
 
 static void print_option_help(const struct option *opts, int full)
@@ -719,7 +719,7 @@ static void print_option_help(const struct option *opts, int full)
 	if (opts->flags & PARSE_OPT_DISABLED)
 		return;
 
-	pos = fprintf(stderr, "    ");
+	pos = fprintf(stderr, "  ");
 	if (isshort(opts->short_name))
 		pos += fprintf(stderr, "-%c", opts->short_name);
 	else
@@ -883,7 +883,8 @@ static bool option__in_argv(const struct option *opt, const struct parse_opt_ctx
 			if (opt->long_name && strcmp(opt->long_name, arg) == 0)
 				return true;
 
-			if (opt->help && strcasestr(opt->help, arg) != NULL)
+			// OPT_GROUP, OPT_ARGUMENT
+			if (opt->help && strcmp(opt->help, arg) == 0)
 				return true;
 
 			continue;
@@ -1003,7 +1004,7 @@ opt:
 
 		if (strstarts(opts->long_name, optstr))
 			print_option_help(opts, 0);
-		if (strstarts("no-", optstr) &&
+		if (strstarts(optstr, "no-") &&
 		    strstarts(opts->long_name, optstr + 3))
 			print_option_help(opts, 0);
 	}
