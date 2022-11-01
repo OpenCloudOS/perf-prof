@@ -17,6 +17,11 @@
 
 char *error_buf;
 
+static inline bool isshort(int short_name)
+{
+	return short_name < 256 && isalnum(short_name);
+}
+
 static int opterror(const struct option *opt, const char *reason, int flags)
 {
 	if (flags & OPT_SHORT)
@@ -351,7 +356,7 @@ static int parse_short_opt(struct parse_opt_ctx_t *p, const struct option *optio
 {
 retry:
 	for (; options->type != OPTION_END; options++) {
-		if (options->short_name == *p->opt) {
+		if (isshort(options->short_name) && options->short_name == *p->opt) {
 			p->opt = p->opt[1] ? p->opt + 1 : NULL;
 			return get_value(p, options, OPT_SHORT);
 		}
@@ -715,12 +720,12 @@ static void print_option_help(const struct option *opts, int full)
 		return;
 
 	pos = fprintf(stderr, "    ");
-	if (opts->short_name)
+	if (isshort(opts->short_name))
 		pos += fprintf(stderr, "-%c", opts->short_name);
 	else
 		pos += fprintf(stderr, "    ");
 
-	if (opts->long_name && opts->short_name)
+	if (opts->long_name && isshort(opts->short_name))
 		pos += fprintf(stderr, ", ");
 	if (opts->long_name)
 		pos += fprintf(stderr, "--%s", opts->long_name);
@@ -870,7 +875,7 @@ static bool option__in_argv(const struct option *opt, const struct parse_opt_ctx
 
 		if (arg[0] != '-') {
 			if (arg[1] == '\0') {
-				if (arg[0] == opt->short_name)
+				if (isshort(opt->short_name) && arg[0] == opt->short_name)
 					return true;
 				continue;
 			}
@@ -884,7 +889,7 @@ static bool option__in_argv(const struct option *opt, const struct parse_opt_ctx
 			continue;
 		}
 
-		if (arg[1] == opt->short_name ||
+		if ((isshort(opt->short_name) && arg[1] == opt->short_name) ||
 		    (arg[1] == '-' && opt->long_name && strcmp(opt->long_name, arg + 2) == 0))
 			return true;
 	}
@@ -986,7 +991,7 @@ int parse_options_usage(const char * const *usagestr,
 opt:
 	for (  ; opts->type != OPTION_END; opts++) {
 		if (short_opt) {
-			if (opts->short_name == *optstr) {
+			if (isshort(opts->short_name) && opts->short_name == *optstr) {
 				print_option_help(opts, 0);
 				break;
 			}
