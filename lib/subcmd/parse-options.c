@@ -733,13 +733,23 @@ static void print_option_help(const struct option *opts, int full)
 	case OPTION_U64:
 	case OPTION_INTEGER:
 	case OPTION_UINTEGER:
-		if (opts->flags & PARSE_OPT_OPTARG)
-			if (opts->long_name)
-				pos += fprintf(stderr, "[=<n>]");
+		if (opts->argh) {
+			if (opts->flags & PARSE_OPT_OPTARG)
+				if (opts->long_name)
+					pos += fprintf(stderr, "[=<%s>]", opts->argh);
+				else
+					pos += fprintf(stderr, "[<%s>]", opts->argh);
 			else
-				pos += fprintf(stderr, "[<n>]");
-		else
-			pos += fprintf(stderr, " <n>");
+				pos += fprintf(stderr, " <%s>", opts->argh);
+		} else {
+			if (opts->flags & PARSE_OPT_OPTARG)
+				if (opts->long_name)
+					pos += fprintf(stderr, "[=<n>]");
+				else
+					pos += fprintf(stderr, "[<n>]");
+			else
+				pos += fprintf(stderr, " <n>");
+		}
 		break;
 	case OPTION_CALLBACK:
 		if (opts->flags & PARSE_OPT_NOARG)
