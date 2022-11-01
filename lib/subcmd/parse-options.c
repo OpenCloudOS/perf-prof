@@ -61,7 +61,7 @@ static int get_arg(struct parse_opt_ctx_t *p, const struct option *opt,
 	} else if ((opt->flags & PARSE_OPT_LASTARG_DEFAULT) && (p->argc == 1 ||
 		    **(p->argv + 1) == '-')) {
 		res = (const char *)opt->defval;
-	} else if (p->argc > 1) {
+	} else if (p->argc > 1 && (**(p->argv + 1) != '-')) {
 		p->argc--;
 		res = *++p->argv;
 	} else
@@ -358,6 +358,7 @@ retry:
 	for (; options->type != OPTION_END; options++) {
 		if (isshort(options->short_name) && options->short_name == *p->opt) {
 			p->opt = p->opt[1] ? p->opt + 1 : NULL;
+			p->opt = (p->opt && *p->opt == '=') ? p->opt + 1 : p->opt;
 			return get_value(p, options, OPT_SHORT);
 		}
 	}
