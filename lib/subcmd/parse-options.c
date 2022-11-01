@@ -791,7 +791,18 @@ static void print_option_help(const struct option *opts, int full)
 		fputc('\n', stderr);
 		pad = USAGE_OPTS_WIDTH;
 	}
-	fprintf(stderr, "%*s%s\n", pad + USAGE_GAP, "", opts->help);
+
+	if (strchr(opts->help, '\n')) {
+		char *help = strdup(opts->help);
+		char *s = help, *saveptr;
+		while ((s = strtok_r(s, "\n", &saveptr))) {
+			fprintf(stderr, "%*s%s\n", pad + USAGE_GAP, "", s);
+			s = NULL;
+			pad = USAGE_OPTS_WIDTH;
+		}
+		free(help);
+	} else
+		fprintf(stderr, "%*s%s\n", pad + USAGE_GAP, "", opts->help);
 	if (opts->flags & PARSE_OPT_NOBUILD)
 		fprintf(stderr, "%*s(not built-in because %s)\n",
 			USAGE_OPTS_WIDTH + USAGE_GAP, "",
