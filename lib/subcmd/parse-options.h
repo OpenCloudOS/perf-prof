@@ -37,6 +37,7 @@ enum parse_opt_flags {
 	PARSE_OPT_KEEP_ARGV0 = 4,
 	PARSE_OPT_KEEP_UNKNOWN = 8,
 	PARSE_OPT_NO_INTERNAL_HELP = 16,
+	PARSE_OPT_INTERNAL_HELP_NO_ORDER = 32,
 };
 
 enum parse_opt_option_flags {

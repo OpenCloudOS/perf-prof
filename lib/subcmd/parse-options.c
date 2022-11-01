@@ -870,7 +870,7 @@ static int usage_with_options_internal(const char * const *usagestr,
 				       const struct option *opts, int full,
 				       struct parse_opt_ctx_t *ctx)
 {
-	struct option *ordered;
+	struct option *ordered = NULL;
 
 	if (!usagestr)
 		return PARSE_OPT_HELP;
@@ -895,9 +895,11 @@ static int usage_with_options_internal(const char * const *usagestr,
 	if (opts->type != OPTION_GROUP)
 		fputc('\n', stderr);
 
-	ordered = options__order(opts);
-	if (ordered)
-		opts = ordered;
+	if (!(ctx && ctx->flags & PARSE_OPT_INTERNAL_HELP_NO_ORDER)) {
+		ordered = options__order(opts);
+		if (ordered)
+			opts = ordered;
+	}
 
 	for (  ; opts->type != OPTION_END; opts++) {
 		if (ctx && ctx->argc > 1 && !option__in_argv(opts, ctx))
@@ -907,7 +909,8 @@ static int usage_with_options_internal(const char * const *usagestr,
 
 	fputc('\n', stderr);
 
-	free(ordered);
+	if (ordered)
+		free(ordered);
 
 	return PARSE_OPT_HELP;
 }
