@@ -275,8 +275,19 @@ static void trace_help(struct help_ctx *hctx)
     printf("\n");
 }
 
+static const char *trace_desc[] = PROFILER_DESC("trace",
+    "[OPTION...] -e EVENT [--overwrite] [-g [--flame-graph file [-i INT]]]",
+    "Trace events and print them directly.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" trace -e sched:sched_wakeup -C 0 -g",
+    "    "PROGRAME" trace -e sched:sched_wakeup,sched:sched_switch --overwrite");
+static const char *trace_argv[] = PROFILER_ARGV("trace",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "overwrite", "call-graph", "flame-graph");
 static profiler trace = {
     .name = "trace",
+    .desc = trace_desc,
+    .argv = trace_argv,
     .pages = 2,
     .help = trace_help,
     .init = trace_init,
