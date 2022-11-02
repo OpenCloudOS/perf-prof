@@ -370,8 +370,21 @@ static void kvm_exit_sample(union perf_event *event, int instance)
     }
 }
 
+static const char *kvm_exit_desc[] = PROFILER_DESC("kvm-exit",
+    "[OPTION...] [--perins] [--than ns] [--heatmap file] [--filter filter]",
+    "Count the delay from kvm_exit to kvm_entry.", "",
+    "TRACEPOINT", "",
+    "    kvm:kvm_exit, kvm:kvm_entry", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" kvm-exit -p 2347 -i 1000",
+    "    "PROGRAME" kvm-exit -C 1-4 -i 1000 --perins");
+static const char *kvm_exit_argv[] = PROFILER_ARGV("kvm-exit",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "perins", "than", "heatmap", "filter");
 struct monitor kvm_exit = {
     .name = "kvm-exit",
+    .desc = kvm_exit_desc,
+    .argv = kvm_exit_argv,
     .pages = 64,
     .init = kvm_exit_init,
     .filter = kvm_exit_filter,
