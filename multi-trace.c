@@ -1006,8 +1006,28 @@ static void multi_trece_help(struct help_ctx *hctx)
         __multi_trece_help(hctx, common, impl_str[impl], false);
 }
 
+static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
+    "[OPTION...] -e EVENT [-e ...] [-k key] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]",
+    "Multipurpose trace: delay, pair, kmemprof, syscalls.", "",
+    "SYNOPSIS", "",
+    "    Multiple events are associated by key and finally converted into two-event analysis.", "",
+    "TWO-EVENT", "",
+    "    delay - latency analysis",
+    "    pair - event pair, alloc and free, open and close, etc.",
+    "    kmemprof - mem profile, alloc and free bytes",
+    "    syscalls - syscalls latency analysis", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000",
+    "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --impl pair",
+    "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us",
+    "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms");
+static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "detail", "perins", "heatmap");
 static profiler multi_trace = {
     .name = "multi-trace",
+    .desc = multi_trace_desc,
+    .argv = multi_trace_argv,
     .pages = 64,
     .help = multi_trece_help,
     .init = multi_trace_init,
