@@ -371,8 +371,19 @@ static void mpdelay_help(struct help_ctx *hctx)
 }
 
 
+static const char *mpdelay_desc[] = PROFILER_DESC("mpdelay",
+    "[OPTION...] -e EVENT [--perins] [--than ns] [--heatmap file]",
+    "Latency analysis. Get 'delay' data from the event itself.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" mpdelay -e sched:sched_stat_runtime help",
+    "    "PROGRAME" mpdelay -e sched:sched_stat_runtime//delay=runtime/ -C 0 -i 1000");
+static const char *mpdelay_argv[] = PROFILER_ARGV("mpdelay",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "perins", "than", "heatmap");
 static profiler mpdelay = {
     .name = "mpdelay",
+    .desc = mpdelay_desc,
+    .argv = mpdelay_argv,
     .pages = 64,
     .help = mpdelay_help,
     .init = mpdelay_init,
