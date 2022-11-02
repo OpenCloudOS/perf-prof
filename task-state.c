@@ -417,8 +417,22 @@ static void task_state_sigusr1(int signum)
     obj__stat(stderr);
 }
 
+static const char *task_state_desc[] = PROFILER_DESC("task-state",
+    "[OPTION...] [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]",
+    "Trace task state, wakeup, switch, INTERRUPTIBLE, UNINTERRUPTIBLE.", "",
+    "TRACEPOINT", "",
+    "    sched:sched_switch, sched:sched_wakeup", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" task-state -p 2347 -SD --than 20ms -g",
+    "    "PROGRAME" task-state --filter 'java,python*' -S --than 100ms -g",
+    "    "PROGRAME" task-state -- ip link show eth0");
+static const char *task_state_argv[] = PROFILER_ARGV("task-state",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "interruptible", "uninterruptible", "than", "filter", "call-graph", "flame-graph");
 struct monitor task_state = {
     .name = "task-state",
+    .desc = task_state_desc,
+    .argv = task_state_argv,
     .pages = 8,
     .init = task_state_init,
     .filter = task_state_filter,
