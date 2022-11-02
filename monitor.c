@@ -465,7 +465,7 @@ static int parse_main_options(int argc, char *argv[])
         break;
     }
 
-    if (monitor == NULL)
+    if (monitor == NULL && env.symbols == NULL)
         help();
 
     if (argc && !dashdash) {
