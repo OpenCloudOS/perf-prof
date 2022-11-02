@@ -1241,8 +1241,28 @@ static void nested_trace_help(struct help_ctx *hctx)
         __multi_trece_help(hctx, common, impl_str[impl], false);
 }
 
+static const char *nested_trace_desc[] = PROFILER_DESC("nested-trace",
+    "[OPTION...] -e E,E_ret [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]",
+    "Nested-event trace: delay, call, call-delay.", "",
+    "SYNOPSIS", "",
+    "    Function calls, interrupts, etc. are possible nested events.",
+    "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
+    "TWO-EVENT", "",
+    "    delay - analyze function time",
+    "    call - analyze function calls",
+    "    call-delay - Analyze function calls. Also analyze function time.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" nested-trace -e irq:softirq_entry/vec==1/,irq:softirq_exit/vec==1/ -i 1000",
+    "    "PROGRAME" nested-trace -e irq:softirq_entry/vec==1/,irq:softirq_exit/vec==1/ -i 1000 --impl call-delay",
+    "    "PROGRAME" nested-trace -e irq:softirq_entry/vec==1/,irq:softirq_exit/vec==1/ -e "
+                                   "timer:timer_expire_entry,timer:timer_expire_exit -i 1000 --impl call-delay");
+static const char *nested_trace_argv[] = PROFILER_ARGV("nested-trace",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "detail", "perins", "heatmap");
 static profiler nested_trace = {
     .name = "nested-trace",
+    .desc = nested_trace_desc,
+    .argv = nested_trace_argv,
     .pages = 64,
     .help = nested_trace_help,
     .init = nested_trace_init,
