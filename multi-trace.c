@@ -1108,8 +1108,21 @@ static void syscalls_help(struct help_ctx *hctx)
     env->impl = oldimpl;
 }
 
+static const char *syscalls_desc[] = PROFILER_DESC("syscalls",
+    "[OPTION...] -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]",
+    "Syscalls latency analysis.", "",
+    "SYNOPSIS", "",
+    "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -p 1561",
+    "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -k common_pid --order -C 0");
+static const char *syscalls_argv[] = PROFILER_ARGV("syscalls",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "key", "than", "perins", "heatmap");
 static profiler syscalls = {
     .name = "syscalls",
+    .desc = syscalls_desc,
+    .argv = syscalls_argv,
     .pages = 64,
     .help = syscalls_help,
     .init = syscalls_init,
