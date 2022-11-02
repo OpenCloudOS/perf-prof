@@ -818,12 +818,14 @@ static void print_option_help(const struct option *opts, int full)
 static int option__cmp(const void *va, const void *vb)
 {
 	const struct option *a = va, *b = vb;
-	int sa = tolower(a->short_name), sb = tolower(b->short_name), ret;
+	int sa = isshort(a->short_name) ? tolower(a->short_name) : a->short_name;
+	int sb = isshort(b->short_name) ? tolower(b->short_name) : b->short_name;
+	int ret;
 
 	if (sa == 0)
-		sa = 'z' + 1;
+		sa = INT32_MAX;
 	if (sb == 0)
-		sb = 'z' + 1;
+		sb = INT32_MAX;
 
 	ret = sa - sb;
 
