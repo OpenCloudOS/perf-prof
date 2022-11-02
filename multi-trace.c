@@ -1060,8 +1060,22 @@ static void kmemprof_help(struct help_ctx *hctx)
     env->impl = oldimpl;
 }
 
+static const char *kmemprof_desc[] = PROFILER_DESC("kmemprof",
+    "[OPTION...] -e alloc -e free [-k str]",
+    "Memory allocation profile. Both user and kernel allocators are supported.", "",
+    "SYNOPSIS", "",
+    "    Profile alloc and free bytes, as well as the alloc stack.",
+    "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" kmemprof -e kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ -e kmem:kfree//ptr=ptr/ -m 128 --order -k ptr",
+    "    "PROGRAME" kmemprof -e kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/,kmem:kmalloc_node//ptr=ptr/size=bytes_alloc/stack/ -e kmem:kfree//ptr=ptr/ --order -k ptr");
+static const char *kmemprof_argv[] = PROFILER_ARGV("kmemprof",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "key");
 static profiler kmemprof = {
     .name = "kmemprof",
+    .desc = kmemprof_desc,
+    .argv = kmemprof_argv,
     .pages = 64,
     .help = kmemprof_help,
     .init = kmemprof_init,
