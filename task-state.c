@@ -215,6 +215,9 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
                 goto error_free;
             }
 
+            if (env->verbose >= VERBOSE_NOTICE)
+                printf("sched:sched_switch filter \"%s\"\n", filter);
+
             err = perf_evsel__apply_filter(evsel, filter);
 
         error_free:
@@ -229,6 +232,8 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
 
             tp_filter = tp_filter_new(ctx.thread_map, "pid", env->filter, "comm");
             if (tp_filter) {
+                if (env->verbose >= VERBOSE_NOTICE)
+                    printf("sched:sched_wakeup filter \"%s\"\n", tp_filter->filter);
                 err = perf_evsel__apply_filter(evsel, tp_filter->filter);
                 if (err < 0) {
                     fprintf(stderr, "sched:sched_wakeup filter \"%s\"\n", tp_filter->filter);
