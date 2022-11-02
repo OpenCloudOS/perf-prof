@@ -27,6 +27,7 @@ include $(srctree)/scripts/Makefile.arch
 INCLUDES = \
 -I$(srctree)/lib/perf/include \
 -I$(srctree)/lib/traceevent \
+-I$(srctree)/lib/subcmd \
 -I$(srctree)/lib/ \
 -I$(srctree)/include \
 -I$(srctree)/include/uapi \

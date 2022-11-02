@@ -31,7 +31,7 @@ perf-prof-y += kvmmmu.o
 endif
 
 bin-y += perf-prof
-perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a
+perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a
 ifdef CONFIG_LIBBPF
     perf-prof-libs += lib/bpf/libbpf.a
     LDFLAGS_perf-prof += -lz

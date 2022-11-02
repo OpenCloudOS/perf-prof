@@ -23,6 +23,8 @@
 #include <monitor.h>
 #include <tep.h>
 
+static void help(void);
+
 struct monitor *monitors_list = NULL;
 struct monitor *monitor = NULL;
 
@@ -99,170 +101,15 @@ struct env env = {
 
 static volatile bool exiting;
 static volatile bool child_finished;
-int remaining_argc = 0;
-char **remaining_argv = NULL;
 
-
-const char *argp_program_version = PROGRAME " 0.10";
-const char *argp_program_bug_address = "<corcpp@foxmail.com>";
-const char argp_program_args_doc[] =
-    "profiler [PROFILER OPTION...] [help] [cmd [args...]]\n"
-    "--symbols /path/to/bin";
-const char argp_program_doc[] =
-"\nProfiling based on perf_event\n\n"
-"Most Used Profilers:\n"
-"  perf-prof trace -e EVENT[...] [--overwrite] [-g [--flame-graph file [-i INT]]]\n"
-"  perf-prof task-state [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]\n"
-"  perf-prof kvm-exit [--perins] [--than ns] [--heatmap file] [--filter filter]\n"
-"  perf-prof mpdelay -e EVENT[...] [--perins] [--than ns] [--heatmap file]\n"
-"  perf-prof multi-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]\n"
-"  perf-prof nested-trace -e EVENT [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]\n"
-"  perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]] [-v]\n"
-"  perf-prof kmemprof -e EVENT [-e ...] [-k str]\n"
-"  perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]\n"
-"  perf-prof hrtimer [-e EVENT[...]] [-F freq] [--period ns] [-g] [FILTER OPTION...] [-v]\n"
-"  perf-prof hrcount [-e EVENT[...]] [--period ns] [--perins] [-v]\n"
-"  perf-prof percpu-stat [--syscalls]\n"
-"  perf-prof top -e EVENT[...] [-i INT] [-k str] [-v]\n"
-"  perf-prof stat -e EVENT[...] [--perins]\n"
-"  perf-prof blktrace -d device [--than ns]\n"
-"  perf-prof profile [-F freq] [-g [--flame-graph file [-i INT]]] [--than PCT] [FILTER OPTION...]\n"
-"  perf-prof cpu-util [--exclude-*] [-G]\n"
-"  perf-prof ldlat-loads [--ldlat cycles] [-T trigger]\n"
-"  perf-prof ldlat-stores [-T trigger]\n"
-"Use Fewer Profilers:\n"
-"  perf-prof split-lock [-T trigger] [-G] [--test]\n"
-"  perf-prof irq-off [--than ns] [-g] [--precise]\n"
-"  perf-prof signal [--filter comm] [-g]\n"
-"  perf-prof watchdog [-F freq] [-g]\n"
-"  perf-prof llcstat\n"
-"  perf-prof kvmmmu [--spte] [--mmio] [--detail]\n"
-"  perf-prof sched-migrate [--detail] [--filter filter] [-g [--flame-graph file]] [-v]\n"
-"  perf-prof oncpu -p PID [--detail] [--filter filter]\n"
-"  perf-prof page-faults [-g]\n"
-"  perf-prof event-lost -e EVENT\n"
-"\n"
-"Event selector. use 'perf list tracepoint' to list available tp events.\n"
-"  EVENT,EVENT,...\n"
-"  EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
-"  filter: ftrace filter\n"
-"  ATTR:\n"
-"      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
-"      max-stack=int : sample_max_stack\n"
-"      alias=str: event alias\n"
-"      top-by=field: add to top, sort by this field\n"
-"      top-add=field: add to top\n"
-"      comm=field: top, show COMM\n"
-"      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
-"      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
-"      delay=field: mpdelay, delay field\n"
-"      key=field: key for multiple events: top, multi-trace\n"
-"      untraced: multi-trace, auxiliary, no two-event analysis\n"
-;
+const char *main_program_version = PROGRAME " 0.10";
 
 enum {
-    LONG_OPT_test = 500,
-    LONG_OPT_precise,
-    LONG_OPT_filter,
-    LONG_OPT_exclude_user,
-    LONG_OPT_exclude_kernel,
-    LONG_OPT_exclude_guest,
+    LONG_OPT_start = 500,
     LONG_OPT_than,
-    LONG_OPT_alloc,
-    LONG_OPT_free,
-    LONG_OPT_syscalls,
-    LONG_OPT_perins,
-    LONG_OPT_symbols,
-    LONG_OPT_flame_graph,
-    LONG_OPT_heatmap,
-    LONG_OPT_order,
     LONG_OPT_order_mem,
     LONG_OPT_detail,
-    LONG_OPT_impl,
-    LONG_OPT_ldlat,
-    LONG_OPT_overwrite,
     LONG_OPT_period,
-    LONG_OPT_cgroups,
-    LONG_OPT_spte,
-    LONG_OPT_mmio,
-    //ebpf
-    LONG_OPT_irqs_disabled,
-    LONG_OPT_tif_need_resched,
-    LONG_OPT_exclude_pid,
-    LONG_OPT_nr_running_min,
-    LONG_OPT_nr_running_max,
-};
-static const struct argp_option opts[] = {
-    { NULL, 0, NULL, 0, "OPTION:" },
-    { "cpu", 'C', "CPU[-CPU],...", 0, "Monitor the specified CPU, Dflt: all cpu" },
-    { "pids", 'p', "PID,...", 0, "Attach to processes" },
-    { "tids", 't', "TID,...", 0, "Attach to threads" },
-    { "cgroups", LONG_OPT_cgroups, "cgroup,...", 0, "Attach to cgroups, support regular expression." },
-    { "interval", 'i', "ms", 0, "Interval, Unit: ms" },
-    { "output", 'o', "file", 0, "Output file name" },
-    { "order", LONG_OPT_order, NULL, 0, "Order events by timestamp." },
-    { "order-mem", LONG_OPT_order_mem, "Bytes", 0, "Maximum memory used by ordering events. Unit: GB/MB/KB/*B." },
-    { "mmap-pages", 'm', "pages", 0, "Number of mmap data pages and AUX area tracing mmap pages" },
-    { "verbose", 'v', NULL, 0, "Verbose debug output" },
-
-    { NULL, 0, NULL, 0, "FILTER OPTION:" },
-    { "exclude-host", 'G', NULL, 0, "Monitor GUEST, exclude host" },
-    { "exclude-user", LONG_OPT_exclude_user, NULL, 0, "exclude user" },
-    { "exclude-kernel", LONG_OPT_exclude_kernel, NULL, 0, "exclude kernel" },
-    { "exclude-guest", LONG_OPT_exclude_guest, NULL, 0, "exclude guest" },
-    { "irqs_disabled", LONG_OPT_irqs_disabled, "0|1", OPTION_ARG_OPTIONAL, "ebpf, irqs disabled or not." },
-    { "tif_need_resched", LONG_OPT_tif_need_resched, "0|1", OPTION_ARG_OPTIONAL, "ebpf, TIF_NEED_RESCHED is set or not." },
-    { "exclude_pid", LONG_OPT_exclude_pid, "PID", 0, "ebpf, exclude pid" },
-    { "nr_running_min", LONG_OPT_nr_running_min, "N", 0, "ebpf, minimum number of running processes for CPU runqueue." },
-    { "nr_running_max", LONG_OPT_nr_running_max, "N", 0, "ebpf, maximum number of running processes for CPU runqueue." },
-
-    { NULL, 0, NULL, 0, "PROFILER OPTION:" },
-    { "event", 'e', "EVENT,...", 0, "Event selector" },
-    { "trigger", 'T', "T", 0, "Trigger Threshold, Dflt: 1000, No trigger: 0" },
-    { "test", LONG_OPT_test, NULL, 0, "Split-lock test verification" },
-    { "latency", 'L', "LAT", 0, "Interrupt off latency, Unit: us, Dflt: 20ms" },
-    { "freq", 'F', "n", 0, "Profile at this frequency, Dflt: 100, No profile: 0" },
-    { "period", LONG_OPT_period, "ns", 0, "Sample period, Unit: s/ms/us/*ns" },
-    { "filter", LONG_OPT_filter, "filter", 0, "Event filter/comm filter", },
-    { "key", 'k', "str", 0, "Key for series events" },
-    { "impl", LONG_OPT_impl, "impl", 0, "Implementation of two-event analysis class. Dflt: delay.\n"
-                                        "    delay: latency distribution between two events\n"
-                                        "    pair: determine if two events are paired\n"
-                                        "    kmemprof: profile memory allocated and freed bytes\n"
-                                        "    syscalls: syscall delay\n"
-                                        "    call: analyze function calls, only for nested-trace.\n"
-                                        "    call-delay: call + delay, only for nested-trace."
-                                        },
-    { "interruptible", 'S', NULL, 0, "TASK_INTERRUPTIBLE" },
-    { "uninterruptible", 'D', NULL, 0, "TASK_UNINTERRUPTIBLE" },
-    { "than", LONG_OPT_than, "ns", 0, "Greater than specified time, Unit: s/ms/us/*ns/percent" },
-    { "alloc", LONG_OPT_alloc, "EVENT,...", 0, "Memory alloc tracepoint/kprobe" },
-    { "free", LONG_OPT_free, "EVENT,...", 0, "Memory free tracepoint/kprobe" },
-    { "syscalls", LONG_OPT_syscalls, NULL, 0, "Trace syscalls" },
-    { "perins", LONG_OPT_perins, NULL, 0, "Print per instance stat" },
-    { "call-graph", 'g', NULL, 0, "Enable call-graph recording" },
-    { "precise", LONG_OPT_precise, NULL, 0, "Generate precise interrupt" },
-    { "symbols", LONG_OPT_symbols, "symbols", 0, "Maps addresses to symbol names.\n"
-                                                 "Similar to pprof --symbols." },
-    { "flame-graph", LONG_OPT_flame_graph, "file", 0, "Specify the folded stack file." },
-    { "heatmap", LONG_OPT_heatmap, "file", 0, "Specify the output latency file." },
-    { "detail", LONG_OPT_detail, "-N,", OPTION_ARG_OPTIONAL,
-                                          "More detailed information output.\n"
-                                          "For multi-trace profiler:\n"
-                                          "   -N: Before event1, print events within N nanoseconds.\n"
-                                          "   +N: After event2, print events within N nanoseconds.\n"
-                                          "samecpu: Only show events with the same cpu as event1 or event2.\n"
-                                          "samepid: Only show events with the same pid as event1 or event2."
-                                          },
-    { "device", 'd', "device", 0, "Block device, /dev/sdx" },
-    { "ldlat", LONG_OPT_ldlat, "cycles", 0, "mem-loads latency, Unit: cycles" },
-    { "overwrite", LONG_OPT_overwrite, NULL, 0, "use overwrite mode" },
-    { "spte", LONG_OPT_spte, NULL, 0, "kvmmmu: enable kvmmmu:kvm_mmu_set_spte" },
-    { "mmio", LONG_OPT_mmio, NULL, 0, "kvmmmu: enable kvmmmu:mark_mmio_spte" },
-
-    { "version", 'V', NULL, 0, "Version info" },
-    { NULL, 'h', NULL, OPTION_HIDDEN, "" },
-    {},
 };
 
 /**
@@ -367,57 +214,9 @@ static void detail_parse(const char *s)
         env.after_event2 = nsparse(s, NULL);
 }
 
-static void libbpf_support(void)
+static int parse_arg(int key, char *arg)
 {
-#ifndef CONFIG_LIBBPF
-    static bool printed = 0;
-    if (!printed) {
-        fprintf(stderr, "WARN: An option that requires ebpf was used. Please recompile `make CONFIG_LIBBPF=y`\n");
-        printed = true;
-    }
-#endif
-}
-
-static error_t parse_arg(int key, char *arg, struct argp_state *state)
-{
-    int latency;
-
     switch (key) {
-    case 'h':
-        argp_help((const struct argp *__restrict)state->root_argp, stderr, ARGP_HELP_STD_HELP, (char *__restrict)"perf-prof");
-        exit(0);
-    case 'T':
-        env.trigger_freq = strtol(arg, NULL, 10);
-        break;
-    case 'C':
-        env.cpumask = strdup(arg);
-        break;
-    case 'i':
-        env.interval = strtol(arg, NULL, 10);
-        break;
-    case 'o':
-        env.output = strdup(arg);
-        break;
-    case 'p':
-        env.pids = strdup(arg);
-        break;
-    case 't':
-        env.tids = strdup(arg);
-        break;
-    case LONG_OPT_cgroups:
-        env.cgroups = strdup(arg);
-        break;
-    case LONG_OPT_test:
-        env.test = 1;
-        break;
-    case 'L':
-        latency = strtol(arg, NULL, 10);
-        if (latency > 1)
-            env.latency = latency;
-        break;
-    case 'F':
-        env.freq = strtol(arg, NULL, 10);
-        break;
     case 'e':
         env.events = realloc(env.events, (env.nr_events + 1) * sizeof(*env.events));
         env.events[env.nr_events] = strdup(arg);
@@ -425,92 +224,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
             env.event = env.events[0];
         env.nr_events ++;
         break;
-    case LONG_OPT_filter:
-        env.filter = strdup(arg);
-        break;
-    case 'k':
-        env.key = strdup(arg);
-        break;
-    case LONG_OPT_impl:
-        env.impl = strdup(arg);
-        break;
-    case 'S':
-        env.interruptible = 1;
-        break;
-    case 'D':
-        env.uninterruptible = 1;
-        break;
-    case LONG_OPT_exclude_user:
-        env.exclude_user = 1;
-        break;
-    case LONG_OPT_exclude_kernel:
-        env.exclude_kernel = 1;
-        break;
-    case LONG_OPT_exclude_guest:
-        env.exclude_guest = 1;
-        break;
-    case 'G':
-        env.exclude_host = 1;
-        break;
-    case LONG_OPT_irqs_disabled:
-        env.irqs_disabled = arg ? atoi(arg) : 1;
-        if (env.irqs_disabled > 1)
-            env.irqs_disabled = 1;
-        libbpf_support();
-        break;
-    case LONG_OPT_tif_need_resched:
-        env.tif_need_resched = arg ? atoi(arg) : 1;
-        if (env.tif_need_resched > 1)
-            env.tif_need_resched = 1;
-        libbpf_support();
-        break;
-    case LONG_OPT_exclude_pid:
-        env.exclude_pid = strtol(arg, NULL, 10);
-        libbpf_support();
-        break;
-    case LONG_OPT_nr_running_min:
-        env.nr_running_min = strtol(arg, NULL, 10);
-        libbpf_support();
-        break;
-    case LONG_OPT_nr_running_max:
-        env.nr_running_max = strtol(arg, NULL, 10);
-        libbpf_support();
+    case 'L':
+        env.latency = nsparse(arg, NULL);
+        env.latency /= 1000; // to us
         break;
     case LONG_OPT_than:
         env.greater_than = nsparse(arg, NULL);
-        break;
-    case LONG_OPT_alloc:
-        env.tp_alloc = strdup(arg);
-        break;
-    case LONG_OPT_free:
-        env.tp_free = strdup(arg);
-        break;
-    case LONG_OPT_syscalls:
-        env.syscalls = 1;
-        break;
-    case LONG_OPT_perins:
-        env.perins = 1;
-        break;
-    case 'g':
-        env.callchain = 1;
-        break;
-    case 'm':
-        env.mmap_pages = strtol(arg, NULL, 10);
-        break;
-    case LONG_OPT_precise:
-        env.precise = 1;
-        break;
-    case LONG_OPT_symbols:
-        env.symbols = strdup(arg);
-        break;
-    case LONG_OPT_flame_graph:
-        env.flame_graph = strdup(arg);
-        break;
-    case LONG_OPT_heatmap:
-        env.heatmap = strdup(arg);
-        break;
-    case LONG_OPT_order:
-        env.order = true;
         break;
     case LONG_OPT_order_mem:
         env.order_mem = memparse(arg, NULL);
@@ -530,65 +249,240 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
             free(ss);
         }
         break;
-    case 'd':
-        env.device = strdup(arg);
-        break;
-    case LONG_OPT_ldlat:
-        env.ldlat = strtol(arg, NULL, 10);
-        break;
-    case LONG_OPT_overwrite:
-        env.overwrite = true;
-        break;
     case LONG_OPT_period:
         env.sample_period = nsparse(arg, NULL);
         break;
-    case LONG_OPT_spte:
-        env.spte = true;
-        break;
-    case LONG_OPT_mmio:
-        env.mmio = true;
-        break;
-    case 'v':
-        env.verbose++;
-        break;
     case 'V':
-        printf("%s\n", argp_program_version);
+        printf("%s\n", main_program_version);
         exit(0);
-        break;
-    case ARGP_KEY_ARG:
-        switch (state->arg_num) {
-            case 0:
-                monitor = monitor_find(arg);
-                if (monitor == NULL && env.symbols == NULL)
-                    argp_usage (state);
-                break;
-            case 1:
-                env.help_monitor = monitor;
-                monitor = monitor_find(arg);
-                if (monitor && strcmp(monitor->name, "help") == 0) {
-                    break;
-                } else {
-                    monitor = env.help_monitor;
-                    env.help_monitor = NULL;
-                    return ARGP_ERR_UNKNOWN;
-                }
-            default:
-                return ARGP_ERR_UNKNOWN;
-        };
-        break;
-    case ARGP_KEY_ARGS:
-        remaining_argv = state->argv + state->next;
-        remaining_argc = state->argc - state->next;
-        break;
-    case ARGP_KEY_END:
-        if (env.symbols == NULL && state->arg_num < 1)
-            argp_usage (state);
-        break;
     default:
-        return ARGP_ERR_UNKNOWN;
+        break;
     }
     return 0;
 }
+
+static int parse_help_cb(const struct option *opt, const char *arg, int unset)
+{
+    help();
+    return 0;
+}
+
+static int parse_arg_cb(const struct option *opt, const char *arg, int unset)
+{
+    return parse_arg(opt->short_name, (char *)arg);
+}
+
+#define OPT_BOOL_NONEG(s, l, v, h)       { .type = OPTION_BOOLEAN, .short_name = (s), .long_name = (l), .value = check_vtype(v, bool *), .help = (h), .flags = PARSE_OPT_NONEG }
+#define OPT_INT_NONEG(s, l, v, a, h)     { .type = OPTION_INTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
+#define OPT_UINT_NONEG(s, l, v, a, h)    { .type = OPTION_UINTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, unsigned int *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
+#define OPT_LONG_NONEG(s, l, v, a, h)    { .type = OPTION_LONG, .short_name = (s), .long_name = (l), .value = check_vtype(v, long *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
+#define OPT_ULONG_NONEG(s, l, v, a, h)   { .type = OPTION_ULONG, .short_name = (s), .long_name = (l), .value = check_vtype(v, unsigned long *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
+#define OPT_U64_NONEG(s, l, v, a, h)     { .type = OPTION_U64, .short_name = (s), .long_name = (l), .value = check_vtype(v, u64 *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
+#define OPT_STRDUP_NONEG(s, l, v, a, h)  { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, char **), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_NOEMPTY }
+#define OPT_PARSE_NONEG(s, l, v, a, h) \
+    { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG, .callback = (parse_arg_cb) }
+#define OPT_PARSE_NOARG(s, l, v, a, h) \
+    { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_NOARG, .callback = (parse_arg_cb) }
+#define OPT_PARSE_OPTARG(s, l, v, a, h) \
+    { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_OPTARG, .callback = (parse_arg_cb) }
+#define OPT_INT_OPTARG(s, l, v, d, a, h) \
+    { .type = OPTION_INTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .argh = (a), .defval = (intptr_t)(d), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_OPTARG }
+#define OPT_HELP() \
+    { .type = OPTION_CALLBACK, .short_name = ('h'), .long_name = ("help"), .help = ("Give this help list"), .flags = PARSE_OPT_NONEG | PARSE_OPT_NOARG, .callback = (parse_help_cb) }
+
+struct option main_options[] = {
+    OPT_GROUP("OPTION:"),
+    OPT_STRDUP_NONEG('C',        "cpus", &env.cpumask,    "CPU[-CPU],...", "Monitor the specified CPU, Dflt: all cpu"),
+    OPT_STRDUP_NONEG('p',        "pids", &env.pids,       "PID,...",       "Attach to processes"),
+    OPT_STRDUP_NONEG('t',        "tids", &env.tids,       "TID,...",       "Attach to threads"),
+    OPT_STRDUP_NONEG( 0 ,     "cgroups", &env.cgroups,    "cgroup,...",    "Attach to cgroups, support regular expression."),
+    OPT_INT_NONEG   ('i',    "interval", &env.interval,   "ms",            "Interval, Unit: ms"),
+    OPT_STRDUP_NONEG('o',      "output", &env.output,     "file",          "Output file name"),
+    OPT_BOOL_NONEG  ( 0 ,       "order", &env.order,                       "Order events by timestamp."),
+    OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "Bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
+    OPT_INT_NONEG   ('m',  "mmap-pages", &env.mmap_pages, "pages",         "Number of mmap data pages and AUX area tracing mmap pages"),
+    OPT_PARSE_NOARG ('V',     "version", NULL,             NULL,           "Version info"),
+    OPT__VERBOSITY(&env.verbose),
+    OPT_HELP(),
+
+    OPT_GROUP("FILTER OPTION:"),
+    OPT_BOOL_NONEG  ('G',     "exclude-host", &env.exclude_host,                "Monitor GUEST, exclude host"),
+    OPT_BOOL_NONEG  ( 0 ,    "exclude-guest", &env.exclude_guest,               "exclude guest"),
+    OPT_BOOL_NONEG  ( 0 ,     "exclude-user", &env.exclude_user,                "exclude user"),
+    OPT_BOOL_NONEG  ( 0 ,   "exclude-kernel", &env.exclude_kernel,              "exclude kernel"),
+    OPT_INT_OPTARG  ( 0 ,    "irqs_disabled", &env.irqs_disabled,    1, "0|1",  "ebpf, irqs disabled or not."),
+    OPT_INT_OPTARG  ( 0 , "tif_need_resched", &env.tif_need_resched, 1, "0|1",  "ebpf, TIF_NEED_RESCHED is set or not."),
+    OPT_INT_NONEG   ( 0 ,      "exclude_pid", &env.exclude_pid,         "PID",  "ebpf, exclude pid"),
+    OPT_INT_NONEG   ( 0 ,   "nr_running_min", &env.nr_running_min,       NULL,  "ebpf, minimum number of running processes for CPU runqueue."),
+    OPT_INT_NONEG   ( 0 ,   "nr_running_max", &env.nr_running_max,       NULL,  "ebpf, maximum number of running processes for CPU runqueue."),
+
+    OPT_GROUP("PROFILER OPTION:"),
+    OPT_PARSE_NONEG ('e', "event", NULL,    "EVENT,...",        "Event selector. use 'perf list tracepoint' to list available tp events.\n"
+                                                                "  EVENT,EVENT,...\n"
+                                                                "  EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
+                                                                "  filter: ftrace filter\n"
+                                                                "  ATTR:\n"
+                                                                "      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
+                                                                "      max-stack=int : sample_max_stack\n"
+                                                                "      alias=str: event alias\n"
+                                                                "      top-by=field: add to top, sort by this field\n"
+                                                                "      top-add=field: add to top\n"
+                                                                "      comm=field: top, show COMM\n"
+                                                                "      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
+                                                                "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
+                                                                "      delay=field: mpdelay, delay field\n"
+                                                                "      key=field: key for multiple events: top, multi-trace\n"
+                                                                "      untraced: multi-trace, auxiliary, no two-event analysis"),
+    OPT_INT_NONEG   ('F',            "freq", &env.freq,                  NULL,  "Profile at this frequency, Dflt: 100, No profile: 0"),
+    OPT_STRDUP_NONEG('k',             "key", &env.key,                  "str",  "Key for series events"),
+    OPT_STRDUP_NONEG( 0 ,          "filter", &env.filter,            "filter",  "Event filter/comm filter"),
+    OPT_PARSE_NONEG (LONG_OPT_period, "period", &env.sample_period,      "ns",   "Sample period, Unit: s/ms/us/*ns"),
+    OPT_STRDUP_NONEG(0, "impl", &env.impl,    "impl",       "Implementation of two-event analysis class. Dflt: delay.\n"
+                                                                "    delay: latency distribution between two events\n"
+                                                                "    pair: determine if two events are paired\n"
+                                                                "    kmemprof: profile memory allocated and freed bytes\n"
+                                                                "    syscalls: syscall delay\n"
+                                                                "    call: analyze function calls, only for nested-trace.\n"
+                                                                "    call-delay: call + delay, only for nested-trace."),
+    OPT_BOOL_NONEG  ('S',   "interruptible", &env.interruptible,                "TASK_INTERRUPTIBLE"),
+    OPT_BOOL_NONEG  ('D', "uninterruptible", &env.uninterruptible,              "TASK_UNINTERRUPTIBLE"),
+    OPT_PARSE_NONEG ( LONG_OPT_than, "than", &env.greater_than,          "ns",  "Greater than specified time, Unit: s/ms/us/*ns/percent"),
+    OPT_STRDUP_NONEG( 0 ,           "alloc", &env.tp_alloc,           "EVENT",  "Memory alloc tracepoint/kprobe/uprobe"),
+    OPT_STRDUP_NONEG( 0 ,            "free", &env.tp_free,            "EVENT",  "Memory free tracepoint/kprobe/uprobe"),
+    OPT_BOOL_NONEG  ( 0 ,        "syscalls", &env.syscalls,                     "Trace syscalls"),
+    OPT_BOOL_NONEG  ( 0 ,          "perins", &env.perins,                       "Print per instance stat"),
+    OPT_BOOL_NONEG  ('g',      "call-graph", &env.callchain,                    "Enable call-graph recording"),
+    OPT_STRDUP_NONEG( 0 ,     "flame-graph", &env.flame_graph,         "file",  "Specify the folded stack file."),
+    OPT_STRDUP_NONEG( 0 ,         "heatmap", &env.heatmap,             "file",  "Specify the output latency file."),
+    OPT_PARSE_OPTARG( LONG_OPT_detail, "detail", NULL, "-N,+N,samecpu,samepid",
+                                                       "More detailed information output.\n"
+                                                       "For multi-trace profiler:\n"
+                                                       "   -N: Before event1, print events within N nanoseconds.\n"
+                                                       "   +N: After event2, print events within N nanoseconds.\n"
+                                                       "samecpu: Only show events with the same cpu as event1 or event2.\n"
+                                                       "samepid: Only show events with the same pid as event1 or event2."),
+    OPT_INT_NONEG   ('T',         "trigger", &env.trigger_freq,          NULL,  "Trigger Threshold, Dflt: 1000, No trigger: 0"),
+    OPT_BOOL_NONEG  ( 0 ,            "test", &env.test,                         "Split-lock test verification"),
+    OPT_PARSE_NONEG ('L',         "latency", &env.latency,               NULL,  "Interrupt off latency, Unit: us, Dflt: 20ms"),
+    OPT_BOOL_NONEG  ( 0 ,         "precise", &env.precise,                      "Generate precise interrupt"),
+    OPT_STRDUP_NONEG( 0 ,         "symbols", &env.symbols,               NULL,           "Maps addresses to symbol names.\n"
+                                                                                "Similar to pprof --symbols."),
+    OPT_STRDUP_NONEG('d',          "device", &env.device,            "device",  "Block device, /dev/sdx"),
+    OPT_INT_NONEG   ( 0 ,           "ldlat", &env.ldlat,             "cycles",  "mem-loads latency, Unit: cycles"),
+    OPT_BOOL_NONEG  ( 0 ,       "overwrite", &env.overwrite,                    "use overwrite mode"),
+    OPT_BOOL_NONEG  ( 0 ,            "spte", &env.spte,                         "kvmmmu: enable kvmmmu:kvm_mmu_set_spte"),
+    OPT_BOOL_NONEG  ( 0 ,            "mmio", &env.mmio,                         "kvmmmu: enable kvmmmu:mark_mmio_spte"),
+
+    OPT_END()
+};
+
+const char * const main_usage[] = {
+    PROGRAME " profiler [PROFILER OPTION...] [help] [cmd [args...]]",
+    PROGRAME " --symbols /path/to/bin",
+    "",
+    "Profiling based on perf_event and ebpf",
+    NULL
+};
+
+static void help(void)
+{
+    int argc = 2;
+    const char *argv[] = {PROGRAME, "--help"};
+    const char * const *usagestr = main_usage;
+    struct monitor *m = monitor;
+
+    if (m) {
+        if (monitor->argv && monitor->desc) {
+            argc = 0;
+            while (monitor->argv[argc++] != NULL);
+            parse_options(argc - 1, monitor->argv, main_options, monitor->desc, PARSE_OPT_INTERNAL_HELP_NO_ORDER);
+        } else
+            parse_options(argc, argv, main_options, main_usage, PARSE_OPT_INTERNAL_HELP_NO_ORDER);
+    }
+
+    fprintf(stderr, "\n Usage: %s\n", *usagestr++);
+    while (*usagestr && **usagestr)
+        fprintf(stderr, "    or: %s\n", *usagestr++);
+    while (*usagestr) {
+        fprintf(stderr, "%s%s\n",
+                **usagestr ? "    " : "",
+                *usagestr);
+        usagestr++;
+    }
+
+    fprintf(stderr, "\n Available Profilers:\n");
+    while((m = monitor_next(m))) {
+        fprintf(stderr, "   %-20s", m->name);
+        if (m->desc && m->desc[2] && m->desc[2][0])
+            fprintf(stderr, " %s\n", m->desc[2]);
+        else
+            fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "\n See '%s profiler -h' for more information on a specific profiler.\n\n", PROGRAME);
+    exit(129);
+}
+
+#ifndef CONFIG_LIBBPF
+static const char *LIBBPF_BUILD = "NO CONFIG_LIBBPF=y";
+#endif
+
+static int parse_main_options(int argc, char *argv[])
+{
+    bool stop_at_non_option = true;
+    bool dashdash = false;
+
+#ifndef CONFIG_LIBBPF
+    set_option_nobuild(main_options, 0,    "irqs_disabled", LIBBPF_BUILD, true);
+    set_option_nobuild(main_options, 0, "tif_need_resched", LIBBPF_BUILD, true);
+    set_option_nobuild(main_options, 0,      "exclude_pid", LIBBPF_BUILD, true);
+    set_option_nobuild(main_options, 0,   "nr_running_min", LIBBPF_BUILD, true);
+    set_option_nobuild(main_options, 0,   "nr_running_max", LIBBPF_BUILD, true);
+#endif
+
+    while (argc > 1) {
+        argc = parse_options(argc, (const char **)argv, main_options, main_usage,
+                             PARSE_OPT_NO_INTERNAL_HELP | PARSE_OPT_KEEP_DASHDASH |
+                             (stop_at_non_option ? PARSE_OPT_STOP_AT_NON_OPTION :
+                                                   PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN));
+        if (argc && argv[0][0] != '-' && argv[0][1] != '-') {
+            struct monitor *m = monitor_find(argv[0]);
+            if (m != NULL) {
+                env.help_monitor = monitor;
+                monitor = m;
+                continue;
+            } else if (stop_at_non_option) {
+                stop_at_non_option = false;
+                continue;
+            }
+        }
+        // --
+        if (argc && argv[0][0] == '-' && argv[0][1] == '-') {
+            argc--;
+            memmove(argv, argv + 1, argc * sizeof(argv[0]));
+            argv[argc] = NULL;
+            dashdash = true;
+        }
+        break;
+    }
+
+    if (monitor == NULL)
+        help();
+
+    if (argc && !dashdash) {
+        if (monitor->argc_init)
+            argc = monitor->argc_init(argc, argv);
+        else if (env.verbose > 0) {
+            int i;
+            printf("Unparsed options:");
+            for (i = 0; i < argc; i ++)
+                printf(" %s", argv[i]);
+            printf("\n");
+        }
+    }
+
+    return argc;
+}
+
 static void sig_handler(int sig)
 {
     if (sig == SIGCHLD)
@@ -1028,13 +922,7 @@ static int libperf_print(enum libperf_print_level level,
 
 int main(int argc, char *argv[])
 {
-    static const struct argp argp = {
-        .options = opts,
-        .parser = parse_arg,
-        .args_doc = argp_program_args_doc,
-        .doc = argp_program_doc,
-    };
-    int err;
+    int err = 0;
     struct workload workload = {0, 0};
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
@@ -1045,26 +933,16 @@ int main(int argc, char *argv[])
     bool deinited;
 
     sigusr2_handler(0);
-    if (isatty(STDOUT_FILENO)) {
-        struct winsize size;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0) {
-            char buff[16];
-            snprintf(buff, sizeof(buff), "rmargin=%u", size.ws_col);
-            setenv("ARGP_HELP_FMT", buff, 1);
-        }
-    }
 
-    err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
-    if (err)
-        return err;
+    argc = parse_main_options(argc, argv);
 
     if (env.symbols) {
         syms__convert(stdin, stdout);
         return 0;
     }
 
-    if (remaining_argc) {
-        workload_prepare(&workload, remaining_argv);
+    if (argc) {
+        workload_prepare(&workload, argv);
     }
 
     // workload output to stdout & stderr

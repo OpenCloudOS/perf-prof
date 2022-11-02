@@ -9,6 +9,7 @@
 #include <perf/evsel.h>
 #include <perf/mmap.h>
 #include <perf/event.h>
+#include <parse-options.h>
 #include <tep.h>
 
 struct monitor;
@@ -138,6 +139,8 @@ struct help_ctx {
 typedef struct monitor {
     struct monitor *next;
     const char *name;
+    const char **desc;
+    const char **argv;
     int pages;
     int reinit;
     bool dup; //dup event
@@ -146,6 +149,8 @@ typedef struct monitor {
     struct perf_thread_map *threads;
 
     void (*help)(struct help_ctx *ctx);
+
+    int (*argc_init)(int argc, char *argv[]);
 
     int (*init)(struct perf_evlist *evlist, struct env *env);
     int (*filter)(struct perf_evlist *evlist, struct env *env);
@@ -184,6 +189,23 @@ typedef struct monitor {
     //PERF_RECORD_NAMESPACES            = 16,
     void (*namespace)(union perf_event *event, int instance);
 }profiler;
+
+#define PROFILER_DESC(name, arg, ...) \
+    {PROGRAME " " name " " arg, "", __VA_ARGS__, NULL}
+#define PROFILER_ARGV(name, ...) \
+    {PROGRAME, "-h", __VA_ARGS__, NULL}
+#define PROFILER_ARGV_OPTION \
+    "OPTION:", \
+    "cpus", "pids", "tids", "cgroups", \
+    "interval", "output", "order", "order-mem", "mmap-pages", \
+    "version", "verbose", "quiet", "help"
+#define PROFILER_ARGV_FILTER \
+    "FILTER OPTION:", \
+    "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", \
+    "irqs_disabled", "tif_need_resched", "exclude_pid", "nr_running_min", "nr_running_max"
+#define PROFILER_ARGV_PROFILER \
+    "PROFILER OPTION:" \
+
 
 profiler *order(profiler *p);
 bool current_is_order(void);
