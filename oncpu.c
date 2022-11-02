@@ -546,8 +546,21 @@ static void oncpu_sample(union perf_event *event, int instance)
     }
 }
 
+static const char *oncpu_desc[] = PROFILER_DESC("oncpu",
+    "[OPTION...] [--detail] [--filter filter]",
+    "Determine which processes are running on which CPUs.", "",
+    "TRACEPOINT", "",
+    "    sched:sched_switch, sched:sched_stat_runtime", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" oncpu -p 2347",
+    "    "PROGRAME" oncpu -C 0-3");
+static const char *oncpu_argv[] = PROFILER_ARGV("oncpu",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "detail", "filter");
 static profiler oncpu = {
     .name = "oncpu",
+    .desc = oncpu_desc,
+    .argv = oncpu_argv,
     .pages = 4,
     .init = oncpu_init,
     .filter = oncpu_filter,
