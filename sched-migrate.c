@@ -286,8 +286,24 @@ static void sched_migrate_sample(union perf_event *event, int instance)
     }
 }
 
+
+static const char *sched_migrate_desc[] = PROFILER_DESC("sched-migrate",
+    "[OPTION...] [--detail] [--filter filter] [-g [--flame-graph file]]",
+    "Monitor system process migrations.", "",
+    "SYNOPSIS", "",
+    "    Monitor system process migrations. Determine if source and destination cpu belong",
+    "    to the same LLC, L2 cache", "",
+    "TRACEPOINT", "",
+    "    sched:sched_migrate_task", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" sched-migrate --detail");
+static const char *sched_migrate_argv[] = PROFILER_ARGV("sched-migrate",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "detail", "filter", "call-graph", "flame-graph");
 static profiler sched_migrate = {
     .name = "sched-migrate",
+    .desc = sched_migrate_desc,
+    .argv = sched_migrate_argv,
     .pages = 2,
     .init = sched_migrate_init,
     .filter = sched_migrate_filter,
