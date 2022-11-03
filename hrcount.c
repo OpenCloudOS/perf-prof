@@ -490,8 +490,23 @@ static void hrcount_help(struct help_ctx *hctx)
     __common_help(hctx, hrcount.name);
 }
 
+
+static const char *hrcount_desc[] = PROFILER_DESC("hrcount",
+    "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
+    "High-resolution counter.", "",
+    "SYNOPSIS", "",
+    "    High-resolution counters are capable of displaying count changes at millisecond or",
+    "    microsecond granularity.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" hrcount -e sched:sched_switch -C 0 --period 50ms -i 1000",
+    "    "PROGRAME" hrcount -e sched:sched_switch,sched:sched_wakeup -C 0-5 --period 50ms -i 1000");
+static const char *hrcount_argv[] = PROFILER_ARGV("hrcount",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "period", "perins");
 static profiler hrcount = {
     .name = "hrcount",
+    .desc = hrcount_desc,
+    .argv = hrcount_argv,
     .pages = 2,
     .help = hrcount_help,
     .init = hrcount_init,
