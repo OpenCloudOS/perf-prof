@@ -131,8 +131,22 @@ static void help_exit(struct perf_evlist *evlist)
 
 }
 
+static const char *help_desc[] = PROFILER_DESC("",
+    "[profiler] [PROFILER OPTION...] help",
+    "Helps writing profiler commands, event attrs, event filters.", "",
+    "SYNOPSIS", "",
+    "    Helps writing event attrs, event filters, 'help' can be added anywhere",
+    "    in the command, but must be after the profiler.", "",
+    "    Profiler can be omitted.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" trace -e sched:sched_wakeup help",
+    "    "PROGRAME" -e sched:sched_wakeup,sched:sched_switch help");
+static const char *help_argv[] = PROFILER_ARGV("help",
+    PROFILER_ARGV_PROFILER, "event", "alloc", "free");
 static profiler help = {
     .name = "help",
+    .desc = help_desc,
+    .argv = help_argv,
     .init = help_init,
     .deinit = help_exit,
 };
