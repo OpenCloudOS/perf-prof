@@ -271,8 +271,31 @@ static void percpu_stat_sample(union perf_event *event, int instance)
 {
 }
 
+
+static const char *percpu_stat_desc[] = PROFILER_DESC("percpu-stat",
+    "[OPTION...] [--syscalls]",
+    "Handpicked event statistics.", "",
+    "TRACEPOINT", "",
+    "    PERF_COUNT_SW_CONTEXT_SWITCHES  PERF_COUNT_SW_CPU_MIGRATIONS",
+    "    PERF_COUNT_SW_PAGE_FAULTS_MIN   PERF_COUNT_SW_PAGE_FAULTS_MAJ",
+    "    irq:irq_handler_entry           irq:softirq_entry",
+    "    timer:hrtimer_expire_entry      workqueue:workqueue_execute_start",
+    "    kvm:kvm_exit                    net:netif_receive_skb",
+    "    net:net_dev_xmit                net:napi_gro_receive_entry      ",
+    "    kmem:mm_page_alloc              compaction:mm_compaction_migratepages",
+    "    migrate:mm_migrate_pages        vmscan:mm_vmscan_direct_reclaim_begin",
+    "    writeback:wbc_writepage         filemap:mm_filemap_add_to_page_cache",
+    "    raw_syscalls:sys_enter          power:cpu_idle", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" percpu-stat -C 0",
+    "    "PROGRAME" percpu-stat --syscalls -i 2000");
+static const char *percpu_stat_argv[] = PROFILER_ARGV("percpu-stat",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "syscalls");
 static profiler percpu_stat = {
     .name = "percpu-stat",
+    .desc = percpu_stat_desc,
+    .argv = percpu_stat_argv,
     .pages = 0,
     .init = percpu_stat_init,
     .deinit = percpu_stat_exit,
