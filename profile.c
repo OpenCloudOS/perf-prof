@@ -295,8 +295,22 @@ static void empty_sample(union perf_event *event, int instance)
 {
 }
 
+static const char *cpu_util_desc[] = PROFILER_DESC("cpu-util",
+    "[OPTION...] [--exclude-*] [-G]",
+    "Report CPU utilization for guest or host.", "",
+    "SYNOPSIS", "",
+    "    Based on profile. See '"PROGRAME" profile -h' for more information.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" cpu-util -C 1-4",
+    "    "PROGRAME" cpu-util -C 1-4 -G");
+static const char *cpu_util_argv[] = PROFILER_ARGV("cpu-util",
+    PROFILER_ARGV_OPTION,
+    "FILTER OPTION:",
+    "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel");
 struct monitor cpu_util = {
     .name = "cpu-util",
+    .desc = cpu_util_desc,
+    .argv = cpu_util_argv,
     .pages = 0,
     .init = cpu_util_init,
     .deinit = profile_exit,
