@@ -493,7 +493,10 @@ static void top_interval(void)
 
         if (!ctx.tty || !ctx.ws_row || ++row < ctx.ws_row) {
             t = container_of(rbn, struct top_info, rbnode);
-            printf("%*llu ", ctx.key_len, t->key);
+            if (t->key < 100000000UL)
+                printf("%*llu ", ctx.key_len, t->key);
+            else
+                printf("0x%*llx ", ctx.key_len, t->key);
             for (i = 0; i < ctx.nr_fields; i++)
                 printf("%*llu ", ctx.fields[i].len, t->counter[i]);
             if (ctx.show_comm)
