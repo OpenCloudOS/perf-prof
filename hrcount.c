@@ -522,8 +522,22 @@ static void stat_help(struct help_ctx *hctx)
     __common_help(hctx, stat.name);
 }
 
+
+static const char *stat_desc[] = PROFILER_DESC("stat",
+    "[OPTION...] -e EVENT[...] [--perins]",
+    "Periodic counter with lower resolution.", "",
+    "SYNOPSIS", "",
+    "    Based on hrcount. See '"PROGRAME" hrcount -h' for more information.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" stat -e sched:sched_switch -C 0 -i 1000",
+    "    "PROGRAME" stat -e sched:sched_switch,sched:sched_wakeup -C 0-5 -i 1000");
+static const char *stat_argv[] = PROFILER_ARGV("stat",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "perins");
 static profiler stat = {
     .name = "stat",
+    .desc = stat_desc,
+    .argv = stat_argv,
     .pages = 2,
     .help = stat_help,
     .init = hrcount_init,
