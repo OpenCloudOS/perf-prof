@@ -764,8 +764,22 @@ static void kvm_mmu_sample(union perf_event *event, int instance)
     }
 }
 
+static const char *kvmmmu_desc[] = PROFILER_DESC("kvmmmu",
+    "[OPTION...] [--spte] [--mmio] [--detail]",
+    "Observe the kvm_mmu_page mapping on x86 platforms.", "",
+    "TRACEPOINT", "",
+    "    kvmmmu:kvm_mmu_get_page, kvmmmu:kvm_mmu_prepare_zap_page",
+    "    kvmmmu:kvm_mmu_set_spte, kvmmmu:mark_mmio_spte", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" kvmmmu -p 2347 -i 5000 --mmio",
+    "    "PROGRAME" kvmmmu -p 2347 -i 5000 --spte --mmio --detail");
+static const char *kvmmmu_argv[] = PROFILER_ARGV("kvmmmu",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "spte", "mmio", "detail");
 struct monitor kvm_mmu = {
     .name = "kvmmmu",
+    .desc = kvmmmu_desc,
+    .argv = kvmmmu_argv,
     .pages = 64,
     .order = true,
     .init = kvm_mmu_init,
