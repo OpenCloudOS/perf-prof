@@ -162,8 +162,19 @@ static void page_faults_sample(union perf_event *event, int instance)
     }
 }
 
+static const char *page_faults_desc[] = PROFILER_DESC("page-faults",
+    "[OPTION...] [-g]",
+    "Print the user mode regs and stack when a page fault occurs.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" page-faults -p 2347 -g",
+    "    "PROGRAME" page-faults -C 0 -g");
+static const char *page_faults_argv[] = PROFILER_ARGV("page-faults",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "call-graph");
 static profiler page_faults = {
     .name = "page-faults",
+    .desc = page_faults_desc,
+    .argv = page_faults_argv,
     .pages = 2,
     .init = page_faults_init,
     .deinit = page_faults_exit,
