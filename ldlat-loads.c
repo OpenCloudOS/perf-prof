@@ -478,8 +478,21 @@ static int ldlat_stores_init(struct perf_evlist *evlist, struct env *env)
 }
 
 
+static const char *ldlat_stores_desc[] = PROFILER_DESC("ldlat-stores",
+    "[OPTION...] [-T trigger] [--perins]",
+    "PEBS Data Address Profiling on Intel Platform.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" ldlat-stores -C 0 -i 1000",
+    "    "PROGRAME" ldlat-stores -p 2347 -v -i 1000");
+static const char *ldlat_stores_argv[] = PROFILER_ARGV("ldlat-stores",
+    PROFILER_ARGV_OPTION,
+    "FILTER OPTION:",
+    "exclude-host", "exclude-guest",
+    PROFILER_ARGV_PROFILER, "trigger", "perins", "than");
 static profiler ldlat_stores = {
     .name = "ldlat-stores",
+    .desc = ldlat_stores_desc,
+    .argv = ldlat_stores_argv,
     .pages = 32, // 2x PEBS_BUFFER_SIZE, in kernel PEBS_BUFFER_SIZE=(PAGE_SIZE << 4)
     .init = ldlat_stores_init,
     .deinit = ldlat_loads_exit,
