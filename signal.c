@@ -146,8 +146,21 @@ static void signal_sample_callchain(union perf_event *event, int instance)
     }
 }
 
+
+static const char *signal_desc[] = PROFILER_DESC("signal",
+    "[OPTION...] [--filter comm] [-g]",
+    "Demo", "",
+    "TRACEPOINT", "",
+    "    signal:signal_generate", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" signal --filter python");
+static const char *signal_argv[] = PROFILER_ARGV("signal",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "filter", "call-graph");
 struct monitor monitor_signal = {
     .name = "signal",
+    .desc = signal_desc,
+    .argv = signal_argv,
     .pages = 2,
     .init = signal_init,
     .filter = signal_filter,
