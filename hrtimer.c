@@ -308,8 +308,25 @@ static void hrtimer_help(struct help_ctx *hctx)
     printf("\n");
 }
 
+
+static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
+    "[OPTION...] [-e EVENT[...]] [-F freq] [--period ns] [-g]",
+    "High-resolution conditional timing sampling.", "",
+    "SYNOPSIS", "",
+    "    High-resolution timer sampling. During the sampling interval, it is up to",
+    "    whether the events occurs or not to print samples.", "",
+    "    Currently, if the events does not occur, print the samples.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" hrtimer -e sched:sched_switch -C 0 --period 50ms",
+    "    "PROGRAME" hrtimer -e sched:sched_switch,sched:sched_wakeup -C 0-5 -F 20 -g");
+static const char *hrtimer_argv[] = PROFILER_ARGV("hrtimer",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_FILTER,
+    PROFILER_ARGV_PROFILER, "event", "freq", "period", "call-graph");
 static profiler hrtimer = {
     .name = "hrtimer",
+    .desc = hrtimer_desc,
+    .argv = hrtimer_argv,
     .pages = 2,
     .help = hrtimer_help,
     .init = hrtimer_init,
