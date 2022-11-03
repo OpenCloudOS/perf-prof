@@ -163,8 +163,24 @@ static void split_lock_sample(union perf_event *event, int instance)
     }
 }
 
+
+static const char *split_lock_desc[] = PROFILER_DESC("split-lock",
+    "[OPTION...] [-T trigger] [-G] [--test]",
+    "Split-lock on x86 platform.", "",
+    "SYNOPSIS", "",
+    "    Super Queue lock splits across a cache line.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" split-lock -T 0 -i 1000 --test",
+    "    "PROGRAME" split-lock -T 1000 -i 1000 -G");
+static const char *split_lock_argv[] = PROFILER_ARGV("split-lock",
+    PROFILER_ARGV_OPTION,
+    "FILTER OPTION:",
+    "exclude-host",
+    PROFILER_ARGV_PROFILER, "trigger", "perins");
 struct monitor split_lock = {
     .name = "split-lock",
+    .desc = split_lock_desc,
+    .argv = split_lock_argv,
     .pages = 1,
     .init = split_lock_init,
     .deinit = split_lock_exit,
