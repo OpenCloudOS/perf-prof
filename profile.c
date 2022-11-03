@@ -258,8 +258,20 @@ static void profile_interval(void)
     flame_graph_reset(ctx.flame);
 }
 
+static const char *profile_desc[] = PROFILER_DESC("profile",
+    "[OPTION...] [-F freq] [-g [--flame-graph file [-i INT]]] [--than percent]",
+    "Sampling at the specified frequency to profile high CPU utilization.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" profile -F 997 -p 2347 -g --flame-graph cpu",
+    "    "PROGRAME" profile -F 997 -C 0-3 --than 30 -g --flame-graph cpu");
+static const char *profile_argv[] = PROFILER_ARGV("profile",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_FILTER,
+    PROFILER_ARGV_PROFILER, "freq", "call-graph", "flame-graph", "than");
 struct monitor profile = {
     .name = "profile",
+    .desc = profile_desc,
+    .argv = profile_argv,
     .pages = 2,
     .init = profile_init,
     .filter = profile_filter,
