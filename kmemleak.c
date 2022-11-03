@@ -734,8 +734,24 @@ static void kmemleak_help(struct help_ctx *hctx)
 }
 
 
+static const char *kmemleak_desc[] = PROFILER_DESC("kmemleak",
+    "[OPTION...] --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]]",
+    "Memory leak analysis. Both user and kernel allocators are supported.", "",
+    "SYNOPSIS", "",
+    "    Memory leak: Allocated but not freed.", "",
+    "    --alloc specify memory allocation events. --free specify memory free events.",
+    "    'alloc' and 'free' events are associated via 'ptr' ATTR.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ --free kmem:kfree//ptr=ptr/ --order --order-mem 64M -m 128 -g",
+    "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/,kmem:kmalloc_node//ptr=ptr/size=bytes_alloc/stack/ \\",
+    "                       --free kmem:kfree//ptr=ptr/ --order --order-mem 64M -m 128 -g");
+static const char *kmemleak_argv[] = PROFILER_ARGV("kmemleak",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event", "alloc", "free", "call-graph", "flame-graph");
 struct monitor kmemleak = {
     .name = "kmemleak",
+    .desc = kmemleak_desc,
+    .argv = kmemleak_argv,
     .pages = 4,
     .help = kmemleak_help,
     .init = kmemleak_init,
