@@ -150,8 +150,19 @@ found:
     tp->counters[instance] = hdr->counter;
 }
 
+
+static const char *event_lost_desc[] = PROFILER_DESC("event-lost",
+    "[OPTION...] -e EVENT",
+    "Determine if any events are lost.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" event-lost -e sched:sched_wakeup -m 64");
+static const char *event_lost_argv[] = PROFILER_ARGV("event-lost",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_PROFILER, "event");
 static profiler event_lost = {
     .name = "event-lost",
+    .desc = event_lost_desc,
+    .argv = event_lost_argv,
     .pages = 2,
     .init = event_lost_init,
     .filter = event_lost_filter,
