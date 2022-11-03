@@ -414,10 +414,26 @@ static void ldlat_loads_sample(union perf_event *event, int instance)
     latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full);
 }
 
+static const char *ldlat_loads_desc[] = PROFILER_DESC("ldlat-loads",
+    "[OPTION...] [--ldlat cycles] [-T trigger] [--perins] [--than cycles]",
+    "Load Latency Performance Monitoring on Intel Platform.", "",
+    "SYNOPSIS", "",
+    "    Load Latency Performance Monitoring Facility", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" ldlat-loads -C 0 -i 1000",
+    "    "PROGRAME" ldlat-loads -p 2347 --ldlat 10 --than 100 -i 1000");
+static const char *ldlat_loads_argv[] = PROFILER_ARGV("ldlat-loads",
+    PROFILER_ARGV_OPTION,
+    "FILTER OPTION:",
+    "exclude-host", "exclude-guest",
+    PROFILER_ARGV_PROFILER, "ldlat", "trigger", "perins", "than");
+
 //PEBS
 //18.3.4.4.2 Load Latency Performance Monitoring Facility
 static profiler ldlat_loads = {
     .name = "ldlat-loads",
+    .desc = ldlat_loads_desc,
+    .argv = ldlat_loads_argv,
     .pages = 32, // 2x PEBS_BUFFER_SIZE, in kernel PEBS_BUFFER_SIZE=(PAGE_SIZE << 4)
     .init = ldlat_loads_init,
     .deinit = ldlat_loads_exit,
