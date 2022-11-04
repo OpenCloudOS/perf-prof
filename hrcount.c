@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <linux/string.h>
 #include <linux/rblist.h>
 #include <sys/ioctl.h>
 #include <signal.h>
@@ -267,11 +268,7 @@ static void packed_print(void *opaque, struct count_node *node)
     } *iter = opaque;
 
     node->max = 0;
-    len = 1;
-    while (max >= 10) {
-        max /= 10;
-        len ++;
-    }
+    len = strsize(max);
     if (ctx.pertp_counter_max_len[node->id] < ctx.hist_size * (len+1) - 1)
         ctx.pertp_counter_max_len[node->id] = ctx.hist_size * (len+1) - 1;
 
@@ -308,7 +305,6 @@ static void packed_print(void *opaque, struct count_node *node)
 static void __hrcount_interval(void)
 {
     int len, i;
-    u64 max;
     u64 print_pos = (ctx.rounds + 1) * ctx.hist_size;
     u64 max_pos = 0;
 
@@ -323,12 +319,7 @@ static void __hrcount_interval(void)
         max_pos - print_pos >= ctx.hist_size/2)
         ctx.need_reset = true;
 
-    len = 1;
-    max = count_dist_max(ctx.count_dist);
-    while (max >= 10) {
-        max /= 10;
-        len ++;
-    }
+    len = strsize(count_dist_max(ctx.count_dist));
     if (len > ctx.all_counters_max_len)
         ctx.all_counters_max_len = len;
 
