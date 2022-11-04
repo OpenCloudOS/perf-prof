@@ -47,4 +47,7 @@ extern char * __must_check skip_spaces(const char *);
 extern char *strim(char *);
 
 extern void *memchr_inv(const void *start, int c, size_t bytes);
+
+int strsize(u64 u);
+
 #endif /* _TOOLS_LINUX_STRING_H_ */

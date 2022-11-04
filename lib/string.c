@@ -226,3 +226,41 @@ void *memchr_inv(const void *start, int c, size_t bytes)
 
 	return check_bytes8(start, value, bytes % 8);
 }
+
+/**
+ * strsize - Decimal string length.
+ *
+ * @u: 64-bit value to be converted to a decimal string.
+ *
+ * return the length of the string.
+ */
+int strsize(u64 u)
+{
+	static u64 table[] = {
+		9UL,
+		99UL,
+		999UL,
+		9999UL,
+		99999UL,
+		999999UL,
+		9999999UL,
+		99999999UL,
+		999999999UL,
+		9999999999UL,
+		99999999999UL,
+		999999999999UL,
+		9999999999999UL,
+		99999999999999UL,
+		999999999999999UL,
+		9999999999999999UL,
+		99999999999999999UL,
+		999999999999999999UL,
+		9999999999999999999UL,
+		UINT64_MAX
+	};
+	int i;
+	for (i = 0 ; ; i ++) {
+		if (u <= table[i])
+			return i + 1;
+	}
+}
