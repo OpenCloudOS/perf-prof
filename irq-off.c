@@ -142,8 +142,20 @@ static void irq_off_sample(union perf_event *event, int instance)
     }
 }
 
+static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
+    "[OPTION...] [--than ns] [-g]",
+    "Detection interrupt is off.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" irq-off --than 10ms -g");
+static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
+    "OPTION:",
+    "cpus", "output", "mmap-pages",
+    "version", "verbose", "quiet", "help",
+    PROFILER_ARGV_PROFILER, "than", "call-graph");
 struct monitor irq_off = {
     .name = "irq-off",
+    .desc = irq_off_desc,
+    .argv = irq_off_argv,
     .pages = 2,
     .init = irq_off_init,
     .deinit = irq_off_exit,
