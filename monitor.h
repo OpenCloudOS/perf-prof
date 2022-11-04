@@ -68,7 +68,6 @@ struct env {
     int trigger_freq;
     char *cpumask;
     int interval;
-    int latency;  // unit: us
     int freq;
     char *pids;
     char *tids;
@@ -104,7 +103,6 @@ struct env {
     bool syscalls;
     bool perins;
     bool test;
-    bool precise;
     bool detail;
     // detail_arg
         unsigned long before_event1;// unit: ns

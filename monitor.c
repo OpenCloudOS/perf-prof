@@ -90,7 +90,6 @@ perf-prof argc argv
 
 struct env env = {
     .trigger_freq = 1000,
-    .latency = 20000,
     .freq = 100,
     .irqs_disabled = -1,
     .tif_need_resched = -1,
@@ -223,10 +222,6 @@ static int parse_arg(int key, char *arg)
         if (env.nr_events == 0)
             env.event = env.events[0];
         env.nr_events ++;
-        break;
-    case 'L':
-        env.latency = nsparse(arg, NULL);
-        env.latency /= 1000; // to us
         break;
     case LONG_OPT_than:
         env.greater_than = nsparse(arg, NULL);
@@ -363,9 +358,7 @@ struct option main_options[] = {
                                                        "samepid: Only show events with the same pid as event1 or event2."),
     OPT_INT_NONEG   ('T',         "trigger", &env.trigger_freq,          NULL,  "Trigger Threshold, Dflt: 1000, No trigger: 0"),
     OPT_BOOL_NONEG  ( 0 ,            "test", &env.test,                         "Split-lock test verification"),
-    OPT_PARSE_NONEG ('L',         "latency", &env.latency,               NULL,  "Interrupt off latency, Unit: us, Dflt: 20ms"),
-    OPT_BOOL_NONEG  ( 0 ,         "precise", &env.precise,                      "Generate precise interrupt"),
-    OPT_STRDUP_NONEG( 0 ,         "symbols", &env.symbols,               NULL,           "Maps addresses to symbol names.\n"
+    OPT_STRDUP_NONEG( 0 ,         "symbols", &env.symbols,               NULL,  "Maps addresses to symbol names.\n"
                                                                                 "Similar to pprof --symbols."),
     OPT_STRDUP_NONEG('d',          "device", &env.device,            "device",  "Block device, /dev/sdx"),
     OPT_INT_NONEG   ( 0 ,           "ldlat", &env.ldlat,             "cycles",  "mem-loads latency, Unit: cycles"),

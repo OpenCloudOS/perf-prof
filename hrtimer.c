@@ -7,13 +7,16 @@
 static profiler hrtimer;
 typedef int (*analyzer)(int instance, int nr_tp, u64 *counters);
 
+#define BREAK 0
+#define PRINT 1
+
 static int __analyzer_eqzero(int instance, int nr_tp, u64 *counters)
 {
     int i;
     for (i = 0; i < nr_tp; i++) // exclude counters[nr_tp]
         if (counters[i] != 0)
-            return 0;
-    return 1;
+            return BREAK;
+    return PRINT;
 }
 
 static struct monitor_ctx {
@@ -27,6 +30,14 @@ static struct monitor_ctx {
     struct bpf_filter filter;
     struct env *env;
 } ctx;
+
+static int __analyzer_irq_off(int instance, int nr_tp, u64 *counters)
+{
+    if (nr_tp == 0 && counters[0] > ctx.env->greater_than)
+        return PRINT;
+    else
+        return BREAK;
+}
 
 static int monitor_ctx_init(struct env *env)
 {
@@ -49,6 +60,19 @@ static int monitor_ctx_init(struct env *env)
 
         if (bpf_filter_init(&ctx.filter, env))
             bpf_filter_open(&ctx.filter);
+    } else if (env->greater_than) {
+        ctx.counters = calloc(1, monitor_nr_instance() * sizeof(u64));
+        if (!ctx.counters)
+            return -1;
+
+        ctx.ins_counters = malloc(sizeof(u64));
+        if (!ctx.ins_counters)
+            return -1;
+
+        ctx.analyzer = __analyzer_irq_off;
+
+        if (bpf_filter_init(&ctx.filter, env))
+            bpf_filter_open(&ctx.filter);
     }
 
     if (env->callchain) {
@@ -64,14 +88,18 @@ static void monitor_ctx_exit(void)
     if (ctx.env->callchain) {
         callchain_ctx_free(ctx.cc);
     }
+
+    if (ctx.counters)
+        free(ctx.counters);
+    if (ctx.ins_counters)
+        free(ctx.ins_counters);
+
     if (ctx.env->event) {
         bpf_filter_close(&ctx.filter);
-        if (ctx.counters)
-            free(ctx.counters);
-        if (ctx.ins_counters)
-            free(ctx.ins_counters);
         tp_list_free(ctx.tp_list);
         tep__unref();
+    } else if (ctx.env->greater_than) {
+        bpf_filter_close(&ctx.filter);
     }
 }
 
@@ -117,19 +145,19 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     if (monitor_ctx_init(env) < 0)
         return -1;
 
-    if (!env->event) {
+    if (!env->event && !env->greater_than) {
         // perf-prof hrtimer -C 0-1 -F 100
         // no events, no sampling, only hrtimer
-        hrtimer.pages = 0;
-        hrtimer.sample = NULL;
+        current_base_profiler()->pages = 0;
+        current_base_profiler()->sample = NULL;
     }
 
     if (env->callchain) {
-        hrtimer.pages *= 2;
+        current_base_profiler()->pages *= 2;
     }
-    attr.wakeup_watermark = (hrtimer.pages << 12) / 2;
+    attr.wakeup_watermark = (current_base_profiler()->pages << 12) / 2;
 
-    reduce_wakeup_times(&hrtimer, &attr);
+    reduce_wakeup_times(current_base_profiler(), &attr);
 
     ctx.leader = evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -207,12 +235,10 @@ static void hrtimer_sample(union perf_event *event, int instance)
         } groups;
     } *data = (void *)event->sample.array;
     struct callchain *callchain;
-    int n = ctx.tp_list->nr_tp;
+    int n = ctx.env->event ? ctx.tp_list->nr_tp : 0;
     u64 *jcounter = ctx.counters + instance * (n + 1);
     u64 counter, cpu_clock = 0;
-    u64 i;
-    int j;
-    int print = 0;
+    u64 i, j, print = BREAK;
     int verbose = ctx.env->verbose;
     int header_end = 0;
 
@@ -260,7 +286,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
 
     print = ctx.analyzer(instance, n, ctx.ins_counters);
 
-    if (print || verbose) {
+    if (print == PRINT || verbose) {
         if (!verbose) {
             print_time(stdout);
             printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
@@ -321,7 +347,9 @@ static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
     "    "PROGRAME" hrtimer -e sched:sched_switch -C 0 --period 50ms",
     "    "PROGRAME" hrtimer -e sched:sched_switch,sched:sched_wakeup -C 0-5 -F 20 -g");
 static const char *hrtimer_argv[] = PROFILER_ARGV("hrtimer",
-    PROFILER_ARGV_OPTION,
+    "OPTION:",
+    "cpus", "output", "mmap-pages",
+    "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
     PROFILER_ARGV_PROFILER, "event", "freq", "period", "call-graph");
 static profiler hrtimer = {
@@ -336,4 +364,77 @@ static profiler hrtimer = {
     .sample = hrtimer_sample,
 };
 PROFILER_REGISTER(hrtimer);
+
+
+static void irq_off_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+{
+    int n = ctx.env->event ? ctx.tp_list->nr_tp : 0;
+    u64 *jcounter = ctx.counters + instance * (n + 1);
+    u64 counter, cpu_clock = 0;
+    struct {
+        u64 nr;
+        struct {
+            u64 value;
+            u64 id;
+        } ctnr[0];
+    } *groups = (void *)count;
+    int i, j, print = BREAK;
+    int verbose = ctx.env->verbose;
+
+    for (i = 0; i < groups->nr; i++) {
+        struct perf_evsel *evsel;
+        evsel = perf_evlist__id_to_evsel(ctx.evlist, groups->ctnr[i].id, NULL);
+        if (!evsel)
+            continue;
+        if (evsel == ctx.leader) {
+            cpu_clock = groups->ctnr[i].value - jcounter[n];
+            ctx.ins_counters[n] = cpu_clock;
+            continue;
+        }
+        for (j = 0; j < n; j++) {
+            struct tp *tp = &ctx.tp_list->tp[j];
+            if (tp->evsel == evsel) {
+                counter = groups->ctnr[i].value - jcounter[j];
+                ctx.ins_counters[j] = counter;
+                break;
+            }
+        }
+    }
+
+    print = ctx.analyzer(instance, n, ctx.ins_counters);
+
+    if (print == PRINT || verbose) {
+        print_time(stdout);
+        printf(" %13s [%03d]  cpu-clock: %lu ns\n", "read", monitor_instance_cpu(instance), cpu_clock);
+    }
+}
+
+static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
+    "[OPTION...] [-F freq] [--period ns] [--than ns] [-g]",
+    "Detect the hrtimer latency to determine if the irq is off.", "",
+    "SYNOPSIS", "",
+    "    Hrtimer latency detection, --period specifies the hrtimer period, if the period",
+    "    exceeds the time specified by --than, it will be printed.", "",
+    "    Based on hrtimer. See '"PROGRAME" hrtimer -h' for more information.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" irq-off --period 10ms --than 20ms -g",
+    "    "PROGRAME" irq-off -C 0 --period 10ms --than 20ms -g -i 200");
+static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
+    "OPTION:",
+    "cpus", "interval", "output", "mmap-pages",
+    "version", "verbose", "quiet", "help",
+    PROFILER_ARGV_FILTER,
+    PROFILER_ARGV_PROFILER, "freq", "period", "than", "call-graph");
+struct monitor irq_off = {
+    .name = "irq-off",
+    .desc = irq_off_desc,
+    .argv = irq_off_argv,
+    .pages = 2,
+    .init = hrtimer_init,
+    .filter = hrtimer_filter,
+    .deinit = hrtimer_exit,
+    .read = irq_off_read,
+    .sample = hrtimer_sample,
+};
+MONITOR_REGISTER(irq_off);
 

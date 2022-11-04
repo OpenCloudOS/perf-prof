@@ -3,7 +3,6 @@ perf-prof-y += count_helpers.o
 perf-prof-y += lib/ filter/
 perf-prof-y += monitor.o tep.o
 perf-prof-y += split-lock.o
-perf-prof-y += irq-off.o
 perf-prof-y += profile.o
 perf-prof-y += trace.o
 perf-prof-y += signal.o
