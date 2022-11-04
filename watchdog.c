@@ -50,6 +50,7 @@ static struct monitor_ctx {
 
 static int monitor_ctx_init(struct env *env)
 {
+    char *cpumask = NULL;
     char *str = NULL;
     size_t len;
 
@@ -67,8 +68,20 @@ static int monitor_ctx_init(struct env *env)
         return -1;
     ctx.nr_watchdog = 0;
 
-    if (env->cpumask == NULL)
-        procfs__read_str("sys/kernel/watchdog_cpumask", &env->cpumask, &len);
+    if (procfs__read_str("sys/kernel/watchdog_cpumask", &cpumask, &len) == 0) {
+        struct perf_cpu_map *cpus = NULL;
+
+        cpus = perf_cpu_map__new(cpumask);
+        if (cpus)
+            cpus = perf_cpu_map__and(cpus, watchdog.cpus);
+        if (cpus) {
+            perf_cpu_map__put(watchdog.cpus);
+            watchdog.cpus = cpus;
+            free(env->cpumask);
+            env->cpumask = perf_cpu_map__string(cpus);
+        }
+        free(cpumask);
+    }
 
     procfs__read_str("sys/kernel/watchdog_thresh", &str, &len);
     if (str) {
