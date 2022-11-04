@@ -5,7 +5,7 @@
 #include <internal/cpumap.h>
 #include <asm/bug.h>
 #include <stdio.h>
-#include <string.h>
+#include <linux/string.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <limits.h>
@@ -399,5 +399,37 @@ struct perf_cpu_map *perf_cpu_map__and(struct perf_cpu_map *orig,
 	free(tmp_cpus);
 	perf_cpu_map__put(orig);
 	return and;
+}
+
+char *perf_cpu_map__string(struct perf_cpu_map *cpus)
+{
+    int i = 0, start_cpu, end_cpu;
+    size_t size, pos = 0;
+    char *str;
+    char c;
+
+    if (!cpus)
+        return NULL;
+
+    size = cpus->nr * (strsize(perf_cpu_map__max(cpus)) + 1) + 1;
+    str = malloc(size);
+    if (!str)
+        return NULL;
+
+    do {
+        start_cpu = end_cpu = cpus->map[i++];
+        while (i < cpus->nr && end_cpu + 1 == cpus->map[i]) {
+            end_cpu ++;
+            i ++;
+        }
+        c = i < cpus->nr ? ',' : '\0';
+        if (start_cpu == end_cpu)
+            pos += snprintf(str+pos, size-pos, "%d%c", start_cpu, c);
+        else
+            pos += snprintf(str+pos, size-pos, "%d-%d%c", start_cpu, end_cpu, c);
+    } while (i < cpus->nr);
+
+    pos ++; // '\0'
+    return pos == size ? str : realloc(str, pos);
 }
 

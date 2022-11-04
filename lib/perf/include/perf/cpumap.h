@@ -23,6 +23,7 @@ LIBPERF_API int perf_cpu_map__max(struct perf_cpu_map *map);
 LIBPERF_API struct perf_cpu_map *perf_cpu_map__and(struct perf_cpu_map *orig,
                          struct perf_cpu_map *other);
 LIBPERF_API int perf_cpu_map__idx(struct perf_cpu_map *cpus, int cpu);
+LIBPERF_API char *perf_cpu_map__string(struct perf_cpu_map *cpus);
 
 #define perf_cpu_map__for_each_cpu(cpu, idx, cpus)		\
 	for ((idx) = 0, (cpu) = perf_cpu_map__cpu(cpus, idx);	\
