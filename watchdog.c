@@ -486,8 +486,21 @@ static void watchdog_throttle(union perf_event *event, int instance)
 }
 
 
+static const char *watchdog_desc[] = PROFILER_DESC("watchdog",
+    "[OPTION...] [-F freq] [-g]",
+    "Detect hard lockup and soft lockup.", "",
+    "EXAMPLES", "",
+    "    "PROGRAME" watchdog -F 1 -g",
+    "    "PROGRAME" watchdog -C 0 -F 1 -g -v");
+static const char *watchdog_argv[] = PROFILER_ARGV("watchdog",
+    "OPTION:",
+    "cpus", "output", "mmap-pages",
+    "version", "verbose", "quiet", "help",
+    PROFILER_ARGV_PROFILER, "freq", "call-graph");
 struct monitor watchdog = {
     .name = "watchdog",
+    .desc = watchdog_desc,
+    .argv = watchdog_argv,
     .pages = 2,
     .init = watchdog_init,
     .filter = watchdog_filter,
