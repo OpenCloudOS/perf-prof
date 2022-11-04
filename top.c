@@ -560,7 +560,8 @@ static void top_help(struct help_ctx *hctx)
                 printf("comm=./");
             if (!tp->alias || !top_by || !top_add || !tp->key || !tp->comm)
                 printf("]");
-            if (i != hctx->nr_list - 1)
+            if (i != hctx->nr_list - 1 ||
+                j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
     }

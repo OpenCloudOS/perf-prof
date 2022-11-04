@@ -284,7 +284,8 @@ static void hrtimer_help(struct help_ctx *hctx)
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
-            if (i != hctx->nr_list - 1)
+            if (i != hctx->nr_list - 1 ||
+                j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
     }

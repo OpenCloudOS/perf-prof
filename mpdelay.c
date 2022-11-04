@@ -346,7 +346,8 @@ static void mpdelay_help(struct help_ctx *hctx)
             struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/delay=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
                              tp->delay?:".");
-            if (i != hctx->nr_list - 1)
+            if (i != hctx->nr_list - 1 ||
+                j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
     }

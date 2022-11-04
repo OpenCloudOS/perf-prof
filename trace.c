@@ -255,7 +255,8 @@ static void trace_help(struct help_ctx *hctx)
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (!env->callchain)
                 printf("[stack/]");
-            if (i != hctx->nr_list - 1)
+            if (i != hctx->nr_list - 1 ||
+                j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
     }

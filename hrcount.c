@@ -469,7 +469,8 @@ static void __common_help(struct help_ctx *hctx, const char *name)
                 printf("alias=./");
             if (!tp->alias)
                 printf("]");
-            if (i != hctx->nr_list - 1)
+            if (i != hctx->nr_list - 1 ||
+                j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
     }
