@@ -951,6 +951,7 @@ int main(int argc, char *argv[])
         monitor->pages = env.mmap_pages;
 
     setlinebuf(stdout);
+    setlinebuf(stderr);
     libperf_init(libperf_print);
 
 reinit:
