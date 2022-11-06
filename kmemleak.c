@@ -249,6 +249,11 @@ static int add_tp_list(struct perf_evlist *evlist, struct tp_list *tp_list, bool
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
 
+        if (!tp->mem_ptr) {
+            fprintf(stderr, "%s:%s//ptr=?/ ptr attribute is not set\n", tp->sys, tp->name);
+            return -1;
+        }
+
         attr.config = tp->id;
         if (!callchain) {
             if (tp->stack)
