@@ -1,5 +1,5 @@
 perf-prof-y += trace_helpers.o uprobe_helpers.o stack_helpers.o latency_helpers.o
-perf-prof-y += count_helpers.o
+perf-prof-y += count_helpers.o localtime.o
 perf-prof-y += lib/ filter/
 perf-prof-y += monitor.o tep.o
 perf-prof-y += split-lock.o

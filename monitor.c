@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <argp.h>
 #include <signal.h>
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -22,6 +21,8 @@
 #include <trace_helpers.h>
 #include <monitor.h>
 #include <tep.h>
+
+static int daylight_active;
 
 static void help(void);
 
@@ -491,6 +492,8 @@ static void sigusr2_handler(int sig)
     struct rusage usage;
 
     if (init == 0) {
+        tzset(); /* Now 'timezone' global is populated. */
+        daylight_active = daylight;
         gettimeofday(&tv, NULL);
         if (getrusage(RUSAGE_SELF, &usage) == 0) {
             utime = usage.ru_utime.tv_sec * 1000000UL + usage.ru_utime.tv_usec;
@@ -504,14 +507,18 @@ static void sigusr2_handler(int sig)
     if (getrusage(RUSAGE_SELF, &usage) == 0) {
         unsigned long user, sys, us;
         struct timeval t;
+        char timebuff[64];
+        struct tm result;
 
         gettimeofday(&t, NULL);
         us = t.tv_sec * 1000000UL + t.tv_usec - tv.tv_sec * 1000000UL - tv.tv_usec;
         user = usage.ru_utime.tv_sec * 1000000UL + usage.ru_utime.tv_usec - utime;
         sys = usage.ru_stime.tv_sec * 1000000UL + usage.ru_stime.tv_usec - stime;
 
-        print_time(stdout);
-        printf("CPU %%usr %.2f %%sys %.2f MAXRSS %luk\n", user*100.0/us, sys*100.0/us, usage.ru_maxrss);
+        nolocks_localtime(&result, t.tv_sec, timezone, daylight_active);
+        strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", &result);
+        printf("%s.%06u CPU %%usr %.2f %%sys %.2f MAXRSS %luk\n", timebuff, (unsigned int)tv.tv_usec,
+                user*100.0/us, sys*100.0/us, usage.ru_maxrss);
 
         utime += user;
         stime += sys;
@@ -760,8 +767,12 @@ void print_time(FILE *fp)
 {
     char timebuff[64];
     struct timeval tv;
+    struct tm *result;
+
     gettimeofday(&tv, NULL);
-    strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", localtime(&tv.tv_sec));
+    result = localtime(&tv.tv_sec);
+    daylight_active = result->tm_isdst;
+    strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", result);
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
 }
 

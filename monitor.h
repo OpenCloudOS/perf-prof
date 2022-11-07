@@ -11,6 +11,7 @@
 #include <perf/event.h>
 #include <parse-options.h>
 #include <tep.h>
+#include <localtime.h>
 
 struct monitor;
 void monitor_register(struct monitor *m);
