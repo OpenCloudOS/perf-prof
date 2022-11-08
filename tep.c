@@ -329,12 +329,12 @@ struct tp_list *tp_list_new(char *event_str)
                         goto err_out;
                     }
                     tp->mem_size = value;
-                } else if (strcmp(attr, "delay") == 0) {
+                } else if (strcmp(attr, "num") == 0) {
                     if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr delay: cannot find %s field at %s:%s\n", value, sys, name);
+                        fprintf(stderr, "Attr num: cannot find %s field at %s:%s\n", value, sys, name);
                         goto err_out;
                     }
-                    tp->delay = value;
+                    tp->num = value;
                 } else if (strcmp(attr, "key") == 0) {
                     if (!tep_find_any_field(event, value)) {
                         fprintf(stderr, "Attr key: cannot find %s field at %s:%s\n", value, sys, name);
@@ -372,7 +372,7 @@ struct tp_list *tp_list_new(char *event_str)
         tp_list->nr_top += tp->nr_top;
         tp_list->nr_comm += !!tp->comm;
         tp_list->nr_mem_size += !!tp->mem_size;
-        tp_list->nr_delay += !!tp->delay;
+        tp_list->nr_num += !!tp->num;
         tp_list->nr_untraced += !!tp->untraced;
     }
 

@@ -11,7 +11,7 @@
 #include <stack_helpers.h>
 #include <latency_helpers.h>
 
-static profiler mpdelay;
+static profiler num_dist;
 
 static struct monitor_ctx {
     int nr_ins;
@@ -71,13 +71,13 @@ static int monitor_ctx_init(struct env *env)
     if (!ctx.tp_list) {
         return -1;
     }
-    if (ctx.tp_list->nr_delay == 0) {
+    if (ctx.tp_list->nr_num == 0) {
         fprintf(stderr, "Please use the multi-trace profiler\n");
         tp_list_free(ctx.tp_list);
         return -1;
     }
-    if (ctx.tp_list->nr_tp != ctx.tp_list->nr_delay) {
-        fprintf(stderr, "The number of delay attr is not equal to the number of event\n");
+    if (ctx.tp_list->nr_tp != ctx.tp_list->nr_num) {
+        fprintf(stderr, "The number of 'num' attr is not equal to the number of event\n");
         tp_list_free(ctx.tp_list);
         return -1;
     }
@@ -101,7 +101,7 @@ static int monitor_ctx_init(struct env *env)
 
     if (stacks) {
         ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
-        mpdelay.pages *= 2;
+        num_dist.pages *= 2;
     } else
         ctx.cc = NULL;
 
@@ -136,7 +136,7 @@ static void monitor_ctx_exit(void)
     tep__unref();
 }
 
-static int mpdelay_init(struct perf_evlist *evlist, struct env *env)
+static int num_dist_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -155,7 +155,7 @@ static int mpdelay_init(struct perf_evlist *evlist, struct env *env)
     if (monitor_ctx_init(env) < 0)
         return -1;
 
-    attr.wakeup_watermark = (mpdelay.pages << 12) / 3;
+    attr.wakeup_watermark = (num_dist.pages << 12) / 3;
     for (i = 0; i < ctx.nr_points; i++) {
         struct perf_evsel *evsel;
         struct tp *tp = &ctx.tp_list->tp[i];
@@ -180,7 +180,7 @@ static int mpdelay_init(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static int mpdelay_filter(struct perf_evlist *evlist, struct env *env)
+static int num_dist_filter(struct perf_evlist *evlist, struct env *env)
 {
     int i, err;
 
@@ -242,14 +242,14 @@ static void print_latency_interval(void)
     latency_dist_print(ctx.lat_dist, print_latency_node, &info);
 }
 
-static void mpdelay_interval(void)
+static void num_dist_interval(void)
 {
     print_latency_interval();
 }
 
-static void mpdelay_exit(struct perf_evlist *evlist)
+static void num_dist_exit(struct perf_evlist *evlist)
 {
-    mpdelay_interval();
+    num_dist_interval();
     monitor_ctx_exit();
 }
 
@@ -279,7 +279,7 @@ static void __print_callchain(union perf_event *event, struct tp *tp)
     }
 }
 
-static void mpdelay_sample(union perf_event *event, int instance)
+static void num_dist_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *hdr = (void *)event->sample.array;
     struct tep_record record;
@@ -314,7 +314,7 @@ static void mpdelay_sample(union perf_event *event, int instance)
 
     tep = tep__ref();
     e = tep_find_event_by_record(tep, &record);
-    if (tep_get_field_val(NULL, e, tp->delay, &record, &delta, 0) < 0) {
+    if (tep_get_field_val(NULL, e, tp->num, &record, &delta, 0) < 0) {
         tep__unref();
         return;
     }
@@ -334,18 +334,18 @@ static void mpdelay_sample(union perf_event *event, int instance)
     }
 }
 
-static void mpdelay_help(struct help_ctx *hctx)
+static void num_dist_help(struct help_ctx *hctx)
 {
     int i, j;
     struct env *env = hctx->env;
 
-    printf(PROGRAME " %s ", mpdelay.name);
+    printf(PROGRAME " %s ", num_dist.name);
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &hctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/delay=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
-                             tp->delay?:".");
+            printf("%s:%s/%s/num=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
+                             tp->num?:".");
             if (i != hctx->nr_list - 1 ||
                 j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
@@ -372,27 +372,27 @@ static void mpdelay_help(struct help_ctx *hctx)
 }
 
 
-static const char *mpdelay_desc[] = PROFILER_DESC("mpdelay",
+static const char *num_dist_desc[] = PROFILER_DESC("num-dist",
     "[OPTION...] -e EVENT [--perins] [--than ns] [--heatmap file]",
-    "Latency analysis. Get 'delay' data from the event itself.", "",
+    "Numerical distribution. Get 'num' data from the event itself.", "",
     "EXAMPLES", "",
-    "    "PROGRAME" mpdelay -e sched:sched_stat_runtime help",
-    "    "PROGRAME" mpdelay -e sched:sched_stat_runtime//delay=runtime/ -C 0 -i 1000");
-static const char *mpdelay_argv[] = PROFILER_ARGV("mpdelay",
+    "    "PROGRAME" num-dist -e sched:sched_stat_runtime help",
+    "    "PROGRAME" num-dist -e sched:sched_stat_runtime//num=runtime/ -C 0 -i 1000");
+static const char *num_dist_argv[] = PROFILER_ARGV("num-dist",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "perins", "than", "heatmap");
-static profiler mpdelay = {
-    .name = "mpdelay",
-    .desc = mpdelay_desc,
-    .argv = mpdelay_argv,
+static profiler num_dist = {
+    .name = "num-dist",
+    .desc = num_dist_desc,
+    .argv = num_dist_argv,
     .pages = 64,
-    .help = mpdelay_help,
-    .init = mpdelay_init,
-    .filter = mpdelay_filter,
-    .deinit = mpdelay_exit,
-    .interval = mpdelay_interval,
-    .sample = mpdelay_sample,
+    .help = num_dist_help,
+    .init = num_dist_init,
+    .filter = num_dist_filter,
+    .deinit = num_dist_exit,
+    .interval = num_dist_interval,
+    .sample = num_dist_sample,
 };
-PROFILER_REGISTER(mpdelay)
+PROFILER_REGISTER(num_dist)
 
 

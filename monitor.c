@@ -326,7 +326,7 @@ struct option main_options[] = {
                                                                 "      comm=field: top, show COMM\n"
                                                                 "      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
                                                                 "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
-                                                                "      delay=field: mpdelay, delay field\n"
+                                                                "      num=field: num-dist, num field\n"
                                                                 "      key=field: key for multiple events: top, multi-trace\n"
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis"),
     OPT_INT_NONEG   ('F',            "freq", &env.freq,                  NULL,  "Profile at this frequency, Dflt: 100, No profile: 0"),

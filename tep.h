@@ -38,8 +38,8 @@ struct tp {
     const char *mem_ptr;
     const char *mem_size;
 
-    // mpdelay profiler
-    const char *delay;
+    // num-dist profiler
+    const char *num;
 
     //multi-trace profiler
     const char *key;
@@ -53,7 +53,7 @@ struct tp_list {
     int nr_top;
     int nr_comm;
     int nr_mem_size;
-    int nr_delay;
+    int nr_num;
     int nr_untraced;
     struct tp tp[0];
 };
