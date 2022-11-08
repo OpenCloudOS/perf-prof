@@ -91,8 +91,8 @@ static int monitor_ctx_init(struct env *env)
     for (i = 0; i < ctx.nr_points; i++) {
         struct tp *tp = &ctx.tp_list->tp[i];
 
-        if (strlen(tp->name) > ctx.max_len)
-            ctx.max_len = strlen(tp->name);
+        if (strlen(tp->alias?:tp->name) > ctx.max_len)
+            ctx.max_len = strlen(tp->alias?:tp->name);
         stacks += tp->stack;
 
         if (env->verbose)
@@ -229,7 +229,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         else
             printf("%-8d ", monitor_instance_thread(node->instance));
     }
-    printf("%*s", ctx.max_len, tp->name);
+    printf("%*s", ctx.max_len, tp->alias ?: tp->name);
     printf(" %8lu %16.3f %9.3f %9.3f %12.3f\n",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
 }
@@ -344,8 +344,8 @@ static void num_dist_help(struct help_ctx *hctx)
     for (i = 0; i < hctx->nr_list; i++) {
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
             struct tp *tp = &hctx->tp_list[i]->tp[j];
-            printf("%s:%s/%s/num=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
-                             tp->num?:".");
+            printf("%s:%s/%s/num=%s/alias=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
+                             tp->num?:".", tp->alias?:".");
             if (i != hctx->nr_list - 1 ||
                 j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
