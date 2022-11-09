@@ -214,13 +214,13 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         if (ctx.env->perins)
             printf(oncpu ? "[CPU] " : "[THREAD] ");
         printf("%-*s", ctx.max_len, "event");
-        printf(" %8s %16s %9s %9s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
 
         if (ctx.env->perins)
             printf(oncpu ? "----- " : "-------- ");
         for (i=0; i<ctx.max_len; i++) printf("-");
-        printf(" %8s %16s %9s %9s %12s\n",
-                        "--------", "----------------", "---------", "---------", "------------");
+        printf(" %8s %16s %12s %12s %12s\n",
+                        "--------", "----------------", "------------", "------------", "------------");
     }
 
     if (ctx.env->perins) {
@@ -230,7 +230,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
             printf("%-8d ", monitor_instance_thread(node->instance));
     }
     printf("%*s", ctx.max_len, tp->alias ?: tp->name);
-    printf(" %8lu %16.3f %9.3f %9.3f %12.3f\n",
+    printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
 }
 
