@@ -102,7 +102,7 @@ struct env env = {
 static volatile bool exiting;
 static volatile bool child_finished;
 
-const char *main_program_version = PROGRAME " 0.10";
+const char *main_program_version = PROGRAME " 0.11";
 
 enum {
     LONG_OPT_start = 500,
