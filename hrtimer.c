@@ -366,7 +366,7 @@ static profiler hrtimer = {
 PROFILER_REGISTER(hrtimer);
 
 
-static void irq_off_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static void irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count, int instance)
 {
     int n = ctx.env->event ? ctx.tp_list->nr_tp : 0;
     u64 *jcounter = ctx.counters + instance * (n + 1);
