@@ -143,13 +143,13 @@ static const char *help_desc[] = PROFILER_DESC("",
     "    "PROGRAME" -e sched:sched_wakeup,sched:sched_switch help");
 static const char *help_argv[] = PROFILER_ARGV("help",
     PROFILER_ARGV_PROFILER, "event", "alloc", "free");
-static profiler help = {
+static profiler help_profiler = {
     .name = "help",
     .desc = help_desc,
     .argv = help_argv,
     .init = help_init,
     .deinit = help_exit,
 };
-PROFILER_REGISTER(help)
+PROFILER_REGISTER(help_profiler)
 
 

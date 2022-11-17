@@ -24,7 +24,6 @@
 
 static int daylight_active;
 
-static void help(void);
 
 struct monitor *monitors_list = NULL;
 struct monitor *monitor = NULL;
@@ -378,7 +377,7 @@ const char * const main_usage[] = {
     NULL
 };
 
-static void help(void)
+void help(void)
 {
     int argc = 2;
     const char *argv[] = {PROGRAME, "--help"};
@@ -416,6 +415,17 @@ static void help(void)
     exit(129);
 }
 
+static void disable_help(void)
+{
+    struct option *opts = main_options;
+    for (; opts->type != OPTION_END; opts++) {
+        if (opts->short_name == 'h') {
+            opts->short_name = 0;
+            opts->long_name = "disable-help";
+        }
+    }
+}
+
 #ifndef CONFIG_LIBBPF
 static const char *LIBBPF_BUILD = "NO CONFIG_LIBBPF=y";
 #endif
@@ -433,7 +443,7 @@ static int parse_main_options(int argc, char *argv[])
     set_option_nobuild(main_options, 0,   "nr_running_max", LIBBPF_BUILD, true);
 #endif
 
-    while (argc > 1) {
+    while (argc > 0) {
         argc = parse_options(argc, (const char **)argv, main_options, main_usage,
                              PARSE_OPT_NO_INTERNAL_HELP | PARSE_OPT_KEEP_DASHDASH |
                              (stop_at_non_option ? PARSE_OPT_STOP_AT_NON_OPTION :
@@ -446,6 +456,7 @@ static int parse_main_options(int argc, char *argv[])
                 continue;
             } else if (stop_at_non_option) {
                 stop_at_non_option = false;
+                disable_help();
                 continue;
             }
         }
@@ -462,10 +473,10 @@ static int parse_main_options(int argc, char *argv[])
     if (monitor == NULL && env.symbols == NULL)
         help();
 
-    if (argc && !dashdash) {
+    if (!dashdash) {
         if (monitor->argc_init)
             argc = monitor->argc_init(argc, argv);
-        else if (env.verbose > 0) {
+        else if (argc && env.verbose > 0) {
             int i;
             printf("Unparsed options:");
             for (i = 0; i < argc; i ++)
