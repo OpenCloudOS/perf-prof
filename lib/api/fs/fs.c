@@ -438,6 +438,28 @@ int filename__write_int(const char *filename, int value)
 	return err;
 }
 
+int filename__write_str(const char *filename, const char *str, size_t size)
+{
+	int fd, n, err = 0;
+
+	fd = open(filename, O_WRONLY);
+	if (fd < 0)
+		return -errno;
+
+	do {
+		n = write(fd, str, size);
+		if (n < 0) {
+			err = -errno;
+			break;
+		}
+		str += n;
+		size -= n;
+	} while (size > 0);
+
+	close(fd);
+	return err;
+}
+
 int procfs__read_str(const char *entry, char **buf, size_t *sizep)
 {
 	char path[PATH_MAX];
@@ -555,4 +577,18 @@ int sysfs__write_int(const char *entry, int value)
 		return -1;
 
 	return filename__write_int(path, value);
+}
+
+int sysfs__write_str(const char *entry, const char *str, size_t size)
+{
+	char path[PATH_MAX];
+	const char *sysfs = sysfs__mountpoint();
+
+	if (!sysfs)
+		return -1;
+
+	if (snprintf(path, sizeof(path), "%s/%s", sysfs, entry) >= PATH_MAX)
+		return -1;
+
+	return filename__write_str(path, str, size);
 }

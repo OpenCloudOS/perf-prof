@@ -48,6 +48,7 @@ int filename__read_xll(const char *filename, unsigned long long *value);
 int filename__read_str(const char *filename, char **buf, size_t *sizep);
 
 int filename__write_int(const char *filename, int value);
+int filename__write_str(const char *filename, const char *str, size_t size);
 
 int procfs__read_str(const char *entry, char **buf, size_t *sizep);
 
@@ -59,4 +60,6 @@ int sysfs__read_str(const char *entry, char **buf, size_t *sizep);
 int sysfs__read_bool(const char *entry, bool *value);
 
 int sysfs__write_int(const char *entry, int value);
+int sysfs__write_str(const char *entry, const char *str, size_t size);
+
 #endif /* __API_FS__ */
