@@ -35,6 +35,17 @@ struct timeline_stat {
     u64 unneeded_bytes;
 } tl_stat;
 
+struct __dup_stat {
+    u64 nr_samples;
+    u64 nr_free;
+} dup_stat;
+
+struct __backup_stat {
+    u64 new;
+    u64 delete;
+    u64 mem_bytes;
+} backup_stat;
+
 static struct multi_trace_ctx {
     int nr_ins;
     int nr_list;
@@ -103,6 +114,8 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
             INIT_LIST_HEAD(&b->needed);
+            backup_stat.new ++;
+            backup_stat.mem_bytes += event->header.size;
             return &b->key_node;
         } else
             return NULL;
@@ -118,6 +131,8 @@ static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node 
         tl_stat.unneeded ++;
         tl_stat.unneeded_bytes += b->event->header.size;
     } else {
+        backup_stat.delete ++;
+        backup_stat.mem_bytes -= b->event->header.size;
         free(b->event);
         free(b);
     }
@@ -533,6 +548,22 @@ static void multi_trace_sigusr1(int signum)
 {
     if (ctx.need_timeline)
         timeline_stat();
+    else {
+        if (base_profiler->dup)
+            printf("DUP STAT:\n"
+                   "  nr_samples = %lu\n"
+                   "  nr_free = %lu\n"
+                   "  nr_unfree = %lu\n",
+                   dup_stat.nr_samples, dup_stat.nr_free + backup_stat.delete,
+                   dup_stat.nr_samples - dup_stat.nr_free - backup_stat.delete);
+        printf("BACKUP:\n"
+               "  new = %lu\n"
+               "  delete = %lu\n"
+               "  nr_entries = %u\n"
+               "  mem_bytes = %lu\n",
+               backup_stat.new, backup_stat.delete, rblist__nr_entries(&ctx.backup),
+               backup_stat.mem_bytes);
+    }
 }
 
 static void multi_trace_lost(union perf_event *event, int ins)
@@ -670,6 +701,9 @@ static void multi_trace_sample(union perf_event *event, int instance)
     bool need_find_prev, need_backup, need_remove_from_backup;
     __u64 key;
 
+    if (base_profiler->dup)
+        dup_stat.nr_samples ++;
+
     evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
     if (!evsel)
         goto free_dup_event;
@@ -686,8 +720,10 @@ static void multi_trace_sample(union perf_event *event, int instance)
     }
 
 free_dup_event:
-    if (base_profiler->dup)
+    if (base_profiler->dup) {
         free(event);
+        dup_stat.nr_free ++;
+    }
     return;
 
 found:
@@ -869,9 +905,12 @@ untraced_processing:
                     if (new->event != event) {
                         if (ctx.env->verbose >= VERBOSE_NOTICE)
                             multi_trace_print_title(new->event, new->tp, "EEXIST");
+                        backup_stat.mem_bytes -= new->event->header.size;
+                        dup_stat.nr_free ++;
                         free(new->event);
                         new->event = event;
                         new->time = backup.time;
+                        backup_stat.mem_bytes += event->header.size;
                     }
                     new->tp = tp;
                 } else
@@ -883,10 +922,12 @@ untraced_processing:
                     struct timeline_node *new = rb_entry(rbn, struct timeline_node, key_node);
                     if (ctx.env->verbose >= VERBOSE_NOTICE)
                         multi_trace_print_title(new->event, new->tp, "EEXIST");
+                    backup_stat.mem_bytes -= new->event->header.size;
                     free(new->event);
                     new->event = memdup(event, event->header.size);
                     new->time = backup.time;
                     new->tp = tp;
+                    backup_stat.mem_bytes += event->header.size;
                 } else if (err != 0)
                     goto free_dup_event;
             }
