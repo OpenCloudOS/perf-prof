@@ -4,6 +4,7 @@
 
 #include <linux/types.h>	/* for size_t */
 #include <string.h>
+#include <stdarg.h>
 
 void *memdup(const void *src, size_t len);
 
@@ -49,5 +50,9 @@ extern char *strim(char *);
 extern void *memchr_inv(const void *start, int c, size_t bytes);
 
 int strsize(u64 u);
+
+char *stradd(const char *a, const char *b);
+char *straddv(char *a, void (*freea)(void *), const char *fmt, va_list ap);
+char *straddf(char *a, void (*freea)(void *), const char *fmt, ...);
 
 #endif /* _TOOLS_LINUX_STRING_H_ */

@@ -12,7 +12,7 @@
  *  d0f1fed29e6e ("Add a strtobool function matching semantics of existing in kernel equivalents")
  *  Author: Jonathan Cameron <jic23@cam.ac.uk>
  */
-
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -263,4 +263,90 @@ int strsize(u64 u)
 		if (u <= table[i])
 			return i + 1;
 	}
+}
+
+/**
+ * stradd - a + b
+ *
+ * Return a new string, which needs to be freed.
+ */
+char *stradd(const char *a, const char *b)
+{
+	size_t sa = strlen(a);
+	size_t sb = strlen(b);
+	char *ptr = malloc(sa + sb + 1);
+
+	if (ptr) {
+		memcpy(ptr, a, sa);
+		memcpy(ptr + sa, b, sb);
+		ptr[sa + sb] = '\0';
+	}
+	return ptr;
+}
+
+/**
+ * straddv - String addition.
+ * @a: string a.
+ * @freea: Always free string a.
+ * @fmt: printf format string.
+ * @ap: variable argument lists
+ *
+ * Returns the string a plus the formatted string.
+ */
+char *straddv(char *a, void (*freea)(void *), const char *fmt, va_list ap)
+{
+	va_list ap_saved;
+	char tmp[256];
+	int len;
+	size_t sa;
+	char *ptr = NULL;
+
+	va_copy(ap_saved, ap);
+	len = vsnprintf(tmp, sizeof(tmp), fmt, ap);
+	if (len < 0)
+		goto end;
+
+	sa = a ? strlen(a) : 0;
+	ptr = malloc(sa + len + 1);
+	if (!ptr)
+		goto end;
+
+	memcpy(ptr, a, sa);
+	if (len >= sizeof(tmp)) {
+		int len1 = vsnprintf(ptr + sa, len + 1, fmt, ap_saved);
+		if (len1 < 0 || len1 != len) {
+			free(ptr);
+			ptr = NULL;
+			goto end;
+		}
+	} else
+		memcpy(ptr + sa, tmp, len);
+
+	ptr[sa + len] = '\0';
+
+end:
+	if (freea)
+		freea(a);
+	va_end(ap_saved);
+	return ptr;
+}
+
+/**
+ * straddf - String addition.
+ * @a: string a.
+ * @freea: Always free string a.
+ * @fmt: printf format string.
+ * @...: variable argument lists
+ *
+ * Returns the string a plus the formatted string.
+ */
+char *straddf(char *a, void (*freea)(void *), const char *fmt, ...)
+{
+	va_list ap;
+	char *ptr;
+
+	va_start(ap, fmt);
+	ptr = straddv(a, freea, fmt, ap);
+	va_end(ap);
+	return ptr;
 }
