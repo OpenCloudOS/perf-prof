@@ -1,3 +1,3 @@
 perf-prof-y += vsprintf.o rbtree.o rblist.o ctype.o string.o strlist.o thread_map.o
-perf-prof-y += ordered-events.o
+perf-prof-y += ordered-events.o argv_split.o
 perf-prof-y += cgroup.o

@@ -1,6 +1,6 @@
 perf-prof-y += trace_helpers.o uprobe_helpers.o stack_helpers.o latency_helpers.o
 perf-prof-y += count_helpers.o localtime.o
-perf-prof-y += lib/ filter/
+perf-prof-y += lib/ filter/ arch/
 perf-prof-y += monitor.o tep.o
 perf-prof-y += split-lock.o
 perf-prof-y += profile.o
@@ -28,6 +28,7 @@ perf-prof-y += hrcount.o
 ifeq ($(SRCARCH),x86)
 perf-prof-y += kvmmmu.o
 endif
+perf-prof-y += usdt.o
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a
