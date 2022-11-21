@@ -10,9 +10,20 @@
 
 static const char *skip_arg(const char *cp)
 {
-	while (*cp && !isspace(*cp))
-		cp++;
-
+	int quote = 0;
+	while (*cp && !isspace(*cp)) {
+		switch(*cp) {
+			case '\'': quote = '\''; break;
+			case '"' : quote = '"'; break;
+			case '(' : quote = ')'; break;
+			case '[' : quote = ']'; break;
+			default  : quote = 0; break;
+		}
+		if (quote) {
+			while (*cp && *cp++ != quote);
+		} else
+			cp++;
+	}
 	return cp;
 }
 
