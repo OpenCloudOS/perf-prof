@@ -286,12 +286,12 @@ perf-prof目前支持的延迟处理。
 
 - 统计延迟。最大延迟，最小延迟，平均延迟。
 - 直方图。log2和linear直方图，使用`print_log2_hist`和`print_linear_hist`函数打印。
-- 热图。横坐标是时间轴，纵坐标是延迟信息。目前支持：`kvm-exit, mpdelay, multi-trace`
+- 热图。横坐标是时间轴，纵坐标是延迟信息。目前支持：`kvm-exit, multi-trace`
 
 ## 5.8 热图
 
 ```
-$ perf-prof mpdelay -e "kvm:kvm_exit,kvm:kvm_entry" -C 1 --heatmap mpdelay
+$ perf-prof multi-trace -e kvm:kvm_exit -e kvm:kvm_entry -C 1 --heatmap mpdelay
 $ trace2heatmap.pl --unitstime=ns --unitslabel=ns --grid mpdelay-kvm_exit-kvm_entry.lat > mpdelay-kvm_exit-kvm_entry.svg
 ```
 
@@ -322,7 +322,7 @@ FILTER OPTION:
 
 其中ebpf开头的是ebpf过滤器，其他的是pmu过滤器。ftrace过滤器，只能用于tracepoint事件。
 
-#### 5.9.1 ebpf过滤器
+### 5.9.1 ebpf过滤器
 
 内核perf_event可以通过`ioctl(PERF_EVENT_IOC_SET_BPF)`来设置bpf程序。bpf程序返回1，可以继续采样；bpf程序返回0，终止采样。可以依据这样的策略，来给每个perf_event增加一个过滤器。过滤不需要的采样点。
 
@@ -333,7 +333,7 @@ FILTER OPTION:
 - `--nr_running_min,--nr_running_max`，判断runqueue中nr_running进程的数量。`nr_running_min <= nr_running <= nr_running_max`条件满足继续采样，否则终止采样。
 - `--exclude_pid`，过滤掉进程pid。当前进程等于PID终止采样，否则继续采样。
 
-#### 5.9.2 pmu过滤器
+### 5.9.2 pmu过滤器
 
 内核perf框架默认会带一些简单的过滤器，主要是基于perf_event_attr属性来设置。
 
@@ -344,7 +344,7 @@ FILTER OPTION:
 - `--exclude-kernel`，过滤掉内核态。
 - `--exclude-user`，过滤掉用户态。
 
-#### 5.9.3 ftrace过滤器
+### 5.9.3 ftrace过滤器
 
 每个tracepoint事件都可以设置ftrace过滤器。
 
@@ -442,3 +442,24 @@ perf-prof trace -e sched:sched_stat_runtime --cgroups 'prof*' # prof, prof1
 perf_event cgroup 需要手动把需要观察的进程放进去。
 
 cgroup的指定相对于`/sys/fs/cgroup/perf_event/`目录，同时可以使用正则表达式，匹配多个perf_event cgroup。
+
+## 5.11 USDT
+
+usdt是用户态进程静态导出的trace点，编译之后存放在`.note.stapsdt`section中。解析该section，创建出uprobe就可以trace用户态执行。
+
+目前提供3个功能：
+
+- **list**，列出elf文件中的usdt。
+- **add**，利用usdt添加uprobe点，通过profider:name方式来使用。
+- **del**，删除已添加的uprobe点。
+
+```bash
+# Example:
+perf-prof usdt add libc:memory_malloc_retry@/usr/lib64/libc.so.6 -v
+perf-prof trace -e libc:memory_malloc_retry
+```
+
+当前已支持x86和arm64平台。
+
+[Exploring USDT Probes on Linux](https://leezhenghui.github.io/linux/2019/03/05/exploring-usdt-on-linux.html)
+
