@@ -231,7 +231,7 @@ static void print_latency_interval(void)
     struct print_info info;
 
     info.started = false;
-    latency_dist_print(ctx.lat_dist, print_latency_node, &info);
+    latency_dist_print_sorted(ctx.lat_dist, print_latency_node, &info);
     printf("\n");
 }
 
