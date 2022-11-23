@@ -667,6 +667,7 @@ static int elf__load_sym_table(struct object *obj, Elf *e)
     size_t shstrndx;
     void *buffer = NULL;
     size_t size = 0;
+    int added = 0;
 
     if (elf_getshdrstrndx(e, &shstrndx) < 0)
         return -1;
@@ -687,6 +688,7 @@ static int elf__load_sym_table(struct object *obj, Elf *e)
             if (obj__add_syms(obj, e, section, header.sh_link,
                       header.sh_entsize))
                 goto err_out;
+            added ++;
             continue;
         }
 
@@ -708,7 +710,7 @@ static int elf__load_sym_table(struct object *obj, Elf *e)
         }
     }
 
-    return 0;
+    return added ? 0 : -1;
 
 err_out:
     return -1;
@@ -731,7 +733,7 @@ typedef struct
  * when the build ID is known is in /usr/lib/debug/.build-id.
  * https://sourceware.org/gdb/onlinedocs/gdb/Separate-Debug-Files.html
  */
-static Elf *open_elf_debugfile_by_buildid(Elf *e, int *fd_close)
+static Elf *open_elf_debugfile_by_buildid(Elf *e, int *debug_fd)
 {
     const char * const prefix = SYSTEM_BUILD_ID_DIR;
     const size_t prefix_len = strlen (prefix);
@@ -745,11 +747,10 @@ static Elf *open_elf_debugfile_by_buildid(Elf *e, int *fd_close)
     uint32_t buildid_size;
     Elf_Scn *section = NULL;
     size_t shstrndx;
-    Elf *debug;
-    int debug_fd;
+    Elf *debug = NULL;
 
     if (elf_getshdrstrndx(e, &shstrndx) < 0)
-        return e;
+        return NULL;
 
     while ((section = elf_nextscn(e, section)) != 0) {
         GElf_Shdr header;
@@ -778,13 +779,13 @@ static Elf *open_elf_debugfile_by_buildid(Elf *e, int *fd_close)
             }
         }
     }
-    return e;
+    return NULL;
 
 found:
     len = prefix_len + buildid_size * 2 + suffix_len + 2;
     bd_filename = malloc(len);
     if (bd_filename == NULL)
-        return e;
+        return NULL;
 
     t = bd_filename;
     memcpy(t, prefix, prefix_len);
@@ -804,30 +805,28 @@ found:
     memcpy (t, suffix, suffix_len);
     t[suffix_len] = '\0';
 
-    debug = open_elf(bd_filename, &debug_fd);
-    if (debug) {
-        close_elf(e, *fd_close);
-        e = debug;
-        *fd_close = debug_fd;
-    }
+    debug = open_elf(bd_filename, debug_fd);
     free(bd_filename);
-    return e;
+    return debug;
 }
 
 static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 {
-    Elf *e;
-    int i;
+    Elf *e, *debug = NULL;
+    int debug_fd = 0;
+    int i, err = -1;
     void *tmp;
 
     e = fd > 0 ? open_elf_by_fd(fd) : open_elf(obj->name, &fd);
     if (!e)
-        return -1;
+        return err;
 
-    e = open_elf_debugfile_by_buildid(e, &fd);
+    debug = open_elf_debugfile_by_buildid(e, &debug_fd);
 
-    if (elf__load_sym_table(obj, e) < 0)
-        goto err_out;
+    if (!debug || elf__load_sym_table(obj, debug) < 0) {
+        if (elf__load_sym_table(obj, e) < 0)
+            goto err_out;
+    }
 
     tmp = realloc(obj->strs, obj->strs_sz);
     if (!tmp)
@@ -847,13 +846,17 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
 
     qsort(obj->syms, obj->syms_sz, sizeof(*obj->syms), sym_cmp);
 
+    err = 0;
+
+out:
     close_elf(e, fd);
-    return 0;
+    if (debug)
+        close_elf(debug, debug_fd);
+    return err;
 
 err_out:
     obj__free_fields(obj);
-    close_elf(e, fd);
-    return -1;
+    goto out;
 }
 
 static int create_tmp_vdso_image(struct object *obj)
