@@ -40,7 +40,7 @@ typedef int (*keyvalue_cmp)(void **value1, void **value2);
 void keyvalue_pairs_sorted_firstn(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque, unsigned int n);
 void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque);
 void keyvalue_pairs_reinit(struct key_value_paires *pairs);
-
+unsigned int keyvalue_pairs_nr_entries(struct key_value_paires *pairs);
 
 const char *unique_string(const char *str);
 void unique_string_stat(FILE *fp);

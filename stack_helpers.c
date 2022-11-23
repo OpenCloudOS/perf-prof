@@ -337,7 +337,7 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = cc->kernel;
             user = false;
-            if (kernel_cb) 
+            if (kernel_cb)
                 kernel_cb(opaque, PERF_CONTEXT_KERNEL);
             if (cc->debug)
                 fprintf(cc->fout, "    %016llx PERF_CONTEXT_KERNEL\n", ip);
@@ -647,6 +647,14 @@ void keyvalue_pairs_reinit(struct key_value_paires *pairs)
     if (pairs) {
         rblist__exit(&pairs->kv_pairs);
     }
+}
+
+unsigned int keyvalue_pairs_nr_entries(struct key_value_paires *pairs)
+{
+    if (pairs)
+        return rblist__nr_entries(&pairs->kv_pairs);
+    else
+        return 0;
 }
 
 static bool keyvalue_pairs_empty(struct key_value_paires *pairs)

@@ -861,6 +861,7 @@ static void __print_free(void *opaque, struct_key *key, void *value, unsigned in
 static void mem_profile_print(struct two_event *two)
 {
     struct mem_profile *profile = NULL;
+    unsigned int nr_entries;
 
     if (two) {
         profile = container_of(two, struct mem_profile, base);
@@ -870,9 +871,16 @@ static void mem_profile_print(struct two_event *two)
 
         printf("%s:%s total alloc %lu bytes on %u objects\n", two->tp1->sys, two->tp1->name, profile->alloc_bytes, profile->nr_alloc);
         keyvalue_pairs_sorted_firstn(profile->alloc, __cmp, __print_alloc, profile, two->class->opts.first_n);
+        nr_entries = keyvalue_pairs_nr_entries(profile->alloc);
+        if (nr_entries > two->class->opts.first_n)
+            printf("Skipping alloc numbered %u..%u\n", two->class->opts.first_n+1, nr_entries);
+        printf("\n");
 
         printf("%s:%s total free %lu bytes on %u objects\n", two->tp2->sys, two->tp2->name, profile->free_bytes, profile->nr_free);
         keyvalue_pairs_sorted_firstn(profile->free, __cmp, __print_free, profile, two->class->opts.first_n);
+        nr_entries = keyvalue_pairs_nr_entries(profile->free);
+        if (nr_entries > two->class->opts.first_n)
+            printf("Skipping free numbered %u..%u\n", two->class->opts.first_n+1, nr_entries);
         printf("\n");
 
         //reset
