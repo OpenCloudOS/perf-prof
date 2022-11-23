@@ -474,7 +474,7 @@ static int parse_main_options(int argc, char *argv[])
         help();
 
     if (!dashdash) {
-        if (monitor->argc_init)
+        if (monitor && monitor->argc_init)
             argc = monitor->argc_init(argc, argv);
         else if (argc && env.verbose > 0) {
             int i;
