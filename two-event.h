@@ -6,6 +6,11 @@
 struct two_event_class;
 struct two_event_impl;
 
+typedef enum {
+    REMAINING_CONTINUE,
+    REMAINING_BREAK,
+} remaining_return;
+
 enum keytype {
     K_CPU,
     K_THREAD,
@@ -58,7 +63,7 @@ struct two_event_class {
      * iter, On the timeline, the events between event1 and event2 can be iterated through iter.
      */
     void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter);
-    void (*remaining)(struct two_event *two, union perf_event *event, u64 key);
+    remaining_return (*remaining)(struct two_event *two, union perf_event *event, u64 key);
     int (*print_header)(struct two_event *two);
     void (*print)(struct two_event *two);
 };

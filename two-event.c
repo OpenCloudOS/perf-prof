@@ -149,7 +149,7 @@ static struct two_event *two_event_find_byid(struct two_event_class *class, unsi
 }
 
 static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter) {}
-static void dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {}
+static remaining_return dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {return REMAINING_BREAK;}
 static int dummy_print_header(struct two_event *two) {return 0;}
 static void dummy_print(struct two_event *two) {}
 
@@ -650,7 +650,7 @@ static void pair_two(struct two_event *two, union perf_event *event1, union perf
     }
 }
 
-static void pair_remaining(struct two_event *two, union perf_event *event, u64 key)
+static remaining_return pair_remaining(struct two_event *two, union perf_event *event, u64 key)
 {
     struct pair *pair;
 
@@ -659,6 +659,7 @@ static void pair_remaining(struct two_event *two, union perf_event *event, u64 k
         pair->unpaired ++;
         multi_trace_print(event, two->tp1);
     }
+    return REMAINING_CONTINUE;
 }
 
 static int pair_print_header(struct two_event *two)
@@ -815,9 +816,10 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
     }
 }
 
-static void mem_profile_remaining(struct two_event *two, union perf_event *event, u64 key)
+static remaining_return mem_profile_remaining(struct two_event *two, union perf_event *event, u64 key)
 {
     mem_profile_two(two, event, NULL, NULL, NULL);
+    return REMAINING_CONTINUE;
 }
 
 static int mem_profile_print_header(struct two_event *two)

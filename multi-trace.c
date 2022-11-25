@@ -496,10 +496,29 @@ static int multi_trace_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static void multi_trace_handle_remaining(void)
+{
+    struct rb_node *next = rb_first_cached(&ctx.backup.entries);
+    struct timeline_node *left;
+    struct two_event *two;
+
+    while (next) {
+        left = rb_entry(next, struct timeline_node, key_node);
+        two = ctx.impl->object_find(ctx.class, left->tp, NULL);
+        if (two) {
+            if (ctx.class->remaining(two, left->event, left->key) == REMAINING_BREAK)
+                break;
+        }
+        next = rb_next(next);
+    }
+}
+
 static void multi_trace_interval(void)
 {
     int i, j, k;
     int header = 0;
+
+    multi_trace_handle_remaining();
 
     for (k = 0; k < ctx.nr_list - 1; k++) {
         for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
@@ -521,25 +540,8 @@ static void multi_trace_interval(void)
     }
 }
 
-static void multi_trace_handle_remaining(void)
-{
-    struct rb_node *next = rb_first_cached(&ctx.backup.entries);
-    struct timeline_node *left;
-    struct two_event *two;
-
-    while (next) {
-        left = rb_entry(next, struct timeline_node, key_node);
-        two = ctx.impl->object_find(ctx.class, left->tp, NULL);
-        if (two) {
-            ctx.class->remaining(two, left->event, left->key);
-        }
-        next = rb_next(next);
-    }
-}
-
 static void multi_trace_exit(struct perf_evlist *evlist)
 {
-    multi_trace_handle_remaining();
     multi_trace_interval();
     monitor_ctx_exit();
 }
@@ -1269,6 +1271,8 @@ static void nested_trace_interval(void)
     int i, k;
     int header = 0;
 
+    multi_trace_handle_remaining();
+
     for (k = 0; k < ctx.nr_list; k++) {
         struct tp *tp1 = NULL;
         struct tp *tp2 = NULL;
@@ -1293,7 +1297,6 @@ static void nested_trace_interval(void)
 
 static void nested_trace_exit(struct perf_evlist *evlist)
 {
-    multi_trace_handle_remaining();
     nested_trace_interval();
     monitor_ctx_exit();
 }
