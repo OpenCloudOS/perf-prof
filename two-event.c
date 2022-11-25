@@ -664,8 +664,6 @@ static remaining_return pair_remaining(struct two_event *two, union perf_event *
 
 static int pair_print_header(struct two_event *two)
 {
-    print_time(stdout);
-    printf("\n");
     return 1;
 }
 
@@ -675,8 +673,10 @@ static void pair_print(struct two_event *two)
 
     if (two) {
         pair = container_of(two, struct pair, base);
+        print_time(stdout);
         printf("%s:%s %s:%s paired %lu unpaired %lu\n", two->tp1->sys, two->tp1->name, two->tp2->sys, two->tp2->name,
                 pair->paired, pair->unpaired);
+        pair->paired = pair->unpaired = 0;
     }
 }
 
