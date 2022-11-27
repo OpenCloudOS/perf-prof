@@ -343,6 +343,8 @@ struct tp_list *tp_list_new(char *event_str)
                     tp->key = value;
                 } else if (strcmp(attr, "untraced") == 0) {
                     tp->untraced = true;
+                } else if (strcmp(attr, "trigger") == 0) {
+                    tp->trigger = true;
                 }
             }
         }

@@ -327,7 +327,8 @@ struct option main_options[] = {
                                                                 "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
                                                                 "      num=field: num-dist, num field\n"
                                                                 "      key=field: key for multiple events: top, multi-trace\n"
-                                                                "      untraced: multi-trace, auxiliary, no two-event analysis"),
+                                                                "      untraced: multi-trace, auxiliary, no two-event analysis\n"
+                                                                "      trigger: multi-trace, use events to trigger interval output"),
     OPT_INT_NONEG   ('F',            "freq", &env.freq,                  NULL,  "Profile at this frequency, Dflt: 100, No profile: 0"),
     OPT_STRDUP_NONEG('k',             "key", &env.key,                  "str",  "Key for series events"),
     OPT_STRDUP_NONEG( 0 ,          "filter", &env.filter,            "filter",  "Event filter/comm filter"),

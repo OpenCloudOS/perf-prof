@@ -309,10 +309,10 @@ static int monitor_ctx_init(struct env *env)
             struct tp *tp = &ctx.tp_list[i]->tp[j];
             if (env->verbose)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
-            if (tp->untraced) {
+            if (tp->untraced && !tp->trigger)
                 untraced = true;
+            if (tp->untraced)
                 continue;
-            }
             if (env->key && !tp->key) {
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
                 if (!tep_find_any_field(event, env->key)) {
@@ -730,8 +730,11 @@ free_dup_event:
 
 found:
 
-    if (ctx.env->verbose >= VERBOSE_EVENT) {
-        multi_trace_print(event, tp);
+    if (ctx.env->verbose >= VERBOSE_EVENT || tp->trigger) {
+        multi_trace_print_title(event, tp, tp->trigger ? "trigger" : NULL);
+    }
+    if (tp->trigger) {
+        multi_trace_interval();
     }
 
     if (!ctx.nested) {
@@ -963,8 +966,12 @@ static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key
                 printf("stack/");
             if (tp->untraced)
                 printf("untraced/");
-            else
+            if (tp->trigger)
+                printf("trigger/");
+            if (!tp->untraced)
                 printf("[untraced/]");
+            if (!tp->trigger)
+                printf("[trigger/]");
             if (j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }

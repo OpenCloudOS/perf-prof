@@ -44,6 +44,7 @@ struct tp {
     //multi-trace profiler
     const char *key;
     bool untraced;
+    bool trigger;
 };
 
 struct tp_list {
