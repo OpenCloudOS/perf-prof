@@ -39,6 +39,7 @@ static struct monitor_ctx {
     char *key_name;// toupper(env->key)
     int  key_len;
     bool show_comm; // show COMM
+    bool only_comm; // only COMM
 
     int ws_row;
     int ws_col;
@@ -63,7 +64,7 @@ static int top_info_node_cmp(struct rb_node *rbn, const void *entry)
     else if (t->key < e->key)
         return -1;
     else
-        return 0;
+        return strcmp(t->comm, e->comm);
 }
 
 static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_entry)
@@ -74,7 +75,7 @@ static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_e
     if (t) {
         RB_CLEAR_NODE(&t->rbnode);
         t->key = e->key;
-        memset(t->comm, 0, sizeof(t->comm));
+        memcpy(t->comm, e->comm, sizeof(t->comm));
         memset((void *)t + sizeof(struct top_info), 0, size - sizeof(struct top_info));
         return &t->rbnode;
     } else
@@ -186,6 +187,20 @@ static int monitor_ctx_init(struct env *env)
                 return -1;
             }
         }
+        // default key=pid comm=comm
+        // If key is specified, the comm field is ignored. Because the meaning of key may not be pid.
+        if (!env->key && !tp->key) {
+            struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
+            if (tep_find_any_field(event, "pid")) {
+                tp->key = "pid";
+                // The pid has been found, and then comm.
+                if (tep_find_any_field(event, "comm")) {
+                    tp->comm = "comm";
+                    ctx.tp_list->nr_comm += 1;
+                }
+            }
+        }
+
         if (tp->key && !key_name) {
             key_name = strdup(tp->key);
         }
@@ -210,6 +225,12 @@ static int monitor_ctx_init(struct env *env)
     ctx.key_len = strlen(ctx.key_name);
     if (ctx.key_len < 8)
         ctx.key_len = 8;
+
+    ctx.only_comm = env->only_comm;
+    if (ctx.only_comm && !ctx.show_comm) {
+        fprintf(stderr, "--only-comm need 'comm' attr\n");
+        return -1;
+    }
 
     rblist__init(&ctx.top_list);
     ctx.top_list.node_cmp = top_info_node_cmp;
@@ -345,8 +366,7 @@ static void top_sample(union perf_event *event, int instance)
     struct tep_handle *tep;
     struct trace_seq s;
     struct tep_event *e;
-    const char *key = "pid";
-    bool raw_comm = true;
+    const char *key = NULL;
     int len, i;
     struct top_info info;
     struct rb_node *rbn;
@@ -385,36 +405,35 @@ static void top_sample(union perf_event *event, int instance)
     e = tep_find_event_by_record(tep, &record);
 
     /*
-     * tp->key:  show_comm = !!nr_comm, raw_comm = true;
-     * env->key: show_comm = !!nr_comm, raw_comm = true;
-     * "pid":    show_comm = true,      raw_comm = true;
-     * raw->tid: show_comm = true,      raw_comm = false;
+     * tp->key:  show_comm = !!nr_comm;
+     * env->key: show_comm = !!nr_comm;
+     * raw->tid: show_comm = true;
     **/
-    if (tp->key)
-        key = tp->key;
-    else if (ctx.env->key)
-        key = ctx.env->key;
-    if (tep_get_field_val(&s, e, key, &record, &info.key, 0) < 0) {
-        info.key = raw->tid_entry.tid;
-        raw_comm = false;
-    }
+    if (!ctx.only_comm) {
+        if (tp->key)
+            key = tp->key;
+        else if (ctx.env->key)
+            key = ctx.env->key;
+        if (!key || tep_get_field_val(&s, e, key, &record, &info.key, 0) < 0) {
+            info.key = raw->tid_entry.tid;
+        }
+    } else
+        info.key = 0;
+
+    if (ctx.show_comm) {
+        char *comm = NULL;
+        if (tp->comm)
+            comm = tep_get_field_raw(&s, e, tp->comm, &record, &len, 0);
+        strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
+        info.comm[TASK_COMM_LEN-1] = '\0';
+    } else
+        info.comm[0] = '\0';
 
     rbn = rblist__findnew(&ctx.top_list, &info);
-    if (rbn) {
-        p = container_of(rbn, struct top_info, rbnode);
-        if (ctx.show_comm) {
-            if (p->comm[0] == 0) {
-                char *comm = NULL;
-                if (tp->comm || raw_comm)
-                    comm = tep_get_field_raw(&s, e, tp->comm?:"comm", &record, &len, 0);
-                strncpy(p->comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
-                p->comm[TASK_COMM_LEN-1] = '\0';
-            }
-        } else
-            p->comm[0] = '\0';
-    } else
+    if (!rbn)
         goto destroy;
 
+    p = container_of(rbn, struct top_info, rbnode);
     for (i = 0; i < tp->nr_top; i++, field++) {
         unsigned long long counter;
         if (!tp->top_add[i].event &&
@@ -461,7 +480,9 @@ static void top_interval(void)
     printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
 
     // PID FIELD FIELD ... COMM
-    printed = printf("%*s ", ctx.key_len, ctx.key_name);
+    printed = 0;
+    if (!ctx.only_comm)
+        printed += printf("%*s ", ctx.key_len, ctx.key_name);
     for (i = 0; i < ctx.nr_fields; i++)
         printed += printf("%*s ", ctx.fields[i].len, ctx.fields[i].field);
     if (ctx.show_comm)
@@ -493,10 +514,12 @@ static void top_interval(void)
 
         if (!ctx.tty || !ctx.ws_row || ++row < ctx.ws_row) {
             t = container_of(rbn, struct top_info, rbnode);
-            if (t->key < 100000000UL)
-                printf("%*llu ", ctx.key_len, t->key);
-            else
-                printf("0x%*llx ", ctx.key_len, t->key);
+            if (!ctx.only_comm) {
+                if (t->key < 100000000UL)
+                    printf("%*llu ", ctx.key_len, t->key);
+                else
+                    printf("0x%*llx ", ctx.key_len, t->key);
+            }
             for (i = 0; i < ctx.nr_fields; i++)
                 printf("%*llu ", ctx.fields[i].len, t->counter[i]);
             if (ctx.show_comm)
@@ -579,7 +602,7 @@ static void top_help(struct help_ctx *hctx)
 
 
 static const char *top_desc[] = PROFILER_DESC("top",
-    "[OPTION...] -e EVENT[...] [-i INT] [-k key]",
+    "[OPTION...] -e EVENT[...] [-i INT] [-k key] [--only-comm]",
     "Display key-value counters in top mode.", "",
     "SYNOPSIS",
     "    Get the key from the event 'key' ATTR. Default, key=pid. Get the value from",
@@ -611,7 +634,7 @@ static const char *top_desc[] = PROFILER_DESC("top",
     "    Are the same.");
 static const char *top_argv[] = PROFILER_ARGV("top",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event", "key");
+    PROFILER_ARGV_PROFILER, "event", "key", "only-comm");
 static profiler top = {
     .name = "top",
     .desc = top_desc,

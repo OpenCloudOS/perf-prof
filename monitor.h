@@ -116,6 +116,7 @@ struct env {
     int ldlat;
     bool overwrite;
     unsigned long sample_period;
+    bool only_comm;
 
     /* kvmmmu */
     bool spte;

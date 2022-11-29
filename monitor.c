@@ -366,6 +366,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,       "overwrite", &env.overwrite,                    "use overwrite mode"),
     OPT_BOOL_NONEG  ( 0 ,            "spte", &env.spte,                         "kvmmmu: enable kvmmmu:kvm_mmu_set_spte"),
     OPT_BOOL_NONEG  ( 0 ,            "mmio", &env.mmio,                         "kvmmmu: enable kvmmmu:mark_mmio_spte"),
+    OPT_BOOL_NONEG  ( 0 ,       "only-comm", &env.only_comm,                    "top: only show comm but not key"),
 
     OPT_END()
 };
