@@ -230,3 +230,37 @@ sched:sched_stat_runtime事件使用pid作为拆分参数key，sched:sched_switc
 ```
 
 - python 进程，内部包含2个计数器，RUNTIME=96019497，SCHED_SWITCH=1216。python进程，可能是不同的pid，但comm都是python，计数值会统计到一起。最终效果：所有python进程共同运行96019497ns，共发生1216次进程切换。
+
+# 示例
+
+- 按comm统计进程唤醒次数
+
+  ```
+  perf-prof top -e sched:sched_wakeup//comm=comm/ --only-comm -m 64
+  ```
+
+- 按comm统计进程IO
+
+  ```
+  perf-prof top -e block:block_rq_issue//top-by=nr_sector/comm=comm/ --only-comm -m 32
+  ```
+
+- 过滤写IO，且是小IO
+
+  ```
+  perf-prof top -e 'block:block_rq_issue/rwbs==W&&nr_sector<4/top-by=nr_sector/comm=comm/' --only-comm -i 1000
+  ```
+
+- 按退出原因统计虚拟化退出次数
+
+  ```
+  perf-prof top -e kvm:kvm_exit//key=exit_reason/ -i 1000
+  ```
+
+- 统计进程的执行时间和进程切换次数
+
+  ```
+  perf-prof top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/
+  ```
+
+  
