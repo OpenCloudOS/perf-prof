@@ -467,6 +467,9 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
             if (tp1->untraced)
                 continue;
+            // for handle remaining
+            if (!ctx.impl->object_new(ctx.class, tp1, NULL))
+                return -1;
             for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
                 struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
                 if (tp2->untraced)
@@ -517,6 +520,7 @@ static void multi_trace_interval(void)
 {
     int i, j, k;
     int header = 0;
+    struct two_event *two;
 
     multi_trace_handle_remaining();
 
@@ -525,9 +529,15 @@ static void multi_trace_interval(void)
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
             if (tp1->untraced)
                 continue;
+            // for print remaining
+            two = ctx.impl->object_find(ctx.class, tp1, NULL);
+            if (!header) {
+                header = ctx.class->print_header(two);
+            }
+            ctx.class->print(two);
             for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
                 struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
-                struct two_event *two;
+
                 if (tp2->untraced)
                     continue;
                 two = ctx.impl->object_find(ctx.class, tp1, tp2);

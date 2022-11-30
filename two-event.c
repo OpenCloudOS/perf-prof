@@ -25,13 +25,12 @@ static int two_event_node_cmp(struct rb_node *rbn, const void *entry)
     else if (two->tp1 < e->tp1)
         return -1;
     else {
-        // tp2 can be NULL
-        if (e->tp2) {
-            if (two->tp2 > e->tp2)
-                return 1;
-            else if (two->tp2 < e->tp2)
-                return -1;
-        }
+        // tp2 may be NULL
+        if (two->tp2 > e->tp2)
+            return 1;
+        else if (two->tp2 < e->tp2)
+            return -1;
+
         return 0;
     }
 }
@@ -238,6 +237,9 @@ static struct two_event *delay_new(struct two_event_class *class, struct tp *tp1
     if (two) {
         delay = container_of(two, struct delay, base);
         delay_class = container_of(two->class, struct delay_class, base);
+
+        if (!tp2)
+            return two;
 
         if (strlen(tp1->name) > delay_class->max_len1)
             delay_class->max_len1 = strlen(tp1->name);
@@ -487,8 +489,8 @@ static struct two_event *syscalls_new(struct two_event_class *class, struct tp *
 {
     if (strcmp(tp1->sys, "raw_syscalls") ||
         strcmp(tp1->name, "sys_enter") ||
-        strcmp(tp2->sys, "raw_syscalls") ||
-        strcmp(tp2->name, "sys_exit")) {
+        (tp2 && strcmp(tp2->sys, "raw_syscalls")) ||
+        (tp2 && strcmp(tp2->name, "sys_exit"))) {
         fprintf(stderr, "Please use -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit\n");
         return NULL;
     }
@@ -632,8 +634,10 @@ static struct two_event_impl syscalls_impl = {
 
 struct pair {
     struct two_event base;
-    u64 paired;
-    u64 unpaired;
+    union {
+        u64 paired;
+        u64 unpaired;
+    };
 };
 
 struct pair_class {
@@ -674,8 +678,11 @@ static void pair_print(struct two_event *two)
     if (two) {
         pair = container_of(two, struct pair, base);
         print_time(stdout);
-        printf("%s:%s %s:%s paired %lu unpaired %lu\n", two->tp1->sys, two->tp1->name, two->tp2->sys, two->tp2->name,
-                pair->paired, pair->unpaired);
+        if (two->tp2)
+            printf("%s:%s %s:%s paired %lu\n", two->tp1->sys, two->tp1->name, two->tp2->sys, two->tp2->name,
+                pair->paired);
+        else
+             printf("%s:%s unpaired %lu\n", two->tp1->sys, two->tp1->name, pair->unpaired);
         pair->paired = pair->unpaired = 0;
     }
 }
@@ -737,7 +744,7 @@ static struct two_event *mem_profile_new(struct two_event_class *class, struct t
         fprintf(stderr, "WARN: %s:%s//stack/ without stack attribute, memory allocations "
                         "cannot be profiled based on the stack.\n", tp1->sys, tp1->name);
     }
-    if (!tp2->stack) {
+    if (tp2 && !tp2->stack) {
         fprintf(stderr, "WARN: %s:%s//stack/ without stack attribute, memory deallocation "
                         "cannot be profiled based on the stack.\n", tp2->sys, tp2->name);
     }
@@ -868,21 +875,34 @@ static void mem_profile_print(struct two_event *two)
     if (two) {
         profile = container_of(two, struct mem_profile, base);
 
+        if (!two->tp2) {
+            if (profile->nr_alloc) {
+                print_time(stdout);
+                printf("\n%s:%s total alloc %lu bytes on %u objects but not freed\n", two->tp1->sys, two->tp1->name, profile->alloc_bytes, profile->nr_alloc);
+                goto print_alloc;
+            } else
+                return ;
+        }
+
         print_time(stdout);
         printf("\n%s:%s => %s:%s\n", two->tp1->sys, two->tp1->name, two->tp2->sys, two->tp2->name);
-
         printf("%s:%s total alloc %lu bytes on %u objects\n", two->tp1->sys, two->tp1->name, profile->alloc_bytes, profile->nr_alloc);
+print_alloc:
         keyvalue_pairs_sorted_firstn(profile->alloc, __cmp, __print_alloc, profile, two->class->opts.first_n);
         nr_entries = keyvalue_pairs_nr_entries(profile->alloc);
         if (nr_entries > two->class->opts.first_n)
             printf("Skipping alloc numbered %u..%u\n", two->class->opts.first_n+1, nr_entries);
-        printf("\n");
+
+        if (!two->tp2)
+            goto reset;
 
         printf("%s:%s total free %lu bytes on %u objects\n", two->tp2->sys, two->tp2->name, profile->free_bytes, profile->nr_free);
         keyvalue_pairs_sorted_firstn(profile->free, __cmp, __print_free, profile, two->class->opts.first_n);
         nr_entries = keyvalue_pairs_nr_entries(profile->free);
         if (nr_entries > two->class->opts.first_n)
             printf("Skipping free numbered %u..%u\n", two->class->opts.first_n+1, nr_entries);
+
+reset:
         printf("\n");
 
         //reset
