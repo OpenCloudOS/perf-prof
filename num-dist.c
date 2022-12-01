@@ -17,7 +17,7 @@ static struct monitor_ctx {
     int nr_ins;
     int nr_points;
     struct tp_list *tp_list;
-    struct latency_dist *lat_dist;
+    struct latency_dist *dist;
     int max_len;
     struct perf_evlist *evlist;
     struct callchain_ctx *cc;
@@ -84,8 +84,8 @@ static int monitor_ctx_init(struct env *env)
 
     ctx.nr_points = ctx.tp_list->nr_tp;
 
-    ctx.lat_dist = latency_dist_new(env->perins, true, 0);
-    if (!ctx.lat_dist)
+    ctx.dist = latency_dist_new(env->perins, true, 0);
+    if (!ctx.dist)
         return -1;
 
     for (i = 0; i < ctx.nr_points; i++) {
@@ -125,7 +125,7 @@ static int monitor_ctx_init(struct env *env)
 static void monitor_ctx_exit(void)
 {
     tp_list_free(ctx.tp_list);
-    latency_dist_free(ctx.lat_dist);
+    latency_dist_free(ctx.dist);
     callchain_ctx_free(ctx.cc);
     if (ctx.env->heatmap) {
         int i;
@@ -198,7 +198,7 @@ static int num_dist_filter(struct perf_evlist *evlist, struct env *env)
 struct print_info {
     bool started;
 };
-static void print_latency_node(void *opaque, struct latency_node *node)
+static void print_num_node(void *opaque, struct latency_node *node)
 {
     struct print_info *info = opaque;
     int oncpu = monitor_instance_oncpu();
@@ -214,7 +214,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         if (ctx.env->perins)
             printf(oncpu ? "[CPU] " : "[THREAD] ");
         printf("%-*s", ctx.max_len, "event");
-        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+        printf(" %8s %16s %12s %12s %12s\n", "calls", "total", "min", "avg", "max");
 
         if (ctx.env->perins)
             printf(oncpu ? "----- " : "-------- ");
@@ -230,21 +230,21 @@ static void print_latency_node(void *opaque, struct latency_node *node)
             printf("%-8d ", monitor_instance_thread(node->instance));
     }
     printf("%*s", ctx.max_len, tp->alias ?: tp->name);
-    printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
-        node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
+    printf(" %8lu %16lu %12lu %12lu %12lu\n",
+        node->n, node->sum, node->min, node->sum/node->n, node->max);
 }
 
-static void print_latency_interval(void)
+static void print_interval(void)
 {
     struct print_info info;
 
     info.started = false;
-    latency_dist_print(ctx.lat_dist, print_latency_node, &info);
+    latency_dist_print(ctx.dist, print_num_node, &info);
 }
 
 static void num_dist_interval(void)
 {
-    print_latency_interval();
+    print_interval();
 }
 
 static void num_dist_exit(struct perf_evlist *evlist)
@@ -320,7 +320,7 @@ static void num_dist_sample(union perf_event *event, int instance)
     }
     tep__unref();
 
-    latency_dist_input(ctx.lat_dist, ctx.env->perins?instance:0, i, delta);
+    latency_dist_input(ctx.dist, ctx.env->perins?instance:0, i, delta);
 
     if (ctx.env->heatmap)
         heatmap_write(ctx.heatmaps[i], hdr->time, delta);
