@@ -263,4 +263,10 @@ sched:sched_stat_runtime事件使用pid作为拆分参数key，sched:sched_switc
   perf-prof top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/
   ```
 
+- 统计程序的执行次数
+
+  ```
+  perf-prof top -e sched:sched_process_exec//comm=filename/ --only-comm
+  ```
+
   

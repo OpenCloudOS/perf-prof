@@ -38,6 +38,7 @@ static struct monitor_ctx {
     } *fields;
     char *key_name;// toupper(env->key)
     int  key_len;
+    char *comm;
     bool show_comm; // show COMM
     bool only_comm; // only COMM
 
@@ -51,6 +52,7 @@ struct top_info {
     struct rb_node rbnode;
     unsigned long long key; //int pid;
     char comm[TASK_COMM_LEN];
+    char *pcomm;
     unsigned long long counter[0];
 };
 
@@ -64,7 +66,7 @@ static int top_info_node_cmp(struct rb_node *rbn, const void *entry)
     else if (t->key < e->key)
         return -1;
     else
-        return strcmp(t->comm, e->comm);
+        return e->pcomm ? strcmp(t->pcomm, e->pcomm) : 0;
 }
 
 static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_entry)
@@ -75,7 +77,21 @@ static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_e
     if (t) {
         RB_CLEAR_NODE(&t->rbnode);
         t->key = e->key;
-        memcpy(t->comm, e->comm, sizeof(t->comm));
+        if (e->pcomm) {
+            int len = strlen(e->pcomm);
+            if (len < TASK_COMM_LEN) {
+                t->pcomm = t->comm;
+                strcpy(t->pcomm, e->pcomm);
+            } else {
+                t->pcomm = strdup(e->pcomm);
+                if (!t->pcomm) {
+                    t->pcomm = t->comm;
+                    strncpy(t->pcomm, e->pcomm, TASK_COMM_LEN - 1);
+                    t->pcomm[TASK_COMM_LEN - 1] = '\0';
+                }
+            }
+        } else
+            t->pcomm = NULL;
         memset((void *)t + sizeof(struct top_info), 0, size - sizeof(struct top_info));
         return &t->rbnode;
     } else
@@ -84,6 +100,8 @@ static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_e
 static void top_info_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct top_info *t = container_of(rb_node, struct top_info, rbnode);
+    if (t->pcomm && t->pcomm != t->comm)
+        free(t->pcomm);
     free(t);
 }
 static void top_info_node_delete_empty(struct rblist *rblist, struct rb_node *rb_node)
@@ -147,6 +165,7 @@ static int monitor_ctx_init(struct env *env)
     int i, j, f = 0;
     int len;
     char *key_name = NULL;
+    char *comm = NULL;
 
     if (!env->event)
         return -1;
@@ -204,6 +223,9 @@ static int monitor_ctx_init(struct env *env)
         if (tp->key && !key_name) {
             key_name = strdup(tp->key);
         }
+        if (tp->comm && !comm) {
+            comm = strdup(tp->comm);
+        }
     }
     if (!key_name && env->key) {
         key_name = strdup(env->key);
@@ -225,6 +247,14 @@ static int monitor_ctx_init(struct env *env)
     ctx.key_len = strlen(ctx.key_name);
     if (ctx.key_len < 8)
         ctx.key_len = 8;
+
+    if (comm) {
+        len = strlen(comm);
+        for (i = 0; i < len; i++)
+            comm[i] = (char)toupper(comm[i]);
+        ctx.comm = comm;
+    } else
+        ctx.comm = strdup("COMM");
 
     ctx.only_comm = env->only_comm;
     if (ctx.only_comm && !ctx.show_comm) {
@@ -264,6 +294,7 @@ static void monitor_ctx_exit(void)
     free(ctx.fields);
     free(ctx.EVENT);
     free(ctx.key_name);
+    free(ctx.comm);
     tp_list_free(ctx.tp_list);
     tep__unref();
 }
@@ -421,13 +452,12 @@ static void top_sample(union perf_event *event, int instance)
         info.key = 0;
 
     if (ctx.show_comm) {
-        char *comm = NULL;
         if (tp->comm)
-            comm = tep_get_field_raw(&s, e, tp->comm, &record, &len, 0);
-        strncpy(info.comm, comm?:tep__pid_to_comm(raw->tid_entry.tid), sizeof(info.comm)-1);
-        info.comm[TASK_COMM_LEN-1] = '\0';
+            info.pcomm = tep_get_field_raw(&s, e, tp->comm, &record, &len, 0);
+        else
+            info.pcomm = (void *)tep__pid_to_comm(raw->tid_entry.tid);
     } else
-        info.comm[0] = '\0';
+        info.pcomm = NULL;
 
     rbn = rblist__findnew(&ctx.top_list, &info);
     if (!rbn)
@@ -486,7 +516,7 @@ static void top_interval(void)
     for (i = 0; i < ctx.nr_fields; i++)
         printed += printf("%*s ", ctx.fields[i].len, ctx.fields[i].field);
     if (ctx.show_comm)
-        printed += printf("%-*s", TASK_COMM_LEN, "COMM");
+        printed += printf("%s", ctx.comm);
     printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
 
     if (ctx.tty) printf("\033[0m");
@@ -523,7 +553,7 @@ static void top_interval(void)
             for (i = 0; i < ctx.nr_fields; i++)
                 printf("%*llu ", ctx.fields[i].len, t->counter[i]);
             if (ctx.show_comm)
-                printf("%-s", *(u64*)t->comm == 0x3e2e2e2e3c /*<...>*/ ? tep__pid_to_comm(t->key) : t->comm);
+                printf("%-s", t->pcomm);
             printf("\n");
         }
 
@@ -624,6 +654,7 @@ static const char *top_desc[] = PROFILER_DESC("top",
     "    "PROGRAME" top -e irq:irq_handler_entry//key=irq/ -C 0",
     "    "PROGRAME" top -e sched:sched_stat_runtime//top-by=runtime/ -C 0 -i 1000",
     "    "PROGRAME" top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -C 0 -i 1000",
+    "    "PROGRAME" top -e sched:sched_process_exec//comm=filename/ --only-comm",
     "",
     "NOTE",
     "    Default, key=pid, comm=comm.",
