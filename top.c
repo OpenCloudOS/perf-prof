@@ -213,7 +213,7 @@ static int monitor_ctx_init(struct env *env)
             if (tep_find_any_field(event, "pid")) {
                 tp->key = "pid";
                 // The pid has been found, and then comm.
-                if (tep_find_any_field(event, "comm")) {
+                if (!tp->comm && tep_find_any_field(event, "comm")) {
                     tp->comm = "comm";
                     ctx.tp_list->nr_comm += 1;
                 }
