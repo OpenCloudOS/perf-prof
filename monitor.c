@@ -966,7 +966,7 @@ int main(int argc, char *argv[])
     // perf-prof output to env.output file
     if (env.output) {
         freopen(env.output, "w+", stdout);
-        freopen(env.output, "a", stderr);
+        dup2(STDOUT_FILENO, STDERR_FILENO);
     }
 
     if (env.order || monitor->order)
