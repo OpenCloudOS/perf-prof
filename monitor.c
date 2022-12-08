@@ -106,6 +106,7 @@ const char *main_program_version = PROGRAME " 0.12";
 enum {
     LONG_OPT_start = 500,
     LONG_OPT_than,
+    LONG_OPT_only_than,
     LONG_OPT_order_mem,
     LONG_OPT_detail,
     LONG_OPT_period,
@@ -223,6 +224,9 @@ static int parse_arg(int key, char *arg)
             env.event = env.events[0];
         env.nr_events ++;
         break;
+    case LONG_OPT_only_than:
+        env.only_print_greater_than = true;
+        // fall through
     case LONG_OPT_than:
         env.greater_than = nsparse(arg, NULL);
         break;
@@ -343,6 +347,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ('S',   "interruptible", &env.interruptible,                "TASK_INTERRUPTIBLE"),
     OPT_BOOL_NONEG  ('D', "uninterruptible", &env.uninterruptible,              "TASK_UNINTERRUPTIBLE"),
     OPT_PARSE_NONEG ( LONG_OPT_than, "than", &env.greater_than,          "ns",  "Greater than specified time, Unit: s/ms/us/*ns/percent"),
+    OPT_PARSE_NONEG ( LONG_OPT_only_than, "only-than", &env.greater_than,"ns",  "Only print those that are greater than the specified time."),
     OPT_STRDUP_NONEG( 0 ,           "alloc", &env.tp_alloc,           "EVENT",  "Memory alloc tracepoint/kprobe/uprobe"),
     OPT_STRDUP_NONEG( 0 ,            "free", &env.tp_free,            "EVENT",  "Memory free tracepoint/kprobe/uprobe"),
     OPT_BOOL_NONEG  ( 0 ,        "syscalls", &env.syscalls,                     "Trace syscalls"),

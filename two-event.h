@@ -19,6 +19,7 @@ enum keytype {
 struct two_event_options {
     enum keytype keytype;
     bool perins;
+    bool only_print_greater_than;
     unsigned long greater_than;
     char *heatmap;
     unsigned int first_n;

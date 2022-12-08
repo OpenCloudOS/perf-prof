@@ -84,6 +84,7 @@ struct env {
     char *output;
     bool interruptible;
     bool uninterruptible;
+    bool only_print_greater_than;
     unsigned long greater_than; // unit: ns, percent
     bool callchain;
     int mmap_pages;

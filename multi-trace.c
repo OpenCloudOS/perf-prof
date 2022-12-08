@@ -278,6 +278,7 @@ static int monitor_ctx_init(struct env *env)
     struct two_event_options options = {
         .keytype = monitor_instance_oncpu() ? K_CPU : K_THREAD,
         .perins = env->perins,
+        .only_print_greater_than = env->only_print_greater_than,
         .greater_than = env->greater_than,
         .heatmap = env->heatmap,
         .first_n = 10,
@@ -1083,7 +1084,7 @@ static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms");
 static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "detail", "perins", "heatmap");
+    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "only-than", "detail", "perins", "heatmap");
 static profiler multi_trace = {
     .name = "multi-trace",
     .desc = multi_trace_desc,

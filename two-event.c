@@ -370,6 +370,9 @@ static int delay_print_header(struct two_event *two)
 
         if (latency_dist_empty(delay_class->lat_dist))
             return 1;
+        if (opts->only_print_greater_than &&
+            !latency_dist_greater_than(delay_class->lat_dist, opts->greater_than))
+            return 1;
 
         print_time(stdout);
         printf("\n");
