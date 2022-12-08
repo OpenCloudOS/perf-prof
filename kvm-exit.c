@@ -186,8 +186,7 @@ static int kvm_exit_init(struct perf_evlist *evlist, struct env *env)
 
 struct print_info {
     bool started;
-    bool print_header;
-    u64 instance;
+    bool ins_oncpu;
 };
 static void print_latency_node(void *opaque, struct latency_node *node)
 {
@@ -195,30 +194,24 @@ static void print_latency_node(void *opaque, struct latency_node *node)
     unsigned int exit_reason = node->key & 0xffffffff;
     u32 isa = node->key >> 32;
 
-    if (!info->started ||
-        info->instance != node->instance) {
-        if (!info->started) {
-            print_time(stdout);
-            printf("\n");
-        }
+    if (!info->started) {
         info->started = true;
-        info->print_header = true;
-        info->instance = node->instance;
-    }
-    if (info->print_header) {
-        info->print_header = false;
+        print_time(stdout);
+        printf("kvm-exit latency\n");
+
         if (ctx.env->perins)
-            if (monitor_instance_oncpu())
-                printf("kvm-exit latency CPU %d\n", monitor_instance_cpu((int)node->instance));
-            else
-                printf("kvm-exit latency THREAD %d\n", monitor_instance_thread((int)node->instance));
-        else
-            printf("kvm-exit latency\n");
+            printf("%s ", info->ins_oncpu ? "[CPU]" : "[THREAD]");
         printf("%-*s %8s %16s %9s %9s %12s %6s\n", isa == KVM_ISA_VMX ? 20 : 32,
                 "exit_reason", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "%gsys");
+
+        if (ctx.env->perins)
+            printf("%s ", info->ins_oncpu ? "-----" : "--------");
         printf("%s %8s %16s %9s %9s %12s %6s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
                 "--------", "----------------", "---------", "---------", "------------", "------");
     }
+    if (ctx.env->perins)
+        printf("[%*d] ", info->ins_oncpu ? 3 : 6,
+                info->ins_oncpu ? monitor_instance_cpu((int)node->instance) : monitor_instance_thread((int)node->instance));
     printf("%-*s %8lu %16.3f %9.3f %9.3f %12.3f %6.2f\n", isa == KVM_ISA_VMX ? 20 : 32,
             find_exit_reason(isa, exit_reason),
             node->n, node->sum/1000.0,
@@ -231,8 +224,10 @@ static void print_latency_interval(void)
     struct print_info info;
 
     info.started = false;
+    info.ins_oncpu = monitor_instance_oncpu();
     latency_dist_print_sorted(ctx.lat_dist, print_latency_node, &info);
-    printf("\n");
+    if (info.started)
+        printf("\n");
 }
 
 static void kvm_exit_interval(void)
