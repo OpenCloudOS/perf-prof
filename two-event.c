@@ -241,13 +241,13 @@ static struct two_event *delay_new(struct two_event_class *class, struct tp *tp1
         if (!tp2)
             return two;
 
-        if (strlen(tp1->name) > delay_class->max_len1)
-            delay_class->max_len1 = strlen(tp1->name);
-        if (strlen(tp2->name) > delay_class->max_len2)
-            delay_class->max_len2 = strlen(tp2->name);
+        if (strlen(tp1->alias ?: tp1->name) > delay_class->max_len1)
+            delay_class->max_len1 = strlen(tp1->alias ?: tp1->name);
+        if (strlen(tp2->alias ?: tp2->name) > delay_class->max_len2)
+            delay_class->max_len2 = strlen(tp2->alias ?: tp2->name);
         if (class->opts.heatmap) {
             char buff[1024];
-            snprintf(buff, sizeof(buff), "%s-%s-%s", class->opts.heatmap, tp1->name, tp2->name);
+            snprintf(buff, sizeof(buff), "%s-%s-%s", class->opts.heatmap, tp1->alias ?: tp1->name, tp2->alias ?: tp2->name);
             delay->heatmap = heatmap_open("ns", "ns", buff);
         }
     }
@@ -347,8 +347,8 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     if (opts->perins) {
         printf("[%*lu] ", opts->keytype == K_CPU ? 3 : 6, node->instance);
     }
-    printf("%*s", delay_class->max_len1, two->tp1->name);
-    printf(" => %-*s", delay_class->max_len2, two->tp2->name);
+    printf("%*s", delay_class->max_len1, two->tp1->alias ?: two->tp1->name);
+    printf(" => %-*s", delay_class->max_len2, two->tp2->alias ?: two->tp2->name);
     printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
 }
@@ -1180,7 +1180,7 @@ static void call_iterator_print(struct caller_iterator *iter, struct two_event *
             printf("  | ");
         printf("  |-");
     }
-    printf("%s%s\n", two->tp1->name, caller->recursive ? " R" : "");
+    printf("%s%s\n", two->tp1->alias ?: two->tp1->name, caller->recursive ? " R" : "");
 }
 
 static int call_print_header(struct two_event *two)
@@ -1366,7 +1366,7 @@ static void call_delay_iterator(struct caller_iterator *iter, struct two_event *
     }
     flen = call_delay_class->base.max_depth * 4 + delay_class->max_len1;
     if (flen < 13) flen = 13;
-    printf("%-*s %s", flen-len, two->tp1->name, caller->recursive ? "R" : " ");
+    printf("%-*s %s", flen-len, two->tp1->alias ?: two->tp1->name, caller->recursive ? "R" : " ");
 
     if (node)
         printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",

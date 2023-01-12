@@ -979,10 +979,14 @@ static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key
                 printf("untraced/");
             if (tp->trigger)
                 printf("trigger/");
+            if (tp->alias)
+                printf("alias=%s/", tp->alias);
             if (!tp->untraced)
                 printf("[untraced/]");
             if (!tp->trigger)
                 printf("[trigger/]");
+            if (!tp->alias)
+                printf("[alias=./]");
             if (j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
@@ -1068,7 +1072,7 @@ static void multi_trece_help(struct help_ctx *hctx)
 }
 
 static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
-    "[OPTION...] -e EVENT [-e ...] [-k key] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]",
+    "[OPTION...] -e EVENT [-e ...] [-k key] [--impl impl] [--than|--only-than ns] [--detail] [--perins] [--heatmap file]",
     "Multipurpose trace: delay, pair, kmemprof, syscalls.", "",
     "SYNOPSIS", "",
     "    Multiple events are associated by key and finally converted into two-event analysis.", "",
