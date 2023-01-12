@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+'''
+Based on perf-prof command
+
+perf-prof
+    Profiling based on perf_event and ebpf
+'''
+
+import os
+import re
+import time
+import shutil
+import signal
+import threading
+import selectors
+import subprocess
+from threading import Timer
+try:
+    from collections.abc import Iterable
+except ImportError:
+    from collections import Iterable
+
+
+PERF_PROF_PATH = shutil.which("perf-prof", path=os.getcwd() + ":" + os.environ.get("PATH"))
+TCMALLOC = "/lib64/libtcmalloc.so"
+TRACING = "/sys/kernel/debug/tracing/"
+
+class PerfProf(object):
+    '''
+        PerfProf
+        Usage
+            1) Create PerfProf object
+               oncpu = PerfProf(["oncpu", "-C", "0"])
+            2) Append command line arguments
+               oncpu += ["-m", "128"]
+            3) Iterate command output
+               for std, line in oncpu.run():
+                   if std == PerfProf.STDOUT:
+                       print("STDOUT: " + line, end='')
+                   elif std == PerfProf.STDERR:
+                       print("STDERR: " + line, end='')
+    '''
+    def __init__(self, args):
+        PerfProf.STDOUT = 1
+        PerfProf.STDERR = 2
+        PerfProf.SIGUSR1 = signal.SIGUSR1
+        PerfProf.SIGUSR2 = signal.SIGUSR2
+
+        self.args = [PERF_PROF_PATH]
+        self.args.extend(args)
+
+        self.timer = None
+        self.util_timer = None
+
+    def __iadd__(self, arg):
+        if isinstance(arg, Iterable):
+            self.args.extend(arg)
+        else:
+            self.args.append(arg)
+        return self
+
+    def run(self, runtime=None, memleak_check=False, extra_args=[], input=None, util_interval=None, _args_print=True):
+        env = None
+        stdin = None
+
+        if memleak_check:
+            env = {"LD_PRELOAD" : TCMALLOC,
+                   "HEAPCHECK"  : "draconian",
+                   "PPROF_PATH" : PERF_PROF_PATH}
+        if input:
+            stdin = subprocess.PIPE
+
+        if _args_print:
+            if runtime != None and runtime > 0:
+                print('Runtime ' + str(runtime) + ' second', end='')
+            print('\033[35m')
+            if memleak_check:
+                for key, value in env.items():
+                    print(key + '=' + value + ' ', end='')
+            print(' '.join(self.args + extra_args) + '\033[0m')
+
+        if runtime != None and runtime == 0:
+            return
+
+        self.perfprof = subprocess.Popen(self.args + extra_args,
+                        env = env,
+                        bufsize = 1,
+                        stdin = stdin,
+                        stdout = subprocess.PIPE,
+                        stderr = subprocess.PIPE,
+                        universal_newlines = True,
+                        )
+
+        if runtime != None:
+            self.timer = Timer(runtime, self.terminate)
+            self.timer.start()
+        if util_interval != None:
+            self.util_interval = util_interval
+            self.util_timer = Timer(self.util_interval, self._util_timer_handler)
+            self.util_timer.start()
+        signal.signal(signal.SIGINT, self._signal_handler)
+
+        try:
+            with selectors.DefaultSelector() as sel:
+                if input:
+                    input_line = 0
+                    input_lines = input.split('\n')
+                    sel.register(self.perfprof.stdin, selectors.EVENT_WRITE)
+                sel.register(self.perfprof.stdout, selectors.EVENT_READ)
+                sel.register(self.perfprof.stderr, selectors.EVENT_READ)
+                std = {self.perfprof.stdout: PerfProf.STDOUT,
+                       self.perfprof.stderr: PerfProf.STDERR}
+
+                while sel.get_map():
+                    for key, event in sel.select():
+                        if input and key.fileobj is self.perfprof.stdin:
+                            line = input_lines[input_line]
+                            try:
+                                if input_line < len(input_lines)-1:
+                                    line += '\n'
+                                key.fileobj.write(line)
+                                input_line += 1
+                            except BrokenPipeError:
+                                sel.unregister(key.fileobj)
+                                key.fileobj.close()
+                            else:
+                                if input_line >= len(input_lines):
+                                    sel.unregister(key.fileobj)
+                                    key.fileobj.close()
+                        else:
+                            line = key.fileobj.readline()
+                            if not line:
+                                sel.unregister(key.fileobj)
+                                continue
+
+                            sig = yield (std[key.fileobj], line)
+                            if sig == PerfProf.SIGUSR1:
+                                self.perfprof.send_signal(signal.SIGUSR1)
+                            elif sig == PerfProf.SIGUSR2:
+                                self.perfprof.send_signal(signal.SIGUSR2)
+        finally:
+            self.terminate()
+
+    def terminate(self):
+        if self.timer != None:
+            self.timer.cancel()
+            self.timer = None
+        if self.util_timer != None:
+            self.util_timer.cancel()
+            self.util_timer = None
+        if self.perfprof.poll() == None:
+            try:
+                self.perfprof.send_signal(signal.SIGUSR2)
+                self.perfprof.send_signal(signal.SIGINT)
+                self.perfprof.wait(10)
+            except ProcessLookupError:
+                pass
+            except subprocess.TimeoutExpired:
+                self.perfprof.kill()
+
+
+    def _signal_handler(self, signum, frame):
+        self.terminate()
+
+    def _util_timer_handler(self):
+        self.perfprof.send_signal(signal.SIGUSR2)
+        self.util_timer = Timer(self.util_interval, self._util_timer_handler)
+        self.util_timer.start()
+
+    def help(self):
+        for std, line in self.run(extra_args=['help']):
+            print(line, end='', flush=True)
+
+    @staticmethod
+    def lost_events(line):
+        # 2022-11-23 21:25:54.792888 lost 6 events on CPU #24
+        record = line.split()
+        if len(record) >= 5 and record[2] == 'lost' and record[4] == 'events':
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def profilers():
+        profiler_start = False
+        profilers = []
+        perf_prof = PerfProf(['-h'])
+        for std, line in perf_prof.run(_args_print=False):
+            if line.find('Available Profilers:') >= 0:
+                profiler_start = True
+                continue
+            if profiler_start:
+                if line == '\n':
+                    profiler_start = False
+                    continue
+                profiler = line.split(maxsplit=1)
+                profilers.append(profiler[0])
+        return profilers
+
+    @staticmethod
+    def kernel_release(match=None):
+        release = os.uname().release
+        if match != None:
+            return release.find(match) != -1
+        else:
+            return release
+
+    @staticmethod
+    def gettid():
+        machine = os.uname().machine
+        if machine == 'x86_64':
+            SYS_gettid = 186 # unistd_64.h: #define __NR_gettid 186
+        elif machine == 'i386':
+            SYS_gettid = 224 # unistd_32.h: #define __NR_gettid 224
+        else:
+            SYS_gettid = 178 # asm-generic/unistd.h: #define __NR_gettid 178
+        import ctypes
+        tid = ctypes.CDLL(None).syscall(SYS_gettid)
+        return tid
+
+    @staticmethod
+    def sysctl(sys, value=None):
+        path = '/proc/sys/' + sys.replace('.', '/')
+        with open(path) as f:
+            old = f.read()
+        if value != None:
+            with open(path, 'w') as f:
+                f.write(value)
+        return old
+
+    @staticmethod
+    def kallsyms_lookup_name(name):
+        with open("/proc/kallsyms") as syms:
+            for line in syms:
+                sym = line.split()
+                if sym[2].strip() == name:
+                    return int(sym[0], 16)
+
+    @staticmethod
+    def tracepoint_exists(*names):
+        exists = []
+        for name in names:
+            tp = name.split(':', 1)
+            if len(tp) != 2 or not os.path.exists(TRACING + "events/" + tp[0] + "/" + tp[1]):
+                exists.append(False)
+            else:
+                exists.append(True)
+        return False not in exists, tuple(exists)
+
+    @staticmethod
+    def event_format(name):
+        tp = name.split(':', 1)
+        if len(tp) != 2:
+            return None
+
+        format = TRACING + "events/" + tp[0] + "/" + tp[1] + "/format"
+        if not os.path.exists(format):
+            return None
+
+        fields = {}
+        fields['field'] = {}
+        with open(format) as file:
+            # field:char comm[16];    offset:8;       size:16;        signed:1;
+            prog  = re.compile(r'^field:[\S ]+ (\S+);\s+offset:(\d+);\s+size:(\d+);\s+signed:(\d+);$')
+            prog_ = re.compile(r'^field:[\S ]+ (\S+)\[[\S ]+\];\s+offset:(\d+);\s+size:(\d+);\s+signed:(\d+);$')
+            for line in file:
+                s = line.strip()
+                if s.startswith('name:'):
+                    fields['name'] = s.split()[1]
+                    continue
+                if s.startswith('ID:'):
+                    fields['id'] = int(s.split()[1])
+                    continue
+                if s.startswith('field:'):
+                    if s.find("];") != -1:
+                        m = prog_.match(s)
+                    else:
+                        m = prog.match(s)
+                    if m != None:
+                        m.groups()
+                        fields["field"][m.group(1)] = m.groups()[1:]
+                    continue
+                if s.startswith('print fmt:'):
+                    fields['print_fmt'] = s[len('print fmt: '):]
+                    continue
+        return fields
+
+
+class DeadLoop():
+    def __init__(self, loop=lambda :True):
+        self.tid = -1
+        self._stop = False
+        self._loop_ = loop
+        self._t = threading.Thread(target=self._loop, name='Loop', daemon=True)
+        self._t.start()
+        while self.tid == -1:
+            time.sleep(0.001)
+
+    def _loop(self):
+        self.tid = PerfProf.gettid()
+        while not self._stop:
+            self._loop_()
+
+    def stop(self):
+        self._stop = True
+        self._t.join()
+
+
+if __name__ == '__main__':
+    print(PerfProf.kernel_release())
+    print(PerfProf.gettid(), os.getpid())
+    print(PerfProf.sysctl('kernel.sched_schedstats', '0'))
+    print(PerfProf.profilers())
