@@ -701,6 +701,9 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
 
     free(declare);
     info.tp_list = tp_list;
+
+    // Only test a small number of events.
+    if (env->exit_n == 0) env->exit_n = 5;
     return 0;
 }
 
@@ -826,7 +829,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
 );
 static const char *expr_argv[] = PROFILER_ARGV("expr",
     "OPTION:",
-    "cpus", "pids", "tids", "output", "mmap-pages",
+    "cpus", "pids", "tids", "output", "mmap-pages", "exit-N",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "event"
 );

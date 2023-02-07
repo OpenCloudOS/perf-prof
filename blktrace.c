@@ -411,7 +411,7 @@ static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000 --than 10ms");
 static const char *blktrace_argv[] = PROFILER_ARGV("blktrace",
     "OPTION:",
-    "interval", "output", "order", "order-mem", "mmap-pages",
+    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "device", "than");
 static profiler blktrace = {

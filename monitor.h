@@ -72,6 +72,7 @@ struct env {
     char *cpumask;
     int interval;
     int freq;
+    long exit_n;
     char *pids;
     char *tids;
     char *cgroups;
@@ -200,7 +201,7 @@ typedef struct monitor {
 #define PROFILER_ARGV_OPTION \
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", \
-    "interval", "output", "order", "order-mem", "mmap-pages", \
+    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", \
     "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \

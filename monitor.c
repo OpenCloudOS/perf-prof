@@ -300,6 +300,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,       "order", &env.order,                       "Order events by timestamp."),
     OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "Bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
     OPT_INT_NONEG   ('m',  "mmap-pages", &env.mmap_pages, "pages",         "Number of mmap data pages and AUX area tracing mmap pages"),
+    OPT_LONG_NONEG  ('N',      "exit-N", &env.exit_n, "N",                 "Exit after N events have been sampled."),
     OPT_PARSE_NOARG ('V',     "version", NULL,             NULL,           "Version info"),
     OPT__VERBOSITY(&env.verbose),
     OPT_HELP(),
@@ -874,6 +875,8 @@ static void print_context_switch_cpu_fn(union perf_event *event, int ins)
 
 static int perf_event_process_record(union perf_event *event, int instance)
 {
+    static long sampled_events = 0;
+
     switch (event->header.type) {
     case PERF_RECORD_LOST:
         if (monitor->lost)
@@ -912,8 +915,11 @@ static int perf_event_process_record(union perf_event *event, int instance)
             print_throttle_unthrottle_fn(event, instance, 1);
         break;
     case PERF_RECORD_SAMPLE:
-        if (monitor->sample)
-            monitor->sample(event, instance);
+        if (!env.exit_n || ++sampled_events <= env.exit_n) {
+            if (monitor->sample)
+                monitor->sample(event, instance);
+        } else
+            exiting = 1;
         break;
     case PERF_RECORD_SWITCH:
         if (monitor->context_switch)
