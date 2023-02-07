@@ -170,6 +170,77 @@ bool tep__event_field_size(int id, const char *field)
     return size;
 }
 
+event_fields *tep__event_fields(int id)
+{
+    struct tep_event *event;
+    struct tep_format_field **common_fields;
+    struct tep_format_field **fields;
+    int nr_common = 0, nr_fields = 0;
+    event_fields *ef = NULL;
+    int i = 0, f = 0;
+
+    tep__ref();
+    event = tep_find_event(tep, id);
+    if (!event)
+        goto _return;
+
+    common_fields = tep_event_common_fields(event);
+    fields = tep_event_fields(event);
+    if (!common_fields || !fields)
+        goto _return;
+
+    while (common_fields[nr_common]) nr_common++;
+    while (fields[nr_fields]) nr_fields++;
+
+    ef = calloc(nr_common + nr_fields + 1, sizeof(*ef));
+    if (!ef)
+        goto _free;
+
+    f = 0;
+    while (common_fields[f]) {
+        ef[i].name = common_fields[f]->name;
+        ef[i].offset = common_fields[f]->offset;
+        ef[i].size = common_fields[f]->size;
+        ef[i].elementsize = common_fields[f]->elementsize;
+        i++;
+        f++;
+    }
+    f = 0;
+    while (fields[f]) {
+        if (fields[f]->flags & TEP_FIELD_IS_DYNAMIC) {
+            int len = strlen(fields[f]->name);
+            ef[i].name = malloc(len + sizeof("_offset"));
+            sprintf((char *)ef[i].name, "%s_offset", fields[f]->name);
+            ef[i].offset = fields[f]->offset;
+            ef[i].size = 2;
+            ef[i].elementsize = 2;
+            i++;
+
+            ef[i].name = malloc(len + sizeof("_len"));
+            sprintf((char *)ef[i].name, "%s_len", fields[f]->name);
+            ef[i].offset = fields[f]->offset + 2;
+            ef[i].size = 2;
+            ef[i].elementsize = 2;
+        } else {
+            ef[i].name = fields[f]->name;
+            ef[i].offset = fields[f]->offset;
+            ef[i].size = fields[f]->size;
+            ef[i].elementsize = fields[f]->elementsize;
+        }
+        i++;
+        f++;
+    }
+    ef[i].name = NULL;
+
+_free:
+    if (common_fields) free(common_fields);
+    if (fields) free(fields);
+_return:
+    tep__unref();
+    return ef;
+}
+
+
 void monitor_tep__comm(union perf_event *event, int instance)
 {
     tep__update_comm(event->comm.comm, event->comm.tid);

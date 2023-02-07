@@ -2,6 +2,7 @@
 #define __TEP_H
 
 #include <event-parse.h>
+#include <expr.h>
 
 struct tep_handle *tep__ref(void);
 void tep__unref(void);
@@ -11,6 +12,9 @@ const char *tep__pid_to_comm(int pid);
 void tep__print_event(unsigned long long ts, int cpu, void *data, int size);
 bool tep__event_has_field(int id, const char *field);
 bool tep__event_field_size(int id, const char *field);
+
+typedef struct global_var_declare event_fields;
+event_fields *tep__event_fields(int id);
 
 void monitor_tep__comm(union perf_event *event, int instance);
 

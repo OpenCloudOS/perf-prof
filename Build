@@ -29,6 +29,7 @@ ifeq ($(SRCARCH),x86)
 perf-prof-y += kvmmmu.o
 endif
 perf-prof-y += usdt.o
+perf-prof-y += expr.o
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a
