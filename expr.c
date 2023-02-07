@@ -351,14 +351,14 @@ static const char *ksymbol(unsigned long func)
     return name ? : "Unknown";
 }
 
-struct expr_ctx *expr_compile(char *expr_str, struct global_var_declare *declare)
+struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare)
 {
     int i, err;
     int nr_insn = 1024;
     int datasize = 256;
     int strsize = strlen(expr_str);
     char *d, *s;
-    struct expr_ctx *ctx = NULL;
+    struct expr_prog *prog = NULL;
 
     // reset
     loc = 0;
@@ -439,48 +439,48 @@ struct expr_ctx *expr_compile(char *expr_str, struct global_var_declare *declare
 
     nr_insn = e - le + 1;
 
-    ctx = malloc(sizeof(*ctx));
-    if (!ctx) goto err_return;
-    ctx->symtab = realloc(symtab, nr_syms*sizeof(*symtab));
-    ctx->nr_syms = nr_syms;
-    if (data - d) { ctx->data = d; ctx->datasize = datasize; }
-    else { free(d); ctx->data = NULL; ctx->datasize = 0; }
-    if (str - s) ctx->str = s; else { free(s); ctx->str = NULL; }
-    ctx->insn = realloc(le, nr_insn*sizeof(long));
-    ctx->nr_insn = nr_insn;
+    prog = malloc(sizeof(*prog));
+    if (!prog) goto err_return;
+    prog->symtab = realloc(symtab, nr_syms*sizeof(*symtab));
+    prog->nr_syms = nr_syms;
+    if (data - d) { prog->data = d; prog->datasize = datasize; }
+    else { free(d); prog->data = NULL; prog->datasize = 0; }
+    if (str - s) prog->str = s; else { free(s); prog->str = NULL; }
+    prog->insn = realloc(le, nr_insn*sizeof(long));
+    prog->nr_insn = nr_insn;
 
-    for (i=0; i<ctx->nr_syms; i++) {
-        struct symbol_table *s = &ctx->symtab[i];
+    for (i=0; i<prog->nr_syms; i++) {
+        struct symbol_table *s = &prog->symtab[i];
         if (s->class == Sys && s->value == KSYM && s->ref)
             function_resolver_ref();
     }
 
-    return ctx;
+    return prog;
 
 err_return:
     if (symtab) free(symtab);
     if (d) free(d);
     if (s) free(s);
     if (le) free(le);
-    if (ctx) free(ctx);
+    if (prog) free(prog);
     return NULL;
 }
 
-long expr_run(struct expr_ctx *ctx)
+long expr_run(struct expr_prog *prog)
 {
     long *pc, *sp, *bp, a, cycle; // vm registers
     long i, *t; // temps
     long stack[512];
 
-    pc = ctx->insn + 1;
+    pc = prog->insn + 1;
     bp = sp = stack + 512;
     a = 0;
     cycle = 0;
-    if (ctx->debug) printf("Program running:\n");
+    if (prog->debug) printf("Program running:\n");
     while (1) {
         i = *pc++;
         ++cycle;
-        if (ctx->debug) {
+        if (prog->debug) {
             if (cycle > 1) printf("; a: 0x%lx\n", a);
             printf("%ld> %.4s", cycle, &INSN[i * 5]);
             if (i <= SI) printf(" 0x%-16lx", *pc); else printf(" %-18s", "");
@@ -531,20 +531,20 @@ long expr_run(struct expr_ctx *ctx)
 
             case PRTF: t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]); break;
             case KSYM: a = (long)(void *)ksymbol(*sp); break;
-            case EXIT: if (ctx->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
+            case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
     }
 }
 
-int expr_load_glo(struct expr_ctx *ctx, const char *name, long value)
+int expr_load_glo(struct expr_prog *prog, const char *name, long value)
 {
     int i;
 
-    if (!ctx) return 0;
+    if (!prog) return 0;
 
-    for (i=ctx->nr_syms-1; i>=0; i--) {
-        struct symbol_table *s = &ctx->symtab[i];
+    for (i=prog->nr_syms-1; i>=0; i--) {
+        struct symbol_table *s = &prog->symtab[i];
         if (s->token == Id && s->class == Glo && !memcmp(s->name, name, LEN(s->hash))) {
             switch (s->type) {
                 case CHAR: *(char *)s->value = (char)value; break;
@@ -559,39 +559,40 @@ int expr_load_glo(struct expr_ctx *ctx, const char *name, long value)
     return -1;
 }
 
-int expr_load_data(struct expr_ctx *ctx, void *data, int size)
+int expr_load_data(struct expr_prog *prog, void *data, int size)
 {
-    if (!ctx || size > ctx->datasize) return -1;
-    memcpy(ctx->data, data, size);
+    if (!prog || size > prog->datasize) return -1;
+    memcpy(prog->data, data, size);
+    prog->data[size] = 0;
     return 0;
 }
 
-void expr_destroy(struct expr_ctx *ctx)
+void expr_destroy(struct expr_prog *prog)
 {
     int i;
 
-    if (!ctx) return;
+    if (!prog) return;
 
-    for (i=0; i<ctx->nr_syms; i++) {
-        struct symbol_table *s = &ctx->symtab[i];
+    for (i=0; i<prog->nr_syms; i++) {
+        struct symbol_table *s = &prog->symtab[i];
         if (s->class == Sys && s->value == KSYM && s->ref)
             function_resolver_unref();
     }
-    if (ctx->symtab) free(ctx->symtab);
-    if (ctx->data) free(ctx->data);
-    if (ctx->str) free(ctx->str);
-    if (ctx->insn) free(ctx->insn);
-    free(ctx);
+    if (prog->symtab) free(prog->symtab);
+    if (prog->data) free(prog->data);
+    if (prog->str) free(prog->str);
+    if (prog->insn) free(prog->insn);
+    free(prog);
 }
 
-void expr_dump(struct expr_ctx *ctx)
+void expr_dump(struct expr_prog *prog)
 {
     long *e, *le;
     int i;
 
-    if (!ctx) return;
-    le = ctx->insn;
-    e = le+ctx->nr_insn-1;
+    if (!prog) return;
+    le = prog->insn;
+    e = le+prog->nr_insn-1;
 
     printf("Instruction:\n");
     while (le < e) {
@@ -599,10 +600,10 @@ void expr_dump(struct expr_ctx *ctx)
         if (*le <= SI) printf(" 0x%lx\n", *++le); else printf("\n");
     }
 
-    if (ctx->data) {
+    if (prog->data) {
         printf("Global variable:\n");
-        for (i=0; i<ctx->nr_syms; i++) {
-            struct symbol_table *s = &ctx->symtab[i];
+        for (i=0; i<prog->nr_syms; i++) {
+            struct symbol_table *s = &prog->symtab[i];
             if (s->token == Id && s->class == Glo) {
                 printf("    %16p", (void *)s->value);
                 switch (s->type & 0x3) {
@@ -630,7 +631,7 @@ void expr_dump(struct expr_ctx *ctx)
 **/
 static struct expression_info {
     char *expression;
-    struct expr_ctx *ctx;
+    struct expr_prog *prog;
     struct tp_list *tp_list;
 } info;
 
@@ -681,11 +682,11 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
         return -1;
 
     printf("expression: %s\n", info.expression);
-    info.ctx = expr_compile(info.expression, declare);
-    if (!info.ctx)
+    info.prog = expr_compile(info.expression, declare);
+    if (!info.prog)
         return -1;
-    info.ctx->debug = env->verbose;
-    expr_dump(info.ctx);
+    info.prog->debug = env->verbose;
+    expr_dump(info.prog);
 
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
@@ -725,7 +726,7 @@ static int expr_filter(struct perf_evlist *evlist, struct env *env)
 static void expr_deinit(struct perf_evlist *evlist)
 {
     free(info.expression);
-    expr_destroy(info.ctx);
+    expr_destroy(info.prog);
     tp_list_free(info.tp_list);
     tep__unref();
 }
@@ -754,8 +755,8 @@ static void expr_sample(union perf_event *event, int instance)
     print_time(stdout);
     tep__print_event(data->time/1000, data->cpu_entry.cpu, data->raw.data, data->raw.size);
 
-    expr_load_data(info.ctx, data->raw.data, data->raw.size);
-    result = expr_run(info.ctx);
+    expr_load_data(info.prog, data->raw.data, data->raw.size);
+    result = expr_run(info.prog);
     printf("result: 0x%lx\n", result);
 }
 

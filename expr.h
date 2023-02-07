@@ -12,7 +12,7 @@ struct symbol_table {
     long value;
 };
 
-struct expr_ctx {
+struct expr_prog {
     struct symbol_table *symtab;
     int nr_syms;
     char *data; //global var
@@ -30,12 +30,12 @@ struct global_var_declare {
     int elementsize;
 };
 
-struct expr_ctx *expr_compile(char *expr_str, struct global_var_declare *declare);
-long expr_run(struct expr_ctx *ctx);
-int expr_load_glo(struct expr_ctx *ctx, const char *name, long value);
-int expr_load_data(struct expr_ctx *ctx, void *data, int size);
-void expr_destroy(struct expr_ctx *ctx);
-void expr_dump(struct expr_ctx *ctx);
+struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare);
+long expr_run(struct expr_prog *prog);
+int expr_load_glo(struct expr_prog *prog, const char *name, long value);
+int expr_load_data(struct expr_prog *prog, void *data, int size);
+void expr_destroy(struct expr_prog *prog);
+void expr_dump(struct expr_prog *prog);
 
 
 #endif
