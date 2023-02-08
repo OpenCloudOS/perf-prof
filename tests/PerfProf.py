@@ -77,7 +77,9 @@ class PerfProf(object):
             if memleak_check:
                 for key, value in env.items():
                     print(key + '=' + value + ' ', end='')
-            print(' '.join(self.args + extra_args) + '\033[0m')
+            _a = list(map(self.escape_to_shell_param, self.args))
+            _e = list(map(self.escape_to_shell_param, extra_args))
+            print(' '.join(_a + _e) + '\033[0m')
 
         if runtime != None and runtime == 0:
             return
@@ -170,6 +172,15 @@ class PerfProf(object):
     def help(self):
         for std, line in self.run(extra_args=['help']):
             print(line, end='', flush=True)
+
+    @staticmethod
+    def escape_to_shell_param(s):
+        token = ('"', '\\', '$', '>', '!', '?', '~', '*', '@', '(', ')', '{', '}', '[', ']', '|', '&', ';')
+        for t in token:
+            if t in s:
+                s = "'" + s + "'"
+                return s
+        return s
 
     @staticmethod
     def lost_events(line):
