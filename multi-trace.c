@@ -320,6 +320,8 @@ static int monitor_ctx_init(struct env *env)
                     fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
                     return -1;
                 }
+                tp->key_prog = tp_new_prog(tp, env->key);
+                tp->key = env->key;
             }
             if (tp->key)
                 key_attr = true;
@@ -332,7 +334,7 @@ static int monitor_ctx_init(struct env *env)
     } else
         ctx.cc = NULL;
 
-    if (env->key || key_attr) {
+    if (key_attr) {
         options.keytype = K_CUSTOM;
         if (!current_is_order()) {
             fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
@@ -764,28 +766,12 @@ found:
     key = monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance);
     // !untraced: tp->key || ctx.env->key
     //  untraced: tp->key
-    if (tp->key || (!tp->untraced && ctx.env->key)) {
-        struct tep_record record;
-        struct tep_handle *tep = tep__ref();
-        struct tep_event *e;
+    if (tp->key_prog) {
         void *raw;
         int size;
 
         multi_trace_raw_size(event, &raw, &size, tp);
-        memset(&record, 0, sizeof(record));
-        record.ts = hdr->time/1000;
-        record.cpu = hdr->cpu_entry.cpu;
-        record.size = size;
-        record.data = raw;
-
-        e = tep_find_event_by_record(tep, &record);
-        if (tep_get_field_val(NULL, e, tp->key ?: ctx.env->key, &record, &key, 0) < 0) {
-            if (tep_get_common_field_val(NULL, e, tp->key ?: ctx.env->key, &record, &key, 0) < 0) {
-                tep__unref();
-                goto free_dup_event;
-            }
-        }
-        tep__unref();
+        key = tp_get_key(tp, raw, size);
     }
 
     if (tp->untraced)
