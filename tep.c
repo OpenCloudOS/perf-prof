@@ -414,10 +414,11 @@ struct tp_list *tp_list_new(char *event_str)
                     }
                     tp->mem_size = value;
                 } else if (strcmp(attr, "num") == 0) {
-                    if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr num: cannot find %s field at %s:%s\n", value, sys, name);
-                        goto err_out;
-                    }
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->num_prog = prog;
                     tp->num = value;
                 } else if (strcmp(attr, "key") == 0) {
                     if (!fields) fields = tep__event_fields(id);
@@ -460,7 +461,7 @@ struct tp_list *tp_list_new(char *event_str)
         tp_list->nr_top += tp->nr_top;
         tp_list->nr_comm += !!tp->comm_prog;
         tp_list->nr_mem_size += !!tp->mem_size;
-        tp_list->nr_num += !!tp->num;
+        tp_list->nr_num += !!tp->num_prog;
         tp_list->nr_untraced += !!tp->untraced;
 
         if (fields)
@@ -493,6 +494,8 @@ void tp_list_free(struct tp_list *tp_list)
             free(tp->top_add);
         if (tp->comm_prog)
             expr_destroy(tp->comm_prog);
+        if (tp->num_prog)
+            expr_destroy(tp->num_prog);
         if (tp->key_prog)
             expr_destroy(tp->key_prog);
     }
@@ -530,5 +533,11 @@ unsigned long tp_get_key(struct tp *tp, void *data, int size)
 {
     long key = tp_prog_run(tp, tp->key_prog, data, size);
     return key == -1 ? 0 : (unsigned long)key;
+}
+
+unsigned long tp_get_num(struct tp *tp, void *data, int size)
+{
+    long num = tp_prog_run(tp, tp->num_prog, data, size);
+    return num == -1 ? 0 : (unsigned long)num;
 }
 

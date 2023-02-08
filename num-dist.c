@@ -282,9 +282,6 @@ static void __print_callchain(union perf_event *event, struct tp *tp)
 static void num_dist_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *hdr = (void *)event->sample.array;
-    struct tep_record record;
-    struct tep_handle *tep;
-    struct tep_event *e;
     struct perf_evsel *evsel;
     struct tp *tp;
     int i;
@@ -306,20 +303,7 @@ static void num_dist_sample(union perf_event *event, int instance)
     tp = &ctx.tp_list->tp[i];
     __raw_size(event, &raw, &size, tp);
 
-    memset(&record, 0, sizeof(record));
-    record.ts = hdr->time/1000;
-    record.cpu = hdr->cpu_entry.cpu;
-    record.size = size;
-    record.data = raw;
-
-    tep = tep__ref();
-    e = tep_find_event_by_record(tep, &record);
-    if (tep_get_field_val(NULL, e, tp->num, &record, &delta, 0) < 0) {
-        tep__unref();
-        return;
-    }
-    tep__unref();
-
+    delta = tp_get_num(tp, raw, size);
     latency_dist_input(ctx.dist, ctx.env->perins?instance:0, i, delta);
 
     if (ctx.env->heatmap)
@@ -377,7 +361,8 @@ static const char *num_dist_desc[] = PROFILER_DESC("num-dist",
     "Numerical distribution. Get 'num' data from the event itself.", "",
     "EXAMPLES", "",
     "    "PROGRAME" num-dist -e sched:sched_stat_runtime help",
-    "    "PROGRAME" num-dist -e sched:sched_stat_runtime//num=runtime/ -C 0 -i 1000");
+    "    "PROGRAME" num-dist -e sched:sched_stat_runtime//num=runtime/ -C 0 -i 1000",
+    "    "PROGRAME" num-dist -e 'sched:sched_stat_runtime//num=\"runtime/1000\"/alias=runtime(us)/' -C 0 -i 1000");
 static const char *num_dist_argv[] = PROFILER_ARGV("num-dist",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "perins", "than", "heatmap");

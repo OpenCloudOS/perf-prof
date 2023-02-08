@@ -330,7 +330,7 @@ struct option main_options[] = {
                                                                 "      comm=EXPR: top, show COMM\n"
                                                                 "      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
                                                                 "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
-                                                                "      num=field: num-dist, num field\n"
+                                                                "      num=EXPR: num-dist, num field\n"
                                                                 "      key=EXPR: key for multiple events: top, multi-trace\n"
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
                                                                 "      trigger: multi-trace, use events to trigger interval output\n"

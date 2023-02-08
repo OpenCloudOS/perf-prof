@@ -48,6 +48,7 @@ struct tp {
     const char *mem_size;
 
     // num-dist profiler
+    struct expr_prog *num_prog;
     const char *num;
 
     //multi-trace profiler
@@ -77,7 +78,7 @@ struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str);
 long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size);
 char *tp_get_comm(struct tp *tp, void *data, int size);
 unsigned long tp_get_key(struct tp *tp, void *data, int size);
-
+unsigned long tp_get_num(struct tp *tp, void *data, int size);
 
 
 #endif
