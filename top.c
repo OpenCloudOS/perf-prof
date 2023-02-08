@@ -400,13 +400,10 @@ static void top_sample(union perf_event *event, int instance)
     int size = raw->raw.size;
     struct tp *tp = NULL;
     int field = 0;
-    struct tep_handle *tep;
     int i;
     struct top_info info;
     struct rb_node *rbn;
     struct top_info *p;
-
-    tep = tep__ref();
 
     if (ctx.env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
@@ -423,7 +420,7 @@ static void top_sample(union perf_event *event, int instance)
     }
 
     if (tp == NULL)
-        goto unref;
+        return;
 
     if (!ctx.only_comm) {
         if (tp->key_prog)
@@ -437,16 +434,17 @@ static void top_sample(union perf_event *event, int instance)
         if (tp->comm_prog)
             info.pcomm = tp_get_comm(tp, data, size);
         else {
-            if (!tep_is_pid_registered(tep, raw->tid_entry.tid))
+            if (!tep_is_pid_registered(tep__ref(), raw->tid_entry.tid))
                 tep__update_comm(NULL, raw->tid_entry.tid);
             info.pcomm = (void *)tep__pid_to_comm(raw->tid_entry.tid);
+            tep__unref();
         }
     } else
         info.pcomm = NULL;
 
     rbn = rblist__findnew(&ctx.top_list, &info);
     if (!rbn)
-        goto unref;
+        return;
 
     p = container_of(rbn, struct top_info, rbnode);
     for (i = 0; i < tp->nr_top; i++, field++) {
@@ -457,9 +455,6 @@ static void top_sample(union perf_event *event, int instance)
     }
 
     ctx.nr_events ++;
-
-unref:
-    tep__unref();
 }
 
 static inline int top_print_time(const char *fmt)
