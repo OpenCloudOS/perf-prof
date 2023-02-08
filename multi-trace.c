@@ -1118,8 +1118,10 @@ static const char *kmemprof_desc[] = PROFILER_DESC("kmemprof",
     "    Profile alloc and free bytes, as well as the alloc stack.",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
     "EXAMPLES", "",
-    "    "PROGRAME" kmemprof -e kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ -e kmem:kfree//ptr=ptr/ -m 128 --order -k ptr",
-    "    "PROGRAME" kmemprof -e kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/,kmem:kmalloc_node//ptr=ptr/size=bytes_alloc/stack/ -e kmem:kfree//ptr=ptr/ --order -k ptr");
+    "    "PROGRAME" kmemprof -e kmem:kmalloc//size=bytes_alloc/stack/ -e kmem:kfree -m 128 --order -k ptr",
+    "    "PROGRAME" kmemprof -e kmem:kmalloc//size=bytes_alloc/stack/,kmem:kmalloc_node//size=bytes_alloc/stack/ -e kmem:kfree --order -k ptr",
+    "    "PROGRAME" kmemprof -e 'kmem:mm_page_alloc//size=4096<<order/key=page/stack/' -e kmem:mm_page_free//key=page/stack/ -m 256 --order"
+    );
 static const char *kmemprof_argv[] = PROFILER_ARGV("kmemprof",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "key");

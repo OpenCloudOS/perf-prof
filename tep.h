@@ -45,6 +45,7 @@ struct tp {
 
     // kmemleak profiler
     const char *mem_ptr;
+    struct expr_prog *mem_size_prog;
     const char *mem_size;
 
     // num-dist profiler
@@ -79,6 +80,7 @@ long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size);
 char *tp_get_comm(struct tp *tp, void *data, int size);
 unsigned long tp_get_key(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
+unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
 
 
 #endif

@@ -408,10 +408,11 @@ struct tp_list *tp_list_new(char *event_str)
                     }
                     tp->mem_ptr = value;
                 } else if (strcmp(attr, "size") == 0) {
-                    if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr size: cannot find %s field at %s:%s\n", value, sys, name);
-                        goto err_out;
-                    }
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->mem_size_prog = prog;
                     tp->mem_size = value;
                 } else if (strcmp(attr, "num") == 0) {
                     if (!fields) fields = tep__event_fields(id);
@@ -454,13 +455,19 @@ struct tp_list *tp_list_new(char *event_str)
 
         if (!tp->mem_ptr && tep_find_any_field(event, "ptr"))
             tp->mem_ptr = "ptr";
-        if (!tp->mem_size && tep_find_any_field(event, "bytes_alloc"))
+        if (!tp->mem_size && tep_find_any_field(event, "bytes_alloc")) {
+            if (!fields) fields = tep__event_fields(id);
+            if (fields)  prog = expr_compile((char *)"bytes_alloc", fields);
+            if (!prog) { free(fields); goto err_out; }
+
+            tp->mem_size_prog = prog;
             tp->mem_size = "bytes_alloc";
+        }
 
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;
         tp_list->nr_comm += !!tp->comm_prog;
-        tp_list->nr_mem_size += !!tp->mem_size;
+        tp_list->nr_mem_size += !!tp->mem_size_prog;
         tp_list->nr_num += !!tp->num_prog;
         tp_list->nr_untraced += !!tp->untraced;
 
@@ -494,6 +501,8 @@ void tp_list_free(struct tp_list *tp_list)
             free(tp->top_add);
         if (tp->comm_prog)
             expr_destroy(tp->comm_prog);
+        if (tp->mem_size_prog)
+            expr_destroy(tp->mem_size_prog);
         if (tp->num_prog)
             expr_destroy(tp->num_prog);
         if (tp->key_prog)
@@ -539,5 +548,11 @@ unsigned long tp_get_num(struct tp *tp, void *data, int size)
 {
     long num = tp_prog_run(tp, tp->num_prog, data, size);
     return num == -1 ? 0 : (unsigned long)num;
+}
+
+unsigned long tp_get_mem_size(struct tp *tp, void *data, int size)
+{
+    long mem_size = tp_prog_run(tp, tp->mem_size_prog, data, size);
+    return mem_size == -1 ? 1 : (unsigned long)mem_size;
 }
 

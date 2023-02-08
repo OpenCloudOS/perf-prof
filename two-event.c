@@ -739,7 +739,7 @@ static struct two_event *mem_profile_new(struct two_event_class *class, struct t
     struct two_event *two = NULL;
     struct mem_profile *profile = NULL;
 
-    if (!tp1->mem_size) {
+    if (!tp1->mem_size_prog) {
         fprintf(stderr, "%s:%s//size=?/ size attribute is not set\n", tp1->sys, tp1->name);
         return NULL;
     }
@@ -782,9 +782,6 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
         return ;
 
     if (two) {
-        struct tep_handle *tep;
-        struct tep_record record;
-        struct tep_event *e;
         unsigned long long bytes_alloc = 0;
         u64 *bytes;
         void *raw;
@@ -792,17 +789,8 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
 
         profile = container_of(two, struct mem_profile, base);
 
-        tep = tep__ref();
-
         multi_trace_raw_size(event1, &raw, &size, two->tp1);
-        memset(&record, 0, sizeof(record));
-        record.size = size;
-        record.data = raw;
-
-        e = tep_find_event_by_record(tep, &record);
-        if (tep_get_field_val(NULL, e, two->tp1->mem_size, &record, &bytes_alloc, 0) < 0) {
-            bytes_alloc = 1;
-        }
+        bytes_alloc = tp_get_mem_size(two->tp1, raw, size);
 
         profile->nr_alloc ++;
         profile->alloc_bytes += bytes_alloc;
@@ -821,8 +809,6 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
                 *bytes += bytes_alloc;
             }
         }
-
-        tep__unref();
     }
 }
 
