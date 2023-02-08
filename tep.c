@@ -209,14 +209,14 @@ event_fields *tep__event_fields(int id)
     while (fields[f]) {
         if (fields[f]->flags & TEP_FIELD_IS_DYNAMIC) {
             int len = strlen(fields[f]->name);
-            ef[i].name = malloc(len + sizeof("_offset"));
+            ef[i].name = malloc(len + sizeof("_offset")); //TODO need free
             sprintf((char *)ef[i].name, "%s_offset", fields[f]->name);
             ef[i].offset = fields[f]->offset;
             ef[i].size = 2;
             ef[i].elementsize = 2;
             i++;
 
-            ef[i].name = malloc(len + sizeof("_len"));
+            ef[i].name = malloc(len + sizeof("_len")); //TODO need free
             sprintf((char *)ef[i].name, "%s_len", fields[f]->name);
             ef[i].offset = fields[f]->offset + 2;
             ef[i].size = 2;
@@ -320,6 +320,8 @@ struct tp_list *tp_list_new(char *event_str)
         bool top_by;
         char *alias = NULL;
         int id;
+        event_fields *fields = NULL;
+        struct expr_prog *prog = NULL;
 
         sys = s = tp->name;
         sep = strchr(s, ':');
@@ -356,7 +358,16 @@ struct tp_list *tp_list_new(char *event_str)
                     *sep = '\0';
                     value = sep + 1;
                 }
+                // Remove single and double quotes around value
+                if (value && (value[0] == '\'' || value[0] == '"')) {
+                    int len = strlen(value);
+                    if (value[len-1] == value[0]) {
+                        value[len-1] = '\0';
+                        value ++;
+                    }
+                }
                 top_by = false;
+                prog = NULL;
                 if (strcmp(attr, "stack") == 0)
                     stack = 1;
                 else if (strcmp(attr, "max-stack") == 0) {
@@ -371,20 +382,22 @@ struct tp_list *tp_list_new(char *event_str)
                 } else if (strcmp(attr, "top-add") == 0 ||
                            strcmp(attr, "top_add") == 0) {
                     top_add:
-                    if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr top-add: cannot find %s field at %s:%s\n", value, sys, name);
-                        goto err_out;
-                    }
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
                     tp->nr_top ++;
                     tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
+                    tp->top_add[tp->nr_top-1].field_prog = prog;
                     tp->top_add[tp->nr_top-1].field = value;
                     tp->top_add[tp->nr_top-1].event = false;
                     tp->top_add[tp->nr_top-1].top_by = top_by;
                 } else if (strcmp(attr, "comm") == 0) {
-                    if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr comm: cannot find %s field at %s:%s\n", value, sys, name);
-                        goto err_out;
-                    }
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->comm_prog = prog;
                     tp->comm = value;
                 } else if (strcmp(attr, "alias") == 0) {
                     alias = value;
@@ -407,10 +420,11 @@ struct tp_list *tp_list_new(char *event_str)
                     }
                     tp->num = value;
                 } else if (strcmp(attr, "key") == 0) {
-                    if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr key: cannot find %s field at %s:%s\n", value, sys, name);
-                        goto err_out;
-                    }
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->key_prog = prog;
                     tp->key = value;
                 } else if (strcmp(attr, "untraced") == 0) {
                     tp->untraced = true;
@@ -431,6 +445,7 @@ struct tp_list *tp_list_new(char *event_str)
         if (tp->nr_top == 0) {
             tp->nr_top = 1;
             tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
+            tp->top_add[0].field_prog = NULL;
             tp->top_add[0].field = alias ? : name;
             tp->top_add[0].event = true;
             tp->top_add[0].top_by = false;
@@ -443,10 +458,13 @@ struct tp_list *tp_list_new(char *event_str)
 
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;
-        tp_list->nr_comm += !!tp->comm;
+        tp_list->nr_comm += !!tp->comm_prog;
         tp_list->nr_mem_size += !!tp->mem_size;
         tp_list->nr_num += !!tp->num;
         tp_list->nr_untraced += !!tp->untraced;
+
+        if (fields)
+            free(fields);
     }
 
     tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);
@@ -462,14 +480,55 @@ err_out:
 
 void tp_list_free(struct tp_list *tp_list)
 {
-    int i;
+    int i, j;
     if (!tp_list)
         return ;
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
+        for (j = 0; j < tp->nr_top; j++) {
+            if (tp->top_add[j].field_prog)
+                expr_destroy(tp->top_add[j].field_prog);
+        }
         if (tp->top_add)
             free(tp->top_add);
+        if (tp->comm_prog)
+            expr_destroy(tp->comm_prog);
+        if (tp->key_prog)
+            expr_destroy(tp->key_prog);
     }
     free(tp_list);
+}
+
+struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str)
+{
+    event_fields *fields = tep__event_fields(tp->id);
+    struct expr_prog *prog = NULL;
+    if (fields) {
+        prog = expr_compile(expr_str, fields);
+        free(fields);
+    }
+    return prog;
+}
+
+long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size)
+{
+    if (expr_load_data(prog, data, size) != 0) {
+        expr_dump(prog);
+        fprintf(stderr, "tp %s:%s prog load data failed!\n", tp->sys, tp->name);
+        return -1;
+    }
+    return expr_run(prog);
+}
+
+char *tp_get_comm(struct tp *tp, void *data, int size)
+{
+    long comm = tp_prog_run(tp, tp->comm_prog, data, size);
+    return comm == -1 ? (char *)"Error" : (char *)(unsigned long)comm;
+}
+
+unsigned long tp_get_key(struct tp *tp, void *data, int size)
+{
+    long key = tp_prog_run(tp, tp->key_prog, data, size);
+    return key == -1 ? 0 : (unsigned long)key;
 }
 

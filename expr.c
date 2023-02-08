@@ -441,6 +441,7 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
 
     prog = malloc(sizeof(*prog));
     if (!prog) goto err_return;
+    memset(prog, 0, sizeof(*prog));
     prog->symtab = realloc(symtab, nr_syms*sizeof(*symtab));
     prog->nr_syms = nr_syms;
     if (data - d) { prog->data = d; prog->datasize = datasize; }

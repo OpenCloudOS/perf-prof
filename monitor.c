@@ -325,15 +325,18 @@ struct option main_options[] = {
                                                                 "      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
                                                                 "      max-stack=int : sample_max_stack\n"
                                                                 "      alias=str: event alias\n"
-                                                                "      top-by=field: add to top, sort by this field\n"
-                                                                "      top-add=field: add to top\n"
-                                                                "      comm=field: top, show COMM\n"
+                                                                "      top-by=EXPR: add to top, sort by this field\n"
+                                                                "      top-add=EXPR: add to top\n"
+                                                                "      comm=EXPR: top, show COMM\n"
                                                                 "      ptr=field: kmemleak, ptr field, Dflt: ptr=ptr\n"
                                                                 "      size=field: kmemleak, size field, Dflt: size=bytes_alloc\n"
                                                                 "      num=field: num-dist, num field\n"
-                                                                "      key=field: key for multiple events: top, multi-trace\n"
+                                                                "      key=EXPR: key for multiple events: top, multi-trace\n"
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
-                                                                "      trigger: multi-trace, use events to trigger interval output"),
+                                                                "      trigger: multi-trace, use events to trigger interval output\n"
+                                                                "  EXPR:\n"
+                                                                "      C expression. See `"PROGRAME" expr -h` for more information."
+                                                                ),
     OPT_INT_NONEG   ('F',            "freq", &env.freq,                  NULL,  "Profile at this frequency, Dflt: 100, No profile: 0"),
     OPT_STRDUP_NONEG('k',             "key", &env.key,                  "str",  "Key for series events"),
     OPT_STRDUP_NONEG( 0 ,          "filter", &env.filter,            "filter",  "Event filter/comm filter"),

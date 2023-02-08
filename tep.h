@@ -31,11 +31,16 @@ struct tp {
 
     // top profiler
     struct {
+        // long tp_prog_run(struct tp *tp, ...)
+        struct expr_prog *field_prog;
         char *field;
         bool event;
         bool top_by;
     } *top_add;
     int nr_top;
+
+    // char *tp_get_comm(struct tp *tp, ...)
+    struct expr_prog *comm_prog;
     const char *comm;
 
     // kmemleak profiler
@@ -46,6 +51,8 @@ struct tp {
     const char *num;
 
     //multi-trace profiler
+    // unsigned long tp_get_key(struct tp *tp, ...)
+    struct expr_prog *key_prog;
     const char *key;
     bool untraced;
     bool trigger;
@@ -66,6 +73,10 @@ struct tp_list {
 struct tp_list *tp_list_new(char *event_str);
 void tp_list_free(struct tp_list *tp_list);
 
+struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str);
+long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size);
+char *tp_get_comm(struct tp *tp, void *data, int size);
+unsigned long tp_get_key(struct tp *tp, void *data, int size);
 
 
 

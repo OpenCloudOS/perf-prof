@@ -50,10 +50,10 @@ static struct monitor_ctx {
 
 struct top_info {
     struct rb_node rbnode;
-    unsigned long long key; //int pid;
+    unsigned long key;
     char comm[TASK_COMM_LEN];
     char *pcomm;
-    unsigned long long counter[0];
+    unsigned long counter[0];
 };
 
 static int top_info_node_cmp(struct rb_node *rbn, const void *entry)
@@ -205,15 +205,19 @@ static int monitor_ctx_init(struct env *env)
                 fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
                 return -1;
             }
+            tp->key_prog = tp_new_prog(tp, env->key);
+            tp->key = env->key;
         }
         // default key=pid comm=comm
         // If key is specified, the comm field is ignored. Because the meaning of key may not be pid.
         if (!env->key && !tp->key) {
             struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
             if (tep_find_any_field(event, "pid")) {
+                tp->key_prog = tp_new_prog(tp, (char *)"pid");
                 tp->key = "pid";
                 // The pid has been found, and then comm.
-                if (!tp->comm && tep_find_any_field(event, "comm")) {
+                if (!tp->comm_prog && tep_find_any_field(event, "comm")) {
+                    tp->comm_prog = tp_new_prog(tp, (char *)"comm");
                     tp->comm = "comm";
                     ctx.tp_list->nr_comm += 1;
                 }
@@ -227,9 +231,12 @@ static int monitor_ctx_init(struct env *env)
             comm = strdup(tp->comm);
         }
     }
-    if (!key_name && env->key) {
-        key_name = strdup(env->key);
-    }
+
+    /*
+     * tp->key:  show_comm = !!nr_comm;
+     * env->key: show_comm = !!nr_comm;
+     * raw->tid: show_comm = true;
+    **/
     if (key_name) {
         len = strlen(key_name);
         for (i = 0; i < len; i++)
@@ -393,20 +400,13 @@ static void top_sample(union perf_event *event, int instance)
     int size = raw->raw.size;
     struct tp *tp = NULL;
     int field = 0;
-    struct tep_record record;
     struct tep_handle *tep;
-    struct trace_seq s;
-    struct tep_event *e;
-    const char *key = NULL;
-    int len, i;
+    int i;
     struct top_info info;
     struct rb_node *rbn;
     struct top_info *p;
 
     tep = tep__ref();
-
-    if (ctx.show_comm && !tep_is_pid_registered(tep, raw->tid_entry.tid))
-        tep__update_comm(NULL, raw->tid_entry.tid);
 
     if (ctx.env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
@@ -425,58 +425,39 @@ static void top_sample(union perf_event *event, int instance)
     if (tp == NULL)
         goto unref;
 
-    trace_seq_init(&s);
-
-    memset(&record, 0, sizeof(record));
-    record.ts = raw->time/1000;
-    record.cpu = raw->cpu_entry.cpu;
-    record.size = size;
-    record.data = data;
-
-    e = tep_find_event_by_record(tep, &record);
-
-    /*
-     * tp->key:  show_comm = !!nr_comm;
-     * env->key: show_comm = !!nr_comm;
-     * raw->tid: show_comm = true;
-    **/
     if (!ctx.only_comm) {
-        if (tp->key)
-            key = tp->key;
-        else if (ctx.env->key)
-            key = ctx.env->key;
-        if (!key || tep_get_field_val(&s, e, key, &record, &info.key, 0) < 0) {
+        if (tp->key_prog)
+            info.key = tp_get_key(tp, data, size);
+        else
             info.key = raw->tid_entry.tid;
-        }
     } else
         info.key = 0;
 
     if (ctx.show_comm) {
-        if (tp->comm)
-            info.pcomm = tep_get_field_raw(&s, e, tp->comm, &record, &len, 0);
-        else
+        if (tp->comm_prog)
+            info.pcomm = tp_get_comm(tp, data, size);
+        else {
+            if (!tep_is_pid_registered(tep, raw->tid_entry.tid))
+                tep__update_comm(NULL, raw->tid_entry.tid);
             info.pcomm = (void *)tep__pid_to_comm(raw->tid_entry.tid);
+        }
     } else
         info.pcomm = NULL;
 
     rbn = rblist__findnew(&ctx.top_list, &info);
     if (!rbn)
-        goto destroy;
+        goto unref;
 
     p = container_of(rbn, struct top_info, rbnode);
     for (i = 0; i < tp->nr_top; i++, field++) {
-        unsigned long long counter;
-        if (!tp->top_add[i].event &&
-            tep_get_field_val(&s, e, tp->top_add[i].field, &record, &counter, 0) == 0) {
-            p->counter[field] += counter;
-        } else
+        if (!tp->top_add[i].event)
+            p->counter[field] += (unsigned long)tp_prog_run(tp, tp->top_add[i].field_prog, data, size);
+        else
             p->counter[field] += 1;
     }
 
     ctx.nr_events ++;
 
-destroy:
-    trace_seq_destroy(&s);
 unref:
     tep__unref();
 }
@@ -546,12 +527,12 @@ static void top_interval(void)
             t = container_of(rbn, struct top_info, rbnode);
             if (!ctx.only_comm) {
                 if (t->key < 100000000UL)
-                    printf("%*llu ", ctx.key_len, t->key);
+                    printf("%*lu ", ctx.key_len, t->key);
                 else
-                    printf("0x%*llx ", ctx.key_len, t->key);
+                    printf("0x%*lx ", ctx.key_len, t->key);
             }
             for (i = 0; i < ctx.nr_fields; i++)
-                printf("%*llu ", ctx.fields[i].len, t->counter[i]);
+                printf("%*lu ", ctx.fields[i].len, t->counter[i]);
             if (ctx.show_comm)
                 printf("%-s", t->pcomm);
             printf("\n");
@@ -652,9 +633,11 @@ static const char *top_desc[] = PROFILER_DESC("top",
     "EXAMPLES",
     "    "PROGRAME" top -e kvm:kvm_exit//key=exit_reason/ -i 1000",
     "    "PROGRAME" top -e irq:irq_handler_entry//key=irq/ -C 0",
-    "    "PROGRAME" top -e sched:sched_stat_runtime//top-by=runtime/ -C 0 -i 1000",
+    "    "PROGRAME" top -e 'sched:sched_stat_runtime//top-by=\"runtime/1000\"/alias=run(us)/' -C 0 -i 1000",
     "    "PROGRAME" top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -C 0 -i 1000",
-    "    "PROGRAME" top -e sched:sched_process_exec//comm=filename/ --only-comm",
+    "    "PROGRAME" top -e 'sched:sched_process_exec//comm=\"(char *)&common_type+filename_offset\"/' --only-comm",
+    "    "PROGRAME" top -e 'workqueue:workqueue_execute_start//key=common_pid/alias=NUM/comm=ksymbol(function)/' --only-comm",
+    "    "PROGRAME" top -e 'skb:kfree_skb//key=protocol/comm=ksymbol(location)/' -m 32",
     "",
     "NOTE",
     "    Default, key=pid, comm=comm.",
