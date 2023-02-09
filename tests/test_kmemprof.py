@@ -50,7 +50,7 @@ def test_kmemprof_mm_page_alloc(runtime, memleak_check):
         pytest.skip("'page' or 'pfn' not in 'kmem:mm_page_alloc'")
 
     kmemprof = PerfProf(['kmemprof',
-                '-e', 'kmem:mm_page_alloc//ptr={ptr}/size=order/key={ptr}/stack/'.format(ptr=alloc_ptr),
+                '-e', 'kmem:mm_page_alloc//ptr={ptr}/size=4096<<order/key={ptr}/stack/'.format(ptr=alloc_ptr),
                 '-e', 'kmem:mm_page_free//ptr={ptr}/key={ptr}/stack/'.format(ptr=free_ptr),
                 '-m', '256', '--order', '--order-mem', '10M'])
     for std, line in kmemprof.run(runtime, memleak_check):

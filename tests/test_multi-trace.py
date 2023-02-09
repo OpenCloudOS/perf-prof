@@ -17,6 +17,18 @@ def test_multi_trace_hrtimer(runtime, memleak_check):
         if not memleak_check:
             assert std == PerfProf.STDOUT
 
+def test_multi_trace_workqueue(runtime, memleak_check):
+    multi_trace = PerfProf(["multi-trace"])
+    tick = PerfProf.kallsyms_lookup_name("vmstat_update")
+    multi_trace += ["-e", "workqueue:workqueue_queue_work/function==" + hex(tick) + "/",
+                    "-e", "workqueue:workqueue_execute_start/function==" + hex(tick) + "/",
+                    '-k', 'work', '--order', "-i", "1000"]
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        if not memleak_check or (
+            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
+            print(line, end='', flush=True)
+        if not memleak_check:
+            assert std == PerfProf.STDOUT
 
 def test_multi_trace_softirq_timer(runtime, memleak_check):
     # perf-prof multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000
