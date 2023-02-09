@@ -169,7 +169,7 @@ static void next(void)
                 }
                 if (tk == '"') *str++ = ival;
             }
-            ++p;
+            ++p; *str++ = '\0';
             if (tk == '"') ival = (long)pp;
             else tk = Num;
             return;
@@ -622,6 +622,13 @@ void expr_dump(struct expr_prog *prog)
                 printf(" %.*s\n", (int)LEN(s->hash), s->name);
             }
         }
+    }
+
+    if (prog->str) {
+        char *c = prog->str;
+        printf("Strings:\n");
+        while (*c)
+            c += printf("    %s\n", c) - 4;
     }
 }
 
