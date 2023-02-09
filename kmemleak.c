@@ -187,13 +187,7 @@ static int monitor_ctx_init(struct env *env)
 
     tep__ref();
     ctx.user = !monitor_instance_oncpu();
-    if (env->callchain) {
-        int user = ctx.user ? CALLCHAIN_USER : 0;
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | user, stdout);
-        if (env->flame_graph)
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | user, env->flame_graph);
-        kmemleak.pages *= 2;
-    }
+
     rblist__init(&ctx.alloc);
     ctx.alloc.node_cmp = perf_event_backup_node_cmp;
     ctx.alloc.node_new = perf_event_backup_node_new;
@@ -216,12 +210,10 @@ static void monitor_ctx_exit(void)
     report_kmemleak();
     rblist__exit(&ctx.alloc);
     rblist__exit(&ctx.gc_free);
-    if (ctx.env->callchain) {
-        callchain_ctx_free(ctx.cc);
-        if (ctx.env->flame_graph) {
-            flame_graph_output(ctx.flame);
-            flame_graph_close(ctx.flame);
-        }
+    callchain_ctx_free(ctx.cc);
+    if (ctx.env->flame_graph) {
+        flame_graph_output(ctx.flame);
+        flame_graph_close(ctx.flame);
     }
     tep__unref();
 }
@@ -287,10 +279,21 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
     if (!ctx.tp_free)
         return -1;
 
+    if (!env->callchain)
+        env->callchain = (ctx.tp_alloc->nr_need_stack == ctx.tp_alloc->nr_tp);
+
     if (add_tp_list(evlist, ctx.tp_alloc, env->callchain) < 0)
         return -1;
     if (add_tp_list(evlist, ctx.tp_free, false) < 0)
         return -1;
+
+    if (env->callchain || ctx.tp_alloc->nr_need_stack || ctx.tp_free->nr_need_stack) {
+        int user = ctx.user ? CALLCHAIN_USER : 0;
+        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | user, stdout);
+        if (env->flame_graph)
+            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | user, env->flame_graph);
+        kmemleak.pages *= 2;
+    }
 
     if (ctx.tp_alloc->nr_mem_size == ctx.tp_alloc->nr_tp) {
         ctx.report_leaked_bytes = true;
@@ -346,9 +349,9 @@ struct sample_type_raw {
     } raw;
 };
 
-static void __raw_size(union perf_event *event, bool is_alloc, void **praw, int *psize)
+static void __raw_size(union perf_event *event, bool callchain, void **praw, int *psize)
 {
-    if (ctx.env->callchain && is_alloc) {
+    if (callchain) {
         struct sample_type_callchain *data = (void *)event->sample.array;
         struct {
             __u32   size;
@@ -363,11 +366,11 @@ static void __raw_size(union perf_event *event, bool is_alloc, void **praw, int 
     }
 }
 
-static void __print_callchain(union perf_event *event, bool is_alloc)
+static void __print_callchain(union perf_event *event, bool callchain)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain && is_alloc) {
+    if (callchain) {
         print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
         if (ctx.env->flame_graph) {
             if (ctx.user) {
@@ -579,19 +582,16 @@ static void kmemleak_sample(union perf_event *event, int instance)
     struct sample_type_header *data = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct perf_event_entry entry;
-    struct tep_record record;
-    struct tep_handle *tep;
-    struct trace_seq s;
-    struct tep_event *e;
     struct rb_node *rbn;
     struct tp *tp = NULL;
-    unsigned long long ptr;
+    void *ptr = NULL;
     unsigned long long bytes_alloc = 0;
     __u64 config;
     int rc;
     void *raw;
     int size;
     bool is_alloc;
+    bool callchain;
 
     /* PERF_SAMPLE_STREAM_ID:
      * alloc need stack, free does not need stack, PERF_SAMPLE_STREAM_ID must be set.
@@ -606,38 +606,28 @@ static void kmemleak_sample(union perf_event *event, int instance)
 
     config = perf_evsel__attr(evsel)->config;
     is_alloc = config_is_alloc(config, &tp);
-    __raw_size(event, is_alloc, &raw, &size);
+    if (!is_alloc)
+        config_is_free(config, &tp);
 
-    tep = tep__ref();
+    callchain = (is_alloc && ctx.env->callchain) || tp->stack;
+    __raw_size(event, callchain, &raw, &size);
 
-    if (ctx.user && !tep_is_pid_registered(tep, data->tid_entry.tid))
-        tep__update_comm(NULL, data->tid_entry.tid);
+    if (ctx.user) {
+        if (!tep_is_pid_registered(tep__ref(), data->tid_entry.tid))
+            tep__update_comm(NULL, data->tid_entry.tid);
+        tep__unref();
+    }
 
     if (ctx.env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-        __print_callchain(event, is_alloc);
+        __print_callchain(event, callchain);
     }
 
-    trace_seq_init(&s);
-
-    memset(&record, 0, sizeof(record));
-    record.ts = data->time/1000;
-    record.cpu = data->cpu_entry.cpu;
-    record.size = size;
-    record.data = raw;
-
-    e = tep_find_event_by_record(tep, &record);
     if (is_alloc) {
-        if (tep_get_field_val(&s, e, tp->mem_ptr, &record, &ptr, 1) < 0) {
-            trace_seq_putc(&s, '\n');
-            trace_seq_do_fprintf(&s, stderr);
-            goto __return;
-        }
-        if (tp->mem_size &&
-            tep_get_field_val(&s, e, tp->mem_size, &record, &bytes_alloc, 0) < 0) {
-            bytes_alloc = 1;
-        }
+        ptr = tp_get_mem_ptr(tp, raw, size);
+        if (tp->mem_size_prog)
+            bytes_alloc = tp_get_mem_size(tp, raw, size);
 
         entry.ptr = (__u64)ptr;
         entry.bytes_alloc = (unsigned long)bytes_alloc;
@@ -653,12 +643,8 @@ static void kmemleak_sample(union perf_event *event, int instance)
             rblist__add_node(&ctx.alloc, &entry);
         }
         ctx.stat.total_alloc ++;
-    } else if (config_is_free(config, &tp)) {
-        if (tep_get_field_val(&s, e, tp->mem_ptr, &record, &ptr, 1) < 0) {
-            trace_seq_putc(&s, '\n');
-            trace_seq_do_fprintf(&s, stderr);
-            goto __return;
-        }
+    } else {
+        ptr = tp_get_mem_ptr(tp, raw, size);
 
         entry.ptr = (__u64)ptr;
         entry.insert = 0;
@@ -676,9 +662,6 @@ static void kmemleak_sample(union perf_event *event, int instance)
             rblist__remove_node(&ctx.alloc, rbn);
         ctx.stat.total_free ++;
     }
-__return:
-    trace_seq_destroy(&s);
-    tep__unref();
 }
 
 static void kmemleak_sigusr1(int signum)

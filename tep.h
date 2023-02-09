@@ -44,6 +44,7 @@ struct tp {
     const char *comm;
 
     // kmemleak profiler
+    struct expr_prog *mem_ptr_prog;
     const char *mem_ptr;
     struct expr_prog *mem_size_prog;
     const char *mem_size;
@@ -78,9 +79,10 @@ void tp_list_free(struct tp_list *tp_list);
 struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str);
 long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size);
 char *tp_get_comm(struct tp *tp, void *data, int size);
+void *tp_get_mem_ptr(struct tp *tp, void *data, int size);
+unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
 unsigned long tp_get_key(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
-unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
 
 
 #endif

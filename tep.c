@@ -402,10 +402,11 @@ struct tp_list *tp_list_new(char *event_str)
                 } else if (strcmp(attr, "alias") == 0) {
                     alias = value;
                 } else if (strcmp(attr, "ptr") == 0) {
-                    if (!tep_find_any_field(event, value)) {
-                        fprintf(stderr, "Attr ptr: cannot find %s field at %s:%s\n", value, sys, name);
-                        goto err_out;
-                    }
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->mem_ptr_prog = prog;
                     tp->mem_ptr = value;
                 } else if (strcmp(attr, "size") == 0) {
                     if (!fields) fields = tep__event_fields(id);
@@ -453,8 +454,14 @@ struct tp_list *tp_list_new(char *event_str)
             tp->top_add[0].top_by = false;
         }
 
-        if (!tp->mem_ptr && tep_find_any_field(event, "ptr"))
+        if (!tp->mem_ptr && tep_find_any_field(event, "ptr")) {
+            if (!fields) fields = tep__event_fields(id);
+            if (fields)  prog = expr_compile((char *)"ptr", fields);
+            if (!prog) { free(fields); goto err_out; }
+
+            tp->mem_ptr_prog = prog;
             tp->mem_ptr = "ptr";
+        }
         if (!tp->mem_size && tep_find_any_field(event, "bytes_alloc")) {
             if (!fields) fields = tep__event_fields(id);
             if (fields)  prog = expr_compile((char *)"bytes_alloc", fields);
@@ -501,6 +508,8 @@ void tp_list_free(struct tp_list *tp_list)
             free(tp->top_add);
         if (tp->comm_prog)
             expr_destroy(tp->comm_prog);
+        if (tp->mem_ptr_prog)
+            expr_destroy(tp->mem_ptr_prog);
         if (tp->mem_size_prog)
             expr_destroy(tp->mem_size_prog);
         if (tp->num_prog)
@@ -548,6 +557,12 @@ unsigned long tp_get_num(struct tp *tp, void *data, int size)
 {
     long num = tp_prog_run(tp, tp->num_prog, data, size);
     return num == -1 ? 0 : (unsigned long)num;
+}
+
+void *tp_get_mem_ptr(struct tp *tp, void *data, int size)
+{
+    long mem_ptr = tp_prog_run(tp, tp->mem_ptr_prog, data, size);
+    return mem_ptr == -1 ? NULL : (void *)mem_ptr;
 }
 
 unsigned long tp_get_mem_size(struct tp *tp, void *data, int size)
