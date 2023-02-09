@@ -49,6 +49,7 @@
 #include <memory.h>
 #include <unistd.h>
 #include <setjmp.h>
+#include <arpa/inet.h>
 
 #include <monitor.h>
 #include <tep.h>
@@ -82,14 +83,14 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       PRTF, KSYM, EXIT };
+       PRTF, KSYM, NTHL, NTHS, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY, PTR = 0x8 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ," \
-             "PRTF,KSYM,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -384,6 +385,10 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("printf", INT, PRTF);
     // char *ksymbol(unsigned long func);
     ADD_LIB("ksymbol", CHAR | PTR, KSYM);
+    // uint32_t ntohl(uint32_t netlong);
+    ADD_LIB("ntohl", INT, NTHL);
+    // uint16_t ntohs(uint16_t netshort);
+    ADD_LIB("ntohs", SHORT, NTHS);
 
     data = d; // reset data
     memset(d, 0, datasize);
@@ -532,6 +537,8 @@ long expr_run(struct expr_prog *prog)
 
             case PRTF: t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]); break;
             case KSYM: a = (long)(void *)ksymbol(*sp); break;
+            case NTHL: a = (int)ntohl((int)*sp); break;
+            case NTHS: a = (short)ntohs((short)*sp); break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -825,9 +832,14 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "  Built-in Functions",
     "    int printf(char *fmt, args...)",
     "        Prints args according to fmt, and return the number of characters",
-    "        printed, args can take up to 6 variable parameters.", "",
+    "        printed, args can take up to 6 variable parameters.",
+    "",
     "    char *ksymbol(long addr)",
     "        Get the kernel symbol name according to addr, and return a string.",
+    "",
+    "    int ntohl(int netlong)",
+    "    short ntohs(short netshort)",
+    "        These functions convert network byte order to host byte order.",
     "",
     "EXAMPLES",
     "    "PROGRAME" expr -e sched:sched_wakeup help",
