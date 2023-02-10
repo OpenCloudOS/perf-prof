@@ -807,7 +807,10 @@ static uint64_t time_ms(void)
 
 void print_lost_fn(union perf_event *event, int ins)
 {
-    int oncpu = monitor_instance_oncpu();
+    int oncpu;
+
+    if (env.exit_n) return;
+    oncpu = monitor_instance_oncpu();
     print_time(stderr);
     fprintf(stderr, "lost %llu events on %s #%d\n", event->lost.lost,
                     oncpu ? "CPU" : "thread",
