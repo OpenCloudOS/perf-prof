@@ -21,7 +21,7 @@ except ImportError:
     from collections import Iterable
 
 
-PERF_PROF_PATH = shutil.which("perf-prof", path=os.getcwd() + ":" + os.environ.get("PATH"))
+PERF_PROF_PATH = shutil.which("perf-prof", path=os.getcwd() + ":" + os.getcwd() + "/..:" + os.environ.get("PATH"))
 TCMALLOC = "/lib64/libtcmalloc.so"
 TRACING = "/sys/kernel/debug/tracing/"
 

@@ -26,7 +26,7 @@ def test_block_rq_issue(runtime, memleak_check):
 
 def test_block_rq_issue_filter(runtime, memleak_check):
     #perf-prof top -e 'block:block_rq_issue/rwbs==W&&nr_sector<4/top-by=nr_sector/comm=comm/' --only-comm -i 1000
-    top = PerfProf(['top', '-e', 'block:block_rq_issue/rwbs==W&&nr_sector<4/top-by=nr_sector/comm=comm/', '--only-comm', '-m', '32'])
+    top = PerfProf(['top', '-e', 'block:block_rq_issue/rwbs=="W"&&nr_sector<4/top-by=nr_sector/comm=comm/', '--only-comm', '-m', '32'])
     for std, line in top.run(runtime, memleak_check):
         if not memleak_check or (
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
