@@ -101,10 +101,10 @@ enum { CHAR, SHORT, INT, LONG, ARRAY, PTR = 0x8 };
 #define HASH(tk, len) (((tk) << TK_SHIFT) + (len))
 #define LEN(hash) ((hash) & ((1 << TK_SHIFT) - 1))
 
-static void synerr(const char *str)
+static void synerr(const char *s)
 {
     printf("%s\n", lp);
-    printf("%*s%s\n", (int)(p-lp+1), "^ ", str);
+    printf("%*s%s\n", (int)(p-lp+1), "^ ", s);
     longjmp(synerr_jmp, -1);
 }
 
@@ -456,8 +456,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     prog->nr_insn = nr_insn;
 
     for (i=0; i<prog->nr_syms; i++) {
-        struct symbol_table *s = &prog->symtab[i];
-        if (s->class == Sys && s->value == KSYM && s->ref)
+        struct symbol_table *sym = &prog->symtab[i];
+        if (sym->class == Sys && sym->value == KSYM && sym->ref)
             function_resolver_ref();
     }
 
@@ -567,10 +567,10 @@ int expr_load_glo(struct expr_prog *prog, const char *name, long value)
     return -1;
 }
 
-int expr_load_data(struct expr_prog *prog, void *data, int size)
+int expr_load_data(struct expr_prog *prog, void *d, int size)
 {
     if (!prog || size > prog->datasize) return -1;
-    memcpy(prog->data, data, size);
+    memcpy(prog->data, d, size);
     prog->data[size] = 0;
     return 0;
 }
@@ -595,17 +595,17 @@ void expr_destroy(struct expr_prog *prog)
 
 void expr_dump(struct expr_prog *prog)
 {
-    long *e, *le;
+    long *insn_end, *insn;
     int i;
 
     if (!prog) return;
-    le = prog->insn;
-    e = le+prog->nr_insn-1;
+    insn = prog->insn;
+    insn_end = insn+prog->nr_insn-1;
 
     printf("Instruction:\n");
-    while (le < e) {
-        printf("%8.4s", &INSN[*++le * 5]);
-        if (*le <= SI) printf(" 0x%lx\n", *++le); else printf("\n");
+    while (insn < insn_end) {
+        printf("%8.4s", &INSN[*++insn * 5]);
+        if (*insn <= SI) printf(" 0x%lx\n", *++insn); else printf("\n");
     }
 
     if (prog->data) {
@@ -764,13 +764,13 @@ static void expr_sample(union perf_event *event, int instance)
             __u32   size;
             __u8    data[0];
         } raw;
-    } *data = (void *)event->sample.array;
+    } *raw = (void *)event->sample.array;
     long result;
 
     print_time(stdout);
-    tep__print_event(data->time/1000, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+    tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
-    expr_load_data(info.prog, data->raw.data, data->raw.size);
+    expr_load_data(info.prog, raw->raw.data, raw->raw.size);
     result = expr_run(info.prog);
     printf("result: 0x%lx\n", result);
 }

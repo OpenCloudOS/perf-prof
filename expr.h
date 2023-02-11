@@ -33,7 +33,7 @@ struct global_var_declare {
 struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare);
 long expr_run(struct expr_prog *prog);
 int expr_load_glo(struct expr_prog *prog, const char *name, long value);
-int expr_load_data(struct expr_prog *prog, void *data, int size);
+int expr_load_data(struct expr_prog *prog, void *d, int size);
 void expr_destroy(struct expr_prog *prog);
 void expr_dump(struct expr_prog *prog);
 
