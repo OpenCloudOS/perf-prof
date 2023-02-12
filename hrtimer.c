@@ -10,16 +10,9 @@ typedef int (*analyzer)(int instance, int nr_tp, u64 *counters);
 #define BREAK 0
 #define PRINT 1
 
-static int __analyzer_eqzero(int instance, int nr_tp, u64 *counters)
-{
-    int i;
-    for (i = 0; i < nr_tp; i++) // exclude counters[nr_tp]
-        if (counters[i] != 0)
-            return BREAK;
-    return PRINT;
-}
-
 static struct monitor_ctx {
+    char *expression;
+    struct expr_prog *prog;
     struct perf_evlist *evlist;
     struct callchain_ctx *cc;
     struct perf_evsel *leader;
@@ -30,6 +23,13 @@ static struct monitor_ctx {
     struct bpf_filter filter;
     struct env *env;
 } ctx;
+
+static int __analyzer(int instance, int nr_tp, u64 *counters)
+{
+    if (expr_load_data(ctx.prog, counters, nr_tp+1) != 0)
+        return BREAK;
+    return (int)expr_run(ctx.prog);
+}
 
 static int __analyzer_irq_off(int instance, int nr_tp, u64 *counters)
 {
@@ -56,7 +56,7 @@ static int monitor_ctx_init(struct env *env)
         if (!ctx.ins_counters)
             return -1;
 
-        ctx.analyzer = __analyzer_eqzero;
+        ctx.analyzer = __analyzer;
 
         if (bpf_filter_init(&ctx.filter, env))
             bpf_filter_open(&ctx.filter);
@@ -103,6 +103,15 @@ static void monitor_ctx_exit(void)
     }
 }
 
+static int hrtimer_argc_init(int argc, char *argv[])
+{
+    if (argc >= 1)
+        ctx.expression = strdup(argv[0]);
+    else
+        ctx.expression = NULL;
+    return 0;
+}
+
 static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_event_attr attr = {
@@ -141,7 +150,10 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         return -1;
     if (env->sample_period == 0 && env->freq == 0)
         return -1;
-
+    if (env->event && !ctx.expression) {
+        fprintf(stderr, " {expression} needs to be specified.\n");
+        return -1;
+    }
     if (monitor_ctx_init(env) < 0)
         return -1;
 
@@ -165,20 +177,41 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     }
     perf_evlist__add(evlist, evsel);
 
-    if (env->event)
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    if (env->event) {
+        struct global_var_declare *declare = NULL;
 
-        tp_attr.config = tp->id;
-        evsel = perf_evsel__new(&tp_attr);
-        if (!evsel) {
+        declare = calloc(ctx.tp_list->nr_tp+2, sizeof(*declare));
+        if (!declare)
             return -1;
+
+        for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+            struct tp *tp = &ctx.tp_list->tp[i];
+
+            tp_attr.config = tp->id;
+            evsel = perf_evsel__new(&tp_attr);
+            if (!evsel) {
+                return -1;
+            }
+            perf_evlist__add(evlist, evsel);
+
+            tp->evsel = evsel;
+
+            declare[i].name = tp->alias ? : tp->name;
+            declare[i].offset = i * sizeof(u64);
+            declare[i].size = declare[i].elementsize = sizeof(u64);
         }
-        perf_evlist__add(evlist, evsel);
+        declare[i].name = (char *)"period";
+        declare[i].offset = i * sizeof(u64);
+        declare[i].size = declare[i].elementsize = sizeof(u64);
 
-        tp->evsel = evsel;
+        ctx.prog = expr_compile(ctx.expression, declare);
+        if (!ctx.prog)
+            return -1;
+        free(declare);
+
+        if(env->verbose)
+            expr_dump(ctx.prog);
     }
-
     perf_evlist__set_leader(evlist);
 
     ctx.evlist = evlist;
@@ -209,6 +242,10 @@ static int hrtimer_filter(struct perf_evlist *evlist, struct env *env)
 
 static void hrtimer_exit(struct perf_evlist *evlist)
 {
+    if (ctx.expression)
+        free(ctx.expression);
+    if (ctx.prog)
+        expr_destroy(ctx.prog);
     monitor_ctx_exit();
 }
 
@@ -337,15 +374,21 @@ static void hrtimer_help(struct help_ctx *hctx)
 
 
 static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
-    "[OPTION...] [-e EVENT[...]] [-F freq] [--period ns] [-g]",
-    "High-resolution conditional timing sampling.", "",
-    "SYNOPSIS", "",
+    "[OPTION...] [-e EVENT[...]] [-F freq] [--period ns] [-g] {expression}",
+    "High-resolution conditional timing sampling.",
+    "",
+    "SYNOPSIS",
     "    High-resolution timer sampling. During the sampling interval, it is up to",
-    "    whether the events occurs or not to print samples.", "",
-    "    Currently, if the events does not occur, print the samples.", "",
-    "EXAMPLES", "",
-    "    "PROGRAME" hrtimer -e sched:sched_switch -C 0 --period 50ms",
-    "    "PROGRAME" hrtimer -e sched:sched_switch,sched:sched_wakeup -C 0-5 -F 20 -g");
+    "    whether the events occurs or not to print samples. Whether the event occurs",
+    "    or not is determined by {expression}. The expression uses the event name as",
+    "    a variable, which represents the number of occurrences within the specified",
+    "    period. If the expression is true, the sample is printed, otherwise it is",
+    "    not printed.",
+    "",
+    "EXAMPLES",
+    "    "PROGRAME" hrtimer -e sched:sched_switch -C 0 --period 50ms 'sched_switch==0'",
+    "    "PROGRAME" hrtimer -e sched:sched_switch,sched:sched_wakeup -C 0-5 -F 20 -g \\",
+    "        'sched_switch==0 && sched_wakeup==0'");
 static const char *hrtimer_argv[] = PROFILER_ARGV("hrtimer",
     "OPTION:",
     "cpus", "output", "mmap-pages", "exit-N",
@@ -358,6 +401,7 @@ static profiler hrtimer = {
     .argv = hrtimer_argv,
     .pages = 2,
     .help = hrtimer_help,
+    .argc_init = hrtimer_argc_init,
     .init = hrtimer_init,
     .filter = hrtimer_filter,
     .deinit = hrtimer_exit,
@@ -411,12 +455,15 @@ static void irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count
 
 static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
     "[OPTION...] [-F freq] [--period ns] [--than ns] [-g]",
-    "Detect the hrtimer latency to determine if the irq is off.", "",
-    "SYNOPSIS", "",
+    "Detect the hrtimer latency to determine if the irq is off.",
+    "",
+    "SYNOPSIS",
     "    Hrtimer latency detection, --period specifies the hrtimer period, if the period",
-    "    exceeds the time specified by --than, it will be printed.", "",
-    "    Based on hrtimer. See '"PROGRAME" hrtimer -h' for more information.", "",
-    "EXAMPLES", "",
+    "    exceeds the time specified by --than, it will be printed.",
+    "",
+    "    Based on hrtimer. See '"PROGRAME" hrtimer -h' for more information.",
+    "",
+    "EXAMPLES",
     "    "PROGRAME" irq-off --period 10ms --than 20ms -g",
     "    "PROGRAME" irq-off -C 0 --period 10ms --than 20ms -g -i 200");
 static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
