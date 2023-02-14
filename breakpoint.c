@@ -184,7 +184,7 @@ static void breakpoint_sample(union perf_event *event, int instance)
     } *data = (void *)event->sample.array;
 
     print_time(stdout);
-    printf(" pid %6d [%03d] %llu.%06llu: addr 0x%llx\n", data->tid_entry.pid, data->cpu_entry.cpu,
+    printf(" pid %6d tid %6d [%03d] %llu.%06llu: addr 0x%llx\n", data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
             data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, data->addr);
     if (ctx.env->callchain) {
         if (!ctx.env->flame_graph)
