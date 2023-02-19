@@ -17,6 +17,7 @@ static struct monitor_ctx {
     struct perf_evsel *leader;
     struct tp_list *tp_list;
     int nr_ins;
+    int ins_oncpu;
     u64 *counters;
     u64 *perins_pos;
     struct count_dist *count_dist;
@@ -70,12 +71,22 @@ static int monitor_ctx_init(struct env *env)
     if (!env->sample_period)
         env->sample_period = env->interval * 1000000UL;
 
+    // For stat, if you specify the --period parameter, it actually
+    // refers to the reading interval.
+    if (current_base_profiler() == &stat &&
+        env->interval * 1000000UL > env->sample_period) {
+        int interval = env->interval;
+        env->interval = env->sample_period / 1000000UL;
+        env->sample_period = interval * 1000000UL;
+    }
+
     tep__ref();
 
     ctx.tp_list = tp_list_new(env->event);
     if (!ctx.tp_list)
         return -1;
 
+    ctx.ins_oncpu = monitor_instance_oncpu();
     ctx.nr_ins = monitor_nr_instance();
     ctx.counters = calloc(ctx.nr_ins, (ctx.tp_list->nr_tp + 1) * sizeof(u64));
     if (!ctx.counters)
@@ -89,7 +100,10 @@ static int monitor_ctx_init(struct env *env)
     ctx.slots = 2;
     ctx.round_nr = 0;
 
-    ctx.hist_size = env->interval * 1000000UL / env->sample_period;
+    if (env->interval * 1000000UL > env->sample_period)
+        ctx.hist_size = env->interval * 1000000UL / env->sample_period;
+    else
+        ctx.hist_size = env->sample_period / (env->interval * 1000000UL);
     ctx.count_dist = count_dist_new(env->perins, true, false, ctx.hist_size * ctx.slots);
     if (!ctx.count_dist)
         return -1;
@@ -162,8 +176,13 @@ static int hrcount_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
-    if (!monitor_instance_oncpu())
+    // For hrcount, it can only be attached to cpu.
+    // For stat, it can be attached to cpu and pid.
+    if (current_base_profiler() == &hrcount &&
+        !monitor_instance_oncpu()) {
+        fprintf(stderr, "hrcount can only be attached to cpu.\n");
         return -1;
+    }
 
     if (monitor_ctx_init(env) < 0)
         return -1;
@@ -243,7 +262,8 @@ static void direct_print(void *opaque, struct count_node *node)
     if (len > max_len)
         max_len = len;
     if (ctx.env->perins)
-        printf("[%03d] ", monitor_instance_cpu(node->ins));
+        printf(ctx.ins_oncpu ? "[%03d] " : "[%6d] ",
+               ctx.ins_oncpu ? monitor_instance_cpu(node->ins) : monitor_instance_thread(node->ins));
     printf("%*s ", max_len, buf);
 
     h = (ctx.rounds % ctx.slots) * ctx.hist_size;
@@ -275,7 +295,8 @@ static void packed_print(void *opaque, struct count_node *node)
     if (ctx.env->perins && iter->ins != node->ins) {
         iter->ins = node->ins;
         iter->id = 0;
-        iter->line_len = printf("[%03d] ", monitor_instance_cpu(node->ins));
+        iter->line_len = printf(ctx.ins_oncpu ? "[%03d] " : "[%6d] ",
+            ctx.ins_oncpu ? monitor_instance_cpu(node->ins) : monitor_instance_thread(node->ins));
     }
 
     while (iter->id != node->id) {
@@ -333,7 +354,7 @@ static void __hrcount_interval(void)
             int line_len;
         } iter;
         if (ctx.env->perins)
-            printf("[CPU] ");
+            printf(ctx.ins_oncpu ? "[CPU] " : "[THREAD] ");
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
             struct tp *tp = &ctx.tp_list->tp[i];
             if (i + 1 != ctx.tp_list->nr_tp)
@@ -485,11 +506,13 @@ static void hrcount_help(struct help_ctx *hctx)
 
 static const char *hrcount_desc[] = PROFILER_DESC("hrcount",
     "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
-    "High-resolution counter.", "",
-    "SYNOPSIS", "",
+    "High-resolution counter.",
+    "",
+    "SYNOPSIS",
     "    High-resolution counters are capable of displaying count changes at millisecond or",
-    "    microsecond granularity.", "",
-    "EXAMPLES", "",
+    "    microsecond granularity.",
+    "",
+    "EXAMPLES",
     "    "PROGRAME" hrcount -e sched:sched_switch -C 0 --period 50ms -i 1000",
     "    "PROGRAME" hrcount -e sched:sched_switch,sched:sched_wakeup -C 0-5 --period 50ms -i 1000");
 static const char *hrcount_argv[] = PROFILER_ARGV("hrcount",
@@ -514,14 +537,60 @@ static void stat_help(struct help_ctx *hctx)
     __common_help(hctx, stat.name);
 }
 
+static void stat_read(struct perf_evsel *leader, struct perf_counts_values *count, int instance)
+{
+    struct perf_counts {
+        u64 nr;
+        struct {
+            u64 value;
+            u64 id;
+        } ctnr[0];
+    } *groups = (void *)count;
+    int n = ctx.tp_list->nr_tp;
+    u64 *ins_counter = ctx.counters + instance * (n + 1);
+    u64 counter, cpu_clock;
+    u64 i, j;
+
+    if (leader != ctx.leader)
+        return ;
+
+    for (i = 0; i < groups->nr; i++) {
+        struct perf_evsel *evsel;
+        evsel = perf_evlist__id_to_evsel(ctx.evlist, groups->ctnr[i].id, NULL);
+        if (!evsel)
+            continue;
+        if (evsel == ctx.leader) {
+            cpu_clock = groups->ctnr[i].value - ins_counter[n];
+            ins_counter[n] = groups->ctnr[i].value;
+            if (cpu_clock >= ctx.period * 2) {
+                ctx.perins_pos[instance] += cpu_clock / ctx.period - 1;
+            }
+            continue;
+        }
+        for (j = 0; j < n; j++) {
+            struct tp *tp = &ctx.tp_list->tp[j];
+            if (tp->evsel == evsel) {
+                counter = groups->ctnr[i].value - ins_counter[j];
+                ins_counter[j] = groups->ctnr[i].value;
+                count_dist_insert(ctx.count_dist, instance, j, 0, ctx.perins_pos[instance], counter);
+                break;
+            }
+        }
+    }
+
+    ctx.perins_pos[instance] ++;
+}
+
 
 static const char *stat_desc[] = PROFILER_DESC("stat",
-    "[OPTION...] -e EVENT[...] [--perins]",
-    "Periodic counter with lower resolution.", "",
-    "SYNOPSIS", "",
-    "    Based on hrcount. See '"PROGRAME" hrcount -h' for more information.", "",
-    "EXAMPLES", "",
-    "    "PROGRAME" stat -e sched:sched_switch -C 0 -i 1000",
+    "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
+    "Periodic counter with lower resolution.",
+    "",
+    "SYNOPSIS",
+    "    Based on hrcount. See '"PROGRAME" hrcount -h' for more information.",
+    "",
+    "EXAMPLES",
+    "    "PROGRAME" stat -e sched:sched_switch -C 0 -i 1000 --period 100ms",
     "    "PROGRAME" stat -e sched:sched_switch,sched:sched_wakeup -C 0-5 -i 1000");
 static const char *stat_argv[] = PROFILER_ARGV("stat",
     PROFILER_ARGV_OPTION,
@@ -530,13 +599,13 @@ static profiler stat = {
     .name = "stat",
     .desc = stat_desc,
     .argv = stat_argv,
-    .pages = 2,
+    .pages = 1,
     .help = stat_help,
     .init = hrcount_init,
     .filter = hrcount_filter,
     .deinit = hrcount_exit,
     .interval = hrcount_interval,
-    .sample = hrcount_sample,
+    .read = stat_read,
 };
 PROFILER_REGISTER(stat);
 
