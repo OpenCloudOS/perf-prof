@@ -164,6 +164,8 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
     class->ids = 0;
     class->impl = impl;
     class->opts = *options;
+    if (class->opts.keyname)
+        class->opts.keylen = strlen(class->opts.keyname);
     rblist__init(&class->two_events);
     class->two_events.node_cmp = two_event_node_cmp;
     class->two_events.node_new = two_event_node_new;
@@ -344,9 +346,8 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     struct two_event_options *opts = &delay_class->base.opts;
     struct two_event *two = two_event_find_byid(&delay_class->base, node->key);
 
-    if (opts->perins) {
-        printf("[%*lu] ", opts->keytype == K_CPU ? 3 : 6, node->instance);
-    }
+    if (opts->perins)
+        printf("%-*lu ", opts->keylen, node->instance);
     printf("%*s", delay_class->max_len1, two->tp1->alias ?: two->tp1->name);
     printf(" => %-*s", delay_class->max_len2, two->tp2->alias ?: two->tp2->name);
     printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
@@ -357,11 +358,6 @@ static int delay_print_header(struct two_event *two)
 {
     struct delay_class *delay_class = NULL;
     struct two_event_options *opts;
-    const char *str_keytype[] = {
-        [K_CPU] = "CPU",
-        [K_THREAD] = "THREAD",
-        [K_CUSTOM] = "CUSTOM"
-    };
     int i;
 
     if (two) {
@@ -378,13 +374,15 @@ static int delay_print_header(struct two_event *two)
         printf("\n");
 
         if (opts->perins)
-            printf("[%s] ", str_keytype[opts->keytype]);
+            printf("%-*s ", opts->keylen, opts->keyname);
 
         printf("%*s => %-*s", delay_class->max_len1, "start", delay_class->max_len2, "end");
         printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
 
-        if (opts->perins)
-            printf(opts->keytype == K_CPU ? "----- " : "-------- ");
+        if (opts->perins) {
+            for (i=0; i<opts->keylen; i++) printf("-");
+            printf(" ");
+        }
         for (i=0; i<delay_class->max_len1; i++) printf("-");
         printf("    ");
         for (i=0; i<delay_class->max_len2; i++) printf("-");
@@ -413,6 +411,9 @@ static struct two_event_class *delay_class_new(struct two_event_impl *impl, stru
         class->two = delay_two;
         class->print_header = delay_print_header;
         class->print = delay_print;
+
+        if (class->opts.keylen < 3)
+            class->opts.keylen = 3;
 
         delay_class = container_of(class, struct delay_class, base);
         delay_class->max_len1 = 5; // 5 is strlen("start")

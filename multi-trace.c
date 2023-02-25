@@ -276,7 +276,7 @@ static int monitor_ctx_init(struct env *env)
     int i, j, stacks = 0;
     struct tep_handle *tep;
     struct two_event_options options = {
-        .keytype = monitor_instance_oncpu() ? K_CPU : K_THREAD,
+        .keyname = monitor_instance_oncpu() ? "CPU" : "THREAD",
         .perins = env->perins,
         .only_print_greater_than = env->only_print_greater_than,
         .greater_than = env->greater_than,
@@ -284,7 +284,7 @@ static int monitor_ctx_init(struct env *env)
         .first_n = 10,
         .sort_print = ctx.nested ? false : true,
     };
-    bool key_attr = false;
+    const char *keyname = NULL;
     bool untraced = false;
     int min_nr_events = 2;
 
@@ -332,8 +332,8 @@ static int monitor_ctx_init(struct env *env)
                 tp->key_prog = tp_new_prog(tp, env->key);
                 tp->key = env->key;
             }
-            if (tp->key)
-                key_attr = true;
+            if (tp->key && !keyname)
+                keyname = tp->key;
         }
     }
 
@@ -343,8 +343,8 @@ static int monitor_ctx_init(struct env *env)
     } else
         ctx.cc = NULL;
 
-    if (key_attr) {
-        options.keytype = K_CUSTOM;
+    if (keyname) {
+        options.keyname = keyname;
         if (!current_is_order()) {
             fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
                             "--order parameter to order events.\n");

@@ -11,13 +11,9 @@ typedef enum {
     REMAINING_BREAK,
 } remaining_return;
 
-enum keytype {
-    K_CPU,
-    K_THREAD,
-    K_CUSTOM,
-};
 struct two_event_options {
-    enum keytype keytype;
+    const char *keyname;
+    int keylen;
     bool perins;
     bool only_print_greater_than;
     unsigned long greater_than;
