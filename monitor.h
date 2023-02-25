@@ -119,6 +119,7 @@ struct env {
     bool overwrite;
     unsigned long sample_period;
     bool only_comm;
+    bool cycle;
 
     /* kvmmmu */
     bool spte;

@@ -4,6 +4,17 @@ from PerfProf import PerfProf, DeadLoop
 import pytest
 import time
 
+def test_multi_trace_switch(runtime, memleak_check):
+    # perf-prof multi-trace -e sched:sched_switch --cycle -i 1000 --perins
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'sched:sched_switch', '--cycle', '-i', '1000', '--perins'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        if not memleak_check or (
+            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
+            print(line, end='', flush=True)
+        if not memleak_check:
+            assert std == PerfProf.STDOUT
+
 def test_multi_trace_hrtimer(runtime, memleak_check):
     # perf-prof multi-trace -e timer:hrtimer_expire_entry/function==0x$tick/ -e timer:hrtimer_expire_exit -i 1000
     multi_trace = PerfProf(["multi-trace"])

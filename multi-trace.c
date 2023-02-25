@@ -286,8 +286,17 @@ static int monitor_ctx_init(struct env *env)
     };
     bool key_attr = false;
     bool untraced = false;
+    int min_nr_events = 2;
 
-    if (env->nr_events < (ctx.nested ? 1 : 2))
+    if (ctx.nested)
+        min_nr_events = 1;
+    else if (env->cycle) {
+        if (!env->impl || !strcmp(env->impl, TWO_EVENT_DELAY_IMPL))
+            min_nr_events = 1;
+        else
+            env->cycle = 0;
+    }
+    if (env->nr_events < min_nr_events)
         return -1;
 
     base_profiler = current_base_profiler();
@@ -459,13 +468,14 @@ static int __multi_trace_init(struct perf_evlist *evlist, struct env *env)
 
 static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
 {
-    int i, j, k;
+    int i, j, k, n;
 
     ctx.nested = 0;
     if (__multi_trace_init(evlist, env) < 0)
         return -1;
 
-    for (k = 0; k < ctx.nr_list - 1; k++) {
+    // env->cycle: from the last one back to the first.
+    for (k = 0; k < ctx.nr_list - !env->cycle; k++) {
         for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
             if (tp1->untraced)
@@ -473,8 +483,9 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
             // for handle remaining
             if (!ctx.impl->object_new(ctx.class, tp1, NULL))
                 return -1;
-            for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
-                struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
+            n = (k+1) % ctx.nr_list;
+            for (j = 0; j < ctx.tp_list[n]->nr_tp; j++) {
+                struct tp *tp2 = &ctx.tp_list[n]->tp[j];
                 if (tp2->untraced)
                     continue;
                 if (!ctx.impl->object_new(ctx.class, tp1, tp2))
@@ -521,13 +532,14 @@ static void multi_trace_handle_remaining(void)
 
 static void multi_trace_interval(void)
 {
-    int i, j, k;
+    int i, j, k, n;
     int header = 0;
     struct two_event *two;
 
     multi_trace_handle_remaining();
 
-    for (k = 0; k < ctx.nr_list - 1; k++) {
+    // env->cycle: from the last one back to the first.
+    for (k = 0; k < ctx.nr_list - !ctx.env->cycle; k++) {
         for (i = 0; i < ctx.tp_list[k]->nr_tp; i++) {
             struct tp *tp1 = &ctx.tp_list[k]->tp[i];
             if (tp1->untraced)
@@ -538,8 +550,9 @@ static void multi_trace_interval(void)
                 header = ctx.class->print_header(two);
             }
             ctx.class->print(two);
-            for (j = 0; j < ctx.tp_list[k+1]->nr_tp; j++) {
-                struct tp *tp2 = &ctx.tp_list[k+1]->tp[j];
+            n = (k+1) % ctx.nr_list;
+            for (j = 0; j < ctx.tp_list[n]->nr_tp; j++) {
+                struct tp *tp2 = &ctx.tp_list[n]->tp[j];
 
                 if (tp2->untraced)
                     continue;
@@ -751,8 +764,8 @@ found:
     }
 
     if (!ctx.nested) {
-        need_find_prev = i != 0;
-        need_backup = i != ctx.nr_list - 1;
+        need_find_prev = i != 0 || ctx.env->cycle;
+        need_backup = i != ctx.nr_list - 1 || ctx.env->cycle;
         need_remove_from_backup = 1;
         // no need to use tp1
         tp1 = NULL;
@@ -984,10 +997,24 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
 {
     struct env *env = hctx->env;
     bool has_key = false;
+    int min_nr_events = 2;
 
-    if (!ctx.nested && strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) && hctx->nr_list < 2)
-        return;
     if (env->impl && strcmp(env->impl, impl))
+        return;
+    if (env->cycle && strcmp(impl, TWO_EVENT_DELAY_IMPL))
+        return;
+
+    if (ctx.nested)
+        min_nr_events = 1;
+    else if (env->cycle)
+        min_nr_events = 1;
+
+    if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0)
+        min_nr_events = 1;
+    else if (strcmp(impl, TWO_EVENT_SYSCALLS_IMPL) == 0)
+        min_nr_events = 0;
+
+    if (hctx->nr_list < min_nr_events)
         return;
 
     printf("%s ", common);
@@ -1022,6 +1049,10 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
         }
         if (env->heatmap)
             printf("--heatmap %s ", env->heatmap);
+        if (!ctx.nested)
+        if (env->cycle ||
+            (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 && hctx->nr_list == 1))
+            printf("--cycle ");
     }
     common_help(hctx, true, true, true, true, false, true, true);
 
@@ -1040,6 +1071,10 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
             printf("[--detail[=-N,+N,samecpu,samepid]] ");
         if (!env->heatmap)
             printf("[--heatmap .] ");
+        if (!ctx.nested)
+        if (!env->cycle &&
+            (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 && hctx->nr_list > 1))
+            printf("[--cycle] ");
     }
     common_help(hctx, false, true, true, true, false, true, true);
 
@@ -1058,23 +1093,26 @@ static void multi_trece_help(struct help_ctx *hctx)
 }
 
 static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
-    "[OPTION...] -e EVENT [-e ...] [-k key] [--impl impl] [--than|--only-than ns] [--detail] [--perins] [--heatmap file]",
+    "[OPTION...] -e EVENT [-e ...] [-k key] [--impl impl] [--than|--only-than ns] [--detail] [--perins] [--heatmap file] [--cycle]",
     "Multipurpose trace: delay, pair, kmemprof, syscalls.", "",
-    "SYNOPSIS", "",
-    "    Multiple events are associated by key and finally converted into two-event analysis.", "",
-    "TWO-EVENT", "",
+    "SYNOPSIS",
+    "    Multiple events are associated by key and finally converted into two-event analysis.",
+    "",
+    "TWO-EVENT",
     "    delay - latency analysis",
     "    pair - event pair, alloc and free, open and close, etc.",
     "    kmemprof - mem profile, alloc and free bytes",
-    "    syscalls - syscalls latency analysis", "",
-    "EXAMPLES", "",
+    "    syscalls - syscalls latency analysis",
+    "",
+    "EXAMPLES",
+    "    "PROGRAME" multi-trace -e sched:sched_switch --cycle -i 1000",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --impl pair",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms");
 static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "only-than", "detail", "perins", "heatmap");
+    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "only-than", "detail", "perins", "heatmap", "cycle");
 static profiler multi_trace = {
     .name = "multi-trace",
     .desc = multi_trace_desc,
