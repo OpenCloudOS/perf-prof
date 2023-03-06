@@ -1106,16 +1106,12 @@ reinit:
         struct perf_mmap *map;
         int fds = 0;
 
-        if (env.overwrite == false) {
-            fds = perf_evlist__poll_mmap(evlist, time_left, perf_event_handle_mmap);
-            /*
-             * -ENOENT means that perf_mmap will not generate any more events.
-             */
-            if (fds == -ENOENT)
-                exiting = true;
-        } else if (time_left) {
-            usleep(time_left * 1000);
-        }
+        fds = perf_evlist__poll_mmap(evlist, time_left, perf_event_handle_mmap);
+        /*
+         * -ENOENT means that perf_mmap will not generate any more events.
+         */
+        if (fds == -ENOENT)
+            exiting = true;
 
         if (monitor->pages && (time_left == 0 || exiting))
             perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
