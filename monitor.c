@@ -947,6 +947,20 @@ static int perf_event_process_record(union perf_event *event, int instance)
     return 0;
 }
 
+static void perf_event_handle_mmap(struct perf_mmap *map)
+{
+    union perf_event *event;
+
+    if (perf_mmap__read_init(map) < 0)
+        return;
+    while ((event = perf_mmap__read_event(map)) != NULL) {
+        /* process event */
+        perf_event_process_record(event, perf_mmap__idx(map));
+        perf_mmap__consume(map);
+    }
+    perf_mmap__read_done(map);
+}
+
 static int libperf_print(enum libperf_print_level level,
                          const char *fmt, va_list ap)
 {
@@ -1090,26 +1104,23 @@ reinit:
     time_left = env.interval ? : -1;
     while (!exiting && !monitor->reinit) {
         struct perf_mmap *map;
-        union perf_event *event;
         int fds = 0;
 
-        if (env.overwrite == false)
-            fds = perf_evlist__poll(evlist, time_left);
-        else if (time_left) {
+        if (env.overwrite == false) {
+            fds = perf_evlist__poll_mmap(evlist, time_left, perf_event_handle_mmap);
+            /*
+             * -ENOENT means that perf_mmap will not generate any more events.
+             */
+            if (fds == -ENOENT)
+                exiting = true;
+        } else if (time_left) {
             usleep(time_left * 1000);
         }
 
-        if (monitor->pages && (fds || time_left == 0 || exiting))
-        perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
-            if (perf_mmap__read_init(map) < 0)
-                continue;
-            while ((event = perf_mmap__read_event(map)) != NULL) {
-                /* process event */
-                perf_event_process_record(event, perf_mmap__idx(map));
-                perf_mmap__consume(map);
+        if (monitor->pages && (time_left == 0 || exiting))
+            perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
+                perf_event_handle_mmap(map);
             }
-            perf_mmap__read_done(map);
-        }
 
         if (monitor->read && time_left == 0) {
             struct perf_evsel *evsel;
