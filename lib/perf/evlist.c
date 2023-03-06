@@ -22,13 +22,12 @@
 #include <sys/mman.h>
 #include <perf/cpumap.h>
 #include <perf/threadmap.h>
-#include <api/fd/array.h>
 
 void perf_evlist__init(struct perf_evlist *evlist)
 {
 	INIT_LIST_HEAD(&evlist->entries);
 	evlist->nr_entries = 0;
-	fdarray__init(&evlist->pollfd, 64);
+	perf_evlist_poll__init(evlist);
 	perf_evlist__reset_id_hash(evlist);
 }
 
@@ -129,7 +128,6 @@ void perf_evlist__exit(struct perf_evlist *evlist)
 	evlist->cpus = NULL;
 	evlist->all_cpus = NULL;
 	evlist->threads = NULL;
-	fdarray__exit(&evlist->pollfd);
 }
 
 void perf_evlist__delete(struct perf_evlist *evlist)
@@ -309,58 +307,115 @@ struct perf_evsel *perf_evlist__id_to_evsel(struct perf_evlist *evlist,
     return NULL;
 }
 
-int perf_evlist__alloc_pollfd(struct perf_evlist *evlist)
+void perf_evlist_poll__init(struct perf_evlist *evlist)
 {
-	int nr_cpus = perf_cpu_map__nr(evlist->cpus);
-	int nr_threads = perf_thread_map__nr(evlist->threads);
-	int nfds = 0;
-	struct perf_evsel *evsel;
+	struct perf_evlist_poll *epoll = &evlist->epoll;
 
-	perf_evlist__for_each_entry(evlist, evsel) {
-		if (evsel->system_wide)
-			nfds += nr_cpus;
-		else
-			nfds += nr_cpus * nr_threads;
-	}
+	epoll->epfd = -1;
+	epoll->maxevents = 0;
+	epoll->events = NULL;
+	epoll->nr = 0;
+	epoll->nr_alloc = 0;
+	epoll->data = NULL;
+}
 
-	if (fdarray__available_entries(&evlist->pollfd) < nfds &&
-	    fdarray__grow(&evlist->pollfd, nfds) < 0)
+int perf_evlist_poll__alloc(struct perf_evlist *evlist)
+{
+	struct perf_evlist_poll *epoll = &evlist->epoll;
+	struct perf_cpu_map *cpus = evlist->cpus;
+	struct perf_thread_map *threads = evlist->threads;
+
+	epoll->epfd = epoll_create1(EPOLL_CLOEXEC);
+	if (epoll->epfd < 0)
+		return -errno;
+	epoll->maxevents = 64;
+	epoll->events = zalloc(epoll->maxevents * sizeof(*epoll->events));
+	if (epoll->events == NULL)
+		return -ENOMEM;
+
+	epoll->nr = 0;
+	epoll->nr_alloc = evlist->nr_entries * perf_cpu_map__nr(cpus) * perf_thread_map__nr(threads);
+	epoll->data = zalloc(epoll->nr_alloc * sizeof(*epoll->data));
+	if (epoll->data == NULL)
 		return -ENOMEM;
 
 	return 0;
 }
 
-int perf_evlist__add_pollfd(struct perf_evlist *evlist, int fd,
-			    void *ptr, short revent, enum fdarray_flags flags)
+void perf_evlist_poll__free(struct perf_evlist *evlist)
 {
-	int pos = fdarray__add(&evlist->pollfd, fd, revent | POLLERR | POLLHUP, flags);
+	struct perf_evlist_poll *epoll = &evlist->epoll;
 
-	if (pos >= 0) {
-		evlist->pollfd.priv[pos].ptr = ptr;
-		fcntl(fd, F_SETFL, O_NONBLOCK);
+	if (epoll->events)
+		free(epoll->events);
+	if (epoll->epfd >= 0)
+		close(epoll->epfd);
+	if (epoll->data)
+		free(epoll->data);
+	perf_evlist_poll__init(evlist);
+}
+
+int perf_evlist_poll__add(struct perf_evlist *evlist, int fd,
+				struct perf_mmap *mmap, unsigned revent)
+{
+	struct perf_evlist_poll *epoll = &evlist->epoll;
+	struct epoll_event event;
+
+	if (epoll->nr == epoll->nr_alloc)
+		return -ENOMEM;
+
+	epoll->data[epoll->nr].fd = fd;
+	epoll->data[epoll->nr].mmap = mmap;
+
+	event.events = revent | EPOLLERR | EPOLLHUP;
+	event.data.u32 = epoll->nr;
+	if (epoll_ctl(epoll->epfd, EPOLL_CTL_ADD, fd, &event) < 0)
+		return -errno;
+
+	epoll->nr ++;
+	return 0;
+}
+
+int perf_evlist_poll__del(struct perf_evlist *evlist, int n)
+{
+	struct perf_evlist_poll *epoll = &evlist->epoll;
+
+	if (epoll->data[n].mmap) {
+		perf_mmap__put(epoll->data[n].mmap);
+		epoll->data[n].mmap = NULL;
+		if (epoll_ctl(epoll->epfd, EPOLL_CTL_DEL, epoll->data[n].fd, NULL) < 0)
+			return -errno;
+		epoll->nr --;
 	}
-
-	return pos;
+	return 0;
 }
 
-static void perf_evlist__munmap_filtered(struct fdarray *fda, int fd,
-					 void *arg __maybe_unused)
+int perf_evlist__poll_mmap(struct perf_evlist *evlist, int timeout, handle_mmap handle)
 {
-	struct perf_mmap *map = fda->priv[fd].ptr;
+	struct perf_evlist_poll *epoll = &evlist->epoll;
+	int i, cnt;
 
-	if (map)
-		perf_mmap__put(map);
-}
+	if (epoll->nr == 0)
+		return -ENOENT;
 
-int perf_evlist__filter_pollfd(struct perf_evlist *evlist, short revents_and_mask)
-{
-	return fdarray__filter(&evlist->pollfd, revents_and_mask,
-			       perf_evlist__munmap_filtered, NULL);
+	cnt = epoll_wait(epoll->epfd, epoll->events, epoll->maxevents, timeout);
+	if (cnt < 0)
+		return -errno;
+
+	for (i = 0; i < cnt; i++) {
+		unsigned int revents = epoll->events[i].events;
+		int n = epoll->events[i].data.u32;
+		if (handle)
+			handle(epoll->data[n].mmap);
+		if (revents & EPOLLHUP)
+			perf_evlist_poll__del(evlist, n);
+	}
+	return cnt;
 }
 
 int perf_evlist__poll(struct perf_evlist *evlist, int timeout)
 {
-	return fdarray__poll(&evlist->pollfd, timeout);
+	return perf_evlist__poll_mmap(evlist, timeout, NULL);
 }
 
 static struct perf_mmap* perf_evlist__alloc_mmap(struct perf_evlist *evlist, bool overwrite)
@@ -446,7 +501,7 @@ mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 {
 	int evlist_cpu = perf_cpu_map__cpu(evlist->cpus, cpu_idx);
 	struct perf_evsel *evsel;
-	int revent;
+	unsigned revent;
 
 	perf_evlist__for_each_entry(evlist, evsel) {
 		bool overwrite = evsel->attr.write_backward;
@@ -485,10 +540,6 @@ mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 			 * I.e. we can get the POLLHUP meaning that the fd doesn't exist
 			 * anymore, but the last events for it are still in the ring buffer,
 			 * waiting to be consumed.
-			 *
-			 * Tools can chose to ignore this at their own discretion, but the
-			 * evlist layer can't just drop it when filtering events in
-			 * perf_evlist__filter_pollfd().
 			 */
 			refcount_set(&map->refcnt, 2);
 
@@ -504,10 +555,10 @@ mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 			perf_mmap__get(map);
 		}
 
-		revent = !overwrite ? POLLIN : 0;
+		revent = !overwrite ? EPOLLIN : 0;
 
 		if (!evsel->system_wide &&
-		    perf_evlist__add_pollfd(evlist, fd, map, revent, fdarray_flag__default) < 0) {
+		    perf_evlist_poll__add(evlist, fd, map, revent) < 0) {
 			perf_mmap__put(map);
 			return -1;
 		}
@@ -611,7 +662,7 @@ int perf_evlist__mmap_ops(struct perf_evlist *evlist,
 			return -ENOMEM;
 	}
 
-	if (evlist->pollfd.entries == NULL && perf_evlist__alloc_pollfd(evlist) < 0)
+	if (evlist->epoll.epfd == -1 && perf_evlist_poll__alloc(evlist) < 0)
 		return -ENOMEM;
 
 	if (perf_cpu_map__empty(cpus))
@@ -637,6 +688,12 @@ void perf_evlist__munmap(struct perf_evlist *evlist)
 {
     struct perf_evsel *evsel;
 	int i;
+
+	if (evlist->epoll.nr) {
+		for (i = 0; i < evlist->epoll.nr_alloc; i++)
+			perf_evlist_poll__del(evlist, i);
+	}
+	perf_evlist_poll__free(evlist);
 
 	if (evlist->mmap) {
 		for (i = 0; i < evlist->nr_mmaps; i++)

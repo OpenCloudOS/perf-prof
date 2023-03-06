@@ -3,8 +3,8 @@
 #define __LIBPERF_INTERNAL_EVLIST_H
 
 #include <linux/list.h>
-#include <api/fd/array.h>
 #include <internal/evsel.h>
+#include <sys/epoll.h>
 
 #define PERF_EVLIST__HLIST_BITS 8
 #define PERF_EVLIST__HLIST_SIZE (1 << PERF_EVLIST__HLIST_BITS)
@@ -12,6 +12,18 @@
 struct perf_cpu_map;
 struct perf_thread_map;
 struct perf_mmap_param;
+
+struct perf_evlist_poll {
+	int epfd;
+	int maxevents;
+	struct epoll_event *events;
+	int nr;
+	int nr_alloc;
+	struct perf_evlist_poll_data {
+		int fd;
+		struct perf_mmap *mmap;
+	} *data;
+};
 
 struct perf_evlist {
 	struct list_head	 entries;
@@ -23,7 +35,7 @@ struct perf_evlist {
 	struct perf_thread_map	*threads;
 	int			 nr_mmaps;
 	size_t			 mmap_len;
-	struct fdarray		 pollfd;
+	struct perf_evlist_poll epoll;
 	struct hlist_head	 heads[PERF_EVLIST__HLIST_SIZE];
 	struct perf_mmap	*mmap;
 	struct perf_mmap	*mmap_ovw;
@@ -44,9 +56,13 @@ struct perf_evlist_mmap_ops {
 	perf_evlist_mmap__cb_mmap_t	mmap;
 };
 
-int perf_evlist__alloc_pollfd(struct perf_evlist *evlist);
-int perf_evlist__add_pollfd(struct perf_evlist *evlist, int fd,
-			    void *ptr, short revent, enum fdarray_flags flags);
+void perf_evlist_poll__init(struct perf_evlist *evlist);
+int perf_evlist_poll__alloc(struct perf_evlist *evlist);
+void perf_evlist_poll__free(struct perf_evlist *evlist);
+int perf_evlist_poll__add(struct perf_evlist *evlist, int fd,
+			  struct perf_mmap *mmap, unsigned revent);
+int perf_evlist_poll__del(struct perf_evlist *evlist, int fd);
+
 
 int perf_evlist__mmap_ops(struct perf_evlist *evlist,
 			  struct perf_evlist_mmap_ops *ops,

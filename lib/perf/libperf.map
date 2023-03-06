@@ -53,10 +53,10 @@ LIBPERF_0.0.1 {
 		perf_evlist__remove;
 		perf_evlist__next;
 		perf_evlist__set_maps;
+		perf_evlist__poll_map;
 		perf_evlist__poll;
 		perf_evlist__mmap;
 		perf_evlist__munmap;
-		perf_evlist__filter_pollfd;
 		perf_evlist__id_to_evsel;
 		perf_evlist__next_mmap;
 		perf_evlist__set_leader;

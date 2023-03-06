@@ -107,15 +107,6 @@ else
   API_PATH=$(LIB_DIR)
 endif
 
-LIBAPI = $(API_PATH)libapi.a
-export LIBAPI
-
-$(LIBAPI): FORCE
-	$(Q)$(MAKE) -C $(LIB_DIR) O=$(OUTPUT) $(OUTPUT)libapi.a
-
-$(LIBAPI)-clean:
-	$(call QUIET_CLEAN, libapi)
-	$(Q)$(MAKE) -C $(LIB_DIR) O=$(OUTPUT) clean >/dev/null
 
 $(LIBPERF_IN): FORCE
 	$(Q)$(MAKE) $(build)=libperf
@@ -123,7 +114,7 @@ $(LIBPERF_IN): FORCE
 $(LIBPERF_A): $(LIBPERF_IN)
 	$(QUIET_AR)$(RM) $@ && $(AR) rcs $@ $(LIBPERF_IN)
 
-$(LIBPERF_SO): $(LIBPERF_IN) $(LIBAPI)
+$(LIBPERF_SO): $(LIBPERF_IN)
 	$(QUIET_LINK)$(CC) --shared -Wl,-soname,libperf.so \
                                     -Wl,--version-script=$(VERSION_SCRIPT) $^ -o $@
 	@ln -sf $(@F) $(OUTPUT)libperf.so
@@ -135,7 +126,7 @@ libs: $(LIBPERF_A) $(LIBPERF_SO) $(LIBPERF_PC)
 all: fixdep
 	$(Q)$(MAKE) libs
 
-clean: $(LIBAPI)-clean
+clean:
 	$(call QUIET_CLEAN, libperf) $(RM) $(LIBPERF_A) \
                 *.o *~ *.a *.so *.so.$(VERSION) *.so.$(LIBPERF_VERSION) .*.d .*.cmd tests/*.o LIBPERF-CFLAGS $(LIBPERF_PC) \
                 $(TESTS_STATIC) $(TESTS_SHARED)
@@ -148,10 +139,10 @@ TESTS_SHARED = $(OUTPUT)tests-shared
 $(TESTS_IN): FORCE
 	$(Q)$(MAKE) $(build)=tests
 
-$(TESTS_STATIC): $(TESTS_IN) $(LIBPERF_A) $(LIBAPI)
+$(TESTS_STATIC): $(TESTS_IN) $(LIBPERF_A)
 	$(QUIET_LINK)$(CC) -o $@ $^
 
-$(TESTS_SHARED): $(TESTS_IN) $(LIBAPI)
+$(TESTS_SHARED): $(TESTS_IN)
 	$(QUIET_LINK)$(CC) -o $@ -L$(if $(OUTPUT),$(OUTPUT),.) $^ -lperf
 
 make-tests: libs $(TESTS_SHARED) $(TESTS_STATIC)

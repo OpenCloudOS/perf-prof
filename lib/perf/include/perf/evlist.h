@@ -10,6 +10,7 @@ struct perf_evlist;
 struct perf_evsel;
 struct perf_cpu_map;
 struct perf_thread_map;
+struct perf_mmap;
 
 LIBPERF_API void perf_evlist__add(struct perf_evlist *evlist,
 				  struct perf_evsel *evsel);
@@ -32,9 +33,9 @@ LIBPERF_API void perf_evlist__disable(struct perf_evlist *evlist);
 LIBPERF_API void perf_evlist__set_maps(struct perf_evlist *evlist,
 				       struct perf_cpu_map *cpus,
 				       struct perf_thread_map *threads);
+typedef void (*handle_mmap)(struct perf_mmap *map);
+LIBPERF_API int perf_evlist__poll_mmap(struct perf_evlist *evlist, int timeout, handle_mmap handle);
 LIBPERF_API int perf_evlist__poll(struct perf_evlist *evlist, int timeout);
-LIBPERF_API int perf_evlist__filter_pollfd(struct perf_evlist *evlist,
-					   short revents_and_mask);
 LIBPERF_API struct perf_evsel *perf_evlist__id_to_evsel(struct perf_evlist *evlist,
                                uint64_t id, int *pcpu);
 LIBPERF_API int perf_evlist__mmap(struct perf_evlist *evlist, int pages);
