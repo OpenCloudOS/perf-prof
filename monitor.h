@@ -12,6 +12,7 @@
 #include <parse-options.h>
 #include <tep.h>
 #include <localtime.h>
+#include <linux/epoll.h>
 
 struct monitor;
 void monitor_register(struct monitor *m);
@@ -22,6 +23,9 @@ int monitor_instance_cpu(int ins);
 int monitor_instance_thread(int ins);
 int monitor_instance_oncpu(void);
 struct monitor *current_monitor(void);
+
+int main_epoll_add(int fd, unsigned int events, void *ptr, handle_event handle);
+int main_epoll_del(int fd);
 
 void help(void);
 

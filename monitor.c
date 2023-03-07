@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <time.h>
 #include <pthread.h>
 #include <signal.h>
 #define _GNU_SOURCE
@@ -24,6 +25,7 @@
 
 static int daylight_active;
 
+struct event_poll *main_epoll = NULL;
 
 struct monitor *monitors_list = NULL;
 struct monitor *monitor = NULL;
@@ -82,6 +84,16 @@ int monitor_instance_oncpu(void)
 struct monitor *current_monitor(void)
 {
     return monitor;
+}
+
+int main_epoll_add(int fd, unsigned int events, void *ptr, handle_event handle)
+{
+    return event_poll__add(main_epoll, fd, events, ptr, handle);
+}
+
+int main_epoll_del(int fd)
+{
+    return event_poll__del(main_epoll, fd);
 }
 
 /******************************************************
@@ -961,6 +973,24 @@ static void perf_event_handle_mmap(struct perf_mmap *map)
     perf_mmap__read_done(map);
 }
 
+static void perf_event_handle(int fd, unsigned int revents, void *ptr)
+{
+    perf_event_handle_mmap(ptr);
+    if (revents & EPOLLHUP)
+        main_epoll_del(fd);
+}
+
+static int __addfn(int fd, unsigned events, struct perf_mmap *mmap)
+{
+    return main_epoll_add(fd, events, mmap, perf_event_handle);
+}
+
+static int __delfn(int fd, unsigned events, struct perf_mmap *mmap)
+{
+    main_epoll_del(fd);
+    return 0;
+}
+
 static int libperf_print(enum libperf_print_level level,
                          const char *fmt, va_list ap)
 {
@@ -988,6 +1018,11 @@ int main(int argc, char *argv[])
     if (env.symbols) {
         syms__convert(stdin, stdout);
         return 0;
+    }
+
+    main_epoll = event_poll__alloc(64);
+    if (!main_epoll) {
+        return -1;
     }
 
     if (argc) {
@@ -1019,6 +1054,7 @@ reinit:
         fprintf(stderr, "failed to create evlist\n");
         return -1;
     }
+    perf_evlist_poll__external(evlist, true);
 
     if (env.pids || env.tids) {
         // attach to processes
@@ -1083,11 +1119,13 @@ reinit:
         goto out_close;
     }
 
-    if (monitor->pages)
+    if (monitor->pages) {
         err = perf_evlist__mmap(evlist, monitor->pages);
-    if (err) {
-        fprintf(stderr, "failed to mmap evlist\n");
-        goto out_close;
+        if (err)
+            goto out_close;
+        err = perf_evlist_poll__foreach_fd(evlist, __addfn);
+        if (err)
+            goto out_close;
     }
 
     perf_evlist__enable(evlist);
@@ -1106,11 +1144,14 @@ reinit:
         struct perf_mmap *map;
         int fds = 0;
 
-        fds = perf_evlist__poll_mmap(evlist, time_left, perf_event_handle_mmap);
-        /*
-         * -ENOENT means that perf_mmap will not generate any more events.
-         */
-        if (fds == -ENOENT)
+        fds = event_poll__poll(main_epoll, time_left);
+
+        // fds == 0 means timeout.
+        if (fds == 0)
+            time_left = 0;
+
+        // -ENOENT means there are no file descriptors in event_poll.
+        if (monitor->pages && fds == -ENOENT)
             exiting = true;
 
         if (monitor->pages && (time_left == 0 || exiting))
@@ -1144,11 +1185,11 @@ reinit:
             monitor->interval();
 
         if (env.interval) {
+            if (time_left == 0)
+                time_end += env.interval;
             time_left = time_end - time_ms();
-            if (time_left <= 0) {
-                time_end = time_ms() + env.interval + time_left;
+            if (time_left < 0)
                 time_left = 0;
-            }
         }
     }
 
@@ -1165,7 +1206,10 @@ reinit:
         **/
         monitor->deinit(evlist);
     }
-    perf_evlist__munmap(evlist);
+    if (monitor->pages) {
+        perf_evlist_poll__foreach_fd(evlist, __delfn);
+        perf_evlist__munmap(evlist);
+    }
 out_close:
     perf_evlist__close(evlist);
 out_exit:
@@ -1181,6 +1225,8 @@ out_delete:
 
     if (monitor->reinit)
         goto reinit;
+
+    event_poll__free(main_epoll);
 
     cgroup_list__delete();
 
