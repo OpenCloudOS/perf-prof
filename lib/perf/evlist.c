@@ -426,6 +426,10 @@ int perf_evlist__poll_mmap(struct perf_evlist *evlist, int timeout, handle_mmap 
 	if (epoll->external)
 		return -EINVAL;
 
+	if (epoll->epfd < 0) {
+		return usleep(timeout * 1000);
+	}
+
 	cnt = epoll_wait(epoll->epfd, epoll->events, epoll->maxevents, timeout);
 	if (cnt < 0)
 		return -errno;
