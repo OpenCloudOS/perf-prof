@@ -33,6 +33,9 @@ LIBPERF_API void perf_evlist__disable(struct perf_evlist *evlist);
 LIBPERF_API void perf_evlist__set_maps(struct perf_evlist *evlist,
 				       struct perf_cpu_map *cpus,
 				       struct perf_thread_map *threads);
+LIBPERF_API void perf_evlist_poll__external(struct perf_evlist *evlist, bool external);
+typedef int (*foreach_fd)(int fd, unsigned events, struct perf_mmap *mmap);
+LIBPERF_API int perf_evlist_poll__foreach_fd(struct perf_evlist *evlist, foreach_fd fn);
 typedef void (*handle_mmap)(struct perf_mmap *map);
 LIBPERF_API int perf_evlist__poll_mmap(struct perf_evlist *evlist, int timeout, handle_mmap handle);
 LIBPERF_API int perf_evlist__poll(struct perf_evlist *evlist, int timeout);

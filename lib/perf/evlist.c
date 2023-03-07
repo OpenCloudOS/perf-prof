@@ -314,9 +314,15 @@ void perf_evlist_poll__init(struct perf_evlist *evlist)
 	epoll->epfd = -1;
 	epoll->maxevents = 0;
 	epoll->events = NULL;
+	epoll->external = false;
 	epoll->nr = 0;
 	epoll->nr_alloc = 0;
 	epoll->data = NULL;
+}
+
+void perf_evlist_poll__external(struct perf_evlist *evlist, bool external)
+{
+	evlist->epoll.external = external;
 }
 
 int perf_evlist_poll__alloc(struct perf_evlist *evlist)
@@ -325,14 +331,16 @@ int perf_evlist_poll__alloc(struct perf_evlist *evlist)
 	struct perf_cpu_map *cpus = evlist->cpus;
 	struct perf_thread_map *threads = evlist->threads;
 
-	epoll->epfd = epoll_create1(EPOLL_CLOEXEC);
-	if (epoll->epfd < 0)
-		return -errno;
-	epoll->maxevents = 64;
-	epoll->events = zalloc(epoll->maxevents * sizeof(*epoll->events));
-	if (epoll->events == NULL)
-		return -ENOMEM;
+	if (!epoll->external) {
+		epoll->epfd = epoll_create1(EPOLL_CLOEXEC);
+		if (epoll->epfd < 0)
+			return -errno;
 
+		epoll->maxevents = 64;
+		epoll->events = zalloc(epoll->maxevents * sizeof(*epoll->events));
+		if (epoll->events == NULL)
+			return -ENOMEM;
+	}
 	epoll->nr = 0;
 	epoll->nr_alloc = evlist->nr_entries * perf_cpu_map__nr(cpus) * perf_thread_map__nr(threads);
 	epoll->data = zalloc(epoll->nr_alloc * sizeof(*epoll->data));
@@ -365,13 +373,15 @@ int perf_evlist_poll__add(struct perf_evlist *evlist, int fd,
 		return -ENOMEM;
 
 	epoll->data[epoll->nr].fd = fd;
+	epoll->data[epoll->nr].events = revent | EPOLLERR | EPOLLHUP | EPOLLET;
 	epoll->data[epoll->nr].mmap = mmap;
 
-	event.events = revent | EPOLLERR | EPOLLHUP;
-	event.data.u32 = epoll->nr;
-	if (epoll_ctl(epoll->epfd, EPOLL_CTL_ADD, fd, &event) < 0)
-		return -errno;
-
+	if (!epoll->external) {
+		event.events = epoll->data[epoll->nr].events;
+		event.data.u32 = epoll->nr;
+		if (epoll_ctl(epoll->epfd, EPOLL_CTL_ADD, fd, &event) < 0)
+			return -errno;
+	}
 	epoll->nr ++;
 	return 0;
 }
@@ -383,9 +393,27 @@ int perf_evlist_poll__del(struct perf_evlist *evlist, int n)
 	if (epoll->data[n].mmap) {
 		perf_mmap__put(epoll->data[n].mmap);
 		epoll->data[n].mmap = NULL;
-		if (epoll_ctl(epoll->epfd, EPOLL_CTL_DEL, epoll->data[n].fd, NULL) < 0)
-			return -errno;
+		if (!epoll->external) {
+			if (epoll_ctl(epoll->epfd, EPOLL_CTL_DEL, epoll->data[n].fd, NULL) < 0)
+				return -errno;
+		}
 		epoll->nr --;
+	}
+	return 0;
+}
+
+int perf_evlist_poll__foreach_fd(struct perf_evlist *evlist, foreach_fd fn)
+{
+	struct perf_evlist_poll *epoll = &evlist->epoll;
+	int i, err;
+
+	if (!epoll->external)
+		return -EINVAL;
+
+	for (i = 0; i < epoll->nr; i++) {
+		err = fn(epoll->data[i].fd, epoll->data[i].events, epoll->data[i].mmap);
+		if (err)
+			return err;
 	}
 	return 0;
 }
@@ -395,8 +423,8 @@ int perf_evlist__poll_mmap(struct perf_evlist *evlist, int timeout, handle_mmap 
 	struct perf_evlist_poll *epoll = &evlist->epoll;
 	int i, cnt;
 
-	if (epoll->nr == 0)
-		return -ENOENT;
+	if (epoll->external)
+		return -EINVAL;
 
 	cnt = epoll_wait(epoll->epfd, epoll->events, epoll->maxevents, timeout);
 	if (cnt < 0)
@@ -410,7 +438,7 @@ int perf_evlist__poll_mmap(struct perf_evlist *evlist, int timeout, handle_mmap 
 		if (revents & EPOLLHUP)
 			perf_evlist_poll__del(evlist, n);
 	}
-	return cnt;
+	return epoll->nr ? cnt : -ENOENT;
 }
 
 int perf_evlist__poll(struct perf_evlist *evlist, int timeout)

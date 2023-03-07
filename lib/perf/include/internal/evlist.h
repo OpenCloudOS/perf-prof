@@ -17,10 +17,12 @@ struct perf_evlist_poll {
 	int epfd;
 	int maxevents;
 	struct epoll_event *events;
+	bool external;
 	int nr;
 	int nr_alloc;
 	struct perf_evlist_poll_data {
 		int fd;
+		unsigned events;
 		struct perf_mmap *mmap;
 	} *data;
 };
