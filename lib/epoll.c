@@ -83,6 +83,16 @@ int event_poll__add(struct event_poll *ep, int fd, unsigned int events, void *pt
         ep->nr ++;
     }
 
+    /*
+     * There is no need to check whether data is being used in ep->events, and new
+     * values can be safely assigned.
+     *
+     * For the new fd, there can be no reference to data in ep->events.
+     *
+     * For the old fd, there may be a reference to data in ep->events. Regardless
+     * of whether data->handle is executing or not, it is safe to assign a new value
+     * to data.
+    **/
     data->ptr = ptr;
     data->events = events;
     data->handle = handle;
@@ -97,14 +107,24 @@ int event_poll__del(struct event_poll *ep, int fd)
     struct event_poll_data *data;
     struct event_poll_data key;
     struct rb_node *rbn;
+    int i;
 
     key.fd = fd;
     rbn = rb_find(&key, &ep->root, (keycmp)fdcmp);
     if (rbn) {
-        ep->nr --;
-        rb_erase(rbn, &ep->root);
         data = rb_entry(rbn, struct event_poll_data, rbn);
+        /*
+         * Check if data is being used in ep->events, if so, clear it.
+        **/
+        for (i = ep->i + 1; i < ep->cnt; i++) {
+            if (ep->events[i].data.ptr == data) {
+                ep->events[i].data.ptr = NULL;
+            }
+        }
+
+        rb_erase(rbn, &ep->root);
         free(data);
+        ep->nr --;
         return epoll_ctl(ep->epfd, EPOLL_CTL_DEL, fd, NULL);
     } else
         return -ENOENT;
@@ -120,11 +140,17 @@ int event_poll__poll(struct event_poll *ep, int timeout)
     if (cnt < 0)
         return -errno;
 
+    ep->cnt = cnt;
     for (i = 0; i < cnt; i++) {
         revents = ep->events[i].events;
         data = ep->events[i].data.ptr;
-        data->handle(data->fd, revents, data->ptr);
+        if (data) {
+            ep->i = i;
+            data->handle(data->fd, revents, data->ptr);
+        }
     }
+    ep->i = ep->cnt = 0;
+
     return ep->nr ? cnt : -ENOENT;
 }
 

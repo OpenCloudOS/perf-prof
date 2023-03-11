@@ -16,6 +16,7 @@ struct event_poll_data {
 
 struct event_poll {
     int epfd;
+    int i, cnt;
     int maxevents;
     struct epoll_event *events;
     int nr;
