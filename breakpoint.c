@@ -1,9 +1,26 @@
 #include <stdlib.h>
 #include <pthread.h>
+#include <linux/bitops.h>
+#include <asm/perf_regs.h>
 #include <linux/hw_breakpoint.h>
 #include <monitor.h>
 #include <stack_helpers.h>
 #include <trace_helpers.h>
+
+#if defined(__i386__) || defined(__x86_64__)
+#define REG_NOSUPPORT_N 4
+#define REG_NOSUPPORT ((1ULL << PERF_REG_X86_DS) | \
+		       (1ULL << PERF_REG_X86_ES) | \
+		       (1ULL << PERF_REG_X86_FS) | \
+		       (1ULL << PERF_REG_X86_GS))
+#if defined(__i386__)
+#define PERF_REGS_MASK (((1ULL << PERF_REG_X86_32_MAX) - 1) & ~REG_NOSUPPORT)
+#else
+#define PERF_REGS_MASK (((1ULL << PERF_REG_X86_64_MAX) - 1) & ~REG_NOSUPPORT)
+#endif
+#elif defined(__aarch64__)
+#define PERF_REGS_MASK ((1ULL << PERF_REG_ARM64_MAX) - 1)
+#endif
 
 
 #define HBP_NUM 4
@@ -14,6 +31,7 @@ struct hw_breakpoint {
     unsigned long address;
     u8 len;
     u8 type;
+    char typestr[4];
 };
 
 static struct breakpoint_ctx {
@@ -50,7 +68,7 @@ static void monitor_ctx_exit(void)
 
 static int breakpoint_argc_init(int argc, char *argv[])
 {
-    int i;
+    int i, j;
 
     if (argc < 1) {
         fprintf(stderr, " <addr> needs to be specified.\n");
@@ -111,6 +129,11 @@ static int breakpoint_argc_init(int argc, char *argv[])
         ctx.hwbp[i].address = value;
         ctx.hwbp[i].len = len;
         ctx.hwbp[i].type = type;
+        j = 0;
+        if (type & HW_BREAKPOINT_R) ctx.hwbp[i].typestr[j++] = 'R';
+        if (type & HW_BREAKPOINT_W) ctx.hwbp[i].typestr[j++] = 'W';
+        if (type & HW_BREAKPOINT_X) ctx.hwbp[i].typestr[j++] = 'X';
+        ctx.hwbp[i].typestr[j] = '\0';
 
         free(s);
     }
@@ -125,9 +148,10 @@ static int breakpoint_init(struct perf_evlist *evlist, struct env *env)
         .config      = 0,
         .size        = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
-                       (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
+        .sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
+                       (env->callchain ? PERF_SAMPLE_CALLCHAIN | PERF_SAMPLE_REGS_INTR : 0),
         .read_format = 0,
+        .sample_regs_intr = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
         .wakeup_events = 1,
@@ -165,11 +189,49 @@ static void breakpoint_deinit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
+struct sample_regs_intr {
+    u64     abi;
+    u64     regs[hweight64(PERF_REGS_MASK)];
+};
+
+static void print_regs_intr(struct sample_regs_intr *regs_intr, u64 unused)
+{
+#if defined(__i386__) || defined(__x86_64__)
+#define REG(r) regs_intr->regs[PERF_REG_X86_##r - (PERF_REG_X86_##r > PERF_REG_X86_DS ? REG_NOSUPPORT_N : 0)]
+    printf("      RIP: %016lx RSP: %016lx RFLAGS:%08lx\n", REG(IP), REG(SP), REG(FLAGS));
+    printf("      RAX: %016lx RBX: %016lx RCX: %016lx\n", REG(AX), REG(BX), REG(CX));
+    printf("      RDX: %016lx RSI: %016lx RDI: %016lx\n", REG(DX), REG(SI), REG(DI));
+
+#if defined(__i386__)
+    printf("      RBP: %016lx CS: %04lx SS: %04lx\n", REG(BP), REG(CS), REG(SS));
+#else
+    printf("      RBP: %016lx R08: %016lx R09: %016lx\n", REG(BP), REG(R8), REG(R9));
+    printf("      R10: %016lx R11: %016lx R12: %016lx\n", REG(R10), REG(R11), REG(R12));
+    printf("      R13: %016lx R14: %016lx R15: %016lx\n", REG(R13), REG(R14), REG(R15));
+    printf("      CS: %04lx SS: %04lx\n", REG(CS), REG(SS));
+#endif
+
+#elif defined(__aarch64__)
+#define REG(r) regs_intr->regs[PERF_REG_ARM64_##r]
+    printf("      X00: %016lx X01: %016lx X02: %016lx X03: %016lx\n", REG(X0), REG(X1), REG(X2), REG(X3));
+    printf("      X04: %016lx X05: %016lx X06: %016lx X07: %016lx\n", REG(X4), REG(X5), REG(X6), REG(X7));
+    printf("      X08: %016lx X09: %016lx X10: %016lx X11: %016lx\n", REG(X8), REG(X9), REG(X10), REG(X11));
+    printf("      X12: %016lx X13: %016lx X14: %016lx X15: %016lx\n", REG(X12), REG(X13), REG(X14), REG(X15));
+    printf("      X16: %016lx X17: %016lx X18: %016lx X19: %016lx\n", REG(X16), REG(X17), REG(X18), REG(X19));
+    printf("      X20: %016lx X21: %016lx X22: %016lx X23: %016lx\n", REG(X20), REG(X21), REG(X22), REG(X23));
+    printf("      X24: %016lx X25: %016lx X26: %016lx X27: %016lx\n", REG(X24), REG(X25), REG(X26), REG(X27));
+    printf("      X28: %016lx X29: %016lx LR: %016lx\n", REG(X28), REG(X29), REG(LR));
+    printf("      SP: %016lx PC: %016lx\n", REG(SP), REG(PC));
+#endif
+}
+
 static void breakpoint_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU | PERF_SAMPLE_CALLCHAIN
+    // PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU | PERF_SAMPLE_CALLCHAIN |
+    // PERF_SAMPLE_REGS_INTR
     struct sample_type_data {
+        __u64   ip;
         struct {
             __u32    pid;
             __u32    tid;
@@ -182,13 +244,23 @@ static void breakpoint_sample(union perf_event *event, int instance)
         }    cpu_entry;
         struct callchain callchain;
     } *data = (void *)event->sample.array;
+    struct sample_regs_intr *regs_intr;
+    int i;
+
+    for (i = 0; i < HBP_NUM; i++) {
+        if (ctx.hwbp[i].address == data->addr)
+            break;
+    }
 
     print_time(stdout);
-    printf(" pid %6d tid %6d [%03d] %llu.%06llu: addr 0x%llx\n", data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
-            data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, data->addr);
+    printf(" pid %6d tid %6d [%03d] %llu.%06llu: 0x%llx/%d:%s @0x%llx\n", data->tid_entry.pid, data->tid_entry.tid,
+            data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
+            data->addr, ctx.hwbp[i].len, ctx.hwbp[i].typestr, data->ip);
+
     if (ctx.env->callchain) {
+        regs_intr = (struct sample_regs_intr *)&data->callchain.ips[data->callchain.nr];
         if (!ctx.env->flame_graph)
-            print_callchain_common(ctx.cc, &data->callchain, data->tid_entry.pid);
+            print_callchain_common_cbs(ctx.cc, &data->callchain, data->tid_entry.pid, (callchain_cbs)print_regs_intr, NULL, regs_intr);
         else
             flame_graph_add_callchain(ctx.flame, &data->callchain, data->tid_entry.pid, NULL);
     }
