@@ -367,6 +367,8 @@ int perf_evsel__enable(struct perf_evsel *evsel)
 	int i;
 	int err = 0;
 
+	if (evsel->keep_disable) return 0;
+
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_ENABLE, NULL, i);
 	return err;
@@ -382,9 +384,18 @@ int perf_evsel__disable(struct perf_evsel *evsel)
 	int i;
 	int err = 0;
 
+	if (evsel->keep_disable) return 0;
+
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_DISABLE, NULL, i);
 	return err;
+}
+
+void perf_evsel__keep_disable(struct perf_evsel *evsel)
+{
+	if (!evsel->attr.disabled)
+		evsel->attr.disabled = 1;
+	evsel->keep_disable = true;
 }
 
 int perf_evsel__apply_filter_cpu(struct perf_evsel *evsel, const char *filter, int cpu)
@@ -450,6 +461,18 @@ int perf_evsel__alloc_id(struct perf_evsel *evsel, int ncpus, int nthreads)
 	}
 
 	return 0;
+}
+
+#define SID(e, x, y) (e->sample_id ? xyarray__entry(e->sample_id, x, y) : NULL)
+uint64_t perf_evsel__get_id(struct perf_evsel *evsel, int cpu, int thread)
+{
+	struct perf_sample_id *sid;
+
+	if (evsel->system_wide)
+		thread = 0;
+
+	sid = SID(evsel, cpu, thread);
+	return sid ? sid->id : 0;
 }
 
 void perf_evsel__free_id(struct perf_evsel *evsel)
