@@ -22,10 +22,12 @@
 #include <trace_helpers.h>
 #include <monitor.h>
 #include <tep.h>
+#include <timer.h>
 
 static int daylight_active;
 
 struct event_poll *main_epoll = NULL;
+static int perf_event_fds;
 
 struct monitor *monitors_list = NULL;
 struct monitor *monitor = NULL;
@@ -811,13 +813,6 @@ void print_time(FILE *fp)
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
 }
 
-static uint64_t time_ms(void)
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000LL + tv.tv_usec / 1000;
-}
-
 void print_lost_fn(union perf_event *event, int ins)
 {
     int oncpu;
@@ -962,12 +957,13 @@ static int perf_event_process_record(union perf_event *event, int instance)
 static void perf_event_handle_mmap(struct perf_mmap *map)
 {
     union perf_event *event;
+    int idx = perf_mmap__idx(map);
 
     if (perf_mmap__read_init(map) < 0)
         return;
     while ((event = perf_mmap__read_event(map)) != NULL) {
         /* process event */
-        perf_event_process_record(event, perf_mmap__idx(map));
+        perf_event_process_record(event, idx);
         perf_mmap__consume(map);
     }
     perf_mmap__read_done(map);
@@ -976,12 +972,17 @@ static void perf_event_handle_mmap(struct perf_mmap *map)
 static void perf_event_handle(int fd, unsigned int revents, void *ptr)
 {
     perf_event_handle_mmap(ptr);
-    if (revents & EPOLLHUP)
+    if (revents & EPOLLHUP) {
         main_epoll_del(fd);
+        // After all perf events hang up, it's safe to exit.
+        if (--perf_event_fds == 0)
+            exiting = true;
+    }
 }
 
 static int __addfn(int fd, unsigned events, struct perf_mmap *mmap)
 {
+    perf_event_fds ++;
     return main_epoll_add(fd, events, mmap, perf_event_handle);
 }
 
@@ -989,6 +990,54 @@ static int __delfn(int fd, unsigned events, struct perf_mmap *mmap)
 {
     main_epoll_del(fd);
     return 0;
+}
+
+static void interval_handle(struct timer *timer)
+{
+    struct interval_handle_args {
+        struct timer timer;
+        struct perf_evlist *evlist;
+        struct perf_cpu_map *cpus;
+        struct perf_thread_map *threads;
+        int max_read_size;
+    } *interval_args = (void *)timer;
+
+    struct perf_evlist *evlist = interval_args->evlist;
+    struct perf_cpu_map *cpus = interval_args->cpus;
+    struct perf_thread_map *threads = interval_args->threads;
+    int max_read_size = interval_args->max_read_size;
+
+    if (monitor->pages) {
+        struct perf_mmap *map;
+        perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
+            perf_event_handle_mmap(map);
+        }
+    }
+
+    if (monitor->read) {
+        struct perf_evsel *evsel;
+        int cpu, ins, tins;
+        perf_cpu_map__for_each_cpu(cpu, ins, cpus) {
+            for (tins = 0; tins < perf_thread_map__nr(threads); tins++) {
+                perf_evlist__for_each_evsel(evlist, evsel) {
+                    static struct perf_counts_values *count = NULL;
+                    static struct perf_counts_values static_count;
+                    if (!count) {
+                        if (max_read_size <= sizeof(static_count))
+                            count = &static_count;
+                        else
+                            count = malloc(max_read_size);
+                        memset(count, 0, max_read_size);
+                    }
+                    if (perf_evsel__read(evsel, ins, tins, count) == 0)
+                        monitor->read(evsel, count, cpu != -1 ? ins : tins);
+                }
+            }
+        }
+    }
+
+    if (monitor->interval)
+        monitor->interval();
 }
 
 static int libperf_print(enum libperf_print_level level,
@@ -1006,9 +1055,13 @@ int main(int argc, char *argv[])
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
     struct perf_thread_map *threads = NULL;
-    int max_read_size;
-    uint64_t time_end;
-    int time_left;
+    struct interval_handle_args {
+        struct timer timer;
+        struct perf_evlist *evlist;
+        struct perf_cpu_map *cpus;
+        struct perf_thread_map *threads;
+        int max_read_size;
+    } interval_args;
     bool deinited;
 
     sigusr2_handler(0);
@@ -1036,14 +1089,14 @@ int main(int argc, char *argv[])
         dup2(STDOUT_FILENO, STDERR_FILENO);
     }
 
+    setlinebuf(stdout);
+    setlinebuf(stderr);
+    libperf_init(libperf_print);
+
     if (env.order || monitor->order)
         monitor = order(monitor);
     if (env.mmap_pages)
         monitor->pages = env.mmap_pages;
-
-    setlinebuf(stdout);
-    setlinebuf(stderr);
-    libperf_init(libperf_print);
 
 reinit:
     deinited = false;
@@ -1121,11 +1174,16 @@ reinit:
 
     if (monitor->pages) {
         err = perf_evlist__mmap(evlist, monitor->pages);
-        if (err)
+        if (err) {
+            fprintf(stderr, "monitor(%s) mmap failed\n", monitor->name);
             goto out_close;
+        }
+        perf_event_fds = 0;
         err = perf_evlist_poll__foreach_fd(evlist, __addfn);
-        if (err)
+        if (err) {
+            fprintf(stderr, "monitor(%s) poll failed\n", monitor->name);
             goto out_close;
+        }
     }
 
     perf_evlist__enable(evlist);
@@ -1137,60 +1195,32 @@ reinit:
 
     workload_start(&workload);
 
-    max_read_size = perf_evlist__max_read_size(evlist);
-    time_end = env.interval ? time_ms() + env.interval : -1;
-    time_left = env.interval ? : -1;
+    if (env.interval) {
+        interval_args.evlist = evlist;
+        interval_args.cpus = cpus;
+        interval_args.threads = threads;
+        interval_args.max_read_size = perf_evlist__max_read_size(evlist);
+        timer_init(&interval_args.timer, interval_handle);
+        timer_start(&interval_args.timer, env.interval * 1000000UL, false);
+    }
+
     while (!exiting && !monitor->reinit) {
-        struct perf_mmap *map;
-        int fds = 0;
-
-        fds = event_poll__poll(main_epoll, time_left);
-
-        // fds == 0 means timeout.
-        if (fds == 0)
-            time_left = 0;
+        int fds = event_poll__poll(main_epoll, -1);
 
         // -ENOENT means there are no file descriptors in event_poll.
-        if (monitor->pages && fds == -ENOENT)
+        if (fds == -ENOENT)
             exiting = true;
-
-        if (monitor->pages && (time_left == 0 || exiting))
-            perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
-                perf_event_handle_mmap(map);
-            }
-
-        if (monitor->read && time_left == 0) {
-            struct perf_evsel *evsel;
-            int cpu, ins, tins;
-            perf_cpu_map__for_each_cpu(cpu, ins, cpus) {
-                for (tins = 0; tins < perf_thread_map__nr(threads); tins++) {
-                    perf_evlist__for_each_evsel(evlist, evsel) {
-                        static struct perf_counts_values *count = NULL;
-                        static struct perf_counts_values static_count;
-                        if (!count) {
-                            if (max_read_size <= sizeof(static_count))
-                                count = &static_count;
-                            else
-                                count = malloc(max_read_size);
-                            memset(count, 0, max_read_size);
-                        }
-                        if (perf_evsel__read(evsel, ins, tins, count) == 0)
-                            monitor->read(evsel, count, cpu != -1 ? ins : tins);
-                    }
-                }
-            }
+    }
+    // Flush remaining perf events.
+    if (monitor->pages) {
+        struct perf_mmap *map;
+        perf_evlist__for_each_mmap(evlist, map, env.overwrite) {
+            perf_event_handle_mmap(map);
         }
+    }
 
-        if (monitor->interval && time_left == 0)
-            monitor->interval();
-
-        if (env.interval) {
-            if (time_left == 0)
-                time_end += env.interval;
-            time_left = time_end - time_ms();
-            if (time_left < 0)
-                time_left = 0;
-        }
+    if (env.interval) {
+        timer_destroy(&interval_args.timer);
     }
 
     perf_evlist__disable(evlist);
