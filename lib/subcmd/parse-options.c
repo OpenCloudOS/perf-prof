@@ -271,7 +271,7 @@ static int get_value(struct parse_opt_ctx_t *p,
 		}
 		if (get_arg(p, opt, flags, &arg))
 			return -1;
-		*(int *)opt->value = strtol(arg, (char **)&s, 10);
+		*(int *)opt->value = strtol(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
 		return 0;
@@ -289,7 +289,7 @@ static int get_value(struct parse_opt_ctx_t *p,
 			return -1;
 		if (arg[0] == '-')
 			return opterror(opt, "expects an unsigned numerical value", flags);
-		*(unsigned int *)opt->value = strtol(arg, (char **)&s, 10);
+		*(unsigned int *)opt->value = strtol(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
 		return 0;
@@ -305,7 +305,7 @@ static int get_value(struct parse_opt_ctx_t *p,
 		}
 		if (get_arg(p, opt, flags, &arg))
 			return -1;
-		*(long *)opt->value = strtol(arg, (char **)&s, 10);
+		*(long *)opt->value = strtol(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
 		return 0;
@@ -321,7 +321,7 @@ static int get_value(struct parse_opt_ctx_t *p,
 		}
 		if (get_arg(p, opt, flags, &arg))
 			return -1;
-		*(unsigned long *)opt->value = strtoul(arg, (char **)&s, 10);
+		*(unsigned long *)opt->value = strtoul(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
 		return 0;
@@ -339,7 +339,7 @@ static int get_value(struct parse_opt_ctx_t *p,
 			return -1;
 		if (arg[0] == '-')
 			return opterror(opt, "expects an unsigned numerical value", flags);
-		*(u64 *)opt->value = strtoull(arg, (char **)&s, 10);
+		*(u64 *)opt->value = strtoull(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
 		return 0;
