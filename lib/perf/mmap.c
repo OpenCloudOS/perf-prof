@@ -384,3 +384,32 @@ int perf_mmap__read_self(struct perf_mmap *map, struct perf_counts_values *count
 
 	return 0;
 }
+
+int perf_mmap__read_tsc_conversion(struct perf_mmap *map, struct perf_tsc_conversion *tc)
+{
+	struct perf_event_mmap_page *pc = map->base;
+	u32 seq;
+	int i = 0;
+
+	while (1) {
+		seq = pc->lock;
+		rmb();
+		tc->time_mult = pc->time_mult;
+		tc->time_shift = pc->time_shift;
+		tc->time_zero = pc->time_zero;
+		tc->cap_user_time_zero = pc->cap_user_time_zero;
+		rmb();
+		if (pc->lock == seq && !(seq & 1))
+			break;
+		if (++i > 10000) {
+			pr_debug("failed to get perf_event_mmap_page lock\n");
+			return -EINVAL;
+		}
+	}
+
+	if (!tc->cap_user_time_zero)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+

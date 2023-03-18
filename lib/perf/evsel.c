@@ -391,11 +391,11 @@ int perf_evsel__disable(struct perf_evsel *evsel)
 	return err;
 }
 
-void perf_evsel__keep_disable(struct perf_evsel *evsel)
+void perf_evsel__keep_disable(struct perf_evsel *evsel, bool keep_disable)
 {
-	if (!evsel->attr.disabled)
+	if (keep_disable && !evsel->attr.disabled)
 		evsel->attr.disabled = 1;
-	evsel->keep_disable = true;
+	evsel->keep_disable = keep_disable;
 }
 
 int perf_evsel__apply_filter_cpu(struct perf_evsel *evsel, const char *filter, int cpu)

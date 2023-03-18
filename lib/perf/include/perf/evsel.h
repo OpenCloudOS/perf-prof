@@ -3,6 +3,7 @@
 #define __LIBPERF_EVSEL_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <perf/core.h>
 
 struct perf_evsel;
@@ -37,7 +38,7 @@ LIBPERF_API int perf_evsel__enable(struct perf_evsel *evsel);
 LIBPERF_API int perf_evsel__enable_cpu(struct perf_evsel *evsel, int cpu);
 LIBPERF_API int perf_evsel__disable(struct perf_evsel *evsel);
 LIBPERF_API int perf_evsel__disable_cpu(struct perf_evsel *evsel, int cpu);
-LIBPERF_API void perf_evsel__keep_disable(struct perf_evsel *evsel);
+LIBPERF_API void perf_evsel__keep_disable(struct perf_evsel *evsel, bool keep_disable);
 LIBPERF_API int perf_evsel__apply_filter(struct perf_evsel *evsel, const char *filter);
 LIBPERF_API int perf_evsel__apply_filter_cpu(struct perf_evsel *evsel, const char *filter, int cpu);
 LIBPERF_API int perf_evsel__set_bpf(struct perf_evsel *evsel, unsigned int prog_fd);
