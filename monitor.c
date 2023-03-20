@@ -315,6 +315,8 @@ struct option main_options[] = {
     OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "Bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
     OPT_INT_NONEG   ('m',  "mmap-pages", &env.mmap_pages, "pages",         "Number of mmap data pages and AUX area tracing mmap pages"),
     OPT_LONG_NONEG  ('N',      "exit-N", &env.exit_n, "N",                 "Exit after N events have been sampled."),
+    OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf time to tsc time."),
+    OPT_U64_NONEG   ( 0 ,  "tsc-offset", &env.tsc_offset,  NULL,           "Sum with tsc-offset to get the final tsc time."),
     OPT_PARSE_NOARG ('V',     "version", NULL,             NULL,           "Version info"),
     OPT__VERBOSITY(&env.verbose),
     OPT_HELP(),
@@ -887,7 +889,7 @@ static void print_context_switch_cpu_fn(union perf_event *event, int ins)
     }
 }
 
-static int perf_event_process_record(union perf_event *event, int instance)
+static int perf_event_process_record(union perf_event *event, int instance, bool writable)
 {
     static long sampled_events = 0;
 
@@ -931,7 +933,7 @@ static int perf_event_process_record(union perf_event *event, int instance)
     case PERF_RECORD_SAMPLE:
         if (!env.exit_n || ++sampled_events <= env.exit_n) {
             if (monitor->sample)
-                monitor->sample(event, instance);
+                monitor->sample(perf_event_convert(event, writable), instance);
         } else
             exiting = 1;
         break;
@@ -957,13 +959,16 @@ static int perf_event_process_record(union perf_event *event, int instance)
 static void perf_event_handle_mmap(struct perf_mmap *map)
 {
     union perf_event *event;
+    bool writable = false;
     int idx = perf_mmap__idx(map);
 
     if (perf_mmap__read_init(map) < 0)
         return;
-    while ((event = perf_mmap__read_event(map)) != NULL) {
+
+    perf_event_convert_read_tsc_conversion(map);
+    while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
         /* process event */
-        perf_event_process_record(event, idx);
+        perf_event_process_record(event, idx, writable);
         perf_mmap__consume(map);
     }
     perf_mmap__read_done(map);
@@ -1154,6 +1159,10 @@ reinit:
 
     if(monitor->init(evlist, &env) < 0) {
         fprintf(stderr, "monitor(%s) init failed\n", monitor->name);
+        goto out_delete;
+    }
+    if(perf_event_convert_init(evlist, &env) < 0) {
+        fprintf(stderr, "monitor(%s) convert failed\n", monitor->name);
         goto out_delete;
     }
     /* monitor->init allows reassignment of cpus and threads */

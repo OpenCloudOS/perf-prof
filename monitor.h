@@ -14,6 +14,10 @@
 #include <localtime.h>
 #include <linux/epoll.h>
 
+/* perf sample has 16 bits size limit */
+#define PERF_SAMPLE_MAX_SIZE (1 << 16)
+
+
 struct monitor;
 void monitor_register(struct monitor *m);
 struct monitor * monitor_find(char *name);
@@ -124,6 +128,8 @@ struct env {
     unsigned long sample_period;
     bool only_comm;
     bool cycle;
+    bool tsc;
+    u64  tsc_offset;
 
     /* kvmmmu */
     bool spte;
@@ -206,7 +212,7 @@ typedef struct monitor {
 #define PROFILER_ARGV_OPTION \
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", \
-    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", \
+    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset", \
     "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
@@ -226,6 +232,13 @@ void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr);
 void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool interval, bool order, bool pages, bool verbose);
 
 #include <filter/filter.h>
+
+
+//convert.c
+u64 rdtsc(void);
+int perf_event_convert_init(struct perf_evlist *evlist, struct env *env);
+void perf_event_convert_read_tsc_conversion(struct perf_mmap *map);
+union perf_event *perf_event_convert(union perf_event *event, bool writable);
 
 
 #endif
