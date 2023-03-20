@@ -290,8 +290,11 @@ static void blktrace_interval(void)
     print_time(stdout);
     printf("\n");
 
-    printf("%*s => %-*s %8s %16s %12s %12s %12s\n", ctx.max_name_len, "start", ctx.max_name_len, "end",
-                    "reqs", "total(us)", "min(us)", "avg(us)", "max(us)");
+    printf("%*s => %-*s %8s %16s %12s %12s %12s\n", ctx.max_name_len, "start", ctx.max_name_len, "end", "reqs",
+                    ctx.env->tsc ? "total(kcyc)" : "total(us)",
+                    ctx.env->tsc ? "min(kcyc)" : "min(us)",
+                    ctx.env->tsc ? "avg(kcyc)" : "avg(us)",
+                    ctx.env->tsc ? "max(kcyc)" : "max(us)");
 
     for (i=0; i<ctx.max_name_len; i++) printf("-");
     printf("    ");
@@ -411,7 +414,7 @@ static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000 --than 10ms");
 static const char *blktrace_argv[] = PROFILER_ARGV("blktrace",
     "OPTION:",
-    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N",
+    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "device", "than");
 static profiler blktrace = {
