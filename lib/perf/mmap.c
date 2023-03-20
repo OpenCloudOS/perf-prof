@@ -277,7 +277,7 @@ static union perf_event *perf_mmap__read(struct perf_mmap *map,
  * }
  * perf_mmap__read_done()
  */
-union perf_event *perf_mmap__read_event(struct perf_mmap *map)
+union perf_event *perf_mmap__read_event(struct perf_mmap *map, bool *writable)
 {
 	union perf_event *event;
 
@@ -292,6 +292,8 @@ union perf_event *perf_mmap__read_event(struct perf_mmap *map)
 		map->end = perf_mmap__read_head(map);
 
 	event = perf_mmap__read(map, &map->start, map->end);
+	if (writable)
+		*writable = event == (union perf_event *)map->event_copy;
 
 	if (!map->overwrite)
 		map->prev = map->start;
