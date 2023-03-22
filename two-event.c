@@ -276,6 +276,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     struct multi_trace_type_header *e2 = (void *)event2->sample.array;
     u64 key = info->key;
     u64 delta = 0;
+    const char *unit;
 
     if (two) {
         delay = container_of(two, struct delay, base);
@@ -291,6 +292,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 heatmap_write(delay->heatmap, e2->time, delta);
 
             if (opts->greater_than && delta > opts->greater_than) {
+                unit = opts->env->tsc ? "kcyc" : "us";
 
                 // print events before event1
                 if (iter && iter->start && iter->start != iter->event1) {
@@ -303,7 +305,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                     e = (void *)iter->event->sample.array;
                     neg = e->time - e1->time;
-                    snprintf(buff, sizeof(buff), "Previous %.3f us", neg/1000.0);
+                    snprintf(buff, sizeof(buff), "Previous %.3f %s", neg/1000.0, unit);
                     printf("\n");
 
                     do {
@@ -323,7 +325,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 if (iter) {
                     bool first = true;
                     char buff[32];
-                    snprintf(buff, sizeof(buff), "| %12.3f us", delta/1000.0);
+                    snprintf(buff, sizeof(buff), "| %12.3f %s", delta/1000.0, unit);
                     event_iter_cmd(iter, CMD_EVENT1);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
                         if (event_need_to_print(iter->event, event1, event2)) {
@@ -377,7 +379,10 @@ static int delay_print_header(struct two_event *two)
             printf("%-*s ", opts->keylen, opts->keyname);
 
         printf("%*s => %-*s", delay_class->max_len1, "start", delay_class->max_len2, "end");
-        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+        if (!opts->env->tsc)
+            printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+        else
+            printf(" %8s %16s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)");
 
         if (opts->perins) {
             for (i=0; i<opts->keylen; i++) printf("-");
@@ -583,7 +588,10 @@ static int syscalls_print_header(struct two_event *two)
             printf("[THREAD] ");
 
         printf("%-20s", "syscalls");
-        printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "err");
+        if (!opts->env->tsc)
+            printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "err");
+        else
+            printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)", "err");
 
         if (opts->perins)
             printf("-------- ");
@@ -1323,7 +1331,10 @@ static void call_delay_begin(struct caller_iterator *iter)
     flen = call_class->max_depth * 4 + delay_class->max_len1;
     if (flen < 13) flen = 13; // 13 is strlen("function call");
     printf("%*s R", flen, "function call");
-    printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+    if (!call_class->base.opts.env->tsc)
+        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+    else
+        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)");
 
     for (i=0; i<flen; i++) printf("-");
     printf(" -");

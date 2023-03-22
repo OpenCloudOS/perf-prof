@@ -20,6 +20,7 @@ struct two_event_options {
     char *heatmap;
     unsigned int first_n;
     bool sort_print;
+    struct env *env;
 };
 
 struct event_info {
