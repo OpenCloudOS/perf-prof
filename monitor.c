@@ -350,6 +350,8 @@ struct option main_options[] = {
                                                                 "      key=EXPR: key for multiple events: top, multi-trace\n"
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
                                                                 "      trigger: multi-trace, use events to trigger interval output\n"
+                                                                "      push=[IP]:PORT: push events to the local broadcast server IP:PORT\n"
+                                                                "      pull=[IP]:PORT: pull events from server IP:PORT\n"
                                                                 "  EXPR:\n"
                                                                 "      C expression. See `"PROGRAME" expr -h` for more information."
                                                                 ),
@@ -889,7 +891,7 @@ static void print_context_switch_cpu_fn(union perf_event *event, int ins)
     }
 }
 
-static int perf_event_process_record(union perf_event *event, int instance, bool writable)
+int perf_event_process_record(union perf_event *event, int instance, bool writable, bool converted)
 {
     static long sampled_events = 0;
 
@@ -931,10 +933,11 @@ static int perf_event_process_record(union perf_event *event, int instance, bool
             print_throttle_unthrottle_fn(event, instance, 1);
         break;
     case PERF_RECORD_SAMPLE:
-        if (!env.exit_n || ++sampled_events <= env.exit_n) {
+        if (likely(!env.exit_n) || ++sampled_events <= env.exit_n) {
             if (monitor->sample)
-                monitor->sample(perf_event_convert(event, writable), instance);
-        } else
+                monitor->sample(unlikely(converted) ? event : perf_event_convert(event, writable), instance);
+        }
+        if (unlikely(env.exit_n) && sampled_events >= env.exit_n)
             exiting = 1;
         break;
     case PERF_RECORD_SWITCH:
@@ -968,7 +971,7 @@ static void perf_event_handle_mmap(struct perf_mmap *map)
     perf_event_convert_read_tsc_conversion(map);
     while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
         /* process event */
-        perf_event_process_record(event, idx, writable);
+        perf_event_process_record(event, idx, writable, false);
         perf_mmap__consume(map);
     }
     perf_mmap__read_done(map);

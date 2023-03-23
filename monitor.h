@@ -54,6 +54,8 @@ int in_guest(void);
 
 void print_lost_fn(union perf_event *event, int ins);
 
+int perf_event_process_record(union perf_event *event, int instance, bool writable, bool converted);
+
 
 #define PROFILER_REGISTER_NAME(p, name) \
 __attribute__((constructor)) static void __monitor_register_##name(void) \
