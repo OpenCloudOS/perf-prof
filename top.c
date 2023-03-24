@@ -338,6 +338,8 @@ static int top_init(struct perf_evlist *evlist, struct env *env)
             return -1;
         }
         perf_evlist__add(evlist, evsel);
+        if (!tp_local(tp))
+            perf_evsel__keep_disable(evsel, true);
 
         tp->evsel = evsel;
 
@@ -421,6 +423,8 @@ static void top_sample(union perf_event *event, int instance)
 
     if (tp == NULL)
         return;
+
+    tp_broadcast_event(tp, event);
 
     if (!ctx.only_comm) {
         if (tp->key_prog)
