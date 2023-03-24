@@ -458,6 +458,8 @@ static int __multi_trace_init(struct perf_evlist *evlist, struct env *env)
                 return -1;
             }
             perf_evlist__add(evlist, evsel);
+            if (!tp_local(tp))
+                perf_evsel__keep_disable(evsel, true);
 
             tp->evsel = evsel;
         }
@@ -757,6 +759,7 @@ free_dup_event:
 
 found:
 
+    tp_broadcast_event(tp, event);
     if (ctx.env->verbose >= VERBOSE_EVENT || tp->trigger) {
         multi_trace_print_title(event, tp, tp->trigger ? "trigger" : NULL);
     }
