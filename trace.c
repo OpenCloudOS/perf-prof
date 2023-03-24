@@ -110,6 +110,8 @@ static int trace_init(struct perf_evlist *evlist, struct env *env)
             return -1;
         }
         perf_evlist__add(evlist, evsel);
+        if (!tp_local(tp))
+            perf_evsel__keep_disable(evsel, true);
 
         tp->evsel = evsel;
     }
@@ -198,7 +200,7 @@ static inline void __print_callchain(union perf_event *event, bool callchain)
     }
 }
 
-static inline bool have_callchain(union perf_event *event)
+static inline bool have_callchain(union perf_event *event, struct perf_evsel *evsel)
 {
     if (ctx.env->callchain)
         return true;
@@ -207,12 +209,13 @@ static inline bool have_callchain(union perf_event *event)
         return true;
 
     if (ctx.tp_list->need_stream_id) {
-        struct perf_evsel *evsel;
         struct sample_type_header *data = (void *)event->sample.array;
-        evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
         if (!evsel) {
-            fprintf(stderr, "Can't find evsel, please set read_format = PERF_FORMAT_ID\n");
-            exit(1);
+            evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
+            if (!evsel) {
+                fprintf(stderr, "Can't find evsel, please set read_format = PERF_FORMAT_ID\n");
+                exit(1);
+            }
         }
         return !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
     }
@@ -223,9 +226,24 @@ static inline bool have_callchain(union perf_event *event)
 static void trace_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *data = (void *)event->sample.array;
+    struct perf_evsel *evsel = NULL;
     void *raw;
     int size;
-    bool callchain = have_callchain(event);
+    bool callchain;
+
+    if (ctx.tp_list->nr_push_to) {
+        int i;
+        evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
+        for (i = 0; i < ctx.tp_list->nr_tp; i++) {
+            struct tp *tp = &ctx.tp_list->tp[i];
+            if (tp->evsel == evsel) {
+                if (tp_broadcast_event(tp, event)) return;
+                else break;
+            }
+        }
+    }
+
+    callchain = have_callchain(event, evsel);
 
     __raw_size(event, &raw, &size, callchain);
     tep__update_comm(NULL, data->tid_entry.tid);
