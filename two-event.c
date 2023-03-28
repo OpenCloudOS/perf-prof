@@ -347,13 +347,16 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     struct delay_class *delay_class = opaque;
     struct two_event_options *opts = &delay_class->base.opts;
     struct two_event *two = two_event_find_byid(&delay_class->base, node->key);
+    double p50 = tdigest_quantile(node->td, 0.50);
+    double p95 = tdigest_quantile(node->td, 0.95);
+    double p99 = tdigest_quantile(node->td, 0.99);
 
     if (opts->perins)
         printf("%-*lu ", opts->keylen, node->instance);
     printf("%*s", delay_class->max_len1, two->tp1->alias ?: two->tp1->name);
     printf(" => %-*s", delay_class->max_len2, two->tp2->alias ?: two->tp2->name);
-    printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
-        node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
+    printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n",
+        node->n, node->sum/1000.0, node->min/1000.0, p50/1000.0, p95/1000.0, p99/1000.0, node->max/1000.0);
 }
 
 static int delay_print_header(struct two_event *two)
@@ -380,9 +383,11 @@ static int delay_print_header(struct two_event *two)
 
         printf("%*s => %-*s", delay_class->max_len1, "start", delay_class->max_len2, "end");
         if (!opts->env->tsc)
-            printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+            printf(" %8s %16s %12s %12s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "p50(us)",
+                    "p95(us)", "p99(us)", "max(us)");
         else
-            printf(" %8s %16s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)");
+            printf(" %8s %16s %12s %12s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "p50(kcyc)",
+                    "p95(kcyc)", "p99(kcyc)", "max(kcyc)");
 
         if (opts->perins) {
             for (i=0; i<opts->keylen; i++) printf("-");
@@ -391,8 +396,9 @@ static int delay_print_header(struct two_event *two)
         for (i=0; i<delay_class->max_len1; i++) printf("-");
         printf("    ");
         for (i=0; i<delay_class->max_len2; i++) printf("-");
-        printf(" %8s %16s %12s %12s %12s\n",
-                        "--------", "----------------", "------------", "------------", "------------");
+        printf(" %8s %16s %12s %12s %12s %12s %12s\n",
+                        "--------", "----------------", "------------", "------------", "------------",
+                        "------------", "------------");
 
         if (!opts->sort_print)
             latency_dist_print(delay_class->lat_dist, delay_print_node, delay_class);
@@ -423,7 +429,7 @@ static struct two_event_class *delay_class_new(struct two_event_impl *impl, stru
         delay_class = container_of(class, struct delay_class, base);
         delay_class->max_len1 = 5; // 5 is strlen("start")
         delay_class->max_len2 = 3; // 5 is strlen("end")
-        delay_class->lat_dist = latency_dist_new(options->perins, true, 0);
+        delay_class->lat_dist = latency_dist_new_quantile(options->perins, true, 0);
     }
     return class;
 }
@@ -1332,14 +1338,17 @@ static void call_delay_begin(struct caller_iterator *iter)
     if (flen < 13) flen = 13; // 13 is strlen("function call");
     printf("%*s R", flen, "function call");
     if (!call_class->base.opts.env->tsc)
-        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)");
+        printf(" %8s %16s %12s %12s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "p50(us)",
+                "p95(us)", "p99(us)", "max(us)");
     else
-        printf(" %8s %16s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)");
+        printf(" %8s %16s %12s %12s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "p50(kcyc)",
+                "p95(kcyc)", "p99(kcyc)", "max(kcyc)");
 
     for (i=0; i<flen; i++) printf("-");
     printf(" -");
-    printf(" %8s %16s %12s %12s %12s\n",
-                    "--------", "----------------", "------------", "------------", "------------");
+    printf(" %8s %16s %12s %12s %12s %12s %12s\n",
+                    "--------", "----------------", "------------", "------------", "------------",
+                    "------------", "------------");
 }
 
 static void call_delay_iterator(struct caller_iterator *iter, struct two_event *two)
@@ -1350,6 +1359,7 @@ static void call_delay_iterator(struct caller_iterator *iter, struct two_event *
     struct latency_node *node;
     struct caller *caller = container_of(two, struct caller, base);
     int len = 0, flen;
+    double p50, p95, p99;
 
     call_delay = container_of(two, struct call_delay, base.base);
     call_delay_class = container_of(two->class, struct call_delay_class, base.base);
@@ -1366,9 +1376,12 @@ static void call_delay_iterator(struct caller_iterator *iter, struct two_event *
     if (flen < 13) flen = 13;
     printf("%-*s %s", flen-len, two->tp1->alias ?: two->tp1->name, caller->recursive ? "R" : " ");
 
+    p50 = tdigest_quantile(node->td, 0.50);
+    p95 = tdigest_quantile(node->td, 0.95);
+    p99 = tdigest_quantile(node->td, 0.99);
     if (node)
-        printf(" %8lu %16.3f %12.3f %12.3f %12.3f\n",
-            node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0);
+        printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n",
+            node->n, node->sum/1000.0, node->min/1000.0, p50/1000.0, p95/1000.0, p99/1000.0, node->max/1000.0);
     else
         printf("\n");
 }
