@@ -14,6 +14,7 @@ struct latency_dist {
     struct rblist lat;
     bool perins;
     bool perkey;
+    bool quantile;
     int extra_size;
 };
 
@@ -50,7 +51,14 @@ static struct rb_node *latency_stat_node_new(struct rblist *rlist, const void *n
     struct latency_dist *dist = container_of(rlist, struct latency_dist, lat);
     const struct letency_entry *e = new_entry;
     struct latency_node *n = malloc(sizeof(*n) + dist->extra_size);
+
     if (n) {
+        if (dist->quantile) {
+            n->td = tdigest_new(100);
+            if (!n->td) goto _err;
+        } else
+            n->td = NULL;
+
         RB_CLEAR_NODE(&n->rbnode);
         n->instance = e->instance;
         n->key = e->key;
@@ -59,13 +67,17 @@ static struct rb_node *latency_stat_node_new(struct rblist *rlist, const void *n
         if (dist->extra_size)
             memset(n->extra, 0, dist->extra_size);
         return &n->rbnode;
-    } else
-        return NULL;
+    }
+
+_err:
+    if (n) free(n);
+    return NULL;
 }
 
 static void latency_stat_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct latency_node *n = rb_entry(rb_node, struct latency_node, rbnode);
+    if (n->td) tdigest_free(n->td);
     free(n);
 }
 
@@ -127,7 +139,18 @@ struct latency_dist *latency_dist_new(bool perins, bool perkey, int extra_size)
 
     dist->perins = perins;
     dist->perkey = perkey;
+    dist->quantile = false;
     dist->extra_size = extra_size;
+    return dist;
+}
+
+struct latency_dist *latency_dist_new_quantile(bool perins, bool perkey, int extra_size)
+{
+    struct latency_dist *dist = latency_dist_new(perins, perkey, extra_size);
+
+    if (dist)
+        dist->quantile = true;
+
     return dist;
 }
 
@@ -151,6 +174,9 @@ struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance,
     rbn = rblist__findnew(&dist->lat, &e);
     if (rbn) {
         ln = rb_entry(rbn, struct latency_node, rbnode);
+
+        if (dist->quantile)
+            tdigest_add(ln->td, lat, 1);
 
         if (lat < ln->min)
             ln->min = lat;
