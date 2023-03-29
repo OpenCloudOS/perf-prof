@@ -84,7 +84,7 @@ static int monitor_ctx_init(struct env *env)
 
     ctx.nr_points = ctx.tp_list->nr_tp;
 
-    ctx.dist = latency_dist_new(env->perins, true, 0);
+    ctx.dist = latency_dist_new_quantile(env->perins, true, 0);
     if (!ctx.dist)
         return -1;
 
@@ -203,6 +203,7 @@ static void print_num_node(void *opaque, struct latency_node *node)
     struct print_info *info = opaque;
     int oncpu = monitor_instance_oncpu();
     struct tp *tp = &ctx.tp_list->tp[node->key];
+    double p99 = tdigest_quantile(node->td, 0.99);
     int i;
 
     if (!info->started) {
@@ -214,13 +215,13 @@ static void print_num_node(void *opaque, struct latency_node *node)
         if (ctx.env->perins)
             printf(oncpu ? "[CPU] " : "[THREAD] ");
         printf("%-*s", ctx.max_len, "event");
-        printf(" %8s %16s %12s %12s %12s\n", "calls", "total", "min", "avg", "max");
+        printf(" %8s %16s %12s %12s %12s %12s\n", "calls", "total", "min", "avg", "p99", "max");
 
         if (ctx.env->perins)
             printf(oncpu ? "----- " : "-------- ");
         for (i=0; i<ctx.max_len; i++) printf("-");
-        printf(" %8s %16s %12s %12s %12s\n",
-                        "--------", "----------------", "------------", "------------", "------------");
+        printf(" %8s %16s %12s %12s %12s %12s\n",
+                        "--------", "----------------", "------------", "------------", "------------", "------------");
     }
 
     if (ctx.env->perins) {
@@ -230,8 +231,8 @@ static void print_num_node(void *opaque, struct latency_node *node)
             printf("%-8d ", monitor_instance_thread(node->instance));
     }
     printf("%*s", ctx.max_len, tp->alias ?: tp->name);
-    printf(" %8lu %16lu %12lu %12lu %12lu\n",
-        node->n, node->sum, node->min, node->sum/node->n, node->max);
+    printf(" %8lu %16lu %12lu %12lu %12lu %12lu\n",
+        node->n, node->sum, node->min, node->sum/node->n, (u64)p99, node->max);
 }
 
 static void print_interval(void)
