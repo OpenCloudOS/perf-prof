@@ -96,6 +96,18 @@ def test_multi_trace_softirq_timer_detail_only_than(runtime, memleak_check):
         if not memleak_check:
             assert std == PerfProf.STDOUT
 
+def test_multi_trace_softirq_timer_detail_tsc(runtime, memleak_check):
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'irq:softirq_entry/vec==1/',
+                            '-e', 'irq:softirq_exit/vec==1/',
+                            '-i', '1000', '--than', '100us', '--order', '--detail=-1ms', '--tsc'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        if not memleak_check or (
+            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
+            print(line, end='', flush=True)
+        if not memleak_check:
+            assert std == PerfProf.STDOUT
+
 
 @pytest.fixture
 def sleep_loop_tid():
