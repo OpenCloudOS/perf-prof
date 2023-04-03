@@ -29,6 +29,8 @@ struct runtime {
         int tid;
     };
     u64 runtime;
+    u64 nr_run;
+    u64 nr_max;
     char comm[16];
 };
 
@@ -138,6 +140,8 @@ static struct rb_node *runtime_node_new(struct rblist *rlist, const void *new_en
         run->instance = e->instance;
         run->another = e->another;
         run->runtime = 0;
+        run->nr_run = 0;
+        run->nr_max = 0;
         memset(run->comm, 0, 16);
         return &run->rbn;
     }
@@ -279,7 +283,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     ctx.runtimes.node_new = runtime_node_new;
     ctx.runtimes.node_delete = runtime_node_delete;
 
-    if (env->detail) {
+    if (ctx.tid_to_cpumap && env->detail) {
         ctx.percpu_thread_siblings = calloc(ctx.nr_cpus, sizeof(int));
         if (!ctx.percpu_thread_siblings)
             return -1;
@@ -293,13 +297,11 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         }
 
         // on thread
-        if (ctx.tid_to_cpumap) {
-            ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
-            if (!ctx.perins_vmf_sib)
-                return -1;
-            for (i = 0; i < ctx.nr_ins; i++) {
-                ctx.perins_vmf_sib[i] = read_sched_vmf_sib(i);
-            }
+        ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
+        if (!ctx.perins_vmf_sib)
+            return -1;
+        for (i = 0; i < ctx.nr_ins; i++) {
+            ctx.perins_vmf_sib[i] = read_sched_vmf_sib(i);
         }
     }
 
@@ -405,7 +407,10 @@ static void print_tidmap(struct runtime *first)
     printf("%03d %-7lu ", monitor_instance_cpu(first->instance), sum/1000000);
 
     for_each_runtime(first, run, rbn, instance)
-        printf("%s:%d(%lums) ", run->comm, run->tid, run->runtime/1000000);
+        if (ctx.env->detail)
+            printf("%s:%d(%.1fms/%lu/%.1fms) ", run->comm, run->tid, run->runtime/1000000.0, run->nr_run, run->nr_max/1000000.0);
+        else
+            printf("%s:%d(%.1fms) ", run->comm, run->tid, run->runtime/1000000.0);
 
     printf("\n");
 }
@@ -445,7 +450,7 @@ static void oncpu_interval(void)
             ctx.env->detail ? "CO(ms) CO(%)  " : "",
             ctx.env->detail ? ", SIBLINGS" : "");
     else
-        printf("CPU %-7s COMM:TID(ms)\n", "SUM(ms)");
+        printf("CPU %-7s COMM:TID(ms%s)\n", "SUM(ms)", ctx.env->detail ? "/switches/max_ms" : "");
 
     first = rb_entry_safe(next, struct runtime, rbn);
     while (first) {
@@ -472,7 +477,7 @@ static void oncpu_sample(union perf_event *event, int instance)
     char *comm;
 
     if (ctx.env->verbose >= VERBOSE_EVENT)
-        tep__print_event(data->time, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+        tep__print_event(data->time/1000, data->cpu_entry.cpu, data->raw.data, data->raw.size);
 
     if (ctx.tid_to_cpumap) {
         // sched:sched_stat_runtime
@@ -540,6 +545,9 @@ static void oncpu_sample(union perf_event *event, int instance)
     if (rbn) {
         run = rb_entry(rbn, struct runtime, rbn);
         run->runtime += runtime;
+        run->nr_run += 1;
+        if (runtime > run->nr_max)
+            run->nr_max = runtime;
         if (run->comm[0] == 0) {
             memcpy(run->comm, comm, 16);
         }
