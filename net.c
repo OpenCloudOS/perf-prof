@@ -398,10 +398,10 @@ void *tcp_server(const char *node, const char *service, struct tcp_socket_ops *o
         close(sfd);
     }
 
+    freeaddrinfo(result);
+
     if (rp == NULL)
         return NULL;
-
-    freeaddrinfo(result);
 
     if (set_nonblocking_flag(sfd, true) < 0) goto err;
     if (set_close_on_exec(sfd, true) < 0) goto err;
@@ -530,8 +530,10 @@ void *tcp_connect(const char *node, const char *service, struct tcp_socket_ops *
             break;
     }
 
-    if (rp == NULL)
+    if (rp == NULL) {
+        freeaddrinfo(result);
         return NULL;
+    }
 
     if (set_nonblocking_flag(cfd, true) < 0) goto err;
     if (set_close_on_exec(cfd, true) < 0) goto err;
@@ -584,6 +586,15 @@ void tcp_close(void *tcp)
             tcp_unref(tcp);
             break;
         case CONNECT_CLIENT:
+            /*
+             * Calling tcp_close externally prohibits calling the disconnect callback to avoid
+             * repeated execution of the disconnect callback. handle_errhup, tcp_close, and
+             * disconnect callback can only be executed once.
+             * Therefore, the external call to tcp_close also needs to include the disconnect
+             * callback function.
+             */
+            if (header->ops)
+                header->ops->disconnect = NULL;
             handle_errhup(header->fd, EPOLLHUP, tcp);
             break;
         case ACCEPT_CLIENT: /* Can't be closed */

@@ -62,20 +62,9 @@ struct tp {
     bool untraced;
     bool trigger;
 
-    // net event
-    void *push_to;
-    struct tcp_socket_ops push_ops;
-    const char *server_ip;
-    const char *server_port;
-
-    void *pull_from;
-    struct tcp_socket_ops pull_ops;
-    const char *ip;
-    const char *port;
-    int remote_id;
-    int cpu_pos;
-    int stream_id_pos;
-    int common_type_pos;
+    // event spread
+    void *broadcast;
+    void *receive;
 };
 
 struct tp_list {
@@ -111,7 +100,8 @@ enum tp_event_type {
 struct tp_list *tp_list_new(char *event_str);
 void tp_list_free(struct tp_list *tp_list);
 bool tp_local(struct tp *tp);
-int tp_broadcast_event(struct tp *tp, union perf_event *event);
+
+#include <event-spread.h>
 
 struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str);
 long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size);

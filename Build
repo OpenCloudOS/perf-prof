@@ -1,7 +1,7 @@
 perf-prof-y += trace_helpers.o uprobe_helpers.o stack_helpers.o latency_helpers.o
 perf-prof-y += count_helpers.o localtime.o
 perf-prof-y += lib/ filter/ arch/
-perf-prof-y += monitor.o tep.o timer.o convert.o net.o
+perf-prof-y += monitor.o tep.o timer.o convert.o net.o event-spread.o
 
 perf-prof-y += split-lock.o
 perf-prof-y += profile.o

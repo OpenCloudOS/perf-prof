@@ -269,206 +269,6 @@ void monitor_tep__comm(union perf_event *event, int instance)
     tep__update_comm(event->comm.comm, event->comm.tid);
 }
 
-static int tp_event_convert(union perf_event *event, struct tp *tp)
-{
-    struct perf_event_attr *attr;
-    void *data;
-    u64 sample_type;
-    int cpuidx = 0;
-    int pos = 0;
-    int common_type_pos = 0;
-
-    if (unlikely(!tp->evsel))
-        return -1;
-
-    attr = perf_evsel__attr(tp->evsel);
-    if (unlikely(attr->sample_period == 0))
-        return -1;
-
-   /*
-    *  { u64           id;   } && PERF_SAMPLE_IDENTIFIER
-    *  { u64           ip;   } && PERF_SAMPLE_IP
-    *  { u32           pid, tid; } && PERF_SAMPLE_TID
-    *  { u64           time;     } && PERF_SAMPLE_TIME
-    *  { u64           addr;     } && PERF_SAMPLE_ADDR
-    *  { u64           id;   } && PERF_SAMPLE_ID
-    *  { u64           stream_id;} && PERF_SAMPLE_STREAM_ID
-    *  { u32           cpu, res; } && PERF_SAMPLE_CPU
-    *  { u64           period;   } && PERF_SAMPLE_PERIOD
-    *  { struct read_format    values;   } && PERF_SAMPLE_READ
-    *  { u64           nr,
-    *    u64           ips[nr];  } && PERF_SAMPLE_CALLCHAIN
-    *  { u32			size;
-    *    char                  data[size];}&& PERF_SAMPLE_RAW
-    */
-    data = (void *)event->sample.array;
-    sample_type = attr->sample_type;
-
-    if (tp->cpu_pos == -1 && tp->stream_id_pos == -1 && tp->common_type_pos == -1) {
-        if (sample_type & PERF_SAMPLE_IDENTIFIER)
-            pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_IP)
-            pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_TID)
-            pos += sizeof(u32) + sizeof(u32);
-        if (sample_type & PERF_SAMPLE_TIME)
-            pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_ADDR)
-            pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_ID)
-            pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_STREAM_ID) {
-            tp->stream_id_pos = pos;
-            pos += sizeof(u64);
-        }
-        if (sample_type & PERF_SAMPLE_CPU) {
-            tp->cpu_pos = pos;
-            pos += sizeof(u32) + sizeof(u32);
-        }
-        if (sample_type & PERF_SAMPLE_PERIOD)
-            pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_READ)
-            pos += perf_evsel__read_size(tp->evsel);
-        tp->common_type_pos = pos;
-    }
-
-    if (tp->cpu_pos != -1) {
-        cpuidx = perf_cpu_map__idx(perf_evsel__cpus(tp->evsel), *(u32 *)(data + tp->cpu_pos));
-        if (cpuidx < 0)
-            cpuidx = 0;
-    }
-
-    if (sample_type & PERF_SAMPLE_STREAM_ID) {
-        //u64           stream_id;
-        *(u64 *)(data + tp->stream_id_pos) = perf_evsel__get_id(tp->evsel, cpuidx, 0);
-    }
-
-    if (tp->id != tp->remote_id) {
-        common_type_pos = tp->common_type_pos;
-        if (sample_type & PERF_SAMPLE_CALLCHAIN) {
-            struct {
-                u64 nr;
-                u64 ips[];
-            } *callchain = data + common_type_pos;
-            common_type_pos += (callchain->nr + 1) * sizeof(u64);
-        }
-        if (sample_type & PERF_SAMPLE_RAW) {
-            common_type_pos += sizeof(u32);
-            //unsigned short common_type;
-            *(unsigned short *)(data + common_type_pos) = tp->id;
-        }
-    }
-    return cpuidx;
-}
-
-static int tp_process_event(union perf_event *event, struct tcp_socket_ops *ops)
-{
-    struct tp *tp = container_of(ops, struct tp, pull_ops);
-    int ins = 0;
-
-    switch (event->header.type) {
-        case PERF_RECORD_TP: {
-                struct perf_record_tp *record = (void *)event;
-                struct perf_event_attr *attr = tp->evsel ? perf_evsel__attr(tp->evsel) : NULL;
-
-                if (strcmp((char *)record + record->sys_offset, tp->sys) ||
-                    strcmp((char *)record + record->name_offset, tp->name)) {
-                    fprintf(stderr, "tp sys:name mismatch, unable to receive net-events.\n");
-                    goto close;
-                }
-                if (!attr || attr->sample_period == 0 || record->sample_period == 0) {
-                    fprintf(stderr, "tp is non-sampling, unable to receive net-events.\n");
-                    goto close;
-                }
-                if (attr->sample_type != record->sample_type) {
-                    fprintf(stderr, "tp sample_type(%llu) mismatch, unable to receive net-events.\n",
-                                    attr->sample_type ^ record->sample_type);
-                    goto close;
-                }
-                if (record->sample_type & PERF_SAMPLE_CALLCHAIN) {
-                    fprintf(stderr, "tp has PERF_SAMPLE_CALLCHAIN enabled, unable to receive net-events.\n");
-                    goto close;
-                }
-                if (tep__event_size(tp->id) != record->event_size) {
-                    fprintf(stderr, "tp event_size mismatch, unable to receive net-events.\n");
-                    goto close;
-                }
-
-                tp->remote_id = record->id;
-                return 0;
-
-                close: {
-                    void *pull_from = tp->pull_from;
-                    tp->pull_from = NULL;
-                    tcp_close(pull_from);
-                }
-                return -1;
-            }
-        case PERF_RECORD_SAMPLE:
-            ins = tp_event_convert(event, tp);
-            if (ins < 0) return 0;
-            else break;
-        default:
-            break;
-    }
-
-    perf_event_process_record(event, ins, true, true);
-    return 0;
-}
-
-static int tp_disconnect(struct tcp_socket_ops *ops)
-{
-    struct tp *tp = container_of(ops, struct tp, pull_ops);
-    printf("%s:%s re-enable kernel events\n", tp->sys, tp->name);
-    if (tp->evsel) {
-        perf_evsel__keep_disable(tp->evsel, false);
-        perf_evsel__enable(tp->evsel);
-    }
-    if (tp->pull_from) {
-        void *pull_from = tp->pull_from;
-        tp->pull_from = NULL;
-        tcp_close(pull_from);
-    }
-    return 0;
-}
-
-static int tp_new_client(struct tcp_socket_ops *ops)
-{
-    struct tp *tp = NULL;
-    struct perf_event_attr *attr;
-    struct perf_record_tp record;
-
-    if (!ops->server_ops)
-        return 0;
-
-    tp = container_of(ops->server_ops, struct tp, push_ops);
-    if (!tp->evsel)
-        return 0;
-
-    attr = perf_evsel__attr(tp->evsel);
-
-    // send sys:name, perf_event_attr, /FILTER/ATTR/
-
-    record.header.size = sizeof(record) + strlen(tp->sys) + strlen(tp->name) + 2;
-    record.header.type = PERF_RECORD_TP;
-    record.header.misc = 0;
-
-    record.id = tp->id;
-    record.sys_offset = sizeof(record);
-    record.name_offset = sizeof(record) + strlen(tp->sys) + 1;
-    record.sample_period = attr->sample_period;
-    record.sample_type = attr->sample_type;
-    record.event_size = tep__event_size(tp->id);
-    record.unused = 0;
-
-    if (tcp_send(ops->client, &record, sizeof(record), MSG_MORE) == 0 &&
-        tcp_send(ops->client, tp->sys, strlen(tp->sys)+1, MSG_MORE) == 0 &&
-        tcp_send(ops->client, tp->name, strlen(tp->name)+1, 0) == 0)
-        return 0;
-    else
-        return -1;
-}
-
 static char *next_sep(char *s, int c)
 {
     while (*s) {
@@ -494,7 +294,7 @@ struct tp_list *tp_list_new(char *event_str)
     if (!s)
         return NULL;
 
-    while ((sep = strchr(s, ',')) != NULL) {
+    while ((sep = next_sep(s, ',')) != NULL) {
         nr_tp ++;
         s = sep + 1;
     }
@@ -511,7 +311,7 @@ struct tp_list *tp_list_new(char *event_str)
     tp_list->nr_tp = nr_tp;
     s = event_str;
     i = 0;
-    while ((sep = strchr(s, ',')) != NULL) {
+    while ((sep = next_sep(s, ',')) != NULL) {
         tp_list->tp[i++].name = s;
         *sep = '\0';
         s = sep + 1;
@@ -657,39 +457,9 @@ struct tp_list *tp_list_new(char *event_str)
                 } else if (strcmp(attr, "trigger") == 0) {
                     tp->trigger = true;
                 } else if (strcmp(attr, "push") == 0) {
-                    char *ip = NULL;
-                    char *port = strchr(value, ':');
-                    if (port) {
-                        *port ++ = '\0';
-                        if (*value) ip = value;
-                    } else
-                        port = value;
-                    if (!*port) goto err_out;
-
-                    tp->server_ip = ip;
-                    tp->server_port = port;
-                    tp->push_ops.new_client = tp_new_client;
-                    tp->push_to = tcp_server(ip, port, &tp->push_ops);
-                    if (!tp->push_to) goto err_out;
+                    if (tp_broadcast_new(tp, value) < 0) goto err_out;
                 } else if (strcmp(attr, "pull") == 0) {
-                    char *ip = NULL;
-                    char *port = strchr(value, ':');
-                    if (port) {
-                        *port ++ = '\0';
-                        if (*value) ip = value;
-                    } else
-                        port = value;
-                    if (!*port) goto err_out;
-
-                    tp->ip = ip;
-                    tp->port = port;
-                    tp->cpu_pos = -1;
-                    tp->stream_id_pos = -1;
-                    tp->common_type_pos = -1;
-                    tp->pull_ops.process_event = tp_process_event;
-                    tp->pull_ops.disconnect = tp_disconnect;
-                    tp->pull_from = tcp_connect(ip, port, &tp->pull_ops);
-                    if (!tp->pull_from) goto err_out;
+                    if (tp_receive_new(tp, value) < 0) goto err_out;
                 }
             }
         }
@@ -734,8 +504,8 @@ struct tp_list *tp_list_new(char *event_str)
         tp_list->nr_mem_size += !!tp->mem_size_prog;
         tp_list->nr_num += !!tp->num_prog;
         tp_list->nr_untraced += !!tp->untraced;
-        tp_list->nr_push_to += !!tp->push_to;
-        tp_list->nr_pull_from += !!tp->pull_from;
+        tp_list->nr_push_to += !!tp->broadcast;
+        tp_list->nr_pull_from += !!tp->receive;
 
         if (fields)
             free(fields);
@@ -775,35 +545,18 @@ void tp_list_free(struct tp_list *tp_list)
             expr_destroy(tp->num_prog);
         if (tp->key_prog)
             expr_destroy(tp->key_prog);
-        if (tp->push_to) {
-            void *push_to = tp->push_to;
-            tp->push_to = NULL;
-            tcp_close(push_to);
-        }
-        if (tp->pull_from) {
-            void *pull_from = tp->pull_from;
-            tp->pull_from = NULL;
-            tcp_close(pull_from);
-        }
+        tp_broadcast_free(tp);
+        tp_receive_free(tp);
     }
     free(tp_list);
 }
 
 bool tp_local(struct tp *tp)
 {
-    if (tp->pull_from)
+    if (tp->receive)
         return false;
 
     return true;
-}
-
-int tp_broadcast_event(struct tp *tp, union perf_event *event)
-{
-    if (tp->push_to) {
-        tcp_server_broadcast(tp->push_to, event, event->header.size, 0);
-        return 1;
-    } else
-        return 0;
 }
 
 struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str)
