@@ -670,7 +670,8 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+                         PERF_SAMPLE_RAW,
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
@@ -712,6 +713,8 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
             return -1;
         }
         perf_evlist__add(evlist, evsel);
+        if (!tp_local(tp))
+            perf_evsel__keep_disable(evsel, true);
         tp->evsel = evsel;
     }
 
@@ -749,17 +752,19 @@ static void expr_deinit(struct perf_evlist *evlist)
 static void expr_sample(union perf_event *event, int instance)
 {
     // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
+    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
     struct sample_type_header {
         struct {
             __u32    pid;
             __u32    tid;
         }    tid_entry;
         __u64   time;
+        __u64   stream_id;
         struct {
             __u32    cpu;
             __u32    reserved;
         }    cpu_entry;
+        __u64       period;
         struct {
             __u32   size;
             __u8    data[0];
