@@ -65,6 +65,7 @@ struct tp {
     // event spread
     void *broadcast;
     void *receive;
+    bool kernel; // event from kernel
 };
 
 struct tp_list {
@@ -99,7 +100,10 @@ enum tp_event_type {
 
 struct tp_list *tp_list_new(char *event_str);
 void tp_list_free(struct tp_list *tp_list);
-bool tp_local(struct tp *tp);
+static inline bool tp_kernel(struct tp *tp)
+{
+    return tp->kernel;
+}
 
 #include <event-spread.h>
 

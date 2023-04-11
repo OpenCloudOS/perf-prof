@@ -476,6 +476,7 @@ struct tp_list *tp_list_new(char *event_str)
         tp->stack = stack;
         tp->max_stack = max_stack;
         tp->alias = alias;
+        tp->kernel = !tp->receive;
         if (tp->nr_top == 0) {
             tp->nr_top = 1;
             tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
@@ -553,14 +554,6 @@ void tp_list_free(struct tp_list *tp_list)
         tp_receive_free(tp);
     }
     free(tp_list);
-}
-
-bool tp_local(struct tp *tp)
-{
-    if (tp->receive)
-        return false;
-
-    return true;
 }
 
 struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str)

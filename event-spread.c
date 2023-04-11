@@ -645,6 +645,7 @@ static void block_free(struct event_block *block)
         if (tp->evsel) {
             perf_evsel__keep_disable(tp->evsel, false);
             perf_evsel__enable(tp->evsel);
+            tp->kernel = true;
         }
     }
 }

@@ -338,7 +338,7 @@ static int top_init(struct perf_evlist *evlist, struct env *env)
             return -1;
         }
         perf_evlist__add(evlist, evsel);
-        if (!tp_local(tp))
+        if (!tp_kernel(tp))
             perf_evsel__keep_disable(evsel, true);
 
         tp->evsel = evsel;
