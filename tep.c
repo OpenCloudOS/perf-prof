@@ -199,7 +199,7 @@ event_fields *tep__event_fields(int id)
     struct tep_event *event;
     struct tep_format_field **common_fields;
     struct tep_format_field **fields;
-    int nr_common = 0, nr_fields = 0;
+    int nr_common = 0, nr_fields = 0, nr_dynamic = 0;
     event_fields *ef = NULL;
     int i = 0, f = 0;
 
@@ -214,9 +214,13 @@ event_fields *tep__event_fields(int id)
         goto _return;
 
     while (common_fields[nr_common]) nr_common++;
-    while (fields[nr_fields]) nr_fields++;
+    while (fields[nr_fields]) {
+        if (fields[nr_fields]->flags & TEP_FIELD_IS_DYNAMIC)
+            nr_dynamic++;
+        nr_fields++;
+    }
 
-    ef = calloc(nr_common + nr_fields + 1, sizeof(*ef));
+    ef = calloc(nr_common + nr_fields + nr_dynamic + 1, sizeof(*ef));
     if (!ef)
         goto _free;
 
