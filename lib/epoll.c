@@ -79,7 +79,7 @@ int event_poll__add(struct event_poll *ep, int fd, unsigned int events, void *pt
         free(data);
         data = rb_entry(rbn, struct event_poll_data, rbn);
     } else {
-        fcntl(fd, F_SETFL, O_NONBLOCK);
+        fcntl(fd, F_SETFL, O_NONBLOCK | fcntl(fd, F_GETFL));
         ep->nr ++;
     }
 
