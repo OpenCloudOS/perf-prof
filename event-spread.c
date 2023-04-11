@@ -3,22 +3,45 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
+#define __USE_GNU
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/eventfd.h>
+#include <sys/signalfd.h>
+#include <linux/kernel.h>
+#include <linux/circ_buf.h>
 #include <linux/list.h>
 #include <monitor.h>
 #include <tep.h>
 #include <net.h>
 
+#define BUF_LEN (1 << 16)
+
 enum block_type {
     TYPE_TCP,
+    TYPE_CDEV,
     TYPE_FILE,
 };
 
-struct event_block_list {
-    struct list_head block_list;
-    struct tp *tp;
-    bool broadcast;
-    bool freeing;
+static struct cdev_wait_list {
+    int sfd;
+    struct list_head wait_head;
+} cdev_wait_list = {-1, LIST_HEAD_INIT(cdev_wait_list.wait_head)};
+
+struct cdev_block { // chardev
+    int fd;
+    bool connected;
+    const char *filename;
+    struct list_head wait_link;
+
+    // EPOLLOUT
+    struct perf_record_lost lost_event;
+    // struct circ_buf circ;
+    char *buf; // BUF_LEN
+    int head;  // write event
+    int tail;  // read and write to cdev
 };
 
 struct event_block {
@@ -32,6 +55,7 @@ struct event_block {
             const char *ip;
             const char *port;
         } tcp;
+        struct cdev_block cdev;
         struct file_block {
             FILE *file; // broadcast or receive
             size_t pos;
@@ -46,7 +70,44 @@ struct event_block {
     int common_type_pos;
 };
 
+struct event_block_list {
+    struct list_head block_list;
+    struct tp *tp;
+    bool broadcast;
+    bool freeing;
+};
+
 static inline void block_free(struct event_block *block);
+static inline void block_broadcast(struct event_block *block, const void *buf, size_t len, int flags);
+static void handle_cdev_event(int fd, unsigned int revents, void *ptr);
+
+
+static int fcntl_setfl(int fd, unsigned int flags, bool set)
+{
+    unsigned int oldflags, newflags;
+
+    if ((oldflags = fcntl(fd, F_GETFL)) < 0) return -1;
+
+    newflags = oldflags;
+    if (set) newflags |= flags;
+    else     newflags &= ~flags;
+    if (oldflags == newflags) return 0;
+
+    if (fcntl(fd, F_SETFL, newflags) < 0) return -1;
+    if ((flags = fcntl(fd, F_GETFL)) < 0) return -1;
+
+    return newflags == flags ? 0 : -1;
+}
+
+static inline int fcntl_setown(int fd, int who)
+{
+    return fcntl(fd, F_SETOWN, who);
+}
+
+static inline int fcntl_setsig(int fd, int sig)
+{
+    return fcntl(fd, F_SETSIG, sig);
+}
 
 static int block_event_convert(struct event_block *block, union perf_event *event)
 {
@@ -153,7 +214,8 @@ static int block_process_event(struct event_block *block, union perf_event *even
 
                 if (strcmp((char *)record + record->sys_offset, tp->sys) ||
                     strcmp((char *)record + record->name_offset, tp->name)) {
-                    fprintf(stderr, "tp sys:name mismatch, unable to receive pull-events.\n");
+                    fprintf(stderr, "tp sys:name does not match %s:%s, unable to receive pull-events.\n",
+                                    (char *)record + record->sys_offset, (char *)record + record->name_offset);
                     goto failed;
                 }
                 if (!attr || attr->sample_period == 0 || record->sample_period == 0) {
@@ -254,6 +316,159 @@ static int tcp_new_client(struct tcp_socket_ops *ops)
         return -1;
 }
 
+static void handle_cdev_sigio(int fd, unsigned int revents, void *ptr)
+{
+    struct event_block *block = NULL;
+    struct cdev_block *cdev = NULL;
+    struct signalfd_siginfo fdsi;
+    int s, found = 0;
+
+    s = read(fd, &fdsi, sizeof(struct signalfd_siginfo));
+    if (s != sizeof(fdsi)) return ;
+    if (fdsi.ssi_signo != SIGIO) return ;
+
+    list_for_each_entry(block, &cdev_wait_list.wait_head, u.cdev.wait_link) {
+        cdev = &block->u.cdev;
+        if (cdev->fd == fdsi.ssi_fd && (fdsi.ssi_band & EPOLLOUT)) {
+            found = 1;
+            break;
+        }
+    }
+    if (found) {
+        fcntl_setfl(cdev->fd, FASYNC, 0);
+        fcntl_setsig(cdev->fd, 0);
+        fcntl_setown(cdev->fd, 0);
+        list_del_init(&cdev->wait_link);
+        main_epoll_add(cdev->fd, EPOLLOUT | EPOLLHUP, block, handle_cdev_event);
+        printf("Cdev %s is connected\n", cdev->filename);
+    }
+    if (list_empty(&cdev_wait_list.wait_head)) {
+        sigset_t mask;
+
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGIO);
+        sigprocmask(SIG_UNBLOCK, &mask, NULL);
+
+        main_epoll_del(cdev_wait_list.sfd);
+        cdev_wait_list.sfd = -1;
+    }
+}
+
+/*
+ * cdev is required to support the FASYNC capability.
+ * Currently only virtio-ports are available.
+ */
+static int cdev_wait_connected(struct event_block *block)
+{
+    struct cdev_block *cdev = &block->u.cdev;
+    sigset_t mask;
+    int sfd = -1;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGIO);
+    if (list_empty(&cdev_wait_list.wait_head)) {
+        sigprocmask(SIG_BLOCK, &mask, NULL);
+
+        if ((sfd = signalfd(-1, &mask, SFD_NONBLOCK)) < 0) goto e1;
+        if (main_epoll_add(sfd, EPOLLIN, NULL, handle_cdev_sigio) < 0) goto e2;
+        cdev_wait_list.sfd = sfd;
+    }
+
+    if (fcntl_setown(cdev->fd, getpid()) < 0) goto e3;
+    if (fcntl_setsig(cdev->fd, SIGIO) < 0) goto e4;
+    if (fcntl_setfl(cdev->fd, FASYNC, 1) < 0) goto e5;
+
+    list_add_tail(&cdev->wait_link, &cdev_wait_list.wait_head);
+    return 0;
+
+e5: fcntl_setsig(cdev->fd, 0);
+e4: fcntl_setown(cdev->fd, 0);
+e3: if (sfd > 0) {
+        main_epoll_del(sfd);
+        cdev_wait_list.sfd = -1;
+    } else
+        return -1;
+
+e2: close(sfd);
+e1: sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    return -1;
+}
+
+static int cdev_write_header(struct event_block *block)
+{
+    struct tp *tp = block->eb_list->tp;
+    struct perf_record_tp record;
+
+    if (perf_record_tp_init(tp, &record) < 0)
+        return 0;
+
+    block_broadcast(block, &record, sizeof(record), 0);
+    block_broadcast(block, tp->sys, strlen(tp->sys)+1, 0);
+    block_broadcast(block, tp->name, strlen(tp->name)+1, 0);
+    return 0;
+}
+
+static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
+{
+    struct event_block *block = ptr;
+    struct cdev_block *cdev = &block->u.cdev;
+
+    if (revents & EPOLLHUP) {
+        // reset circ_buf
+        cdev->head = 0;
+        cdev->tail = 0;
+        memset(&cdev->lost_event, 0, sizeof(struct perf_record_lost));
+        main_epoll_del(cdev->fd);
+
+        // reopen.
+        // There may be some dirty data in cdev, which can be refreshed by reopening.
+        if (cdev->connected == 1) {
+            cdev->connected = 0;
+            close(cdev->fd);
+            cdev->fd = open(cdev->filename, O_WRONLY | O_NONBLOCK);
+        }
+
+        if (cdev->fd < 0 ||
+            cdev_wait_connected(block) < 0)
+            block_free(block);
+        else
+            printf("Cdev %s has hang up\n", cdev->filename);
+        return ;
+    }
+
+    if (revents & EPOLLOUT) {
+        int cnt;
+        ssize_t wr;
+
+        if (unlikely(cdev->connected == 0)) {
+            cdev->connected = 1;
+            cdev_write_header(block);
+        }
+    retry:
+        cnt = CIRC_CNT_TO_END(cdev->head, cdev->tail, BUF_LEN);
+        if (cnt == 0) {
+            // write lost event
+            if (cdev->lost_event.lost > 0) {
+                block_broadcast(block, &cdev->lost_event, sizeof(struct perf_record_lost), 0);
+                cdev->lost_event.lost = 0;
+            } else
+                main_epoll_add(fd, EPOLLHUP, block, handle_cdev_event);
+            return ;
+        }
+        wr = write(cdev->fd, cdev->buf + (cdev->tail & (BUF_LEN-1)), cnt);
+        if (wr <= 0) {
+            if (wr < 0 && errno != EAGAIN)
+                fprintf(stderr, "Unable write to %s: %s\n", cdev->filename, strerror(errno));
+            return ;
+        }
+        cdev->tail = (cdev->tail + wr) & (BUF_LEN-1);
+        goto retry;
+    }
+
+    if (revents & EPOLLIN) {
+    }
+}
+
 static int file_write_header(struct event_block *block)
 {
     struct tp *tp = block->eb_list->tp;
@@ -302,6 +517,7 @@ static int block_new(struct event_block_list *eb_list, char *value)
     char *ip = NULL;
     char *port;
     FILE *file = NULL;
+    struct stat st;
 
     port = strchr(value, ':');
     if (port) {
@@ -321,6 +537,9 @@ static int block_new(struct event_block_list *eb_list, char *value)
     block->stream_id_pos = -1;
     block->common_type_pos = -1;
 
+    /*
+     * Detect whether it is a tcp server or client.
+     */
     block->u.tcp.ip = ip;
     block->u.tcp.port = port;
     block->u.tcp.ops.process_event = tcp_process_event;
@@ -331,6 +550,40 @@ static int block_new(struct event_block_list *eb_list, char *value)
         block->type = TYPE_TCP;
         return 0;
     }
+
+    /*
+     * Check if it is a cdev.
+     * Currently only virtio_console are supported, /dev/virtio-ports/.
+     */
+    if (stat(port, &st) == 0 &&
+        S_ISCHR(st.st_mode)) {
+        int fd = open(port, O_WRONLY | O_NONBLOCK);
+        if (fd >= 0 &&
+            main_epoll_add(fd, EPOLLOUT | EPOLLHUP, block, handle_cdev_event) == 0) {
+            // main_epoll_add < 0 && errno == EPERM, The file fd does not support epoll.
+            block->u.cdev.fd = fd;
+            block->u.cdev.connected = 0;
+            block->u.cdev.filename = port;
+            INIT_LIST_HEAD(&block->u.cdev.wait_link);
+            block->u.cdev.head = 0;
+            block->u.cdev.tail = 0;
+            memset(&block->u.cdev.lost_event, 0, sizeof(struct perf_record_lost));
+            block->u.cdev.buf = malloc(BUF_LEN);
+            block->type = TYPE_CDEV;
+            if (block->u.cdev.buf) {
+                printf("Open cdev %s\n", block->u.cdev.filename);
+                return 0;
+            } else {
+                main_epoll_del(fd);
+                close(fd);
+                goto failed;
+            }
+        }
+    }
+
+    /*
+     * Check if it is a file.
+     */
     if ((file = fopen(port, eb_list->broadcast ? "w+" : "r"))) {
         block->u.file.file = file;
         block->u.file.pos = 0;
@@ -365,6 +618,14 @@ static void block_free(struct event_block *block)
         case TYPE_TCP:
             tcp_close(block->u.tcp.tcp);
             break;
+        case TYPE_CDEV:
+            if (!list_empty(&block->u.cdev.wait_link))
+                list_del(&block->u.cdev.wait_link);
+            main_epoll_del(block->u.cdev.fd);
+            close(block->u.cdev.fd);
+            free(block->u.cdev.buf);
+            printf("Close cdev %s\n", block->u.cdev.filename);
+            break;
         case TYPE_FILE:
             if (block->u.file.notifyfd >= 0)
                 main_epoll_del(block->u.file.notifyfd);
@@ -394,6 +655,34 @@ static inline void block_broadcast(struct event_block *block, const void *buf, s
         case TYPE_TCP:
             tcp_server_broadcast(block->u.tcp.tcp, buf, len, flags);
             break;
+        case TYPE_CDEV: {
+            struct cdev_block *cdev = &block->u.cdev;
+            if (cdev->connected) {
+                int add = 0;
+                if (CIRC_SPACE(cdev->head, cdev->tail, BUF_LEN) < len) {
+                    handle_cdev_event(cdev->fd, EPOLLOUT, block);
+                }
+                add = CIRC_CNT(cdev->head, cdev->tail, BUF_LEN) == 0;
+                if (likely(CIRC_SPACE(cdev->head, cdev->tail, BUF_LEN) >= len)) {
+                    int space = CIRC_SPACE_TO_END(cdev->head, cdev->tail, BUF_LEN);
+                    space = min((int)len, space);
+                    len -= space;
+                    memcpy(cdev->buf + (cdev->head & (BUF_LEN-1)), buf, space);
+                    if (len)
+                        memcpy(cdev->buf, buf + space, len);
+                    cdev->head = (cdev->head + space + len) & (BUF_LEN-1);
+                    if (add)
+                        main_epoll_add(cdev->fd, EPOLLOUT | EPOLLHUP, block, handle_cdev_event);
+                } else {
+                    // lost event
+                    cdev->lost_event.header.size = sizeof(struct perf_record_lost);
+                    cdev->lost_event.header.type = PERF_RECORD_LOST;
+                    cdev->lost_event.header.misc = 0;
+                    cdev->lost_event.id          = 0;
+                    cdev->lost_event.lost        ++ ;
+                }
+            }
+            } break;
         case TYPE_FILE:
             if (block->u.file.pos == 0)
                 file_write_header(block);
