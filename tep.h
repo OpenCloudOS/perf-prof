@@ -104,6 +104,7 @@ static inline bool tp_kernel(struct tp *tp)
 {
     return tp->kernel;
 }
+void tp_print_marker(struct tp *tp);
 
 #include <event-spread.h>
 

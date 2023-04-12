@@ -633,6 +633,7 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
         printf("%-27s", title);
     else
         print_time(stdout);
+    tp_print_marker(tp);
     tep__update_comm(NULL, data->h.tid_entry.tid);
     tep__print_event(data->h.time/1000, data->h.cpu_entry.cpu, raw, size);
 

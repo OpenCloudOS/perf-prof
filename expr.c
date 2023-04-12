@@ -773,6 +773,7 @@ static void expr_sample(union perf_event *event, int instance)
     long result;
 
     print_time(stdout);
+    tp_print_marker(&info.tp_list->tp[0]);
     tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
     expr_load_data(info.prog, raw->raw.data, raw->raw.size);

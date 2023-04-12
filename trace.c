@@ -232,15 +232,16 @@ static void trace_sample(union perf_event *event, int instance)
 {
     struct sample_type_header *data = (void *)event->sample.array;
     struct perf_evsel *evsel = NULL;
+    struct tp *tp = NULL;
     void *raw;
     int size;
     bool callchain;
 
-    if (ctx.tp_list->nr_push_to) {
+    if (ctx.tp_list->nr_push_to || ctx.tp_list->nr_pull_from) {
         int i;
         evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx.tp_list->tp[i];
+            tp = &ctx.tp_list->tp[i];
             if (tp->evsel == evsel) {
                 if (tp_broadcast_event(tp, event)) return;
                 else break;
@@ -253,6 +254,7 @@ static void trace_sample(union perf_event *event, int instance)
     __raw_size(event, &raw, &size, callchain);
     tep__update_comm(NULL, data->tid_entry.tid);
     print_time(stdout);
+    tp_print_marker(tp);
     tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
     __print_callchain(event, callchain);
 }

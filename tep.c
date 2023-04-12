@@ -556,6 +556,11 @@ void tp_list_free(struct tp_list *tp_list)
     free(tp_list);
 }
 
+void tp_print_marker(struct tp *tp)
+{
+    printf("%c ", (!tp || tp_kernel(tp)) ? ' ' : 'G');
+}
+
 struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str)
 {
     event_fields *fields = tep__event_fields(tp->id);

@@ -407,11 +407,6 @@ static void top_sample(union perf_event *event, int instance)
     struct rb_node *rbn;
     struct top_info *p;
 
-    if (ctx.env->verbose >= VERBOSE_EVENT) {
-        print_time(stdout);
-        tep__print_event(raw->time/1000, raw->cpu_entry.cpu, data, size);
-    }
-
     for (i = 0; i < ctx.tp_list->nr_tp; i++) {
         struct tp *tmp = &ctx.tp_list->tp[i];
         if (common_type == tmp->id) {
@@ -423,6 +418,12 @@ static void top_sample(union perf_event *event, int instance)
 
     if (tp == NULL)
         return;
+
+    if (ctx.env->verbose >= VERBOSE_EVENT) {
+        print_time(stdout);
+        tp_print_marker(tp);
+        tep__print_event(raw->time/1000, raw->cpu_entry.cpu, data, size);
+    }
 
     tp_broadcast_event(tp, event);
 
