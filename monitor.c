@@ -953,7 +953,10 @@ int perf_event_process_record(union perf_event *event, int instance, bool writab
             print_context_switch_cpu_fn(event, instance);
         break;
     default:
-        fprintf(stderr, "unknown perf sample type %d\n", event->header.type);
+        if (likely(!env.exit_n) || ++sampled_events <= env.exit_n)
+            fprintf(stderr, "unknown perf sample type %d\n", event->header.type);
+        if (unlikely(env.exit_n) && sampled_events >= env.exit_n)
+            exiting = 1;
         return -1;
     }
     return 0;
