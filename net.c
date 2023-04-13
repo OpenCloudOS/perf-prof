@@ -479,6 +479,12 @@ int tcp_server_broadcast(void *server, const void *buf, size_t len, int flags)
     struct tcp_server_socket *srv = server;
     struct tcp_client_socket *client, *next;
 
+    // Non-tcp server, tcp_send directly.
+    if (unlikely(srv->header.type != LISTEN_SERVER)) {
+        tcp_send(srv, buf, len, flags);
+        return 0;
+    }
+
     list_for_each_entry_safe(client, next, &srv->clilist, srvlink) {
         tcp_send(client, buf, len, flags);
     }
@@ -575,9 +581,36 @@ err:
     return NULL;
 }
 
+static void tcp_close_flush(void *tcp)
+{
+    struct tcp_socket_header *header = tcp;
+    struct tcp_server_socket *srv;
+    struct tcp_client_socket *client, *next;
+
+    switch (header->type) {
+        case LISTEN_SERVER:
+            srv = tcp;
+            list_for_each_entry_safe(client, next, &srv->clilist, srvlink) {
+                set_nonblocking_flag(client->header.fd, false);
+                handle_inout(client->header.fd, EPOLLOUT, client);
+            }
+            break;
+        case CONNECT_CLIENT:
+            client = tcp;
+            set_nonblocking_flag(client->header.fd, false);
+            handle_inout(client->header.fd, EPOLLOUT, client);
+            break;
+        case ACCEPT_CLIENT: /* Can't be closed */
+        default:
+            return;
+    }
+}
+
 void tcp_close(void *tcp)
 {
     struct tcp_socket_header *header = tcp;
+
+    tcp_close_flush(tcp);
 
     switch (header->type) {
         case LISTEN_SERVER:
