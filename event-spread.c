@@ -42,6 +42,10 @@ struct cdev_block { // chardev
     char *buf; // BUF_LEN
     int head;  // write event
     int tail;  // read and write to cdev
+
+    // EPOLLIN
+    char *event_copy;
+    int read;
 };
 
 struct event_block {
@@ -322,6 +326,7 @@ static void handle_cdev_sigio(int fd, unsigned int revents, void *ptr)
     struct cdev_block *cdev = NULL;
     struct signalfd_siginfo fdsi;
     int s, found = 0;
+    unsigned int events;
 
     s = read(fd, &fdsi, sizeof(struct signalfd_siginfo));
     if (s != sizeof(fdsi)) return ;
@@ -339,7 +344,8 @@ static void handle_cdev_sigio(int fd, unsigned int revents, void *ptr)
         fcntl_setsig(cdev->fd, 0);
         fcntl_setown(cdev->fd, 0);
         list_del_init(&cdev->wait_link);
-        main_epoll_add(cdev->fd, EPOLLOUT | EPOLLHUP, block, handle_cdev_event);
+        events = (block->eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLHUP;
+        main_epoll_add(cdev->fd, events, block, handle_cdev_event);
         printf("Cdev %s is connected\n", cdev->filename);
     }
     if (list_empty(&cdev_wait_list.wait_head)) {
@@ -413,6 +419,38 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
     struct event_block *block = ptr;
     struct cdev_block *cdev = &block->u.cdev;
 
+    // Handle EPOLLIN first to fully read out the received events, then EPOLLHUP.
+    if (revents & EPOLLIN) {
+        union perf_event *event;
+        int ret;
+
+        while (true) {
+            ret = read(cdev->fd, cdev->event_copy+cdev->read, BUF_LEN-cdev->read);
+            if (unlikely(ret <= 0)) {
+                // The return value will be 0 when the host is disconnected.
+                if (ret == 0)
+                    break;
+                if (errno != EAGAIN)
+                    fprintf(stderr, "Unable read from %s: %s\n", cdev->filename, strerror(errno));
+                break;
+            }
+
+            cdev->connected = 1;
+            cdev->read += ret;
+            event = (void *)cdev->event_copy;
+            while (cdev->read >= sizeof(struct perf_event_header) &&
+                cdev->read >= event->header.size) {
+                cdev->read -= event->header.size;
+                if (unlikely(block_process_event(block, event) < 0))
+                    return;
+                event = (void *)event + event->header.size;
+            }
+            if (cdev->read) {
+                memcpy(cdev->event_copy, event, cdev->read);
+            }
+        }
+    }
+
     if (revents & EPOLLHUP) {
         // reset circ_buf
         cdev->head = 0;
@@ -425,7 +463,7 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
         if (cdev->connected == 1) {
             cdev->connected = 0;
             close(cdev->fd);
-            cdev->fd = open(cdev->filename, O_WRONLY | O_NONBLOCK);
+            cdev->fd = open(cdev->filename, (block->eb_list->broadcast ? O_WRONLY : O_RDONLY) | O_NONBLOCK);
         }
 
         if (cdev->fd < 0 ||
@@ -463,9 +501,6 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
         }
         cdev->tail = (cdev->tail + wr) & (BUF_LEN-1);
         goto retry;
-    }
-
-    if (revents & EPOLLIN) {
     }
 }
 
@@ -557,9 +592,10 @@ static int block_new(struct event_block_list *eb_list, char *value)
      */
     if (stat(port, &st) == 0 &&
         S_ISCHR(st.st_mode)) {
-        int fd = open(port, O_WRONLY | O_NONBLOCK);
+        int fd = open(port, (eb_list->broadcast ? O_WRONLY : O_RDONLY) | O_NONBLOCK);
+        unsigned int events = (eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLHUP;
         if (fd >= 0 &&
-            main_epoll_add(fd, EPOLLOUT | EPOLLHUP, block, handle_cdev_event) == 0) {
+            main_epoll_add(fd, events, block, handle_cdev_event) == 0) {
             // main_epoll_add < 0 && errno == EPERM, The file fd does not support epoll.
             block->u.cdev.fd = fd;
             block->u.cdev.connected = 0;
@@ -569,6 +605,8 @@ static int block_new(struct event_block_list *eb_list, char *value)
             block->u.cdev.tail = 0;
             memset(&block->u.cdev.lost_event, 0, sizeof(struct perf_record_lost));
             block->u.cdev.buf = malloc(BUF_LEN);
+            block->u.cdev.event_copy = block->u.cdev.buf;
+            block->u.cdev.read = 0;
             block->type = TYPE_CDEV;
             if (block->u.cdev.buf) {
                 printf("Open cdev %s\n", block->u.cdev.filename);
@@ -621,8 +659,10 @@ static void block_free(struct event_block *block)
         case TYPE_CDEV:
             if (!list_empty(&block->u.cdev.wait_link))
                 list_del(&block->u.cdev.wait_link);
-            main_epoll_del(block->u.cdev.fd);
-            close(block->u.cdev.fd);
+            if (block->u.cdev.fd >= 0) {
+                main_epoll_del(block->u.cdev.fd);
+                close(block->u.cdev.fd);
+            }
             free(block->u.cdev.buf);
             printf("Close cdev %s\n", block->u.cdev.filename);
             break;
