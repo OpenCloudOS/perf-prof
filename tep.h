@@ -4,6 +4,7 @@
 #include <event-parse.h>
 #include <expr.h>
 #include <net.h>
+#include <vcpu_info.h>
 
 struct tep_handle *tep__ref(void);
 void tep__unref(void);
@@ -66,6 +67,10 @@ struct tp {
     void *broadcast;
     void *receive;
     bool kernel; // event from kernel
+
+    // vm
+    struct vcpu_info *vcpu; // maybe NULL
+    const char *vm;
 };
 
 struct tp_list {

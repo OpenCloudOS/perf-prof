@@ -350,6 +350,7 @@ struct option main_options[] = {
                                                                 "      key=EXPR: key for multiple events: top, multi-trace\n"
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
                                                                 "      trigger: multi-trace, use events to trigger interval output\n"
+                                                                "      vm=uuid: get the mapping from Guest vcpu to Host tid\n"
                                                                 "      push=[IP]:PORT: push events to the local broadcast server IP:PORT\n"
                                                                 "      push=chardev: push events to chardev, e.g., /dev/virtio-ports/*\n"
                                                                 "      push=file: push events to file\n"

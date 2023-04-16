@@ -464,6 +464,10 @@ struct tp_list *tp_list_new(char *event_str)
                     if (tp_broadcast_new(tp, value) < 0) goto err_out;
                 } else if (strcmp(attr, "pull") == 0) {
                     if (tp_receive_new(tp, value) < 0) goto err_out;
+                } else if (strcmp(attr, "vm") == 0) {
+                    tp->vcpu = vcpu_info_new(value);
+                    if (tp->vcpu)
+                        tp->vm = value;
                 }
             }
         }
@@ -552,6 +556,8 @@ void tp_list_free(struct tp_list *tp_list)
             expr_destroy(tp->key_prog);
         tp_broadcast_free(tp);
         tp_receive_free(tp);
+        if (tp->vcpu)
+            vcpu_info_free(tp->vcpu);
     }
     free(tp_list);
 }
