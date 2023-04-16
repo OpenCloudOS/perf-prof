@@ -351,7 +351,11 @@ struct option main_options[] = {
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
                                                                 "      trigger: multi-trace, use events to trigger interval output\n"
                                                                 "      push=[IP]:PORT: push events to the local broadcast server IP:PORT\n"
+                                                                "      push=chardev: push events to chardev, e.g., /dev/virtio-ports/*\n"
+                                                                "      push=file: push events to file\n"
                                                                 "      pull=[IP]:PORT: pull events from server IP:PORT\n"
+                                                                "      pull=chardev: pull events from chardev\n"
+                                                                "      pull=file: pull events from file\n"
                                                                 "  EXPR:\n"
                                                                 "      C expression. See `"PROGRAME" expr -h` for more information."
                                                                 ),
