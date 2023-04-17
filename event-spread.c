@@ -69,6 +69,7 @@ struct event_block {
     } u;
     // receive
     int remote_id;
+    int pid_pos;
     int cpu_pos;
     int stream_id_pos;
     int common_type_pos;
@@ -122,6 +123,7 @@ static int block_event_convert(struct event_block *block, union perf_event *even
     int cpuidx = 0;
     int pos = 0;
     int common_type_pos = 0;
+    int vcpu = -1;
 
     if (unlikely(!tp->evsel))
         return -1;
@@ -149,13 +151,15 @@ static int block_event_convert(struct event_block *block, union perf_event *even
     data = (void *)event->sample.array;
     sample_type = attr->sample_type;
 
-    if (block->cpu_pos == -1 && block->stream_id_pos == -1 && block->common_type_pos == -1) {
+    if (block->pid_pos == -1 && block->cpu_pos == -1 && block->stream_id_pos == -1 && block->common_type_pos == -1) {
         if (sample_type & PERF_SAMPLE_IDENTIFIER)
             pos += sizeof(u64);
         if (sample_type & PERF_SAMPLE_IP)
             pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_TID)
+        if (sample_type & PERF_SAMPLE_TID) {
+            block->pid_pos = pos;
             pos += sizeof(u32) + sizeof(u32);
+        }
         if (sample_type & PERF_SAMPLE_TIME)
             pos += sizeof(u64);
         if (sample_type & PERF_SAMPLE_ADDR)
@@ -178,9 +182,17 @@ static int block_event_convert(struct event_block *block, union perf_event *even
     }
 
     if (block->cpu_pos != -1) {
-        cpuidx = perf_cpu_map__idx(perf_evsel__cpus(tp->evsel), *(u32 *)(data + block->cpu_pos));
+        vcpu = *(u32 *)(data + block->cpu_pos);
+        cpuidx = perf_cpu_map__idx(perf_evsel__cpus(tp->evsel), vcpu);
         if (cpuidx < 0)
             cpuidx = 0;
+
+        // Guest vcpu => Host tid
+        if (tp->vcpu && block->pid_pos != -1) {
+            // u32           pid, tid;
+            *(u32 *)(data + block->pid_pos) = tp->vcpu->thread_id[vcpu];
+            *(u32 *)(data + block->pid_pos + sizeof(u32)) = tp->vcpu->thread_id[vcpu];
+        }
     }
 
     if (sample_type & PERF_SAMPLE_STREAM_ID) {
@@ -200,7 +212,12 @@ static int block_event_convert(struct event_block *block, union perf_event *even
         if (sample_type & PERF_SAMPLE_RAW) {
             common_type_pos += sizeof(u32);
             //unsigned short common_type;
+            //unsigned char common_flags;
+            //unsigned char common_preempt_count;
+            //int common_pid;
             *(unsigned short *)(data + common_type_pos) = tp->id;
+            if (tp->vcpu && vcpu >= 0)
+                *(int *)(data + common_type_pos + sizeof(u16) + sizeof(u8) + sizeof(u8)) = tp->vcpu->thread_id[vcpu];
         }
     }
     return cpuidx;
@@ -568,6 +585,7 @@ static int block_new(struct event_block_list *eb_list, char *value)
     block->eb_list = eb_list;
     list_add_tail(&block->link, &eb_list->block_list);
 
+    block->pid_pos = -1;
     block->cpu_pos = -1;
     block->stream_id_pos = -1;
     block->common_type_pos = -1;
