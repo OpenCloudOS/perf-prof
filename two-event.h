@@ -153,7 +153,7 @@ static inline void multi_trace_print(union perf_event *event, struct tp *tp)
 {
     multi_trace_print_title(event, tp, NULL);
 }
-bool event_need_to_print(union perf_event *event, union perf_event *event1, union perf_event *event2);
+bool event_need_to_print(union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter);
 
 
 /*

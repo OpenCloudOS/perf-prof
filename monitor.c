@@ -222,6 +222,8 @@ static void detail_parse(const char *s)
         env.samecpu = true;
     else if (strcmp(s, "samepid") == 0)
         env.samepid = true;
+    else if (strcmp(s, "samekey") == 0)
+        env.samekey = true;
     else if (s[0] == '-')
         env.before_event1 = nsparse(s+1, NULL);
     else
@@ -388,7 +390,8 @@ struct option main_options[] = {
                                                        "   -N: Before event1, print events within N nanoseconds.\n"
                                                        "   +N: After event2, print events within N nanoseconds.\n"
                                                        "samecpu: Only show events with the same cpu as event1 or event2.\n"
-                                                       "samepid: Only show events with the same pid as event1 or event2."),
+                                                       "samepid: Only show events with the same pid as event1 or event2.\n"
+                                                       "samekey: Only show events with the same key as event1 or event2."),
     OPT_INT_NONEG   ('T',         "trigger", &env.trigger_freq,          NULL,  "Trigger Threshold, Dflt: 1000, No trigger: 0"),
     OPT_BOOL_NONEG  ( 0 ,            "test", &env.test,                         "Split-lock test verification"),
     OPT_STRDUP_NONEG( 0 ,         "symbols", &env.symbols,               NULL,  "Maps addresses to symbol names.\n"

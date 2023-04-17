@@ -322,8 +322,13 @@ static int monitor_ctx_init(struct env *env)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
             if (tp->untraced && !tp->trigger)
                 untraced = true;
-            if (tp->untraced)
+            if (tp->untraced) {
+                if ((env->samekey || env->samepid || env->samekey) &&
+                    !tp_kernel(tp) && !tp->vcpu)
+                    fprintf(stderr, "The event %s:%s needs the vm attr to convert the fields of the Guest events.\n",
+                            tp->sys, tp->name);
                 continue;
+            }
             if (env->key && !tp->key) {
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
                 if (!tep_find_any_field(event, env->key)) {
@@ -642,23 +647,34 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
     }
 }
 
-bool event_need_to_print(union perf_event *event, union perf_event *event1, union perf_event *event2)
+bool event_need_to_print(union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
 {
-    struct multi_trace_type_header *e  = (void *)event ->sample.array;
+    struct timeline_node *curr = iter->curr;
+    struct multi_trace_type_header *e  = (void *)iter->event->sample.array;
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     struct multi_trace_type_header *e2 = (void *)event2->sample.array;
+    bool match;
 
-    if (!(ctx.env->samecpu || ctx.env->samepid))
+    if (!(ctx.env->samecpu || ctx.env->samepid || ctx.env->samekey))
         return true;
 
-    if (ctx.env->samecpu)
+    // tp_kernel: Compare key values directly.
+    //!tp_kernel: Rely on vm attr to convert the fields of the Guest events.
+    match = tp_kernel(curr->tp) ? 1 : !!(curr->tp->vcpu);
+
+    if (ctx.env->samecpu && match)
     if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
         e->cpu_entry.cpu == e2->cpu_entry.cpu)
         return true;
 
-    if (ctx.env->samepid)
+    if (ctx.env->samepid && match)
     if (e->tid_entry.pid == e1->tid_entry.pid ||
         e->tid_entry.pid == e2->tid_entry.pid)
+        return true;
+
+    if (ctx.env->samekey && match)
+    if ((!!curr->tp->key) == (!!info->tp1->key) &&
+        curr->key == info->key)
         return true;
 
     return false;

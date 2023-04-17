@@ -306,10 +306,10 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     e = (void *)iter->event->sample.array;
                     neg = e->time - e1->time;
                     snprintf(buff, sizeof(buff), "Previous %.3f %s", neg/1000.0, unit);
-                    printf("\n");
 
                     do {
-                        if (event_need_to_print(iter->event, event1, event2)) {
+                        if (event_need_to_print(event1, event2, info, iter)) {
+                            if (first) printf("\n");
                             multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
                             first = false;
                         }
@@ -328,7 +328,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     snprintf(buff, sizeof(buff), "| %12.3f %s", delta/1000.0, unit);
                     event_iter_cmd(iter, CMD_EVENT1);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
-                        if (event_need_to_print(iter->event, event1, event2)) {
+                        if (event_need_to_print(event1, event2, info, iter)) {
                             multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
                             first = false;
                         }
