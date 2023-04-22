@@ -22,8 +22,13 @@ struct timeline_node {
     struct rb_node key_node;
     u64    key;
     struct tp *tp;
-    u32 unneeded : 1;
+    struct tp *tp1; // nested-trace, -e A,A_ret, A's tp.
+    u32 unneeded : 1,
+        need_find_prev : 1,
+        need_backup : 1,
+        need_remove_from_backup : 1;
     struct list_head needed;
+    struct list_head pending;
     union perf_event *event;
 };
 
@@ -31,8 +36,10 @@ struct timeline_stat {
     u64 new;
     u64 delete;
     u64 unneeded;
+    u64 pending;
     u64 mem_bytes;
     u64 unneeded_bytes;
+    u64 pending_bytes;
 } tl_stat;
 
 struct __dup_stat {
@@ -54,7 +61,8 @@ static struct multi_trace_ctx {
     struct two_event_class *class;
     struct rblist backup;
     struct rblist timeline;
-    struct list_head needed_list;
+    struct list_head needed_list; // need_timeline
+    struct list_head pending_list; // need_timeline
     bool need_timeline;
     bool nested;
     bool impl_based_on_call;
@@ -62,6 +70,8 @@ static struct multi_trace_ctx {
     struct perf_evlist *evlist;
     struct env *env;
 } ctx;
+
+static struct timeline_node *multi_trace_first_pending(struct timeline_node *tail);
 
 static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -109,11 +119,16 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             b->time = e->time;
             b->key = e->key;
             b->tp = e->tp;
+            b->tp1 = e->tp1;
             b->unneeded = 0;
+            b->need_find_prev = e->need_find_prev;
+            b->need_backup = e->need_backup;
+            b->need_remove_from_backup = e->need_remove_from_backup;
             b->event = new_event;
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
             INIT_LIST_HEAD(&b->needed);
+            INIT_LIST_HEAD(&b->pending);
             backup_stat.new ++;
             backup_stat.mem_bytes += event->header.size;
             return &b->key_node;
@@ -165,17 +180,34 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         b->time = e->time;
         b->key = e->key;
         b->tp = e->tp;
+        b->tp1 = e->tp1;
         b->unneeded = e->unneeded;
+        b->need_find_prev = e->need_find_prev;
+        b->need_backup = e->need_backup;
+        b->need_remove_from_backup = e->need_remove_from_backup;
         b->event = new_event;
         RB_CLEAR_NODE(&b->timeline_node);
         RB_CLEAR_NODE(&b->key_node);
         INIT_LIST_HEAD(&b->needed);
+        INIT_LIST_HEAD(&b->pending);
+        if (!b->tp->untraced) {
+            /*
+             * With --order enabled, events are backed up in chronological order. Therefore, it
+             * can be directly added to the end of the queue `pending_list' without reordering.
+            **/
+            list_add_tail(&b->pending, &ctx.pending_list);
+            b->unneeded = 0;
+            tl_stat.pending ++;
+            tl_stat.pending_bytes += event->header.size;
+        }
+
         tl_stat.new ++;
         if (b->unneeded) {
             tl_stat.unneeded ++;
             tl_stat.unneeded_bytes += event->header.size;
         }
         tl_stat.mem_bytes += event->header.size;
+
         return &b->timeline_node;
     } else
         return NULL;
@@ -184,6 +216,10 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
 static void timeline_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct timeline_node *b = container_of(rb_node, struct timeline_node, timeline_node);
+    if (!list_empty(&b->pending)) {
+        list_del(&b->pending);
+        fprintf(stderr, "BUG: event is still in the pending list.\n");
+    }
     tl_stat.delete ++;
     tl_stat.mem_bytes -= b->event->header.size;
     if (b->unneeded) {
@@ -215,6 +251,8 @@ static void timeline_free_unneeded(bool lost)
         struct timeline_node *needed_first;
         if (!list_empty(&ctx.needed_list))
             needed_first = list_first_entry(&ctx.needed_list, struct timeline_node, needed);
+        else if (!list_empty(&ctx.pending_list))
+            needed_first = list_first_entry(&ctx.pending_list, struct timeline_node, pending);
         else {
             struct rb_node *unneeded_last = rb_last(&ctx.timeline.entries.rb_root);
             needed_first = rb_entry_safe(unneeded_last, struct timeline_node, timeline_node);
@@ -237,7 +275,7 @@ static void timeline_free_unneeded(bool lost)
             **/
             if (tl->unneeded == 0) {
                 if (RB_EMPTY_NODE(&tl->key_node)) {
-                    printf("BUG: rb key_node is empty\n");
+                    fprintf(stderr, "BUG: rb key_node is empty\n");
                 } else
                     rblist__remove_node(&ctx.backup, &tl->key_node);
                 backup ++;
@@ -262,12 +300,14 @@ static void timeline_stat(void)
            "  new = %lu\n"
            "  delete = %lu\n"
            "  unneeded = %lu\n"
+           "  pending = %lu\n"
            "  mem_bytes = %lu\n"
            "  unneeded_bytes = %lu\n"
+           "  pending_bytes = %lu\n"
            "BACKUP:\n"
            "  nr_entries = %u\n",
-           tl_stat.new, tl_stat.delete, tl_stat.unneeded,
-           tl_stat.mem_bytes, tl_stat.unneeded_bytes,
+           tl_stat.new, tl_stat.delete, tl_stat.unneeded, tl_stat.pending,
+           tl_stat.mem_bytes, tl_stat.unneeded_bytes, tl_stat.pending_bytes,
            rblist__nr_entries(&ctx.backup));
 }
 
@@ -357,10 +397,10 @@ static int monitor_ctx_init(struct env *env)
         }
     }
 
-    if (env->before_event1 &&
+    if (env->detail &&
         ctx.nr_ins > 1 &&
         !using_order(base_profiler)) {
-        fprintf(stderr, "Enable --detail=-N, also need to enable --order.\n");
+        fprintf(stderr, "Enable --detail, also need to enable --order.\n");
         return -1;
     }
 
@@ -389,6 +429,7 @@ static int monitor_ctx_init(struct env *env)
     ctx.timeline.node_delete = timeline_node_delete;
 
     INIT_LIST_HEAD(&ctx.needed_list);
+    INIT_LIST_HEAD(&ctx.pending_list);
 
     ctx.need_timeline = env->detail;
 
@@ -407,6 +448,8 @@ static int monitor_ctx_init(struct env *env)
 static void monitor_ctx_exit(void)
 {
     int i;
+
+    while (multi_trace_first_pending(NULL)) ;
 
     rblist__exit(&ctx.backup);
 
@@ -697,7 +740,8 @@ int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
             }
             break;
         case CMD_EVENT1:
-            curr = iter->curr = iter->event1;
+        case CMD_EVENT2:
+            curr = iter->curr = (cmd == CMD_EVENT1 ? iter->event1 : iter->event2);
             iter->event = curr->event;
             iter->tp = curr->tp;
             break;
@@ -739,15 +783,148 @@ static struct rb_node *multi_trace_find_prev(struct timeline_node *backup)
     return NULL;
 }
 
+static void multi_trace_tryto_call_two(struct timeline_node *tl_event, bool *need_free)
+{
+    union perf_event *event = tl_event->event;
+    struct tp *tp = tl_event->tp;
+    struct tp *tp1 = tl_event->tp1;
+    bool need_find_prev = tl_event->need_find_prev;
+    bool need_remove_from_backup = tl_event->need_remove_from_backup;
+    u64 key = tl_event->key;
+
+    // find prev event, not include untraced
+    if (need_find_prev) {
+        struct timeline_node backup = {
+            .key = key,
+            .tp = tp1,
+        };
+        struct two_event *two;
+        struct rb_node *rbn = multi_trace_find_prev(&backup);
+        if (rbn) {
+            struct timeline_node *prev;
+            prev = container_of(rbn, struct timeline_node, key_node);
+            two = ctx.impl->object_find(ctx.class, prev->tp, tp);
+            if (two) {
+                struct event_info info;
+                info.tp1 = prev->tp;
+                info.tp2 = tp;
+                info.key = key;
+                if (ctx.need_timeline) {
+                    struct event_iter iter;
+                    if (ctx.env->before_event1) {
+                        backup.time = prev->time - ctx.env->before_event1;
+                        iter.start = rb_entry_safe(rblist__find_first(&ctx.timeline, &backup),
+                                                    struct timeline_node, timeline_node);
+                    } else
+                        iter.start = prev;
+                    iter.event1 = prev;
+                    iter.event2 = tl_event;
+                    iter.curr = iter.start;
+                    ctx.class->two(two, prev->event, event, &info, &iter);
+                } else
+                    ctx.class->two(two, prev->event, event, &info, NULL);
+            }
+
+            if (need_remove_from_backup) {
+                rblist__remove_node(&ctx.backup, rbn);
+
+                // ctx.backup no longer references an event, prev.unneeded = 1,
+                // releasing unneeded events on the timeline in time.
+                *need_free = true;
+            }
+        } else if (ctx.impl_based_on_call) {
+            two = ctx.impl->object_find(ctx.class, tp, NULL);
+            if (two) {
+                // two(A, NULL), first call A.
+                struct event_info info;
+                info.tp1 = tp;
+                info.tp2 = NULL;
+                info.key = key;
+                ctx.class->two(two, event, NULL, &info, NULL);
+            }
+        }
+    }
+}
+
+static int multi_trace_tryto_backup(struct timeline_node *tl_event, bool *need_free)
+{
+    bool need_backup = tl_event->need_backup;
+    unsigned int nr_entries;
+    struct rb_node *rbn;
+    int ret = -1;
+
+    // backup events, exclude untraced events.
+    if (need_backup) {
+    retry:
+        nr_entries = rblist__nr_entries(&ctx.backup);
+        rbn = rblist__findnew(&ctx.backup, tl_event);
+        if (rbn) {
+            if (nr_entries == rblist__nr_entries(&ctx.backup)) {
+                struct timeline_node *new;
+                new = rb_entry(rbn, struct timeline_node, key_node);
+                /*
+                 * The same event occurs multiple times, only the last event is backed up.
+                 * Previous events will be marked as unneeded and released on the timeline in time.
+                **/
+                if (ctx.env->verbose >= VERBOSE_NOTICE)
+                    multi_trace_print_title(new->event, new->tp, "EEXIST");
+                rblist__remove_node(&ctx.backup, rbn);
+                *need_free = true;
+
+                /*
+                 * tl_event->unneeded is equal to 0, but not added to ctx.backup, tl_event->key_node
+                 * is empty, `timeline_free_unneeded' cannot be called immediately.
+                **/
+                goto retry;
+            } else
+                ret = 0;
+        } else {
+            tl_event->unneeded = 1;
+            *need_free = true;
+        }
+    } else
+        // Events at the last level are unneeded.
+        *need_free = true;
+
+    return ret;
+}
+
+static struct timeline_node *multi_trace_first_pending(struct timeline_node *tail)
+{
+    struct timeline_node *first;
+    u64 deadline = -1UL;
+
+    if (list_empty(&ctx.pending_list))
+        return NULL;
+
+    first = list_first_entry(&ctx.pending_list, struct timeline_node, pending);
+
+    if (ctx.env->after_event2 && tail)
+        deadline = tail->time - ctx.env->after_event2;
+
+    if (first->time <= deadline) {
+        list_del_init(&first->pending);
+        first->unneeded = !first->need_backup;
+        tl_stat.pending --;
+        tl_stat.pending_bytes -= first->event->header.size;
+        if (first->unneeded) {
+            tl_stat.unneeded ++;
+            tl_stat.unneeded_bytes += first->event->header.size;
+        }
+        return first;
+    }
+    return NULL;
+}
+
 static void multi_trace_sample(union perf_event *event, int instance)
 {
     struct multi_trace_type_header *hdr = (void *)event->sample.array;
     struct tp *tp = NULL, *tp1 = NULL;
-    struct timeline_node *tl_event = NULL;
+    struct timeline_node current;
     struct perf_evsel *evsel;
     int i, j;
     bool need_find_prev, need_backup, need_remove_from_backup;
-    __u64 key;
+    u64 key;
 
     if (base_profiler->dup)
         dup_stat.nr_samples ++;
@@ -808,166 +985,53 @@ found:
         key = tp_get_key(tp, raw, size);
     }
 
-    if (tp->untraced)
-        goto untraced_processing;
+    current.time = hdr->time;
+    current.key = key;
+    current.tp = tp;
+    current.tp1 = tp1;
+    current.unneeded = (!need_backup) || tp->untraced; // untraced means unneeded
+    current.need_find_prev = need_find_prev;
+    current.need_backup = need_backup;
+    current.need_remove_from_backup = need_remove_from_backup;
+    current.event = event;
 
-    // find prev event, not include untraced
-    if (need_find_prev) {
-        struct timeline_node backup = {
-            .key = key,
-            .tp = tp1,
-        };
-        struct two_event *two;
-        struct rb_node *rbn = multi_trace_find_prev(&backup);
-        if (rbn) {
-            struct timeline_node *prev;
-            prev = container_of(rbn, struct timeline_node, key_node);
-            two = ctx.impl->object_find(ctx.class, prev->tp, tp);
-            if (two) {
-                struct event_info info;
-                info.tp1 = prev->tp;
-                info.tp2 = tp;
-                info.key = key;
-                if (ctx.need_timeline) {
-                    struct event_iter iter;
-                    if (ctx.env->before_event1) {
-                        backup.time = prev->time - ctx.env->before_event1;
-                        iter.start = rb_entry_safe(rblist__find_first(&ctx.timeline, &backup),
-                                                    struct timeline_node, timeline_node);
-                    } else
-                        iter.start = prev;
-                    iter.event1 = prev;
-                    iter.curr = iter.start;
-                    ctx.class->two(two, prev->event, event, &info, &iter);
-                } else
-                    ctx.class->two(two, prev->event, event, &info, NULL);
-            }
-
-            if (need_remove_from_backup) {
-                rblist__remove_node(&ctx.backup, rbn);
-
-                // ctx.backup no longer references an event, prev.unneeded = 1,
-                // releasing unneeded events on the timeline in time.
-                if (ctx.need_timeline)
-                    timeline_free_unneeded(false);
-            }
-        } else if (ctx.impl_based_on_call) {
-            two = ctx.impl->object_find(ctx.class, tp, NULL);
-            if (two) {
-                // two(A, NULL), first call A.
-                struct event_info info;
-                info.tp1 = tp;
-                info.tp2 = NULL;
-                info.key = key;
-                ctx.class->two(two, event, NULL, &info, NULL);
-            }
-        }
-    }
-
-untraced_processing:
-
-    // backup events to Timeline, include untraced events.
+    // insert events to Timeline, include untraced events.
     if (ctx.need_timeline) {
-        struct timeline_node backup = {
-            .time = hdr->time,
-            .key = key,
-            .tp = tp,
-            .unneeded = (!need_backup) || tp->untraced, // untraced means unneeded
-            .event = event,
-        };
         struct rb_node *rbn;
-        bool need_free = false;
+        bool need_free = current.unneeded;
 
-        if (rblist__empty(&ctx.timeline) && backup.unneeded && ctx.env->before_event1 == 0)
+        if (rblist__empty(&ctx.timeline) && current.unneeded &&
+            ctx.env->before_event1 == 0 && ctx.env->after_event2 == 0)
             rbn = NULL;
         else
-            rbn = rblist__findnew(&ctx.timeline, &backup);
+            rbn = rblist__findnew(&ctx.timeline, &current);
 
-        if (rbn) {
-            tl_event = rb_entry(rbn, struct timeline_node, timeline_node);
-        } else
+        if (!rbn)
             goto free_dup_event;
 
-        // backup events, exclude untraced events.
-        if (need_backup && !tp->untraced) {
-        retry:
-            rbn = rblist__findnew(&ctx.backup, tl_event);
-            if (rbn) {
-                struct timeline_node *new;
-                new = rb_entry(rbn, struct timeline_node, key_node);
-                if (new != tl_event) {
-                    /*
-                     * The same event occurs multiple times, only the last event is backed up.
-                     * Previous events will be marked as unneeded and released on the timeline in time.
-                    **/
-                    if (ctx.env->verbose >= VERBOSE_NOTICE)
-                        multi_trace_print_title(new->event, new->tp, "EEXIST");
-                    rblist__remove_node(&ctx.backup, rbn);
-                    need_free = true;
+        while (1) {
+            // Only !untraced events are added to the ctx.pending_list, which is sorted
+            // chronologically. See timeline_node_new.
+            struct timeline_node *first = multi_trace_first_pending(&current);
+            if (!first)
+                break;
 
-                    /*
-                     * tl_event->unneeded is equal to 0, but not added to ctx.backup, tl_event->key_node
-                     * is empty, `timeline_free_unneeded' cannot be called immediately.
-                    **/
-                    goto retry;
-                }
-            } else {
-                tl_event->unneeded = 1;
-                need_free = true;
-            }
-        } else
-            // Events at the last level are unneeded.
-            need_free = true;
+            // Only handles !untraced events.
+            multi_trace_tryto_call_two(first, &need_free);
+            multi_trace_tryto_backup(first, &need_free);
+        }
 
         if (need_free)
             timeline_free_unneeded(false);
-    }
-    else
-    {
-        // backup events, exclude untraced events.
-        if (need_backup && !tp->untraced) {
-            struct timeline_node backup = {
-                .time = hdr->time,
-                .key = key,
-                .tp = tp,
-                .event = event,
-            };
+    } else {
+        bool dummy = false;
 
-            if (base_profiler->dup) {
-                struct rb_node *rbn = rblist__findnew(&ctx.backup, &backup);
-                if (rbn) {
-                    struct timeline_node *new;
-                    new = rb_entry(rbn, struct timeline_node, key_node);
-                    if (new->event != event) {
-                        if (ctx.env->verbose >= VERBOSE_NOTICE)
-                            multi_trace_print_title(new->event, new->tp, "EEXIST");
-                        backup_stat.mem_bytes -= new->event->header.size;
-                        dup_stat.nr_free ++;
-                        free(new->event);
-                        new->event = event;
-                        new->time = backup.time;
-                        backup_stat.mem_bytes += event->header.size;
-                    }
-                    new->tp = tp;
-                } else
-                    goto free_dup_event;
-            } else {
-                int err = rblist__add_node(&ctx.backup, &backup);
-                if (err == -EEXIST) {
-                    struct rb_node *rbn = rblist__find(&ctx.backup, &backup);
-                    struct timeline_node *new = rb_entry(rbn, struct timeline_node, key_node);
-                    if (ctx.env->verbose >= VERBOSE_NOTICE)
-                        multi_trace_print_title(new->event, new->tp, "EEXIST");
-                    backup_stat.mem_bytes -= new->event->header.size;
-                    free(new->event);
-                    new->event = memdup(event, event->header.size);
-                    new->time = backup.time;
-                    new->tp = tp;
-                    backup_stat.mem_bytes += event->header.size;
-                } else if (err != 0)
-                    goto free_dup_event;
-            }
-        } else
+        if (tp->untraced)
+            goto free_dup_event;
+
+        // Only handles !untraced events.
+        multi_trace_tryto_call_two(&current, &dummy);
+        if (multi_trace_tryto_backup(&current, &dummy) < 0)
             goto free_dup_event;
     }
 }

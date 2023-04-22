@@ -29,9 +29,13 @@ struct event_info {
     u64 key;
 };
 
+// -|- - - -|- - - -|- - - -
+// -1ms     e1      e2     +1ms
+//start   event1  event2   `end
 struct event_iter {
     void *start;
     void *event1;
+    void *event2;
     void *curr;
     union perf_event *event;
     struct tp *tp;
@@ -167,6 +171,9 @@ enum event_iter_cmd {
 
     // locate to event1
     CMD_EVENT1,
+
+    // locate to event2
+    CMD_EVENT2,
 
     // prev and next
     CMD_PREV,

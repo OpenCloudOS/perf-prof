@@ -297,21 +297,19 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 // print events before event1
                 if (iter && iter->start && iter->start != iter->event1) {
                     struct multi_trace_type_header *e;
-                    bool first = true;
-                    char buff[32];
+                    bool printed = false;
                     s64  neg;
 
                     event_iter_cmd(iter, CMD_RESET);
 
                     e = (void *)iter->event->sample.array;
                     neg = e->time - e1->time;
-                    snprintf(buff, sizeof(buff), "Previous %.3f %s", neg/1000.0, unit);
 
                     do {
                         if (event_need_to_print(event1, event2, info, iter)) {
-                            if (first) printf("\n");
-                            multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
-                            first = false;
+                            if (!printed) printf("Previous %.3f %s\n", neg/1000.0, unit);
+                            printed = true;
+                            multi_trace_print_title(iter->event, iter->tp, "|");
                         }
                         if (!event_iter_cmd(iter, CMD_NEXT))
                             break;
@@ -328,6 +326,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     snprintf(buff, sizeof(buff), "| %12.3f %s", delta/1000.0, unit);
                     event_iter_cmd(iter, CMD_EVENT1);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
+                        if (iter->curr == iter->event2)
+                            break;
                         if (event_need_to_print(event1, event2, info, iter)) {
                             multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
                             first = false;
@@ -337,6 +337,24 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                 // print event2
                 multi_trace_print(event2, two->tp2);
+
+                // print events after event2
+                if (iter) {
+                    union perf_event *last = NULL;
+
+                    event_iter_cmd(iter, CMD_EVENT2);
+                    while (event_iter_cmd(iter, CMD_NEXT)) {
+                        if (event_need_to_print(event1, event2, info, iter)) {
+                            multi_trace_print_title(iter->event, iter->tp, "|");
+                            last = iter->event;
+                        } else if (last)
+                            last = iter->event;
+                    }
+                    if (last) {
+                        struct multi_trace_type_header *e = (void *)last->sample.array;
+                        printf("After %.3f %s\n", (e->time - e2->time)/1000.0, unit);
+                    }
+                }
             }
         }
     }
