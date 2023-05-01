@@ -1,13 +1,18 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <errno.h>
+#include <sys/syscall.h>
+#include <sys/eventfd.h>
 #include <linux/list.h>
 #include <linux/string.h>
 #include <linux/zalloc.h>
 #include <linux/strlist.h>
+#include <linux/thread_map.h>
+#include <linux/atomic.h>
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
@@ -72,6 +77,171 @@ static struct multi_trace_ctx {
 } ctx;
 
 static struct timeline_node *multi_trace_first_pending(struct timeline_node *tail);
+
+struct usleep_node {
+    int u;
+    unsigned long n_usleep;
+    unsigned long tsc1, tsc2;
+    struct list_head link;
+};
+struct usleep_instance {
+    int tid, event;
+    unsigned long max_us;
+    unsigned long delta;
+    unsigned long n_usleep;
+    unsigned long n_check;
+    struct list_head usleep_head;
+    pthread_spinlock_t lock;
+    atomic_t *n;
+};
+#define USLEEP_INS 20
+static struct usleep_instance usleep_instance[USLEEP_INS];
+
+static void *do_usleep(void *ins)
+{
+    struct usleep_instance *ui = ins;
+    unsigned long tsc1, tsc2;
+    unsigned long event;
+
+    ui->tid = syscall(__NR_gettid);
+
+    atomic_inc(ui->n);
+    ui->n = NULL;
+
+    // wait enable
+    read(ui->event, &event, sizeof(event));
+    close(ui->event);
+    ui->event = -1;
+
+    while (1) {
+        int u = rand() % ui->max_us;
+
+        tsc1 = rdtsc();
+        usleep(u);
+        tsc2 = rdtsc();
+
+        ui->n_usleep ++;
+        if (tsc2 - tsc1 > ui->delta) {
+            struct usleep_node *result = malloc(sizeof(*result));
+            if (result) {
+                result->u = u;
+                result->n_usleep = ui->n_usleep;
+                result->tsc1 = tsc1;
+                result->tsc2 = tsc2;
+                pthread_spin_lock(&ui->lock);
+                list_add_tail(&result->link, &ui->usleep_head);
+                pthread_spin_unlock(&ui->lock);
+            }
+        }
+    }
+    return NULL;
+}
+
+int do_test_check(union perf_event *event1, union perf_event *event2)
+{
+    struct multi_trace_type_header *e1 = (void *)event1->sample.array;
+    struct multi_trace_type_header *e2 = (void *)event2->sample.array;
+    struct usleep_instance *ui;
+    struct usleep_node *first;
+    int i, ret = 0;
+
+    if (!ctx.env->test)
+        return 0;
+
+    for (i = 0; i < USLEEP_INS; i++) {
+        ui = &usleep_instance[i];
+        if (e1->tid_entry.tid == ui->tid)
+            goto found;
+    }
+    return 0;
+
+found:
+    ui->n_check ++;
+    pthread_spin_lock(&ui->lock);
+    first = list_first_entry_or_null(&ui->usleep_head, struct usleep_node, link);
+    pthread_spin_unlock(&ui->lock);
+
+    if (!first || first->n_usleep != ui->n_check)
+        return ret;
+
+    if (e1->time < first->tsc1 ||
+        e1->time - first->tsc1 > 100000) {
+        fprintf(stderr, "ENTRY CHECK FAILED %ld, tid %d, tsc %lu.%09lu time %llu.%09llu diff %llu\n",
+                first->n_usleep, ui->tid,
+                first->tsc1/1000000000, first->tsc1%1000000000,
+                e1->time/1000000000, e1->time%1000000000,
+                e1->time - first->tsc1);
+        ret = 1;
+    }
+    if (first->tsc2 < e2->time ||
+        first->tsc2 - e2->time > 100000) {
+        fprintf(stderr, "EXIT CHECK FAILED %ld, tid %d, time %llu.%09llu tsc %lu.%09lu diff %llu\n",
+                first->n_usleep, ui->tid,
+                e2->time/1000000000, e2->time%1000000000,
+                first->tsc2/1000000000, first->tsc2%1000000000,
+                first->tsc2 - e2->time);
+        ret = 1;
+    }
+    pthread_spin_lock(&ui->lock);
+    list_del(&first->link);
+    pthread_spin_unlock(&ui->lock);
+    free(first);
+    return ret;
+}
+
+static void do_test(struct env *env)
+{
+    unsigned long tsc1, tsc2;
+    unsigned long max_us = 10000;
+    unsigned long delta;
+    pthread_t t;
+    int i;
+    atomic_t n;
+
+    if (!env->test)
+        return ;
+
+    tsc1 = rdtsc();
+    usleep(max_us);
+    tsc2 = rdtsc();
+
+    delta = (tsc2 - tsc1) * 995 / 1000;
+
+    atomic_set(&n, 0);
+    for (i = 0; i < USLEEP_INS; i++) {
+        struct usleep_instance *ui = &usleep_instance[i];
+        ui->n = &n;
+        ui->event = eventfd(0, 0);
+        ui->max_us = max_us;
+        ui->delta = delta;
+        INIT_LIST_HEAD(&ui->usleep_head);
+        pthread_spin_init(&ui->lock, PTHREAD_PROCESS_PRIVATE);
+        pthread_create(&t, NULL, do_usleep, ui);
+    }
+
+    while (atomic_read(&n) != USLEEP_INS) usleep(1000);
+    printf("max_us %lu delta %lu\n", max_us, delta);
+
+    perf_cpu_map__put(base_profiler->cpus);
+    perf_thread_map__put(base_profiler->threads);
+    base_profiler->cpus = perf_cpu_map__dummy_new();
+    base_profiler->threads = thread_map__new(getpid(), 0, 0);
+    env->greater_than = delta;
+    env->tsc = true;
+}
+
+static void do_test_enable(struct env *env)
+{
+    int i;
+    unsigned long event = 1;
+
+    if (!env->test)
+        return ;
+    for (i = 0; i < USLEEP_INS; i++) {
+        struct usleep_instance *ui = &usleep_instance[i];
+        write(ui->event, &event, sizeof(event));
+    }
+}
 
 static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -342,6 +512,9 @@ static int monitor_ctx_init(struct env *env)
 
     base_profiler = current_base_profiler();
 
+    do_test(env);
+    options.greater_than = env->greater_than;
+
     tep = tep__ref();
 
     ctx.nr_ins = monitor_nr_instance();
@@ -562,6 +735,11 @@ static int multi_trace_filter(struct perf_evlist *evlist, struct env *env)
         }
     }
     return 0;
+}
+
+static void multi_trace_enable(struct perf_evlist *evlist, struct env *env)
+{
+    do_test_enable(env);
 }
 
 static void multi_trace_handle_remaining(void)
@@ -1206,6 +1384,7 @@ static profiler multi_trace = {
     .help = multi_trece_help,
     .init = multi_trace_init,
     .filter = multi_trace_filter,
+    .enable = multi_trace_enable,
     .deinit = multi_trace_exit,
     .sigusr1 = multi_trace_sigusr1,
     .interval = multi_trace_interval,

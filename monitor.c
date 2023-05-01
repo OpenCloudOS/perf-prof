@@ -1211,6 +1211,9 @@ reinit:
 
     perf_evlist__enable(evlist);
 
+    if (monitor->enable)
+        monitor->enable(evlist, &env);
+
     signal(SIGCHLD, sig_handler);
     signal(SIGINT, sig_handler);
     signal(SIGUSR1, monitor->sigusr1 ? : SIG_IGN);

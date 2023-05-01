@@ -151,6 +151,8 @@ struct multi_trace_type_raw {
     } raw;
 };
 
+int do_test_check(union perf_event *event1, union perf_event *event2);
+
 void multi_trace_raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp);
 void multi_trace_print_title(union perf_event *event, struct tp *tp, const char *title);
 static inline void multi_trace_print(union perf_event *event, struct tp *tp)

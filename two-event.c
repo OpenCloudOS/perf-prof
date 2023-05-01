@@ -291,7 +291,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
             if (delay->heatmap)
                 heatmap_write(delay->heatmap, e2->time, delta);
 
-            if (opts->greater_than && delta > opts->greater_than) {
+            if (do_test_check(event1, event2) ||
+                (opts->greater_than && delta > opts->greater_than)) {
                 unit = opts->env->tsc ? "kcyc" : "us";
 
                 // print events before event1
