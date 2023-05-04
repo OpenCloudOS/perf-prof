@@ -99,8 +99,8 @@ static int monitor_ctx_init(struct env *env)
             printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
     }
 
-    if (stacks) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+    if (stacks || env->callchain) {
+        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
         num_dist.pages *= 2;
     } else
         ctx.cc = NULL;
@@ -143,11 +143,13 @@ static int num_dist_init(struct perf_evlist *evlist, struct env *env)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+                         PERF_SAMPLE_RAW | (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
         .watermark     = 1,
     };
     int i;
@@ -161,10 +163,12 @@ static int num_dist_init(struct perf_evlist *evlist, struct env *env)
         struct tp *tp = &ctx.tp_list->tp[i];
 
         attr.config = tp->id;
-        if (tp->stack)
-            attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
-        else
-            attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
+        if (!env->callchain) {
+            if (tp->stack)
+                attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
+            else
+                attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
+        }
         attr.sample_max_stack = tp->max_stack;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
@@ -256,7 +260,7 @@ static void num_dist_exit(struct perf_evlist *evlist)
 
 static void __raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp)
 {
-    if (tp->stack) {
+    if (tp->stack || ctx.env->callchain) {
         struct sample_type_callchain *data = (void *)event->sample.array;
         struct {
             __u32   size;
@@ -275,8 +279,8 @@ static void __print_callchain(union perf_event *event, struct tp *tp)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (tp->stack) {
-        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+    if (tp->stack || ctx.env->callchain) {
+        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
     }
 }
 
@@ -331,6 +335,8 @@ static void num_dist_help(struct help_ctx *hctx)
             struct tp *tp = &hctx->tp_list[i]->tp[j];
             printf("%s:%s/%s/num=%s/alias=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
                              tp->num?:".", tp->alias?:".");
+            if (!env->callchain)
+                printf("[stack/]");
             if (i != hctx->nr_list - 1 ||
                 j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
@@ -358,7 +364,7 @@ static void num_dist_help(struct help_ctx *hctx)
 
 
 static const char *num_dist_desc[] = PROFILER_DESC("num-dist",
-    "[OPTION...] -e EVENT [--perins] [--than ns] [--heatmap file]",
+    "[OPTION...] -e EVENT [--perins] [--than ns] [--heatmap file] [-g]",
     "Numerical distribution. Get 'num' data from the event itself.", "",
     "EXAMPLES", "",
     "    "PROGRAME" num-dist -e sched:sched_stat_runtime help",
@@ -366,7 +372,8 @@ static const char *num_dist_desc[] = PROFILER_DESC("num-dist",
     "    "PROGRAME" num-dist -e 'sched:sched_stat_runtime//num=\"runtime/1000\"/alias=runtime(us)/' -C 0 -i 1000");
 static const char *num_dist_argv[] = PROFILER_ARGV("num-dist",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event", "perins", "than", "heatmap");
+    PROFILER_ARGV_CALLCHAIN_FILTER,
+    PROFILER_ARGV_PROFILER, "event", "perins", "than", "heatmap", "call-graph");
 static profiler num_dist = {
     .name = "num-dist",
     .desc = num_dist_desc,
