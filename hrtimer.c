@@ -76,7 +76,7 @@ static int monitor_ctx_init(struct env *env)
     }
 
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
     }
 
     ctx.env = env;
@@ -129,7 +129,8 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
         .exclude_host = env->exclude_host,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
         .watermark     = 1,
     };
     struct perf_event_attr tp_attr = {
@@ -331,7 +332,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
         }
         if (ctx.env->callchain) {
             callchain = (struct callchain *)&data->groups.ctnr[data->groups.nr];
-            print_callchain_common(ctx.cc, callchain, 0/*only kernel stack*/);
+            print_callchain_common(ctx.cc, callchain, data->tid_entry.pid);
         }
     }
 }

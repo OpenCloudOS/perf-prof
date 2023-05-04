@@ -45,9 +45,9 @@ static int monitor_ctx_init(struct env *env)
 {
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         else
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
+            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
         breakpoint.pages *= 2;
     }
     ctx.env = env;
@@ -154,6 +154,8 @@ static int breakpoint_init(struct perf_evlist *evlist, struct env *env)
         .sample_regs_intr = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
@@ -281,6 +283,7 @@ static const char *breakpoint_desc[] = PROFILER_DESC("breakpoint",
     "    "PROGRAME" breakpoint 0x7ffd8c7dae28/8:w");
 static const char *breakpoint_argv[] = PROFILER_ARGV("breakpoint",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "call-graph", "flame-graph");
 static profiler breakpoint = {
     .name = "breakpoint",

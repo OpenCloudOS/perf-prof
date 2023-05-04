@@ -52,6 +52,10 @@ static inline int get_cpu_vendor(void) {
 };
 int in_guest(void);
 
+int callchain_flags(int default_flags);
+int exclude_callchain_user(int dflt_flags);
+int exclude_callchain_kernel(int dflt_flags);
+
 void print_lost_fn(union perf_event *event, int ins);
 
 int perf_event_process_record(union perf_event *event, int instance, bool writable, bool converted);
@@ -103,6 +107,8 @@ struct env {
     bool exclude_kernel;
     bool exclude_guest;
     bool exclude_host;
+    bool user_callchain, user_callchain_set;
+    bool kernel_callchain, kernel_callchain_set;
     // ebpf
     int  irqs_disabled;
     int  tif_need_resched;
@@ -220,7 +226,10 @@ typedef struct monitor {
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
     "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", \
+    "user-callchain", "kernel-callchain", \
     "irqs_disabled", "tif_need_resched", "exclude_pid", "nr_running_min", "nr_running_max"
+#define PROFILER_ARGV_CALLCHAIN_FILTER \
+        "FILTER OPTION:", "user-callchain", "kernel-callchain"
 #define PROFILER_ARGV_PROFILER \
     "PROFILER OPTION:" \
 

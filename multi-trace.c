@@ -384,7 +384,7 @@ static int monitor_ctx_init(struct env *env)
     }
 
     if (stacks) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
         base_profiler->pages *= 2;
     } else
         ctx.cc = NULL;
@@ -476,7 +476,8 @@ static int __multi_trace_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
         .watermark     = 1,
     };
     int i, j;
@@ -686,7 +687,7 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
     tep__print_event(data->h.time/1000, data->h.cpu_entry.cpu, raw, size);
 
     if (tp->stack) {
-        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
     }
 }
 
@@ -1197,6 +1198,7 @@ static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms");
 static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "only-than", "detail", "perins", "heatmap", "cycle");
 static profiler multi_trace = {
     .name = "multi-trace",
@@ -1247,6 +1249,7 @@ static const char *kmemprof_desc[] = PROFILER_DESC("kmemprof",
     );
 static const char *kmemprof_argv[] = PROFILER_ARGV("kmemprof",
     PROFILER_ARGV_OPTION,
+    //PROFILER_ARGV_CALLCHAIN_FILTER, // not support user callchain
     PROFILER_ARGV_PROFILER, "event", "key");
 static profiler kmemprof = {
     .name = "kmemprof",
@@ -1294,6 +1297,7 @@ static const char *syscalls_desc[] = PROFILER_DESC("syscalls",
     "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -k common_pid --order -C 0");
 static const char *syscalls_argv[] = PROFILER_ARGV("syscalls",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "event", "key", "than", "perins", "heatmap");
 static profiler syscalls = {
     .name = "syscalls",
@@ -1462,6 +1466,7 @@ static const char *nested_trace_desc[] = PROFILER_DESC("nested-trace",
                                    "timer:timer_expire_entry,timer:timer_expire_exit -i 1000 --impl call-delay");
 static const char *nested_trace_argv[] = PROFILER_ARGV("nested-trace",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "detail", "perins", "heatmap");
 static profiler nested_trace = {
     .name = "nested-trace",

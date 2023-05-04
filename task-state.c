@@ -88,9 +88,9 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         else
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
+            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
         task_state.pages *= 2;
     }
     rblist__init(&ctx.backup);
@@ -128,7 +128,8 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        //.exclude_callchain_user = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1, //1个事件
     };
     struct perf_evsel *evsel;
@@ -433,6 +434,7 @@ static const char *task_state_desc[] = PROFILER_DESC("task-state",
     "    "PROGRAME" task-state -- ip link show eth0");
 static const char *task_state_argv[] = PROFILER_ARGV("task-state",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "interruptible", "uninterruptible", "than", "filter", "call-graph", "flame-graph");
 struct monitor task_state = {
     .name = "task-state",

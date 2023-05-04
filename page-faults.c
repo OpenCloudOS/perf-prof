@@ -39,7 +39,7 @@ static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         page_faults.pages *= 2;
     }
     ctx.env = env;
@@ -67,6 +67,8 @@ static int page_faults_init(struct perf_evlist *evlist, struct env *env)
         .sample_regs_user = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
@@ -170,6 +172,7 @@ static const char *page_faults_desc[] = PROFILER_DESC("page-faults",
     "    "PROGRAME" page-faults -C 0 -g");
 static const char *page_faults_argv[] = PROFILER_ARGV("page-faults",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "call-graph");
 static profiler page_faults = {
     .name = "page-faults",

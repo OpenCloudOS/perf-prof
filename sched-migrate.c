@@ -126,9 +126,9 @@ static int monitor_ctx_init(struct env *env)
 
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
         else {
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL, env->flame_graph);
+            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL), env->flame_graph);
         }
         sched_migrate.pages *= 2;
     }
@@ -169,7 +169,8 @@ static int sched_migrate_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
         .watermark     = 1,
         .wakeup_watermark = (sched_migrate.pages << 12) / 2,
     };
@@ -239,9 +240,9 @@ static inline void __print_callchain(union perf_event *event)
 
     if (ctx.env->callchain) {
         if (!ctx.env->flame_graph)
-            print_callchain_common(ctx.cc, &data->callchain, 0);
+            print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
         else
-            flame_graph_add_callchain(ctx.flame, &data->callchain, 0, NULL);
+            flame_graph_add_callchain(ctx.flame, &data->callchain, data->h.tid_entry.pid, NULL);
     }
 }
 
@@ -299,6 +300,7 @@ static const char *sched_migrate_desc[] = PROFILER_DESC("sched-migrate",
     "    "PROGRAME" sched-migrate --detail");
 static const char *sched_migrate_argv[] = PROFILER_ARGV("sched-migrate",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "detail", "filter", "call-graph", "flame-graph");
 static profiler sched_migrate = {
     .name = "sched-migrate",

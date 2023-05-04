@@ -21,7 +21,7 @@ static int monitor_ctx_init(struct env *env)
 {
     tep__ref();
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
         monitor_signal.pages *= 2;
         monitor_signal.sample = signal_sample_callchain;
     }
@@ -49,7 +49,8 @@ static int signal_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
@@ -142,7 +143,7 @@ static void signal_sample_callchain(union perf_event *event, int instance)
     print_time(stdout);
     tep__print_event(data->time/1000, data->cpu_entry.cpu, raw->data, raw->size);
     if (ctx.env->callchain) {
-        print_callchain_common(ctx.cc, &data->callchain, 0/*only kernel stack*/);
+        print_callchain_common(ctx.cc, &data->callchain, data->tid_entry.pid);
     }
 }
 
@@ -156,6 +157,7 @@ static const char *signal_desc[] = PROFILER_DESC("signal",
     "    "PROGRAME" signal --filter python");
 static const char *signal_argv[] = PROFILER_ARGV("signal",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "filter", "call-graph");
 struct monitor monitor_signal = {
     .name = "signal",

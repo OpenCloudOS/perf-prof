@@ -23,6 +23,8 @@
 #include <monitor.h>
 #include <tep.h>
 #include <timer.h>
+#include <stack_helpers.h>
+
 
 static int daylight_active;
 
@@ -328,6 +330,8 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,    "exclude-guest", &env.exclude_guest,               "exclude guest"),
     OPT_BOOL_NONEG  ( 0 ,     "exclude-user", &env.exclude_user,                "exclude user"),
     OPT_BOOL_NONEG  ( 0 ,   "exclude-kernel", &env.exclude_kernel,              "exclude kernel"),
+    OPT_BOOLEAN_SET ( 0 ,   "user-callchain", &env.user_callchain,   &env.user_callchain_set,   "include user callchains, no- prefix to exclude"),
+    OPT_BOOLEAN_SET ( 0 , "kernel-callchain", &env.kernel_callchain, &env.kernel_callchain_set, "include kernel callchains, no- prefix to exclude"),
     OPT_INT_OPTARG  ( 0 ,    "irqs_disabled", &env.irqs_disabled,    1, "0|1",  "ebpf, irqs disabled or not."),
     OPT_INT_OPTARG  ( 0 , "tif_need_resched", &env.tif_need_resched, 1, "0|1",  "ebpf, TIF_NEED_RESCHED is set or not."),
     OPT_INT_NONEG   ( 0 ,      "exclude_pid", &env.exclude_pid,         "PID",  "ebpf, exclude pid"),
@@ -695,6 +699,37 @@ int in_guest(void)
 #else
     return 0;
 #endif
+}
+
+int callchain_flags(int dflt_flags)
+{
+    int flags = dflt_flags;
+
+    if (env.user_callchain_set) {
+        if (env.user_callchain)
+            flags |= CALLCHAIN_USER;
+        else
+            flags &= ~CALLCHAIN_USER;
+    }
+    if (env.kernel_callchain_set) {
+        if (env.kernel_callchain)
+            flags |= CALLCHAIN_KERNEL;
+        else
+            flags &= ~CALLCHAIN_KERNEL;
+    }
+    return flags;
+}
+
+int exclude_callchain_user(int dflt_flags)
+{
+    int flags = callchain_flags(dflt_flags);
+    return flags & CALLCHAIN_USER ? 0 : 1;
+}
+
+int exclude_callchain_kernel(int dflt_flags)
+{
+    int flags = callchain_flags(dflt_flags);
+    return flags & CALLCHAIN_KERNEL ? 0 : 1;
 }
 
 struct workload {

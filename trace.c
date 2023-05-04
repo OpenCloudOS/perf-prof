@@ -38,9 +38,9 @@ static int monitor_ctx_init(struct env *env)
     ctx.time_str[0] = '\0';
     if (env->callchain || ctx.tp_list->nr_need_stack) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         else {
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
+            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
             if (env->interval) {
                 trace_interval();
                 trace.interval = trace_interval;
@@ -78,6 +78,8 @@ static int trace_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
@@ -309,6 +311,7 @@ static const char *trace_desc[] = PROFILER_DESC("trace",
     "    "PROGRAME" trace -e sched:sched_wakeup,sched:sched_switch --overwrite");
 static const char *trace_argv[] = PROFILER_ARGV("trace",
     PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "event", "overwrite", "call-graph", "flame-graph");
 static profiler trace = {
     .name = "trace",

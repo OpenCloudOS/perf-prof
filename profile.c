@@ -52,9 +52,9 @@ static int monitor_ctx_init(struct env *env)
     ctx.time_str[0] = '\0';
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         else {
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | CALLCHAIN_USER, env->flame_graph);
+            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
             if (env->interval) {
                 profile_interval();
                 profile.interval = profile_interval;
@@ -102,11 +102,12 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = 0,
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
         .exclude_host = env->exclude_host,
+        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
