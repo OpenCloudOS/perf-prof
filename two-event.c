@@ -164,7 +164,7 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
     class->ids = 0;
     class->impl = impl;
     class->opts = *options;
-    if (class->opts.keyname)
+    if (class->opts.keyname && class->opts.keylen == 0)
         class->opts.keylen = strlen(class->opts.keyname);
     rblist__init(&class->two_events);
     class->two_events.node_cmp = two_event_node_cmp;

@@ -391,6 +391,9 @@ static int monitor_ctx_init(struct env *env)
 
     if (keyname) {
         options.keyname = keyname;
+        options.keylen = strlen(keyname);
+        if (options.keylen < 6)
+            options.keylen = 6;
         if (!current_is_order()) {
             fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
                             "--order parameter to order events.\n");
