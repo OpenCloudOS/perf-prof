@@ -28,11 +28,15 @@ static struct perf_event_convert_ctx {
 
 u64 rdtsc(void)
 {
+#if defined(__i386__) || defined(__x86_64__)
 	unsigned int low, high;
 
 	asm volatile("rdtsc" : "=a" (low), "=d" (high));
 
 	return low | ((u64)high) << 32;
+#else
+    return 0;
+#endif
 }
 
 static inline u64 perf_time_to_tsc(u64 ns)
