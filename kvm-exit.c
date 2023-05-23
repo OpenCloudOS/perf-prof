@@ -122,7 +122,7 @@ static int monitor_ctx_init(struct env *env)
     if (!ctx.perins_kvm_exit || !ctx.perins_kvm_exit_valid)
         return -1;
 
-    ctx.lat_dist = latency_dist_new(env->perins, true, sizeof(u64));
+    ctx.lat_dist = latency_dist_new_quantile(env->perins, true, sizeof(u64));
     if (!ctx.lat_dist)
         return -1;
 
@@ -193,6 +193,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
     struct print_info *info = opaque;
     unsigned int exit_reason = node->key & 0xffffffff;
     u32 isa = node->key >> 32;
+    double p99 = tdigest_quantile(node->td, 0.99);
 
     if (!info->started) {
         info->started = true;
@@ -201,24 +202,25 @@ static void print_latency_node(void *opaque, struct latency_node *node)
 
         if (ctx.env->perins)
             printf("%s ", info->ins_oncpu ? "[CPU]" : "[THREAD]");
-        printf("%-*s %8s %16s %12s %12s %12s %6s\n", isa == KVM_ISA_VMX ? 20 : 32, "exit_reason", "calls",
+        printf("%-*s %8s %16s %12s %12s %12s %12s %6s\n", isa == KVM_ISA_VMX ? 20 : 32, "exit_reason", "calls",
                  ctx.env->tsc ? "total(kcyc)" : "total(us)",
                  ctx.env->tsc ? "min(kcyc)" : "min(us)",
                  ctx.env->tsc ? "avg(kcyc)" : "avg(us)",
+                 ctx.env->tsc ? "p99(kcyc)" : "p99(us)",
                  ctx.env->tsc ? "max(kcyc)" : "max(us)", "%gsys");
 
         if (ctx.env->perins)
             printf("%s ", info->ins_oncpu ? "-----" : "--------");
-        printf("%s %8s %16s %12s %12s %12s %6s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
-                "--------", "----------------", "------------", "------------", "------------", "------");
+        printf("%s %8s %16s %12s %12s %12s %12s %6s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
+                "--------", "----------------", "------------", "------------", "------------", "------------", "------");
     }
     if (ctx.env->perins)
         printf("[%*d] ", info->ins_oncpu ? 3 : 6,
                 info->ins_oncpu ? monitor_instance_cpu((int)node->instance) : monitor_instance_thread((int)node->instance));
-    printf("%-*s %8lu %16.3f %12.3f %12.3f %12.3f %6.2f\n", isa == KVM_ISA_VMX ? 20 : 32,
+    printf("%-*s %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %6.2f\n", isa == KVM_ISA_VMX ? 20 : 32,
             find_exit_reason(isa, exit_reason),
             node->n, node->sum/1000.0,
-            node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0,
+            node->min/1000.0, node->sum/node->n/1000.0, p99/1000.0, node->max/1000.0,
             node->extra[0]*100.0/node->sum);
 }
 
