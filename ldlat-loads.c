@@ -411,7 +411,7 @@ static void ldlat_loads_sample(union perf_event *event, int instance)
         print_callchain(ctx.ccx, (struct callchain *)&callchain, data->tid_entry.pid);
     }
 
-    latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full);
+    latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full, ctx.env->greater_than);
 }
 
 static const char *ldlat_loads_desc[] = PROFILER_DESC("ldlat-loads",

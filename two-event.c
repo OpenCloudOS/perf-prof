@@ -286,7 +286,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
         if (e2->time > e1->time) {
             delta = e2->time - e1->time;
 
-            latency_dist_input(delay_class->lat_dist, key, (u64)two->id, delta);
+            latency_dist_input(delay_class->lat_dist, key, (u64)two->id, delta, opts->greater_than);
 
             if (delay->heatmap)
                 heatmap_write(delay->heatmap, e2->time, delta);
@@ -368,24 +368,31 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     double p50 = tdigest_quantile(node->td, 0.50);
     double p95 = tdigest_quantile(node->td, 0.95);
     double p99 = tdigest_quantile(node->td, 0.99);
+    bool than = !!opts->greater_than;
 
     if (opts->perins)
         printf("%-*lu ", opts->keylen, node->instance);
     printf("%*s", delay_class->max_len1, two->tp1->alias ?: two->tp1->name);
     printf(" => %-*s", delay_class->max_len2, two->tp2->alias ?: two->tp2->name);
-    printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n",
+    printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f",
         node->n, node->sum/1000.0, node->min/1000.0, p50/1000.0, p95/1000.0, p99/1000.0, node->max/1000.0);
+    if (than)
+        printf(" %6lu (%3lu%s)\n", node->than, node->than * 100 / (node->n ? : 1), "%");
+    else
+        printf("\n");
 }
 
 static int delay_print_header(struct two_event *two)
 {
     struct delay_class *delay_class = NULL;
     struct two_event_options *opts;
+    bool than;
     int i;
 
     if (two) {
         delay_class = container_of(two->class, struct delay_class, base);
         opts = &two->class->opts;
+        than = !!opts->greater_than;
 
         if (latency_dist_empty(delay_class->lat_dist))
             return 1;
@@ -401,11 +408,16 @@ static int delay_print_header(struct two_event *two)
 
         printf("%*s => %-*s", delay_class->max_len1, "start", delay_class->max_len2, "end");
         if (!opts->env->tsc)
-            printf(" %8s %16s %12s %12s %12s %12s %12s\n", "calls", "total(us)", "min(us)", "p50(us)",
+            printf(" %8s %16s %12s %12s %12s %12s %12s", "calls", "total(us)", "min(us)", "p50(us)",
                     "p95(us)", "p99(us)", "max(us)");
         else
-            printf(" %8s %16s %12s %12s %12s %12s %12s\n", "calls", "total(kcyc)", "min(kcyc)", "p50(kcyc)",
+            printf(" %8s %16s %12s %12s %12s %12s %12s", "calls", "total(kcyc)", "min(kcyc)", "p50(kcyc)",
                     "p95(kcyc)", "p99(kcyc)", "max(kcyc)");
+
+        if (than)
+            printf("    than(reqs)\n");
+        else
+            printf("\n");
 
         if (opts->perins) {
             for (i=0; i<opts->keylen; i++) printf("-");
@@ -414,9 +426,13 @@ static int delay_print_header(struct two_event *two)
         for (i=0; i<delay_class->max_len1; i++) printf("-");
         printf("    ");
         for (i=0; i<delay_class->max_len2; i++) printf("-");
-        printf(" %8s %16s %12s %12s %12s %12s %12s\n",
+        printf(" %8s %16s %12s %12s %12s %12s %12s",
                         "--------", "----------------", "------------", "------------", "------------",
                         "------------", "------------");
+        if (than)
+            printf(" --------------\n");
+        else
+            printf("\n");
 
         if (!opts->sort_print)
             latency_dist_print(delay_class->lat_dist, delay_print_node, delay_class);
@@ -559,7 +575,7 @@ static void syscalls_two(struct two_event *two, union perf_event *event1, union 
                 sys_enter->id != sys_exit->id)
                 return ;
 
-            node = latency_dist_input(delay_class->lat_dist, sys_enter->common_pid, sys_enter->id, delta);
+            node = latency_dist_input(delay_class->lat_dist, sys_enter->common_pid, sys_enter->id, delta, opts->greater_than);
             node->extra[0] += IS_ERR_VALUE((unsigned long)sys_exit->ret); //error
 
             if (delay->heatmap)
@@ -577,6 +593,7 @@ static void syscalls_print_node(void *opaque, struct latency_node *node)
 {
     struct delay_class *delay_class = opaque;
     struct two_event_options *opts = &delay_class->base.opts;
+    bool than = !!opts->greater_than;
     char buf[64];
 
     if (opts->perins) {
@@ -588,19 +605,25 @@ static void syscalls_print_node(void *opaque, struct latency_node *node)
         printf("%-20s", buf);
     } else
         printf("%-20lu", node->key);
-    printf(" %8lu %16.3f %12.3f %12.3f %12.3f %6lu\n",
+    printf(" %8lu %16.3f %12.3f %12.3f %12.3f %6lu",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0, node->extra[0]);
+    if (than)
+        printf(" %6lu (%3lu%s)\n", node->than, node->than * 100 / (node->n ? : 1), "%");
+    else
+        printf("\n");
 }
 
 static int syscalls_print_header(struct two_event *two)
 {
     struct delay_class *delay_class = NULL;
     struct two_event_options *opts;
+    bool than;
     int i;
 
     if (two) {
         delay_class = container_of(two->class, struct delay_class, base);
         opts = &two->class->opts;
+        than = !!opts->greater_than;
 
         if (latency_dist_empty(delay_class->lat_dist))
             return 1;
@@ -613,15 +636,25 @@ static int syscalls_print_header(struct two_event *two)
 
         printf("%-20s", "syscalls");
         if (!opts->env->tsc)
-            printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "err");
+            printf(" %8s %16s %12s %12s %12s %6s", "calls", "total(us)", "min(us)", "avg(us)", "max(us)", "err");
         else
-            printf(" %8s %16s %12s %12s %12s %6s\n", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)", "err");
+            printf(" %8s %16s %12s %12s %12s %6s", "calls", "total(kcyc)", "min(kcyc)", "avg(kcyc)", "max(kcyc)", "err");
+
+        if (than)
+            printf("   than(reqs)\n");
+        else
+            printf("\n");
 
         if (opts->perins)
             printf("-------- ");
         for (i=0; i<20; i++) printf("-");
-        printf(" %8s %16s %12s %12s %12s %6s\n",
+        printf(" %8s %16s %12s %12s %12s %6s",
                         "--------", "----------------", "------------", "------------", "------------", "------");
+        if (than)
+            printf(" --------------\n");
+        else
+            printf("\n");
+
         if (!opts->sort_print)
             latency_dist_print(delay_class->lat_dist, syscalls_print_node, delay_class);
         else

@@ -63,7 +63,7 @@ static struct rb_node *latency_stat_node_new(struct rblist *rlist, const void *n
         n->instance = e->instance;
         n->key = e->key;
         n->min = ~0UL;
-        n->max = n->n = n->sum = 0;
+        n->max = n->than = n->n = n->sum = 0;
         if (dist->extra_size)
             memset(n->extra, 0, dist->extra_size);
         return &n->rbnode;
@@ -162,7 +162,7 @@ void latency_dist_free(struct latency_dist *dist)
     }
 }
 
-struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance, u64 key, u64 lat)
+struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance, u64 key, u64 lat, unsigned long greater_than)
 {
     struct letency_entry e = {dist, NULL, instance, key};
     struct rb_node *rbn = NULL;
@@ -182,6 +182,8 @@ struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance,
             ln->min = lat;
         if (lat > ln->max)
             ln->max = lat;
+        if (greater_than && lat > greater_than)
+            ln->than ++;
         ln->n ++;
         ln->sum += lat;
         return ln;
