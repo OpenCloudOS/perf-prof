@@ -37,6 +37,7 @@ struct block_iostat {
     __u64 max;
     __u64 n;
     __u64 sum;
+    __u64 than;
 };
 
 static struct blktrace_ctx {
@@ -184,6 +185,7 @@ static void iostat_reset(void)
         ctx.stats[i].max = 0UL;
         ctx.stats[i].n = 0UL;
         ctx.stats[i].sum = 0UL;
+        ctx.stats[i].than = 0UL;
     }
 }
 
@@ -286,30 +288,43 @@ static int blktrace_filter(struct perf_evlist *evlist, struct env *env)
 static void blktrace_interval(void)
 {
     int i;
+    bool than = !!ctx.env->greater_than;
 
     print_time(stdout);
     printf("\n");
 
-    printf("%*s => %-*s %8s %16s %12s %12s %12s\n", ctx.max_name_len, "start", ctx.max_name_len, "end", "reqs",
+    printf("%*s => %-*s %8s %16s %12s %12s %12s", ctx.max_name_len, "start", ctx.max_name_len, "end", "reqs",
                     ctx.env->tsc ? "total(kcyc)" : "total(us)",
                     ctx.env->tsc ? "min(kcyc)" : "min(us)",
                     ctx.env->tsc ? "avg(kcyc)" : "avg(us)",
                     ctx.env->tsc ? "max(kcyc)" : "max(us)");
+    if (than)
+        printf("    than(reqs)\n");
+    else
+        printf("\n");
 
     for (i=0; i<ctx.max_name_len; i++) printf("-");
     printf("    ");
     for (i=0; i<ctx.max_name_len; i++) printf("-");
-    printf(" %8s %16s %12s %12s %12s\n",
+    printf(" %8s %16s %12s %12s %12s",
                     "--------", "----------------", "------------", "------------", "------------");
+    if (than)
+        printf("  -------------\n");
+    else
+        printf("\n");
 
     for (i = 1; i < BLOCK_MAX; i++) {
         struct block_iostat *iostat1 = &ctx.stats[i-1];
         struct block_iostat *iostat = &ctx.stats[i];
-        printf("%*s => %-*s %8llu %16.3f %12.3f %12.3f %12.3f\n",
+        printf("%*s => %-*s %8llu %16.3f %12.3f %12.3f %12.3f",
                 ctx.max_name_len, iostat1->name,
                 ctx.max_name_len, iostat->name,
                 iostat->n, iostat->sum/1000.0, iostat->n ? iostat->min/1000.0 : 0.0,
                 iostat->n ? iostat->sum/iostat->n/1000.0 : 0.0, iostat->max/1000.0);
+        if (than)
+            printf(" %6llu (%3llu%s)\n", iostat->than, iostat->than * 100 / (iostat->n ? iostat->n : 1), "%");
+        else
+            printf("\n");
     }
     iostat_reset();
 }
@@ -372,6 +387,8 @@ static void blktrace_sample(union perf_event *event, int instance)
             iostat->min = delta;
         if (delta > iostat->max)
             iostat->max = delta;
+        if (ctx.env->greater_than && delta > ctx.env->greater_than)
+            iostat->than ++;
         iostat->n ++;
         iostat->sum += delta;
 
