@@ -316,7 +316,7 @@ static void __process_fast(struct sample_type_raw *rkvm_exit, struct sample_type
     }
 
     key = ((u64)isa<<32)|exit_reason;
-    node = latency_dist_input(ctx.lat_dist, ctx.env->perins?instance:0, key, delta);
+    node = latency_dist_input(ctx.lat_dist, ctx.env->perins?instance:0, key, delta, ctx.env->greater_than);
     if (node && guest_rip >= START_OF_KERNEL)
         node->extra[0] += delta;
 

@@ -309,7 +309,7 @@ static void num_dist_sample(union perf_event *event, int instance)
     __raw_size(event, &raw, &size, tp);
 
     delta = tp_get_num(tp, raw, size);
-    latency_dist_input(ctx.dist, ctx.env->perins?instance:0, i, delta);
+    latency_dist_input(ctx.dist, ctx.env->perins?instance:0, i, delta, ctx.env->greater_than);
 
     if (ctx.env->heatmap)
         heatmap_write(ctx.heatmaps[i], hdr->time, delta);
