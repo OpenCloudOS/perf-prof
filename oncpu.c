@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -275,8 +276,10 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_cpus = get_present_cpus();
     ctx.last_time = calloc(ctx.nr_ins, sizeof(u64));
-    if (!ctx.last_time)
+    if (!ctx.last_time) {
+        errno = ENOMEM;
         return -1;
+    }
 
     rblist__init(&ctx.runtimes);
     ctx.runtimes.node_cmp = runtime_node_cmp;
@@ -285,8 +288,10 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 
     if (ctx.tid_to_cpumap && env->detail) {
         ctx.percpu_thread_siblings = calloc(ctx.nr_cpus, sizeof(int));
-        if (!ctx.percpu_thread_siblings)
+        if (!ctx.percpu_thread_siblings) {
+            errno = ENOMEM;
             return -1;
+        }
         for (i = 0; i < ctx.nr_cpus; i++) {
             ctx.percpu_thread_siblings[i] = read_cpu_thread_sibling(i);
             if (ctx.percpu_thread_siblings[i] == -1) {
@@ -298,8 +303,10 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
 
         // on thread
         ctx.perins_vmf_sib = calloc(ctx.nr_ins, sizeof(int));
-        if (!ctx.perins_vmf_sib)
+        if (!ctx.perins_vmf_sib) {
+            errno = ENOMEM;
             return -1;
+        }
         for (i = 0; i < ctx.nr_ins; i++) {
             ctx.perins_vmf_sib[i] = read_sched_vmf_sib(i);
         }
@@ -311,6 +318,7 @@ static int oncpu_init(struct perf_evlist *evlist, struct env *env)
         attr.config = tep__event_id("sched", "sched_switch");
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);

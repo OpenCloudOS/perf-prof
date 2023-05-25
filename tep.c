@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -295,8 +296,10 @@ struct tp_list *tp_list_new(char *event_str)
     int nr_tp = 0;
     struct tp_list *tp_list = NULL;
 
-    if (!s)
+    if (!s) {
+        errno = EINVAL;
         return NULL;
+    }
 
     while ((sep = next_sep(s, ',')) != NULL) {
         nr_tp ++;
@@ -305,12 +308,16 @@ struct tp_list *tp_list_new(char *event_str)
     if (*s)
         nr_tp ++;
 
-    if (nr_tp == 0)
+    if (nr_tp == 0) {
+        errno = EINVAL;
         return NULL;
+    }
 
     tp_list = calloc(1, sizeof(struct tp_list) + nr_tp * sizeof(struct tp));
-    if (!tp_list)
+    if (!tp_list) {
+        errno = ENOMEM;
         return NULL;
+    }
 
     tp_list->nr_tp = nr_tp;
     s = event_str;
@@ -352,8 +359,10 @@ struct tp_list *tp_list_new(char *event_str)
 
         sys = s = tp->name;
         sep = strchr(s, ':');
-        if (!sep)
+        if (!sep) {
+            errno = EINVAL;
             goto err_out;
+        }
         *sep = '\0';
 
         name = s = sep + 1;
@@ -362,17 +371,23 @@ struct tp_list *tp_list_new(char *event_str)
             *sep = '\0';
 
         id = tep__event_id(sys, name);
-        if (id < 0)
+        if (id < 0) {
+            errno = EINVAL;
             goto err_out;
+        }
         event = tep_find_event_by_name(tep, sys, name);
-        if (!event)
+        if (!event) {
+            errno = EINVAL;
             goto err_out;
+        }
 
         if (sep) {
             filter = s = sep + 1;
             sep = next_sep(s, '/');
-            if (!sep)
+            if (!sep) {
+                errno = EINVAL;
                 goto err_out;
+            }
             *sep = '\0';
 
             s = sep + 1;
@@ -411,7 +426,7 @@ struct tp_list *tp_list_new(char *event_str)
                     top_add:
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
-                    if (!prog) { free(fields); goto err_out; }
+                    if (!prog) { free(fields); errno = EINVAL; goto err_out; }
 
                     tp->nr_top ++;
                     tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
@@ -422,7 +437,7 @@ struct tp_list *tp_list_new(char *event_str)
                 } else if (strcmp(attr, "comm") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
-                    if (!prog) { free(fields); goto err_out; }
+                    if (!prog) { free(fields); errno = EINVAL; goto err_out; }
 
                     tp->comm_prog = prog;
                     tp->comm = value;
@@ -431,28 +446,28 @@ struct tp_list *tp_list_new(char *event_str)
                 } else if (strcmp(attr, "ptr") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
-                    if (!prog) { free(fields); goto err_out; }
+                    if (!prog) { free(fields); errno = EINVAL; goto err_out; }
 
                     tp->mem_ptr_prog = prog;
                     tp->mem_ptr = value;
                 } else if (strcmp(attr, "size") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
-                    if (!prog) { free(fields); goto err_out; }
+                    if (!prog) { free(fields); errno = EINVAL; goto err_out; }
 
                     tp->mem_size_prog = prog;
                     tp->mem_size = value;
                 } else if (strcmp(attr, "num") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
-                    if (!prog) { free(fields); goto err_out; }
+                    if (!prog) { free(fields); errno = EINVAL; goto err_out; }
 
                     tp->num_prog = prog;
                     tp->num = value;
                 } else if (strcmp(attr, "key") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
-                    if (!prog) { free(fields); goto err_out; }
+                    if (!prog) { free(fields); errno = EINVAL; goto err_out; }
 
                     tp->key_prog = prog;
                     tp->key = value;
@@ -461,9 +476,9 @@ struct tp_list *tp_list_new(char *event_str)
                 } else if (strcmp(attr, "trigger") == 0) {
                     tp->trigger = true;
                 } else if (strcmp(attr, "push") == 0) {
-                    if (tp_broadcast_new(tp, value) < 0) goto err_out;
+                    if (tp_broadcast_new(tp, value) < 0) { errno = EINVAL; goto err_out; }
                 } else if (strcmp(attr, "pull") == 0) {
-                    if (tp_receive_new(tp, value) < 0) goto err_out;
+                    if (tp_receive_new(tp, value) < 0) { errno = EINVAL; goto err_out; }
                 } else if (strcmp(attr, "vm") == 0) {
                     tp->vcpu = vcpu_info_new(value);
                     if (tp->vcpu)

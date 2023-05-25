@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -63,8 +64,10 @@ static void sig_winch(int sig)
 
 static int monitor_ctx_init(struct env *env)
 {
-    if (!env->event)
+    if (!env->event) {
+        errno = EINVAL;
         return -1;
+    }
 
     if (!env->interval)
         env->interval = 1000;
@@ -83,18 +86,23 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
 
     ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
+    if (!ctx.tp_list) {
         return -1;
+    }
 
     ctx.ins_oncpu = monitor_instance_oncpu();
     ctx.nr_ins = monitor_nr_instance();
     ctx.counters = calloc(ctx.nr_ins, (ctx.tp_list->nr_tp + 1) * sizeof(u64));
-    if (!ctx.counters)
+    if (!ctx.counters) {
+        errno = ENOMEM;
         return -1;
+    }
 
     ctx.perins_pos = calloc(ctx.nr_ins, sizeof(u64));
-    if (!ctx.perins_pos)
+    if (!ctx.perins_pos) {
+        errno = ENOMEM;
         return -1;
+    }
 
     ctx.rounds = 0;
     ctx.slots = 2;
@@ -105,8 +113,10 @@ static int monitor_ctx_init(struct env *env)
     else
         ctx.hist_size = env->sample_period / (env->interval * 1000000UL);
     ctx.count_dist = count_dist_new(env->perins, true, false, ctx.hist_size * ctx.slots);
-    if (!ctx.count_dist)
+    if (!ctx.count_dist) {
+        errno = ENOMEM;
         return -1;
+    }
 
     ctx.period = env->sample_period;
     ctx.packed_display = ctx.hist_size <= 5;
@@ -121,9 +131,10 @@ static int monitor_ctx_init(struct env *env)
 
     ctx.all_counters_max_len = 2;
     ctx.pertp_counter_max_len = calloc(ctx.tp_list->nr_tp, sizeof(int));
-    if (!ctx.pertp_counter_max_len)
+    if (!ctx.pertp_counter_max_len) {
+        errno = ENOMEM;
         return -1;
-    else {
+    } else {
         int i;
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
             struct tp *tp = &ctx.tp_list->tp[i];

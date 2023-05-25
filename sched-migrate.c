@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,16 +112,23 @@ static int monitor_ctx_init(struct env *env)
     ctx.nr_cpus = get_present_cpus();
     ctx.l2_cpumap = calloc(ctx.nr_cpus, sizeof(*ctx.l2_cpumap));
     ctx.llc_cpumap = calloc(ctx.nr_cpus, sizeof(*ctx.llc_cpumap));
-    if (!ctx.l2_cpumap || !ctx.llc_cpumap)
+    if (!ctx.l2_cpumap || !ctx.llc_cpumap) {
+        errno = ENOMEM;
         return -1;
+    }
+
     for (i = 0; i < ctx.nr_cpus; i++) {
         if (!ctx.l2_cpumap[i]) {
-            if (read_cpumap(ctx.l2_cpumap, i, 2) < 0)
+            if (read_cpumap(ctx.l2_cpumap, i, 2) < 0) {
+                errno = ENOTSUP;
                 return -1;
+            }
         }
         if (!ctx.llc_cpumap[i]) {
-            if (read_cpumap(ctx.llc_cpumap, i, 3) < 0)
+            if (read_cpumap(ctx.llc_cpumap, i, 3) < 0) {
+                errno = ENOTSUP;
                 return -1;
+            }
         }
     }
 
@@ -182,6 +190,7 @@ static int sched_migrate_init(struct perf_evlist *evlist, struct env *env)
     attr.config = tep__event_id("sched", "sched_migrate_task");
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);

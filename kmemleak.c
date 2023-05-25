@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,8 +183,10 @@ static struct rb_node *perf_event_backup_sorted_node_new(struct rblist *rlist, c
 static int monitor_ctx_init(struct env *env)
 {
     if (!env->tp_alloc ||
-        !env->tp_free)
+        !env->tp_free) {
+        errno = EINVAL;
         return -1;
+    }
 
     tep__ref();
     ctx.user = !monitor_instance_oncpu();
@@ -272,20 +275,27 @@ static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
         return -1;
 
     ctx.tp_alloc = tp_list_new(env->tp_alloc);
-    if (!ctx.tp_alloc)
+    if (!ctx.tp_alloc) {
         return -1;
+    }
 
     ctx.tp_free = tp_list_new(env->tp_free);
-    if (!ctx.tp_free)
+    if (!ctx.tp_free) {
         return -1;
+    }
 
     if (!env->callchain)
         env->callchain = (ctx.tp_alloc->nr_need_stack == ctx.tp_alloc->nr_tp);
 
-    if (add_tp_list(evlist, ctx.tp_alloc, env->callchain) < 0)
+    if (add_tp_list(evlist, ctx.tp_alloc, env->callchain) < 0) {
+        errno = ENOMEM;
         return -1;
-    if (add_tp_list(evlist, ctx.tp_free, false) < 0)
+    }
+
+    if (add_tp_list(evlist, ctx.tp_free, false) < 0) {
+        errno = ENOMEM;
         return -1;
+    }
 
     if (env->callchain || ctx.tp_alloc->nr_need_stack || ctx.tp_free->nr_need_stack) {
         int user = ctx.user ? CALLCHAIN_USER : 0;

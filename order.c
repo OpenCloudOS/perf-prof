@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,7 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
         if (attr->sample_period != 0 &&
             (attr->sample_type & ORDER_SAMPLE_TYPE_MASK) != ORDER_SAMPLE_TYPE) {
             fprintf(stderr, "--order cannot be enabled\n");
+            errno = EINVAL;
             return -1;
         }
     }

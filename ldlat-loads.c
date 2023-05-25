@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,7 @@ static struct monitor_ctx {
 static int monitor_ctx_init(struct env *env)
 {
     if (get_cpu_vendor() != X86_VENDOR_INTEL) {
+        errno = ENOTSUP;
         fprintf(stderr, "Only supports Intel platforms\n");
         return -1;
     }
@@ -65,6 +67,7 @@ static int ldlat_loads_init(struct perf_evlist *evlist, struct env *env)
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);
@@ -471,6 +474,7 @@ static int ldlat_stores_init(struct perf_evlist *evlist, struct env *env)
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);

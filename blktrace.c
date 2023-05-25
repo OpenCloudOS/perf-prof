@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,11 +195,15 @@ static int monitor_ctx_init(struct env *env)
 {
     struct stat st;
 
-    if (!env->device)
+    if (!env->device) {
+        errno = EINVAL;
         return -1;
+    }
 
-    if (stat(env->device, &st) < 0)
+    if (stat(env->device, &st) < 0) {
+        errno = ENODEV;
         return -1;
+    }
 
     ctx.dev = new_decode_dev((u32)st.st_rdev);
 

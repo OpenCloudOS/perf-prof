@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -15,14 +16,17 @@ static struct monitor_ctx {
 
 static int monitor_ctx_init(struct env *env)
 {
-    if (!env->event)
+    if (!env->event) {
+        errno = EINVAL;
         return -1;
+    }
 
     tep__ref();
 
     ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
+    if (!ctx.tp_list) {
         return -1;
+    }
 
     ctx.env = env;
     return 0;
@@ -59,12 +63,15 @@ static int event_lost_init(struct perf_evlist *evlist, struct env *env)
         struct tp *tp = &ctx.tp_list->tp[i];
 
         tp->counters = calloc(monitor_nr_instance(), sizeof(unsigned long));
-        if (!tp->counters)
+        if (!tp->counters) {
+            errno = ENOMEM;
             return -1;
+        }
 
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
+            errno = ENOMEM;
             return -1;
         }
         perf_evlist__add(evlist, evsel);

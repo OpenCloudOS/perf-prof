@@ -44,6 +44,7 @@
  *                                #case EXIT: return a;
 **/
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
@@ -680,27 +681,36 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
-    if (!env->event)
+    if (!env->event) {
+        errno = EINVAL;
         return -1;
+    }
 
     tep__ref();
 
     tp_list = tp_list_new(env->event);
-    if (!tp_list)
+    if (!tp_list) {
+        errno = ENOMEM;
         return -1;
+    }
     if (tp_list->nr_tp != 1) {
         fprintf(stderr, "Only a single event is allowed to be specified.\n");
+        errno = EINVAL;
         return -1;
     }
 
     declare = tep__event_fields(tp_list->tp[0].id);
-    if (!declare)
+    if (!declare) {
+        errno = EINVAL;
         return -1;
+    }
 
     printf("expression: %s\n", info.expression);
     info.prog = expr_compile(info.expression, declare);
-    if (!info.prog)
+    if (!info.prog) {
+        errno = ENOMEM;
         return -1;
+    }
     info.prog->debug = env->verbose;
     expr_dump(info.prog);
 
@@ -710,6 +720,7 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
+            errno = ENOMEM;
             return -1;
         }
         perf_evlist__add(evlist, evsel);

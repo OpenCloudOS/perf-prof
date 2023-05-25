@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,8 +61,10 @@ static int monitor_ctx_init(struct env *env)
 {
     int i, stacks = 0;
 
-    if (!env->event)
+    if (!env->event) {
+        errno = EINVAL;
         return -1;
+    }
 
     tep__ref();
 
@@ -74,19 +77,23 @@ static int monitor_ctx_init(struct env *env)
     if (ctx.tp_list->nr_num == 0) {
         fprintf(stderr, "Please use the multi-trace profiler\n");
         tp_list_free(ctx.tp_list);
+        errno = EINVAL;
         return -1;
     }
     if (ctx.tp_list->nr_tp != ctx.tp_list->nr_num) {
         fprintf(stderr, "The number of 'num' attr is not equal to the number of event\n");
         tp_list_free(ctx.tp_list);
+        errno = EINVAL;
         return -1;
     }
 
     ctx.nr_points = ctx.tp_list->nr_tp;
 
     ctx.dist = latency_dist_new_quantile(env->perins, true, 0);
-    if (!ctx.dist)
+    if (!ctx.dist) {
+        errno = ENOMEM;
         return -1;
+    }
 
     for (i = 0; i < ctx.nr_points; i++) {
         struct tp *tp = &ctx.tp_list->tp[i];
@@ -110,8 +117,10 @@ static int monitor_ctx_init(struct env *env)
         struct tp *tp;
 
         ctx.heatmaps = calloc(ctx.nr_points, sizeof(*ctx.heatmaps));
-        if (!ctx.heatmaps)
+        if (!ctx.heatmaps) {
+            errno = ENOMEM;
             return -1;
+        }
         for (i = 0; i < ctx.nr_points; i++) {
             tp = &ctx.tp_list->tp[i];
             snprintf(buff, sizeof(buff), "%s-%s", env->heatmap, tp->name);
@@ -172,6 +181,7 @@ static int num_dist_init(struct perf_evlist *evlist, struct env *env)
         attr.sample_max_stack = tp->max_stack;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
+            errno = ENOMEM;
             return -1;
         }
         perf_evlist__add(evlist, evsel);

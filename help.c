@@ -107,7 +107,7 @@ static int help_init(struct perf_evlist *evlist, struct env *env)
         }
     }
     if (env->tp_alloc) {
-        ctx->tp_list[i++] = tp_list_new(env->tp_alloc);
+	ctx->tp_list[i++] = tp_list_new(env->tp_alloc);
         if (!ctx->tp_list[i-1])
             exit(1);
     }

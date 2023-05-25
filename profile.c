@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -35,17 +36,20 @@ static int monitor_ctx_init(struct env *env)
     ctx.nr_ins = monitor_nr_instance();
     ctx.counter = calloc(ctx.nr_ins, sizeof(uint64_t));
     if (!ctx.counter) {
+        errno = ENOMEM;
         return -1;
     }
     ctx.cycles = calloc(ctx.nr_ins, sizeof(uint64_t));
     if (!ctx.cycles) {
         free(ctx.counter);
+        errno = ENOMEM;
         return -1;
     }
     ctx.stat = calloc(ctx.nr_ins, sizeof(*ctx.stat));
     if (!ctx.stat) {
         free(ctx.counter);
         free(ctx.cycles);
+        errno = ENOMEM;
         return -1;
     }
     ctx.time = 0;
@@ -112,10 +116,15 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
     };
     struct perf_evsel *evsel;
 
-    if (env->exclude_guest && env->exclude_host)
+    if (env->exclude_guest && env->exclude_host) {
+        errno = EINVAL;
         return -1;
-    if (env->exclude_user && env->exclude_kernel)
+    }
+
+    if (env->exclude_user && env->exclude_kernel) {
+        errno = EINVAL;
         return -1;
+    }
 
     if (monitor_ctx_init(env) < 0)
         return -1;
@@ -142,6 +151,7 @@ static int profile_init(struct perf_evlist *evlist, struct env *env)
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);

@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <linux/bitops.h>
@@ -176,8 +177,10 @@ static int breakpoint_init(struct perf_evlist *evlist, struct env *env)
             attr.bp_len = ctx.hwbp[i].len;
 
             evsel = perf_evsel__new(&attr);
-            if (!evsel)
+            if (!evsel) {
+                errno = ENOMEM;
                 return -1;
+            }
 
             perf_evlist__add(evlist, evsel);
         } else

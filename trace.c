@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,8 +32,9 @@ static int monitor_ctx_init(struct env *env)
     tep__ref();
 
     ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
+    if (!ctx.tp_list) {
         return -1;
+    }
 
     ctx.time = 0;
     ctx.time_str[0] = '\0';
@@ -114,6 +116,7 @@ static int trace_init(struct perf_evlist *evlist, struct env *env)
 
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
+            errno = ENOMEM;
             return -1;
         }
         perf_evlist__add(evlist, evsel);

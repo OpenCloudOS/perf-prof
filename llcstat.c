@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,11 +51,14 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
     __u64 l3_cache_miss_latency = 0;
     __u64 l3_misses_by_request_type = 0;
 
-    if (get_cpuinfo(&ctx.cpuinfo) < 0)
+    if (get_cpuinfo(&ctx.cpuinfo) < 0) {
+        errno = ENOTSUP;
         return -1;
+    }
 
     if (!monitor_instance_oncpu()) {
         fprintf(stderr, "can only be bound to CPU\n");
+        errno = EINVAL;
         return -1;
     }
 
@@ -74,12 +78,14 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
         if ((err = sysfs__read_int("bus/event_source/devices/amd_l3/type", &type)) < 0) {
             fprintf(stderr, "failed to read /sys/bus/event_source/devices/amd_l3/type."
                             "Not Supported.\n");
+            errno = ENOTSUP;
             return -1;
         }
         if ((err = sysfs__read_str("bus/event_source/devices/amd_l3/cpumask", &cpumask, &size)) < 0 &&
             size == 0) {
             fprintf(stderr, "failed to read /sys/bus/event_source/devices/amd_l3/cpumask."
                             "Not Supported.\n");
+            errno = ENOTSUP;
             return -1;
         }
         cpus = perf_cpu_map__new(cpumask);
@@ -98,8 +104,10 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
             l3_cache_miss_latency = 0x0300C00000400090UL;
             l3_misses_by_request_type = 0x0300C00000401F9AUL;
         }
-    } else
+    } else {
+        errno = ENOTSUP;
         return -1;
+    }
 
     ctx.nr_ins = perf_cpu_map__nr(llcstat.cpus);
     ctx.l3_cache_references = calloc(ctx.nr_ins, sizeof(struct cache));

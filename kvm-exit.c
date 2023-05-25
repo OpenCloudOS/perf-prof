@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,12 +120,16 @@ static int monitor_ctx_init(struct env *env)
     ctx.nr_ins = monitor_nr_instance();
     ctx.perins_kvm_exit = calloc(ctx.nr_ins, sizeof(struct sample_type_raw));
     ctx.perins_kvm_exit_valid = calloc(ctx.nr_ins, sizeof(int));
-    if (!ctx.perins_kvm_exit || !ctx.perins_kvm_exit_valid)
+    if (!ctx.perins_kvm_exit || !ctx.perins_kvm_exit_valid) {
+        errno = ENOMEM;
         return -1;
+    }
 
     ctx.lat_dist = latency_dist_new_quantile(env->perins, true, sizeof(u64));
-    if (!ctx.lat_dist)
+    if (!ctx.lat_dist) {
+        errno = ENOMEM;
         return -1;
+    }
 
     if (env->heatmap)
         ctx.heatmap = heatmap_open("ns", "ns", env->heatmap);

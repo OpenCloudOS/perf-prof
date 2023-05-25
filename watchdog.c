@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,8 +65,10 @@ static int monitor_ctx_init(struct env *env)
 
     ctx.nr_cpus = get_present_cpus();
     ctx.watchdog = calloc(ctx.nr_cpus, sizeof(struct watchdog_ctx));
-    if (ctx.watchdog == NULL)
+    if (ctx.watchdog == NULL) {
+        errno = ENOMEM;
         return -1;
+    }
     ctx.nr_watchdog = 0;
 
     if (procfs__read_str("sys/kernel/watchdog_cpumask", &cpumask, &len) == 0) {
@@ -87,8 +90,10 @@ static int monitor_ctx_init(struct env *env)
     if (str) {
         ctx.watchdog_thresh = strtol(str, NULL, 10);
         free(str);
-    } else
+    } else {
+        errno = EINVAL;
         return -1;
+    }
 
     ctx.env = env;
     return 0;
@@ -160,30 +165,39 @@ static int watchdog_init(struct perf_evlist *evlist, struct env *env)
         return -1;
 
     evsel = perf_tp_event(evlist, "timer", "hrtimer_expire_entry");
-    if (!evsel)
+    if (!evsel) {
+        errno = EINVAL;
         return -1;
+    }
     ctx.perf_evsel_hrtimer_expire_entry = evsel;
     ctx.hrtimer_expire_entry = perf_evsel__attr(evsel)->config;
 
     if (ctx.stage == STAGE_MONITOR) {
 
         evsel = perf_tp_event(evlist, "timer", "hrtimer_start");
-        if (!evsel)
+        if (!evsel) {
+            errno = EINVAL;
             return -1;
+        }
         ctx.hrtimer_start = perf_evsel__attr(evsel)->config;
 
         evsel = perf_tp_event(evlist, "timer", "hrtimer_cancel");
-        if (!evsel)
+        if (!evsel) {
+            errno = EINVAL;
             return -1;
+        }
         ctx.hrtimer_cancel = perf_evsel__attr(evsel)->config;
 
         evsel = perf_tp_event(evlist, "sched", "sched_switch");
-        if (!evsel)
+        if (!evsel) {
+            errno = EINVAL;
             return -1;
+        }
         ctx.sched_switch = perf_evsel__attr(evsel)->config;
 
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
+            errno = EINVAL;
             return -1;
         }
         perf_evlist__add(evlist, evsel);

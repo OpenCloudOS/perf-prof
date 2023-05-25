@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -337,8 +338,10 @@ static int monitor_ctx_init(struct env *env)
         else
             env->cycle = 0;
     }
-    if (env->nr_events < min_nr_events)
+    if (env->nr_events < min_nr_events) {
+        errno = EINVAL;
         return -1;
+    }
 
     base_profiler = current_base_profiler();
 
@@ -347,8 +350,10 @@ static int monitor_ctx_init(struct env *env)
     ctx.nr_ins = monitor_nr_instance();
     ctx.nr_list = env->nr_events;
     ctx.tp_list = calloc(ctx.nr_list, sizeof(*ctx.tp_list));
-    if (!ctx.tp_list)
+    if (!ctx.tp_list) {
+        errno = ENOMEM;
         return -1;
+    }
 
     for (i = 0; i < ctx.nr_list; i++) {
         ctx.tp_list[i] = tp_list_new(env->events[i]);
@@ -373,6 +378,7 @@ static int monitor_ctx_init(struct env *env)
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
                 if (!tep_find_any_field(event, env->key)) {
                     fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
+                    errno = EINVAL;
                     return -1;
                 }
                 tp->key_prog = tp_new_prog(tp, env->key);
@@ -404,6 +410,7 @@ static int monitor_ctx_init(struct env *env)
         ctx.nr_ins > 1 &&
         !using_order(base_profiler)) {
         fprintf(stderr, "Enable --detail, also need to enable --order.\n");
+        errno = EINVAL;
         return -1;
     }
 
@@ -411,12 +418,14 @@ static int monitor_ctx_init(struct env *env)
         ctx.impl_based_on_call = true;
     if (ctx.impl_based_on_call && !ctx.nested) {
         fprintf(stderr, "Only nested-trace can enable --impl %s.\n", env->impl);
+        errno = EINVAL;
         return -1;
     }
 
     ctx.impl = impl_get(env->impl ?: TWO_EVENT_DELAY_IMPL);
     if (!ctx.impl) {
         fprintf(stderr, "--impl %s not implemented\n", env->impl);
+        errno = EINVAL;
         return -1;
     }
     ctx.class = ctx.impl->class_new(ctx.impl, &options);
@@ -507,6 +516,7 @@ static int __multi_trace_init(struct perf_evlist *evlist, struct env *env)
             attr.sample_max_stack = tp->max_stack;
             evsel = perf_evsel__new(&attr);
             if (!evsel) {
+                errno = ENOMEM;
                 return -1;
             }
             perf_evlist__add(evlist, evsel);
@@ -536,15 +546,19 @@ static int multi_trace_init(struct perf_evlist *evlist, struct env *env)
             if (tp1->untraced)
                 continue;
             // for handle remaining
-            if (!ctx.impl->object_new(ctx.class, tp1, NULL))
+            if (!ctx.impl->object_new(ctx.class, tp1, NULL)) {
+                errno = ENOMEM;
                 return -1;
+            }
             n = (k+1) % ctx.nr_list;
             for (j = 0; j < ctx.tp_list[n]->nr_tp; j++) {
                 struct tp *tp2 = &ctx.tp_list[n]->tp[j];
                 if (tp2->untraced)
                     continue;
-                if (!ctx.impl->object_new(ctx.class, tp1, tp2))
+                if (!ctx.impl->object_new(ctx.class, tp1, tp2)) {
+                    errno = ENOMEM;
                     return -1;
+                }
             }
         }
     }
@@ -1400,8 +1414,10 @@ static int nested_trace_init(struct perf_evlist *evlist, struct env *env)
                 tp2 = tp;
         }
 
-        if (!ctx.impl->object_new(ctx.class, tp1, tp2))
+        if (!ctx.impl->object_new(ctx.class, tp1, tp2)) {
+            errno = ENOMEM;
             return -1;
+        }
     }
     return 0;
 }

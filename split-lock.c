@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -42,7 +43,11 @@ static int monitor_ctx_init(void)
     ctx.nr_cpus = get_present_cpus();
     ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
     ctx.polling = calloc(ctx.nr_cpus, sizeof(uint64_t));
-    return ctx.counter && ctx.polling ? 0 : -1;
+    if (!ctx.counter || !ctx.polling) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
 }
 
 static void monitor_ctx_exit(void)
@@ -77,6 +82,7 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
 
     if (vendor != X86_VENDOR_INTEL && vendor != X86_VENDOR_AMD) {
         fprintf(stderr, "split-lock exists only on intel/amd platforms\n");
+        errno = ENOTSUP;
         return -1;
     }
 
@@ -106,6 +112,7 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init split-lock\n");
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);

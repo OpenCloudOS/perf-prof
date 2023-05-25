@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -167,8 +168,10 @@ static int monitor_ctx_init(struct env *env)
     char *key_name = NULL;
     char *comm = NULL;
 
-    if (!env->event)
+    if (!env->event) {
+        errno = EINVAL;
         return -1;
+    }
 
     tep = tep__ref();
 
@@ -178,8 +181,9 @@ static int monitor_ctx_init(struct env *env)
         ctx.EVENT[i] = (char)toupper(ctx.EVENT[i]);
 
     ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
+    if (!ctx.tp_list) {
         return -1;
+    }
 
     ctx.nr_fields = ctx.tp_list->nr_top;
     ctx.fields = calloc(ctx.nr_fields, sizeof(*ctx.fields));
@@ -203,6 +207,7 @@ static int monitor_ctx_init(struct env *env)
             struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
             if (!tep_find_any_field(event, env->key)) {
                 fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
+                errno = EINVAL;
                 return -1;
             }
             tp->key_prog = tp_new_prog(tp, env->key);
@@ -266,6 +271,7 @@ static int monitor_ctx_init(struct env *env)
     ctx.only_comm = env->only_comm;
     if (ctx.only_comm && !ctx.show_comm) {
         fprintf(stderr, "--only-comm need 'comm' attr\n");
+        errno = EINVAL;
         return -1;
     }
 

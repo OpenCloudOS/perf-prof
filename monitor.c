@@ -1208,7 +1208,7 @@ reinit:
     monitor->threads = threads;
 
     if(monitor->init(evlist, &env) < 0) {
-        fprintf(stderr, "monitor(%s) init failed\n", monitor->name);
+        fprintf(stderr, "monitor(%s) init failed, reason: %s\n", monitor->name, strerror(errno));
         goto out_delete;
     }
     if(perf_event_convert_init(evlist, &env) < 0) {

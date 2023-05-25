@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -524,8 +525,9 @@ static int monitor_ctx_init(struct env *env)
 
     if (env->event) {
         ctx.tp_list = tp_list_new(env->event);
-        if (!ctx.tp_list)
+        if (!ctx.tp_list) {
             return -1;
+        }
     }
 
     ctx.env = env;
@@ -571,11 +573,14 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
 
     // kvmmmu:kvm_mmu_get_page
     id = tep__event_id("kvmmmu", "kvm_mmu_get_page");
-    if (id < 0)
+    if (id < 0) {
+        errno = EINVAL;
         return -1;
+    }
     attr.config = ctx.kvm_mmu_get_page = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);
@@ -583,11 +588,14 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
 
     // kvmmmu:kvm_mmu_prepare_zap_page
     id = tep__event_id("kvmmmu", "kvm_mmu_prepare_zap_page");
-    if (id < 0)
+    if (id < 0) {
+        errno = EINVAL;
         return -1;
+    }
     attr.config = ctx.kvm_mmu_prepare_zap_page = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);
@@ -601,6 +609,7 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
             attr.config = ctx.kvm_mmu_set_spte = id;
             evsel = perf_evsel__new(&attr);
             if (!evsel) {
+                errno = ENOMEM;
                 return -1;
             }
             perf_evlist__add(evlist, evsel);
@@ -616,6 +625,7 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
             attr.config = ctx.mark_mmio_spte = id;
             evsel = perf_evsel__new(&attr);
             if (!evsel) {
+                errno = ENOMEM;
                 return -1;
             }
             perf_evlist__add(evlist, evsel);
@@ -634,12 +644,14 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
             fprintf(stderr, "The additional event %s:%s cannot be any of kvmmmu:kvm_mmu_get_page, "
                     "kvmmmu:kvm_mmu_prepare_zap_page, kvmmmu:kvm_mmu_set_spte and kvmmmu:mark_mmio_spte.\n",
                     tp->sys, tp->name);
+            errno = EINVAL;
             return -1;
         }
 
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
+            errno = ENOMEM;
             return -1;
         }
         perf_evlist__add(evlist, evsel);

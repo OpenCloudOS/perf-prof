@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "monitor.h"
@@ -45,16 +46,21 @@ static int monitor_ctx_init(struct env *env)
         tep__ref();
 
         ctx.tp_list = tp_list_new(env->event);
-        if (!ctx.tp_list)
+        if (!ctx.tp_list) {
             return -1;
+        }
 
         ctx.counters = calloc(1, monitor_nr_instance() * (ctx.tp_list->nr_tp + 1) * sizeof(u64));
-        if (!ctx.counters)
+        if (!ctx.counters) {
+            errno = ENOMEM;
             return -1;
+        }
 
         ctx.ins_counters = malloc((ctx.tp_list->nr_tp + 1) * sizeof(u64));
-        if (!ctx.ins_counters)
+        if (!ctx.ins_counters) {
+            errno = ENOMEM;
             return -1;
+        }
 
         ctx.analyzer = __analyzer;
 
@@ -62,12 +68,16 @@ static int monitor_ctx_init(struct env *env)
             bpf_filter_open(&ctx.filter);
     } else if (env->greater_than) {
         ctx.counters = calloc(1, monitor_nr_instance() * sizeof(u64));
-        if (!ctx.counters)
+        if (!ctx.counters) {
+            errno = ENOMEM;
             return -1;
+        }
 
         ctx.ins_counters = malloc(sizeof(u64));
-        if (!ctx.ins_counters)
+        if (!ctx.ins_counters) {
+            errno = ENOMEM;
             return -1;
+        }
 
         ctx.analyzer = __analyzer_irq_off;
 
@@ -147,14 +157,22 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
-    if (!monitor_instance_oncpu())
+    if (!monitor_instance_oncpu()) {
+	errno = EINVAL;
         return -1;
-    if (env->sample_period == 0 && env->freq == 0)
+    }
+
+    if (env->sample_period == 0 && env->freq == 0) {
+        errno = EINVAL;
         return -1;
+    }
+
     if (env->event && !ctx.expression) {
+        errno = EINVAL;
         fprintf(stderr, " {expression} needs to be specified.\n");
         return -1;
     }
+
     if (monitor_ctx_init(env) < 0)
         return -1;
 
@@ -174,6 +192,7 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
 
     ctx.leader = evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);
@@ -182,8 +201,10 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         struct global_var_declare *declare = NULL;
 
         declare = calloc(ctx.tp_list->nr_tp+2, sizeof(*declare));
-        if (!declare)
+        if (!declare) {
+            errno = ENOMEM;
             return -1;
+        }
 
         for (i = 0; i < ctx.tp_list->nr_tp; i++) {
             struct tp *tp = &ctx.tp_list->tp[i];
@@ -206,8 +227,10 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         declare[i].size = declare[i].elementsize = sizeof(u64);
 
         ctx.prog = expr_compile(ctx.expression, declare);
-        if (!ctx.prog)
+        if (!ctx.prog) {
+            errno = ENOMEM;
             return -1;
+        }
         free(declare);
 
         if(env->verbose)

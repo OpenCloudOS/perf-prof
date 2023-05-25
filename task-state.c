@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -151,23 +152,30 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
     }
 
     id = tep__event_id("sched", "sched_switch");
-    if (id < 0)
+    if (id < 0) {
+        errno = EINVAL;
         return -1;
+    }
+
     attr.config = ctx.sched_switch = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);
 
     id = tep__event_id("sched", "sched_wakeup");
-    if (id < 0)
+    if (id < 0) {
+        errno = EINVAL;
         return -1;
+    }
     attr.comm = 1;
     attr.task = 1;
     attr.config = ctx.sched_wakeup = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
+        errno = ENOMEM;
         return -1;
     }
     perf_evlist__add(evlist, evsel);
