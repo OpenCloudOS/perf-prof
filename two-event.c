@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -377,7 +378,10 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f",
         node->n, node->sum/1000.0, node->min/1000.0, p50/1000.0, p95/1000.0, p99/1000.0, node->max/1000.0);
     if (than)
-        printf(" %6lu (%3lu%s)\n", node->than, node->than * 100 / (node->n ? : 1), "%");
+        if (node->than && isatty(1))
+            printf(" \033[31;1m%6lu (%3lu%s)\033[0m\n", node->than, node->than * 100 / (node->n ? : 1), "%");
+        else
+            printf(" %6lu (%3lu%s)\n", node->than, node->than * 100 / (node->n ? : 1), "%");
     else
         printf("\n");
 }
@@ -608,7 +612,10 @@ static void syscalls_print_node(void *opaque, struct latency_node *node)
     printf(" %8lu %16.3f %12.3f %12.3f %12.3f %6lu",
         node->n, node->sum/1000.0, node->min/1000.0, node->sum/node->n/1000.0, node->max/1000.0, node->extra[0]);
     if (than)
-        printf(" %6lu (%3lu%s)\n", node->than, node->than * 100 / (node->n ? : 1), "%");
+        if (node->than && isatty(1))
+            printf(" \033[31;1m%6lu (%3lu%s)\033[0m\n", node->than, node->than * 100 / (node->n ? : 1), "%");
+        else
+            printf(" %6lu (%3lu%s)\n", node->than, node->than * 100 / (node->n ? : 1), "%");
     else
         printf("\n");
 }

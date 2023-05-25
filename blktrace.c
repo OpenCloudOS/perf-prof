@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -322,7 +323,10 @@ static void blktrace_interval(void)
                 iostat->n, iostat->sum/1000.0, iostat->n ? iostat->min/1000.0 : 0.0,
                 iostat->n ? iostat->sum/iostat->n/1000.0 : 0.0, iostat->max/1000.0);
         if (than)
-            printf(" %6llu (%3llu%s)\n", iostat->than, iostat->than * 100 / (iostat->n ? iostat->n : 1), "%");
+            if (iostat->than && isatty(1))
+                printf(" \033[31;1m%6llu (%3llu%s)\033[0m\n", iostat->than, iostat->than * 100 / (iostat->n ? iostat->n : 1), "%");
+            else
+                printf(" %6llu (%3llu%s)\n", iostat->than, iostat->than * 100 / (iostat->n ? iostat->n : 1), "%");
         else
             printf("\n");
     }
