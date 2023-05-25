@@ -63,6 +63,7 @@ static void monitors_help(struct help_ctx *ctx)
 static void print_events_format(struct help_ctx *ctx)
 {
     int i, j;
+    int ret;
     char path[256];
     char *format;
     size_t size;
@@ -73,8 +74,10 @@ static void print_events_format(struct help_ctx *ctx)
             printf("%s:%s\n", tp->sys, tp->name);
             snprintf(path, sizeof(path), "kernel/debug/tracing/events/%s/%s/format", tp->sys, tp->name);
             if (sysfs__read_str(path, &format, &size) == 0) {
-                write(STDOUT_FILENO, format, size);
+                ret = write(STDOUT_FILENO, format, size);
                 free(format);
+                if (ret == -1)
+                    return;
             }
             printf("\n");
         }
