@@ -10,6 +10,8 @@ static struct order_ctx {
     profiler *base;
     profiler order;
     struct ordered_events oe;
+    u32 nr_unordered_events;
+    u64 max_timestamp;
     struct env *env;
 } ctx;
 
@@ -41,8 +43,23 @@ static int ordered_events__deliver(struct ordered_events *oe,
     return 0;
 }
 
+static void print_nr_unordered_events(bool sample)
+{
+    u32 nr_unordered_events = ctx.oe.nr_unordered_events;
+    u64 max_timestamp = ctx.oe.max_timestamp;
+
+    if (nr_unordered_events != ctx.nr_unordered_events &&
+        (!sample || max_timestamp != ctx.max_timestamp)) {
+        ctx.nr_unordered_events = nr_unordered_events;
+        ctx.max_timestamp = max_timestamp;
+        print_time(stderr);
+        fprintf(stderr, "Out of order %u, use a larger --order-mem parameter.\n", nr_unordered_events);
+    }
+}
+
 static void order_deinit(struct perf_evlist *evlist)
 {
+    print_nr_unordered_events(false);
     ordered_events__flush(&ctx.oe, OE_FLUSH__FINAL);
     ctx.base->deinit(evlist);
     ordered_events__free(&ctx.oe);
@@ -50,6 +67,7 @@ static void order_deinit(struct perf_evlist *evlist)
 
 static void order_interval(void)
 {
+    print_nr_unordered_events(false);
     ordered_events__flush(&ctx.oe, OE_FLUSH__ROUND);
     if (ctx.base->interval)
         ctx.base->interval();
@@ -59,6 +77,7 @@ static void order_sample(union perf_event *event, int instance)
 {
     struct order_event_header *h = (void *)event->sample.array;
     ordered_events__queue(&ctx.oe, event, h->time, instance);
+    print_nr_unordered_events(true);
 }
 
 static int order_init(struct perf_evlist *evlist, struct env *env)
