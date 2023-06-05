@@ -23,6 +23,7 @@ enum oe_flush {
 	OE_FLUSH__HALF,
 	OE_FLUSH__TOP,
 	OE_FLUSH__TIME,
+	OE_FLUSH__N,
 };
 
 struct ordered_events;
@@ -37,7 +38,7 @@ struct ordered_events_buffer {
 
 struct ordered_events {
 	u64				 last_flush;
-	u64				 next_flush;
+	u64				 round_flush;
 	u64				 max_timestamp;
 	u64				 max_alloc_size;
 	u64				 cur_alloc_size;
@@ -60,6 +61,7 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 void ordered_events__delete(struct ordered_events *oe, struct ordered_event *event);
 int ordered_events__flush(struct ordered_events *oe, enum oe_flush how);
 int ordered_events__flush_time(struct ordered_events *oe, u64 timestamp);
+int ordered_events__flush_n(struct ordered_events *oe, u64 n);
 void ordered_events__init(struct ordered_events *oe, ordered_events__deliver_t deliver,
 			  void *data);
 void ordered_events__free(struct ordered_events *oe);
