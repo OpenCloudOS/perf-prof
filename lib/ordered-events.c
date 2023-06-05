@@ -192,7 +192,7 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 
 	oevent = ordered_events__new_event(oe, timestamp, event);
 	if (!oevent) {
-		ordered_events__flush(oe, OE_FLUSH__HALF);
+		ordered_events__flush_n(oe, 32);
 		oevent = ordered_events__new_event(oe, timestamp, event);
 	}
 
@@ -203,11 +203,10 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 	return 0;
 }
 
-static int do_flush(struct ordered_events *oe)
+static int do_flush(struct ordered_events *oe, u64 limit, u32 n)
 {
 	struct rb_node *pos, *next = rb_first_cached(&oe->events);
 	struct ordered_event *iter;
-	u64 limit = oe->next_flush;
 	int ret;
 
 	if (!limit)
@@ -226,6 +225,9 @@ static int do_flush(struct ordered_events *oe)
 
 		ordered_events__delete(oe, iter);
 		oe->last_flush = iter->timestamp;
+
+		n --;
+		if (!n) break;
 	}
 
 	if (RB_EMPTY_ROOT(&oe->events.rb_root))
@@ -235,9 +237,11 @@ static int do_flush(struct ordered_events *oe)
 }
 
 static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
-				   u64 timestamp)
+				   u64 arg)
 {
 	int err;
+	u64 next_flush = 0;
+	u32 n = oe->nr_events;
 
 	if (oe->nr_events == 0)
 		return 0;
@@ -245,7 +249,7 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 	switch (how) {
 	case OE_FLUSH__FINAL:
 	case OE_FLUSH__TOP:
-		oe->next_flush = ULLONG_MAX;
+		next_flush = ULLONG_MAX;
 		break;
 
 	case OE_FLUSH__HALF:
@@ -260,26 +264,34 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 		if (WARN_ONCE(!last || !first, "empty queue"))
 			return 0;
 
-		oe->next_flush  = first->timestamp;
-		oe->next_flush += (last->timestamp - first->timestamp) / 2;
+		next_flush  = first->timestamp;
+		next_flush += (last->timestamp - first->timestamp) / 2;
 		break;
 	}
 
+	case OE_FLUSH__N:
+		next_flush = ULLONG_MAX;
+		n = arg;
+		break;
+
 	case OE_FLUSH__TIME:
-		oe->next_flush = timestamp;
+		next_flush = arg;
 		break;
 
 	case OE_FLUSH__ROUND:
+        next_flush = oe->round_flush;
+        break;
+
 	case OE_FLUSH__NONE:
 	default:
 		break;
 	}
 
-	err = do_flush(oe);
+	err = do_flush(oe, next_flush, n);
 
 	if (!err) {
 		if (how == OE_FLUSH__ROUND)
-			oe->next_flush = oe->max_timestamp;
+			oe->round_flush = oe->max_timestamp;
 
 		oe->last_flush_type = how;
 	}
@@ -297,6 +309,11 @@ int ordered_events__flush_time(struct ordered_events *oe, u64 timestamp)
 	return __ordered_events__flush(oe, OE_FLUSH__TIME, timestamp);
 }
 
+int ordered_events__flush_n(struct ordered_events *oe, u64 n)
+{
+	return __ordered_events__flush(oe, OE_FLUSH__N, n);
+}
+
 u64 ordered_events__first_time(struct ordered_events *oe)
 {
 	struct rb_node *pos = rb_first_cached(&oe->events);
@@ -308,6 +325,7 @@ u64 ordered_events__first_time(struct ordered_events *oe)
 void ordered_events__init(struct ordered_events *oe, ordered_events__deliver_t deliver,
 			  void *data)
 {
+	oe->round_flush = 0;
 	oe->max_timestamp = 0;
 	oe->events = RB_ROOT_CACHED;
 	INIT_LIST_HEAD(&oe->cache);
