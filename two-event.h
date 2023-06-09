@@ -27,6 +27,7 @@ struct event_info {
     struct tp *tp1;
     struct tp *tp2;
     u64 key;
+    u64 recent_time; // The most recent time for all known events.
 };
 
 // -|- - - -|- - - -|- - - -
@@ -65,7 +66,7 @@ struct two_event_class {
      * iter, On the timeline, the events between event1 and event2 can be iterated through iter.
      */
     void (*two)(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter);
-    remaining_return (*remaining)(struct two_event *two, union perf_event *event, u64 key);
+    remaining_return (*remaining)(struct two_event *two, union perf_event *event1, struct event_info *info, struct event_iter *iter);
     int (*print_header)(struct two_event *two);
     void (*print)(struct two_event *two);
 };

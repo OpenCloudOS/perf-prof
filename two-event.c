@@ -149,7 +149,7 @@ static struct two_event *two_event_find_byid(struct two_event_class *class, unsi
 }
 
 static void dummy_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter) {}
-static remaining_return dummy_remaining(struct two_event *two, union perf_event *event, u64 key) {return REMAINING_BREAK;}
+static remaining_return dummy_remaining(struct two_event *two, union perf_event *event1, struct event_info *info, struct event_iter *iter) {return REMAINING_BREAK;}
 static int dummy_print_header(struct two_event *two) {return 0;}
 static void dummy_print(struct two_event *two) {}
 
@@ -308,7 +308,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                     do {
                         if (event_need_to_print(event1, event2, info, iter)) {
-                            if (!printed) printf("Previous %.3f %s\n", neg/1000.0, unit);
+                            if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
                             printed = true;
                             multi_trace_print_title(iter->event, iter->tp, "|");
                         }
@@ -353,13 +353,77 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     }
                     if (last) {
                         struct multi_trace_type_header *e = (void *)last->sample.array;
-                        printf("After %.3f %s\n", (e->time - e2->time)/1000.0, unit);
+                        printf("`After %.3f %s\n", (e->time - e2->time)/1000.0, unit);
                     }
                 }
             }
         }
     }
 }
+
+static remaining_return delay_remaining(struct two_event *two, union perf_event *event1, struct event_info *info, struct event_iter *iter)
+{
+    struct two_event_options *opts;
+    struct multi_trace_type_header *e1 = (void *)event1->sample.array;
+    const char *unit;
+    u64 delta = 0;
+
+    if (two) {
+        opts = &two->class->opts;
+
+        if (!opts->greater_than || !iter)
+            return REMAINING_BREAK;
+
+        delta = info->recent_time - e1->time;
+        if (delta > opts->greater_than) {
+            unit = opts->env->tsc ? "kcyc" : "us";
+
+            // print events before event1
+            if (iter && iter->start && iter->start != iter->event1) {
+                struct multi_trace_type_header *e;
+                bool printed = false;
+                s64  neg;
+
+                event_iter_cmd(iter, CMD_RESET);
+
+                e = (void *)iter->event->sample.array;
+                neg = e->time - e1->time;
+
+                do {
+                    if (event_need_to_print(event1, NULL, info, iter)) {
+                        if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
+                        printed = true;
+                        multi_trace_print_title(iter->event, iter->tp, "|");
+                    }
+                    if (!event_iter_cmd(iter, CMD_NEXT))
+                        break;
+                } while (iter->curr != iter->event1);
+            }
+
+            // print event1
+            multi_trace_print(event1, two->tp1);
+
+            // print event1 to event2
+            if (iter) {
+                bool first = true;
+                char buff[32];
+                snprintf(buff, sizeof(buff), "| >= %12.3f %s", delta/1000.0, unit);
+                event_iter_cmd(iter, CMD_EVENT1);
+                while (event_iter_cmd(iter, CMD_NEXT)) {
+                    if (iter->curr == iter->event2)
+                        break;
+                    if (event_need_to_print(event1, NULL, info, iter)) {
+                        multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
+                        first = false;
+                    }
+                }
+                printf("| >= %12.3f %s, event2 is in the future.\n", delta/1000.0, unit);
+            }
+        }
+    }
+    return REMAINING_CONTINUE;
+}
+
 
 static void delay_print_node(void *opaque, struct latency_node *node)
 {
@@ -458,6 +522,7 @@ static struct two_event_class *delay_class_new(struct two_event_impl *impl, stru
 
     if (class) {
         class->two = delay_two;
+        class->remaining = delay_remaining;
         class->print_header = delay_print_header;
         class->print = delay_print;
 
@@ -730,14 +795,14 @@ static void pair_two(struct two_event *two, union perf_event *event1, union perf
     }
 }
 
-static remaining_return pair_remaining(struct two_event *two, union perf_event *event, u64 key)
+static remaining_return pair_remaining(struct two_event *two, union perf_event *event1, struct event_info *info, struct event_iter *iter)
 {
     struct pair *pair;
 
     if (two) {
         pair = container_of(two, struct pair, base);
         pair->unpaired ++;
-        multi_trace_print(event, two->tp1);
+        multi_trace_print(event1, two->tp1);
     }
     return REMAINING_CONTINUE;
 }
@@ -885,9 +950,9 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
     }
 }
 
-static remaining_return mem_profile_remaining(struct two_event *two, union perf_event *event, u64 key)
+static remaining_return mem_profile_remaining(struct two_event *two, union perf_event *event1, struct event_info *info, struct event_iter *iter)
 {
-    mem_profile_two(two, event, NULL, NULL, NULL);
+    mem_profile_two(two, event1, NULL, NULL, NULL);
     return REMAINING_CONTINUE;
 }
 

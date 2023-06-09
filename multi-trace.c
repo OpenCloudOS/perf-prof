@@ -66,6 +66,7 @@ static struct multi_trace_ctx {
     bool need_timeline;
     bool nested;
     bool impl_based_on_call;
+    u64 recent_time; // The most recent time for all known events.
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
     struct env *env;
@@ -578,7 +579,28 @@ static void multi_trace_handle_remaining(void)
         left = rb_entry(next, struct timeline_node, key_node);
         two = ctx.impl->object_find(ctx.class, left->tp, NULL);
         if (two) {
-            if (ctx.class->remaining(two, left->event, left->key) == REMAINING_BREAK)
+            struct event_info info;
+            struct event_iter iter;
+            info.tp1 = left->tp;
+            info.tp2 = NULL;
+            info.key = left->key;
+            info.recent_time = ctx.recent_time;
+            if (ctx.need_timeline) {
+                if (ctx.env->before_event1) {
+                    struct timeline_node backup = {
+                        .time = left->time - ctx.env->before_event1,
+                        .key = left->key,
+                    };
+                    iter.start = rb_entry_safe(rblist__find_first(&ctx.timeline, &backup),
+                                                struct timeline_node, timeline_node);
+                } else
+                    iter.start = left;
+                iter.event1 = left;
+                iter.event2 = NULL;
+                iter.curr = iter.start;
+            }
+
+            if (ctx.class->remaining(two, left->event, &info, ctx.need_timeline ? &iter : NULL) == REMAINING_BREAK)
                 break;
         }
         next = rb_next(next);
@@ -699,7 +721,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     struct timeline_node *curr = iter->curr;
     struct multi_trace_type_header *e  = (void *)iter->event->sample.array;
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
-    struct multi_trace_type_header *e2 = (void *)event2->sample.array;
+    struct multi_trace_type_header *e2 = event2 ? (void *)event2->sample.array : NULL;
     bool match;
 
     if (!(ctx.env->samecpu || ctx.env->samepid || ctx.env->samekey))
@@ -711,12 +733,12 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
 
     if (ctx.env->samecpu && match)
     if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
-        e->cpu_entry.cpu == e2->cpu_entry.cpu)
+        (e2 && e->cpu_entry.cpu == e2->cpu_entry.cpu))
         return true;
 
     if (ctx.env->samepid && match)
     if (e->tid_entry.pid == e1->tid_entry.pid ||
-        e->tid_entry.pid == e2->tid_entry.pid)
+        (e2 && e->tid_entry.pid == e2->tid_entry.pid))
         return true;
 
     if (ctx.env->samekey && match)
@@ -813,6 +835,7 @@ static void multi_trace_tryto_call_two(struct timeline_node *tl_event, bool *nee
                 info.tp1 = prev->tp;
                 info.tp2 = tp;
                 info.key = key;
+                info.recent_time = ctx.recent_time;
                 if (ctx.need_timeline) {
                     struct event_iter iter;
                     if (ctx.env->before_event1) {
@@ -932,6 +955,9 @@ static void multi_trace_sample(union perf_event *event, int instance)
 
     if (base_profiler->dup)
         dup_stat.nr_samples ++;
+
+    if (hdr->time > ctx.recent_time)
+        ctx.recent_time = hdr->time;
 
     evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
     if (!evsel)
