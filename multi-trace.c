@@ -401,6 +401,8 @@ static int monitor_ctx_init(struct env *env)
         }
     }
 
+    sched_init(ctx.nr_list, ctx.tp_list);
+
     if (env->detail &&
         ctx.nr_ins > 1 &&
         !using_order(base_profiler)) {
@@ -949,6 +951,8 @@ static void multi_trace_sample(union perf_event *event, int instance)
     struct tp *tp = NULL, *tp1 = NULL;
     struct timeline_node current;
     struct perf_evsel *evsel;
+    void *raw;
+    int size;
     int i, j;
     bool need_find_prev, need_backup, need_remove_from_backup;
     u64 key;
@@ -991,12 +995,23 @@ found:
         multi_trace_interval();
     }
 
+    multi_trace_raw_size(event, &raw, &size, tp);
+
     if (!ctx.nested) {
+        bool event_is_sched_wakeup_and_unnecessary;
+        sched_event(raw, size, hdr->cpu_entry.cpu);
+        event_is_sched_wakeup_and_unnecessary = sched_wakeup_unnecessary(raw, size);
+
         need_find_prev = i != 0 || ctx.env->cycle;
-        need_backup = i != ctx.nr_list - 1 || ctx.env->cycle;
+        need_backup = (i != ctx.nr_list - 1 && !event_is_sched_wakeup_and_unnecessary) ||
+                      (i == ctx.nr_list - 1 && ctx.env->cycle);
         need_remove_from_backup = 1;
         // no need to use tp1
         tp1 = NULL;
+
+        if (ctx.env->verbose >= VERBOSE_NOTICE &&
+            i != ctx.nr_list - 1 && event_is_sched_wakeup_and_unnecessary)
+            multi_trace_print_title(event, tp, "UNNECESSARY");
     } else {
         need_find_prev = ctx.impl_based_on_call || tp1 != NULL;
         need_backup = tp1 == NULL;
@@ -1008,10 +1023,6 @@ found:
     // !untraced: tp->key || ctx.env->key
     //  untraced: tp->key
     if (tp->key_prog) {
-        void *raw;
-        int size;
-
-        multi_trace_raw_size(event, &raw, &size, tp);
         key = tp_get_key(tp, raw, size);
     }
 

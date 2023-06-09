@@ -253,4 +253,10 @@ void perf_event_convert_read_tsc_conversion(struct perf_mmap *map);
 union perf_event *perf_event_convert(union perf_event *event, bool writable);
 
 
+//sched.c
+void sched_init(int nr_list, struct tp_list **tp_list);
+void sched_event(void *raw, int size, int cpu);
+bool sched_wakeup_unnecessary(void *raw, int size);
+
+
 #endif
