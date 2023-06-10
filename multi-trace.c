@@ -26,7 +26,8 @@ struct timeline_node {
     u32 unneeded : 1,
         need_find_prev : 1,
         need_backup : 1,
-        need_remove_from_backup : 1;
+        need_remove_from_backup : 1,
+        maybe_unpaired : 1;
     struct list_head needed;
     struct list_head pending;
     union perf_event *event;
@@ -67,6 +68,7 @@ static struct multi_trace_ctx {
     bool nested;
     bool impl_based_on_call;
     u64 recent_time; // The most recent time for all known events.
+    u64 recent_lost_time;
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
     struct env *env;
@@ -125,6 +127,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             b->need_find_prev = e->need_find_prev;
             b->need_backup = e->need_backup;
             b->need_remove_from_backup = e->need_remove_from_backup;
+            b->maybe_unpaired = 0;
             b->event = new_event;
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
@@ -186,6 +189,7 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         b->need_find_prev = e->need_find_prev;
         b->need_backup = e->need_backup;
         b->need_remove_from_backup = e->need_remove_from_backup;
+        b->maybe_unpaired = 0;
         b->event = new_event;
         RB_CLEAR_NODE(&b->timeline_node);
         RB_CLEAR_NODE(&b->key_node);
@@ -235,6 +239,7 @@ static void timeline_free_unneeded(bool lost)
 {
     struct rb_node *next = rb_first_cached(&ctx.timeline.entries);
     struct timeline_node *tl;
+    u64 unneeded_lost = 0UL;
     u64 unneeded_before = 0UL;
     u64 unneeded = 0, backup = 0;
 
@@ -242,13 +247,18 @@ static void timeline_free_unneeded(bool lost)
      * When there are events lost, events cannot be paired.
      * Therefore, actively release some old events.
     **/
-    if (lost) {
-        struct rb_node *last = rb_last(&ctx.timeline.entries.rb_root);
-        struct timeline_node *tl_last = rb_entry_safe(last, struct timeline_node, timeline_node);
+    if (lost || ctx.recent_lost_time) {
         u64 interval = ctx.env->interval ? : 3000;
-        if (tl_last)
-            unneeded_before = tl_last->time - interval * 1000000UL;
-    } else if (ctx.env->before_event1) {
+
+        // Any event before `ctx.recent_lost_time' may be unpaired. In the next interval, if event2
+        // is not received, the event is considered lost and removed from the timeline forcibly.
+        unneeded_lost = ctx.recent_time - interval * 1000000UL;
+        if (unneeded_lost >= ctx.recent_lost_time) {
+            unneeded_lost = 0UL;
+            ctx.recent_lost_time = 0UL;
+        }
+    }
+    if (ctx.env->before_event1) {
         struct timeline_node *needed_first;
         if (!list_empty(&ctx.needed_list))
             needed_first = list_first_entry(&ctx.needed_list, struct timeline_node, needed);
@@ -261,11 +271,13 @@ static void timeline_free_unneeded(bool lost)
         if (needed_first && needed_first->time > ctx.env->before_event1)
             unneeded_before = needed_first->time - ctx.env->before_event1;
     }
+    if (unneeded_lost > unneeded_before)
+        unneeded_before = unneeded_lost;
 
     while (next) {
         tl = rb_entry(next, struct timeline_node, timeline_node);
 
-        // if lost: before `tl_last->time - interval` on the timeline
+        // if lost: before `ctx.recent_lost_time` on the timeline
         // elif before_event1: before `needed_first->time - before_event1` on the timeline
         // else: unneeded
         if ((unneeded_before == 0UL && tl->unneeded) ||
@@ -289,7 +301,7 @@ static void timeline_free_unneeded(bool lost)
 
         next = rb_first_cached(&ctx.timeline.entries);
     }
-    if (lost) {
+    if (lost || backup) {
         print_time(stderr);
         fprintf(stderr, "free unneeded %lu, backup %lu\n", unneeded, backup);
     }
@@ -601,6 +613,8 @@ static void multi_trace_handle_remaining(void)
                 iter.event2 = NULL;
                 iter.curr = iter.start;
             }
+            if (info.recent_time - left->time > ctx.env->greater_than)
+                left->maybe_unpaired = 1;
 
             if (ctx.class->remaining(two, left->event, &info, ctx.need_timeline ? &iter : NULL) == REMAINING_BREAK)
                 break;
@@ -673,8 +687,12 @@ static void multi_trace_sigusr1(int signum)
     }
 }
 
-static void multi_trace_lost(union perf_event *event, int ins)
+static void multi_trace_lost(union perf_event *event, int ins, u64 lost_time)
 {
+    lost_time = lost_time ? : ctx.recent_time;
+    if (ctx.recent_lost_time < lost_time)
+        ctx.recent_lost_time = lost_time;
+
     print_lost_fn(event, ins);
     if (ctx.need_timeline)
         timeline_free_unneeded(true);
@@ -831,6 +849,7 @@ static void multi_trace_tryto_call_two(struct timeline_node *tl_event, bool *nee
         if (rbn) {
             struct timeline_node *prev;
             prev = container_of(rbn, struct timeline_node, key_node);
+            prev->maybe_unpaired = 0;
             two = ctx.impl->object_find(ctx.class, prev->tp, tp);
             if (two) {
                 struct event_info info;

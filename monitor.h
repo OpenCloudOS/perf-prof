@@ -186,7 +186,7 @@ typedef struct monitor {
     /* PERF_RECORD_* */
 
     //PERF_RECORD_LOST          = 2,
-    void (*lost)(union perf_event *event, int instance);
+    void (*lost)(union perf_event *event, int instance, u64 lost_time);
 
     //PERF_RECORD_COMM          = 3,
     void (*comm)(union perf_event *event, int instance);

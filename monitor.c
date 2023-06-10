@@ -941,7 +941,7 @@ int perf_event_process_record(union perf_event *event, int instance, bool writab
     switch (event->header.type) {
     case PERF_RECORD_LOST:
         if (monitor->lost)
-            monitor->lost(event, instance);
+            monitor->lost(event, instance, 0);
         else
             print_lost_fn(event, instance);
         break;

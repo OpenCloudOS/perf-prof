@@ -6,12 +6,19 @@
 #include <linux/ordered-events.h>
 
 
+struct lost_record {
+    struct perf_record_lost lost;
+    int ins;
+    u64 lost_time;
+};
+
 static struct order_ctx {
     profiler *base;
     profiler order;
     struct ordered_events oe;
     u32 nr_unordered_events;
     u64 max_timestamp;
+    struct lost_record *lost_records;
     struct env *env;
 } ctx;
 
@@ -63,6 +70,8 @@ static void order_deinit(struct perf_evlist *evlist)
     ordered_events__flush(&ctx.oe, OE_FLUSH__FINAL);
     ctx.base->deinit(evlist);
     ordered_events__free(&ctx.oe);
+    if (ctx.base->lost)
+        free(ctx.lost_records);
 }
 
 static void order_interval(void)
@@ -73,9 +82,24 @@ static void order_interval(void)
         ctx.base->interval();
 }
 
+static void order_lost(union perf_event *event, int ins, u64 lost_time)
+{
+    if (ctx.base->lost) {
+        ctx.lost_records[ins].lost = event->lost;
+        ctx.lost_records[ins].ins = ins;
+        ctx.lost_records[ins].lost_time = lost_time;
+    }
+}
+
 static void order_sample(union perf_event *event, int instance)
 {
     struct order_event_header *h = (void *)event->sample.array;
+
+    if (ctx.base->lost && unlikely(ctx.lost_records[instance].lost.lost)) {
+        ctx.base->lost((union perf_event *)&ctx.lost_records[instance].lost, instance,
+                        ctx.lost_records[instance].lost_time ? : h->time);
+        ctx.lost_records[instance].lost.lost = 0;
+    }
     ordered_events__queue(&ctx.oe, event, h->time, instance);
     print_nr_unordered_events(true);
 }
@@ -84,6 +108,12 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
 {
     struct perf_evsel *evsel;
     int err;
+
+    if (ctx.base->lost) {
+        ctx.lost_records = calloc(monitor_nr_instance(), sizeof(struct lost_record));
+        if (!ctx.lost_records)
+            return -1;
+    }
 
     ctx.env = env;
     ctx.base->reinit = ctx.order.reinit;
@@ -106,6 +136,8 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
     ctx.order.init = order_init;
     ctx.order.deinit = order_deinit;
     ctx.order.sample = order_sample;
+    if (ctx.base->lost)
+        ctx.order.lost = order_lost;
     if (env->interval && (ctx.base->interval || env->overwrite))
         ctx.order.interval = order_interval;
 
