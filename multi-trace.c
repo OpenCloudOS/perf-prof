@@ -72,6 +72,7 @@ static struct multi_trace_ctx {
     u64 recent_time; // The most recent time for all known events.
     u64 recent_lost_time;
     u64 event_handled;
+    u64 sched_wakeup_unnecessary;
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
     struct env *env;
@@ -698,6 +699,8 @@ static void multi_trace_sigusr1(int signum)
                backup_stat.new, backup_stat.delete, rblist__nr_entries(&ctx.backup),
                backup_stat.mem_bytes);
     }
+    printf("SPECIAL EVENT:\n");
+    printf("  sched:sched_wakeup unnecessary %lu\n", ctx.sched_wakeup_unnecessary);
 }
 
 static void multi_trace_lost(union perf_event *event, int ins, u64 lost_time)
@@ -1048,6 +1051,7 @@ found:
         bool event_is_sched_wakeup_and_unnecessary;
         sched_event(raw, size, hdr->cpu_entry.cpu);
         event_is_sched_wakeup_and_unnecessary = sched_wakeup_unnecessary(raw, size);
+        if (event_is_sched_wakeup_and_unnecessary) ctx.sched_wakeup_unnecessary ++;
 
         need_find_prev = i != 0 || ctx.env->cycle;
         need_backup = (i != ctx.nr_list - 1 && !event_is_sched_wakeup_and_unnecessary) ||
