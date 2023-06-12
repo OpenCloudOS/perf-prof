@@ -4,6 +4,7 @@
 #include <monitor.h>
 
 static int inited;
+static int sched_wakeup_new;
 static int sched_wakeup_id;
 static int sched_switch_id;
 static struct running_oncpu {
@@ -23,6 +24,22 @@ struct sched_wakeup {
     int success;//      offset:32;      size:4; signed:1;
     int target_cpu;//   offset:36;      size:4; signed:1;
 };
+/*
+ * upstream
+ * 58b9987 sched/tracing: Remove the redundant 'success' in the sched tracepoint
+**/
+struct sched_wakeup_new {
+    unsigned short common_type;//       offset:0;       size:2; signed:0;
+    unsigned char common_flags;//       offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
+    int common_pid;//   offset:4;       size:4; signed:1;
+
+    char comm[16];//    offset:8;       size:16;        signed:1;
+    pid_t pid;//        offset:24;      size:4; signed:1;
+    int prio;// offset:28;      size:4; signed:1;
+    int target_cpu;//      offset:32;      size:4; signed:1;
+};
+
 struct sched_switch {
     unsigned short common_type;//       offset:0;       size:2; signed:0;
     unsigned char common_flags;//       offset:2;       size:1; signed:0;
@@ -40,6 +57,7 @@ struct sched_switch {
 union sched_event {
     unsigned short common_type;//       offset:0;       size:2; signed:0;
     struct sched_wakeup sched_wakeup;
+    struct sched_wakeup_new sched_wakeup_new;
     struct sched_switch sched_switch;
 };
 
@@ -75,6 +93,7 @@ to_check_switch:
     return ;
 
 to_enable:
+    sched_wakeup_new = !tep__event_has_field(wakeup_id, "success");
     sched_wakeup_id = wakeup_id;
     sched_switch_id = switch_id;
     cpus = get_present_cpus();
@@ -203,7 +222,8 @@ bool sched_wakeup_unnecessary(void *raw, int size)
         return false;
 
     if (sched->common_type == sched_wakeup_id) {
-        if (percpu_running[sched->sched_wakeup.target_cpu].pid == sched->sched_wakeup.pid ||
+        int target_cpu = sched_wakeup_new ? sched->sched_wakeup_new.target_cpu : sched->sched_wakeup.target_cpu;
+        if (percpu_running[target_cpu].pid == sched->sched_wakeup.pid ||
             sched->sched_wakeup.common_pid == sched->sched_wakeup.pid)
             return true;
     }
