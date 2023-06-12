@@ -108,6 +108,20 @@ def test_multi_trace_softirq_timer_detail_tsc(runtime, memleak_check):
         if not memleak_check:
             assert std == PerfProf.STDOUT
 
+def test_multi_trace_rundelay(runtime, memleak_check):
+    # perf-prof multi-trace -e 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/' \
+    #                       -e 'sched:sched_switch//key=next_pid/,sched:sched_migrate_task//untraced/key=pid/' \
+    #                       -k pid -m 256 -i 1000 --order --than 100ms --detail=samekey,-100us
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/',
+                            '-e', 'sched:sched_switch//key=next_pid/,sched:sched_migrate_task//untraced/key=pid/',
+                            '-k', 'pid', '-m', '256', '-i', '1000', '--order', '--than', '100ms', '--detail=samekey,-100us'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        if not memleak_check or (
+            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
+            print(line, end='', flush=True)
+        if not memleak_check:
+            assert std == PerfProf.STDOUT
 
 @pytest.fixture
 def sleep_loop_tid():
