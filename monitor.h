@@ -17,6 +17,7 @@
 /* perf sample has 16 bits size limit */
 #define PERF_SAMPLE_MAX_SIZE (1 << 16)
 
+extern unsigned long perf_evlist_enable_nsec;
 
 struct monitor;
 void monitor_register(struct monitor *m);

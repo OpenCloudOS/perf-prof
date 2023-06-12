@@ -33,6 +33,7 @@ static int perf_event_fds;
 
 struct monitor *monitors_list = NULL;
 struct monitor *monitor = NULL;
+unsigned long perf_evlist_enable_nsec = 0;
 
 void monitor_register(struct monitor *m)
 {
@@ -1116,6 +1117,7 @@ int main(int argc, char *argv[])
         struct perf_thread_map *threads;
         int max_read_size;
     } interval_args;
+    struct timespec before_enable, after_enable;
     bool deinited;
 
     sigusr2_handler(0);
@@ -1245,7 +1247,11 @@ reinit:
         }
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &before_enable);
     perf_evlist__enable(evlist);
+    clock_gettime(CLOCK_MONOTONIC, &after_enable);
+    perf_evlist_enable_nsec = (after_enable.tv_sec  - before_enable.tv_sec)*NSEC_PER_SEC +
+                               after_enable.tv_nsec - before_enable.tv_nsec;
 
     signal(SIGCHLD, sig_handler);
     signal(SIGINT, sig_handler);
