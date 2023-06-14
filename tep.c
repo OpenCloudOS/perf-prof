@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
 #include <stack_helpers.h>
@@ -49,6 +50,14 @@ int tep__event_id(const char *sys, const char *name)
     struct stat st;
     struct tep_event *event;
     int id = -1;
+    int i;
+    struct mountpoint {
+        const char *path;
+        const char *subdir;
+    } mountpoints[] = {
+        {debugfs__mountpoint(), "/tracing"},
+        {tracefs__mountpoint(), ""},
+    };
 
     tep__ref();
     event = tep_find_event_by_name(tep, sys, name);
@@ -56,22 +65,28 @@ int tep__event_id(const char *sys, const char *name)
         id = event->id;
         goto unref;
     }
-    snprintf(format, sizeof(format), "/sys/kernel/debug/tracing/events/%s/%s/format", sys, name);
-    if (stat(format, &st) == 0) {
-        FILE *fp;
-        size_t size = 65536;
-        char *buff = malloc(size);
 
-        fp = fopen(format, "r");
-        size = fread(buff, 1, size, fp);
-        fclose(fp);
+    for (i = 0; i < sizeof(mountpoints)/sizeof(mountpoints[0]); i++) {
+        snprintf(format, sizeof(format), "%s%s/events/%s/%s/format", mountpoints[i].path,
+                                          mountpoints[i].subdir, sys, name);
+        if (stat(format, &st) == 0) {
+            FILE *fp;
+            size_t size = 65536;
+            char *buff = malloc(size);
 
-        tep_parse_format(tep, &event, buff, size, sys);
+            fp = fopen(format, "r");
+            size = fread(buff, 1, size, fp);
+            fclose(fp);
 
-        free(buff);
+            tep_parse_format(tep, &event, buff, size, sys);
 
-        id = event->id;
+            free(buff);
+
+            id = event->id;
+            break;
+        }
     }
+
 unref:
     tep__unref();
     return id;
