@@ -334,6 +334,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                             first = false;
                         }
                     }
+                    if (first)
+                        printf("%s\n", buff);
                 }
 
                 // print event2
