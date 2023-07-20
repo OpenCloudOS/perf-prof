@@ -5,6 +5,7 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <linux/compiler.h>
 #include <linux/rblist.h>
 #include <monitor.h>
@@ -44,7 +45,8 @@ struct block_iostat {
 static struct blktrace_ctx {
     struct perf_evlist *evlist;
     struct block_iostat stats[BLOCK_MAX];
-    dev_t  dev;
+    sector_t start_sector;
+    sector_t end_sector;
     int max_name_len;
     struct rblist rq_tracks;
     struct env *env;
@@ -190,9 +192,24 @@ static void iostat_reset(void)
     }
 }
 
+static inline unsigned get_dev_major(u32 dev)
+{
+    return (dev & 0xfff00) >> 8;
+}
+
+static inline unsigned get_dev_minor(u32 dev)
+{
+    return (dev & 0xff) | ((dev >> 12) & 0xfff00);
+}
+
 static int monitor_ctx_init(struct env *env)
 {
     struct stat st;
+    char path[4096];
+    char data[48];
+    unsigned int size;
+    unsigned int major, minor;
+    int fd;
 
     if (!env->device)
         return -1;
@@ -200,7 +217,38 @@ static int monitor_ctx_init(struct env *env)
     if (stat(env->device, &st) < 0)
         return -1;
 
-    ctx.dev = new_decode_dev((u32)st.st_rdev);
+    major = get_dev_major((u32)st.st_rdev);
+    minor = get_dev_minor((u32)st.st_rdev);
+
+    memset(path, 0, 4096);
+    sprintf(path, "/sys/dev/block/%u:%u/start", major, minor);
+    if (stat(path, &st) < 0) {
+        ctx.start_sector = 0;
+    } else {
+        fd = open(path, O_RDONLY);
+        if (fd < 0)
+            return -1;
+        memset(data, 0, 48);
+        if (read(fd, data, 48) <= 0)
+            return -1;
+
+        ctx.start_sector = atoi(data);
+        close(fd);
+    }
+
+    memset(path, 0, 4096);
+    sprintf(path, "/sys/dev/block/%u:%u/size", major, minor);
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return -1;
+
+    memset(data, 0, 48);
+    if (read(fd, data, 48) <= 0)
+        return -1;
+
+    size = atoi(data);
+    ctx.end_sector = ctx.start_sector + size;
 
     iostat_reset();
 
@@ -277,7 +325,7 @@ static int blktrace_filter(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int err;
 
-    snprintf(filter, sizeof(filter), "dev==%u", (unsigned int)ctx.dev);
+    snprintf(filter, sizeof(filter), "sector>=%u && sector<=%u", (unsigned int)ctx.start_sector, (unsigned int)ctx.end_sector);
     perf_evlist__for_each_evsel(evlist, evsel) {
         err = perf_evsel__apply_filter(evsel, filter);
         if (err < 0)
