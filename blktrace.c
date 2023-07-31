@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <linux/compiler.h>
 #include <linux/rblist.h>
+#include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
 #include <trace_helpers.h>
@@ -45,6 +46,8 @@ struct block_iostat {
 static struct blktrace_ctx {
     struct perf_evlist *evlist;
     struct block_iostat stats[BLOCK_MAX];
+    dev_t  dev;
+    int partition;
     sector_t start_sector;
     sector_t end_sector;
     int max_name_len;
@@ -206,10 +209,9 @@ static int monitor_ctx_init(struct env *env)
 {
     struct stat st;
     char path[4096];
-    char data[48];
-    unsigned int size;
     unsigned int major, minor;
-    int fd;
+    char *buf;
+    size_t len;
 
     if (!env->device)
         return -1;
@@ -217,38 +219,37 @@ static int monitor_ctx_init(struct env *env)
     if (stat(env->device, &st) < 0)
         return -1;
 
+    ctx.dev = new_decode_dev((u32)st.st_rdev);
     major = get_dev_major((u32)st.st_rdev);
     minor = get_dev_minor((u32)st.st_rdev);
 
     memset(path, 0, 4096);
-    sprintf(path, "/sys/dev/block/%u:%u/start", major, minor);
-    if (stat(path, &st) < 0) {
-        ctx.start_sector = 0;
-    } else {
-        fd = open(path, O_RDONLY);
-        if (fd < 0)
-            return -1;
-        memset(data, 0, 48);
-        if (read(fd, data, 48) <= 0)
-            return -1;
+    sprintf(path, "dev/block/%u:%u/partition", major, minor);
+    if (sysfs__read_str(path, &buf, &len) < 0)
+        ctx.partition = 0;
+    else {
+        ctx.partition = atoi(buf);
+        ctx.dev -= ctx.partition;
+        free(buf);
 
-        ctx.start_sector = atoi(data);
-        close(fd);
+        memset(path, 0, 4096);
+        sprintf(path, "dev/block/%u:%u/start", major, minor);
+        if (sysfs__read_str(path, &buf, &len) < 0)
+            return -1;
+        else {
+            ctx.start_sector = atol(buf);
+            free(buf);
+        }
+
+        memset(path, 0, 4096);
+        sprintf(path, "dev/block/%u:%u/size", major, minor);
+        if (sysfs__read_str(path, &buf, &len) < 0)
+            return -1;
+        else {
+            ctx.end_sector = ctx.start_sector + atol(buf);
+            free(buf);
+        }
     }
-
-    memset(path, 0, 4096);
-    sprintf(path, "/sys/dev/block/%u:%u/size", major, minor);
-
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return -1;
-
-    memset(data, 0, 48);
-    if (read(fd, data, 48) <= 0)
-        return -1;
-
-    size = atoi(data);
-    ctx.end_sector = ctx.start_sector + size;
 
     iostat_reset();
 
@@ -321,11 +322,17 @@ static int blktrace_init(struct perf_evlist *evlist, struct env *env)
 
 static int blktrace_filter(struct perf_evlist *evlist, struct env *env)
 {
-    char filter[128];
+    char filter[256];
     struct perf_evsel *evsel;
     int err;
 
-    snprintf(filter, sizeof(filter), "sector>=%u && sector<=%u", (unsigned int)ctx.start_sector, (unsigned int)ctx.end_sector);
+    if (ctx.partition)
+        snprintf(filter, sizeof(filter), "dev==%u && sector>=%lu && sector<=%lu", \
+                    (unsigned int)ctx.dev, ctx.start_sector, ctx.end_sector);
+    else
+        snprintf(filter, sizeof(filter), "dev==%u", (unsigned int)ctx.dev);
+    if (ctx.env->verbose)
+        printf("%s\n", filter);
     perf_evlist__for_each_evsel(evlist, evsel) {
         err = perf_evsel__apply_filter(evsel, filter);
         if (err < 0)
