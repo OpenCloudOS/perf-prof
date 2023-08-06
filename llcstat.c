@@ -125,7 +125,7 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
     perf_evlist__add(evlist, evsel);
 
     if (ctx.cpuinfo.vendor != X86_VENDOR_AMD)
-        return 0;
+        goto set_leader;
 
     ctx.l3_cache_miss_latency = calloc(ctx.nr_ins, sizeof(struct cache));
     ctx.l3_misses_by_request_type = calloc(ctx.nr_ins, sizeof(struct cache));
@@ -147,6 +147,9 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
         return -1;
     }
     perf_evlist__add(evlist, evsel);
+
+set_leader:
+    perf_evlist__set_leader(evlist);
     return 0;
 }
 
