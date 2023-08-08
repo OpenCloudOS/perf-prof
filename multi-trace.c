@@ -346,6 +346,7 @@ static int monitor_ctx_init(struct env *env)
         .perins = env->perins,
         .only_print_greater_than = env->only_print_greater_than,
         .greater_than = env->greater_than,
+        .lower_than = env->lower_than,
         .heatmap = env->heatmap,
         .first_n = 10,
         .sort_print = ctx.nested ? false : true,
@@ -1292,7 +1293,7 @@ static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
 static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "only-than", "detail", "perins", "heatmap", "cycle");
+    PROFILER_ARGV_PROFILER, "event", "key", "impl", "than", "only-than", "lower", "detail", "perins", "heatmap", "cycle");
 static profiler multi_trace = {
     .name = "multi-trace",
     .desc = multi_trace_desc,

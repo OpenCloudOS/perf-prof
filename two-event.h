@@ -17,6 +17,7 @@ struct two_event_options {
     bool perins;
     bool only_print_greater_than;
     unsigned long greater_than;
+    unsigned long lower_than;
     char *heatmap;
     unsigned int first_n;
     bool sort_print;
