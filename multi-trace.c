@@ -68,7 +68,6 @@ static struct multi_trace_ctx {
     bool need_timeline;
     bool nested;
     bool impl_based_on_call;
-    u64 first_event_time;
     u64 recent_time; // The most recent time for all known events.
     u64 recent_lost_time;
     u64 event_handled;
@@ -996,20 +995,6 @@ static void multi_trace_sample(union perf_event *event, int instance)
 
     if (base_profiler->dup)
         dup_stat.nr_samples ++;
-
-    if (unlikely(!ctx.first_event_time))
-        ctx.first_event_time = hdr->time;
-    /*
-     * Start sampling after the events is fully enabled.
-     *
-     * -e sched:sched_wakeup -e sched:sched_switch -C 0-95
-     * A sched_wakeup occurs on CPU0, possibly a paired sched_switch occurs on CPU95. When enabling,
-     * CPU0 is enabled first, and CPU95 is enabled last. It is possible that the sched_wakeup event
-     * is only sampled on CPU0, and the sched_switch event is not sampled on CPU95.
-     * It is possible that sched_wakeup will block the timeline to free unneeded events.
-    **/
-    if (hdr->time < ctx.first_event_time + perf_evlist_enable_nsec)
-        goto free_dup_event;
 
     if (hdr->time > ctx.recent_time)
         ctx.recent_time = hdr->time;
