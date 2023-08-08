@@ -596,6 +596,44 @@ static int multi_trace_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
+static unsigned long drop_mmap_events(struct perf_mmap *map)
+{
+    union perf_event *event;
+    bool writable = false;
+    unsigned long dropped = 0;
+
+    if (perf_mmap__read_init(map) < 0)
+        return 0;
+
+    while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
+        dropped ++;
+        perf_mmap__consume(map);
+    }
+
+    perf_mmap__read_done(map);
+    return dropped;
+}
+
+static void multi_trace_enabled(struct perf_evlist *evlist)
+{
+    struct perf_mmap *map;
+    unsigned long dropped = 0;
+    /*
+     * Start sampling after the events is fully enabled.
+     *
+     * -e sched:sched_wakeup -e sched:sched_switch -C 0-95
+     * A sched_wakeup occurs on CPU0, possibly a paired sched_switch occurs on CPU95. When enabling,
+     * CPU0 is enabled first, and CPU95 is enabled last. It is possible that the sched_wakeup event
+     * is only sampled on CPU0, and the sched_switch event is not sampled on CPU95.
+     * It is possible that sched_wakeup will block the timeline to free unneeded events.
+    **/
+    perf_evlist__for_each_mmap(evlist, map, ctx.env->overwrite) {
+        dropped += drop_mmap_events(map);
+    }
+    if (ctx.env->verbose)
+        printf("Drop %lu events before starting sampling.\n", dropped);
+}
+
 static void multi_trace_handle_remaining(void)
 {
     struct rb_node *next = rb_first_cached(&ctx.backup.entries);
@@ -1287,6 +1325,7 @@ static profiler multi_trace = {
     .help = multi_trece_help,
     .init = multi_trace_init,
     .filter = multi_trace_filter,
+    .enabled = multi_trace_enabled,
     .deinit = multi_trace_exit,
     .sigusr1 = multi_trace_sigusr1,
     .interval = multi_trace_interval,

@@ -179,6 +179,7 @@ typedef struct monitor {
 
     int (*init)(struct perf_evlist *evlist, struct env *env);
     int (*filter)(struct perf_evlist *evlist, struct env *env);
+    void (*enabled)(struct perf_evlist *evlist);
     void (*deinit)(struct perf_evlist *evlist);
     void (*sigusr1)(int signum);
     void (*interval)(void);
