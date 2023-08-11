@@ -19,6 +19,10 @@ struct cache {
 static struct monitor_ctx {
     int nr_ins;
     struct cpuinfo_x86 cpuinfo;
+    struct perf_evlist *evlist;
+    struct perf_evsel *leader;
+    struct cache *total_time_enabled;
+    struct cache *total_time_running;
     struct cache *l3_cache_references;
     struct cache *l3_cache_misses;
     struct cache *l3_cache_miss_latency;
@@ -97,17 +101,30 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
             l3_cache_miss = 0x0300C00000400104UL;
             l3_cache_miss_latency = 0x0300C00000400090UL;
             l3_misses_by_request_type = 0x0300C00000401F9AUL;
-        }
+        } else
+            return -1;
     } else
         return -1;
 
     ctx.nr_ins = perf_cpu_map__nr(llcstat.cpus);
+    ctx.total_time_enabled = calloc(ctx.nr_ins, sizeof(struct cache));
+    ctx.total_time_running = calloc(ctx.nr_ins, sizeof(struct cache));
     ctx.l3_cache_references = calloc(ctx.nr_ins, sizeof(struct cache));
     ctx.l3_cache_misses = calloc(ctx.nr_ins, sizeof(struct cache));
-    if (!ctx.l3_cache_references || !ctx.l3_cache_misses)
+    if (!ctx.total_time_enabled || !ctx.total_time_running ||
+        !ctx.l3_cache_references || !ctx.l3_cache_misses)
         return -1;
 
+    // PERF_FORMAT_GROUP
+    //     Use the leader event to read all counters at once. Read the l3_cache_references event
+    //     first, and then read the l3_cache_misses event, which will have an increment.
+    //
+    // PERF_FORMAT_TOTAL_TIME_ENABLED
+    // PERF_FORMAT_TOTAL_TIME_RUNNING
+    //    Use the leader event to get the running time of all events.
+    //
     attr.type = type;
+    attr.read_format = PERF_FORMAT_ID | PERF_FORMAT_GROUP | PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
     ctx.l3_cache_reference_config = attr.config = l3_cache_reference;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -115,7 +132,10 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
         return -1;
     }
     perf_evlist__add(evlist, evsel);
+    ctx.leader = evsel;
+    ctx.evlist = evlist;
 
+    attr.read_format = PERF_FORMAT_ID;
     ctx.l3_cache_miss_config = attr.config = l3_cache_miss;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -155,6 +175,8 @@ set_leader:
 
 static void llcstat_exit(struct perf_evlist *evlist)
 {
+    free(ctx.total_time_enabled);
+    free(ctx.total_time_running);
     free(ctx.l3_cache_references);
     free(ctx.l3_cache_misses);
     if (ctx.cpuinfo.vendor != X86_VENDOR_AMD)
@@ -165,23 +187,55 @@ static void llcstat_exit(struct perf_evlist *evlist)
 
 static void llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
+    struct perf_counts {
+        u64 nr;
+        u64 total_time_enabled;
+        u64 total_time_running;
+        struct {
+            u64 value;
+            u64 id;
+        } ctnr[0];
+    } *groups = (void *)count;
     struct cache *cache;
-    __u64 config = perf_evsel__attr(evsel)->config;
+    int i;
 
-    if (config == ctx.l3_cache_reference_config)
-        cache = ctx.l3_cache_references;
-    else if (config == ctx.l3_cache_miss_config)
-        cache = ctx.l3_cache_misses;
-    else if (config == ctx.l3_cache_miss_latency_config)
-        cache = ctx.l3_cache_miss_latency;
-    else if (config == ctx.l3_misses_by_request_type_config)
-        cache = ctx.l3_misses_by_request_type;
-    else
+    #define UPDATE_COUNTER(c) \
+    if (c > cache[instance].counter) { \
+        cache[instance].incremental = c - cache[instance].counter; \
+        cache[instance].counter = c; \
+    }
+
+    if (evsel != ctx.leader)
         return;
 
-    if (count->val > cache[instance].counter) {
-        cache[instance].incremental = count->val - cache[instance].counter;
-        cache[instance].counter = count->val;
+    cache = ctx.total_time_enabled;
+    UPDATE_COUNTER(groups->total_time_enabled);
+
+    cache = ctx.total_time_running;
+    UPDATE_COUNTER(groups->total_time_running);
+
+    for (i = 0; i < groups->nr; i++) {
+        __u64 config;
+        u64 value = groups->ctnr[i].value;
+
+        evsel = perf_evlist__id_to_evsel(ctx.evlist, groups->ctnr[i].id, NULL);
+        if (!evsel)
+            continue;
+
+        config = perf_evsel__attr(evsel)->config;
+
+        if (config == ctx.l3_cache_reference_config)
+            cache = ctx.l3_cache_references;
+        else if (config == ctx.l3_cache_miss_config)
+            cache = ctx.l3_cache_misses;
+        else if (config == ctx.l3_cache_miss_latency_config)
+            cache = ctx.l3_cache_miss_latency;
+        else if (config == ctx.l3_misses_by_request_type_config)
+            cache = ctx.l3_misses_by_request_type;
+        else
+            continue;
+
+        UPDATE_COUNTER(value);
     }
 }
 
@@ -190,15 +244,17 @@ static void llcstat_interval(void)
     int ins;
 
     print_time(stdout); printf("\n");
-    printf("[CPU] L3 %9s %9s  %6s  %12s\n", "REFERENCE", "MISSES", "HIT%", "MISS-LATENCY");
+    printf("[CPU] L3 %9s %9s  %6s  %6s  %12s\n", "REFERENCE", "MISSES", "HIT%", "RUN%", "MISS-LATENCY");
     for (ins = 0; ins < ctx.nr_ins; ins ++) {
         float hit = 0.0;
+        float run = 0.0;
         if (ctx.l3_cache_references[ins].incremental > ctx.l3_cache_misses[ins].incremental)
             hit = (ctx.l3_cache_references[ins].incremental - ctx.l3_cache_misses[ins].incremental) * 100.0 /
                    ctx.l3_cache_references[ins].incremental;
-        printf("[%03d]    %9lu %9lu  %5.2f%%  ", monitor_instance_cpu(ins),
+        run = ctx.total_time_running[ins].incremental * 100.0 / ctx.total_time_enabled[ins].incremental;
+        printf("[%03d]    %9lu %9lu  %5.2f%%  %5.2f%%  ", monitor_instance_cpu(ins),
                 ctx.l3_cache_references[ins].incremental, ctx.l3_cache_misses[ins].incremental,
-                hit);
+                hit, run);
         if (ctx.cpuinfo.vendor == X86_VENDOR_AMD) {
             printf("%12lu\n", ctx.l3_cache_miss_latency[ins].incremental * 16 /
                                 ctx.l3_misses_by_request_type[ins].incremental);
@@ -223,7 +279,7 @@ static profiler llcstat = {
     .name = "llcstat",
     .desc = llcstat_desc,
     .argv = llcstat_argv,
-    .pages = 0,
+    .pages = 1,
     .init = llcstat_init,
     .deinit = llcstat_exit,
     .interval = llcstat_interval,
