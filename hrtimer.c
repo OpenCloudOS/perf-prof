@@ -411,7 +411,7 @@ static profiler hrtimer = {
 PROFILER_REGISTER(hrtimer);
 
 
-static void irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count, int instance)
+static int irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count, int instance)
 {
     int n = ctx.env->event ? ctx.tp_list->nr_tp : 0;
     u64 *jcounter = ctx.counters + instance * (n + 1);
@@ -452,6 +452,7 @@ static void irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count
         print_time(stdout);
         printf(" %13s [%03d]  cpu-clock: %lu ns\n", "read", monitor_instance_cpu(instance), cpu_clock);
     }
+    return 0;
 }
 
 static const char *irq_off_desc[] = PROFILER_DESC("irq-off",

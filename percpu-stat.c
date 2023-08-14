@@ -214,14 +214,14 @@ static void percpu_stat_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
     struct evsel_node n = {.evsel = evsel};
     struct rb_node *rbn = rblist__find(&ctx.evsel_list, &n);
     struct evsel_node *e = rbn ? container_of(rbn, struct evsel_node, rbnode) : NULL;
 
     if (e == NULL)
-        return;
+        return 0;
 
     e->perins_stats[instance].diff = 0;
     if (count->val > e->perins_stats[instance].count) {
@@ -233,6 +233,7 @@ static void percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values
         }
     }
     e->total_stats->diff += e->perins_stats[instance].diff;
+    return 0;
 }
 
 static void percpu_stat_interval(void)

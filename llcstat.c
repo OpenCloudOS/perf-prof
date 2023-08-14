@@ -185,7 +185,7 @@ static void llcstat_exit(struct perf_evlist *evlist)
     free(ctx.l3_misses_by_request_type);
 }
 
-static void llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
     struct perf_counts {
         u64 nr;
@@ -206,7 +206,7 @@ static void llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *co
     }
 
     if (evsel != ctx.leader)
-        return;
+        return 0;
 
     cache = ctx.total_time_enabled;
     UPDATE_COUNTER(groups->total_time_enabled);
@@ -237,6 +237,7 @@ static void llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *co
 
         UPDATE_COUNTER(value);
     }
+    return 1;
 }
 
 static void llcstat_interval(void)

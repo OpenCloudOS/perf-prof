@@ -537,7 +537,7 @@ static void stat_help(struct help_ctx *hctx)
     __common_help(hctx, stat.name);
 }
 
-static void stat_read(struct perf_evsel *leader, struct perf_counts_values *count, int instance)
+static int stat_read(struct perf_evsel *leader, struct perf_counts_values *count, int instance)
 {
     struct perf_counts {
         u64 nr;
@@ -552,7 +552,7 @@ static void stat_read(struct perf_evsel *leader, struct perf_counts_values *coun
     u64 i, j;
 
     if (leader != ctx.leader)
-        return ;
+        return 0;
 
     for (i = 0; i < groups->nr; i++) {
         struct perf_evsel *evsel;
@@ -579,6 +579,7 @@ static void stat_read(struct perf_evsel *leader, struct perf_counts_values *coun
     }
 
     ctx.perins_pos[instance] ++;
+    return 1;
 }
 
 

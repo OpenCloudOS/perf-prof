@@ -166,7 +166,7 @@ static void profile_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void profile_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int profile_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
     uint64_t cycles = 0;
     const char *str_in[] = {"host,guest", "host", "guest", "error"};
@@ -192,6 +192,7 @@ static void profile_read(struct perf_evsel *evsel, struct perf_counts_values *co
                     monitor_instance_oncpu() ? monitor_instance_cpu(instance) : monitor_instance_thread(instance),
                     str_in[in], str_mode[mode], cycles);
     }
+    return 0;
 }
 
 static void profile_sample(union perf_event *event, int instance)

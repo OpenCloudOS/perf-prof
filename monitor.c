@@ -1088,8 +1088,9 @@ static void interval_handle(struct timer *timer)
                             count = malloc(max_read_size);
                         memset(count, 0, max_read_size);
                     }
-                    if (perf_evsel__read(evsel, ins, tins, count) == 0)
-                        monitor->read(evsel, count, cpu != -1 ? ins : tins);
+                    if (perf_evsel__read(evsel, ins, tins, count) == 0 &&
+                        monitor->read(evsel, count, cpu != -1 ? ins : tins))
+                        break;
                 }
             }
         }

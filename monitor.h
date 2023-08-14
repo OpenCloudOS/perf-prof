@@ -183,7 +183,9 @@ typedef struct monitor {
     void (*deinit)(struct perf_evlist *evlist);
     void (*sigusr1)(int signum);
     void (*interval)(void);
-    void (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
+
+    // return 0:continue; 1:break;
+    int (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
 
     /* PERF_RECORD_* */
 

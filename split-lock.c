@@ -117,7 +117,7 @@ static void split_lock_exit(struct perf_evlist *evlist)
     monitor_ctx_exit();
 }
 
-static void split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
     int cpu = monitor_instance_cpu(instance);
     uint64_t counter = 0;
@@ -130,6 +130,7 @@ static void split_lock_read(struct perf_evsel *evsel, struct perf_counts_values 
         print_time(stdout);
         printf("cpu %d split-lock %lu\n", cpu, counter);
     }
+    return 0;
 }
 
 static void split_lock_sample(union perf_event *event, int instance)
