@@ -245,7 +245,7 @@ static void llcstat_interval(void)
     int ins;
 
     print_time(stdout); printf("\n");
-    printf("[CPU] L3 %9s %9s  %6s  %6s  %12s\n", "REFERENCE", "MISSES", "HIT%", "RUN%", "MISS-LATENCY");
+    printf("[CPU] L3 %9s %9s  %6s %7s  %12s\n", "REFERENCE", "MISSES", "HIT%", "RUN%", "MISS-LATENCY");
     for (ins = 0; ins < ctx.nr_ins; ins ++) {
         float hit = 0.0;
         float run = 0.0;
@@ -253,7 +253,7 @@ static void llcstat_interval(void)
             hit = (ctx.l3_cache_references[ins].incremental - ctx.l3_cache_misses[ins].incremental) * 100.0 /
                    ctx.l3_cache_references[ins].incremental;
         run = ctx.total_time_running[ins].incremental * 100.0 / ctx.total_time_enabled[ins].incremental;
-        printf("[%03d]    %9lu %9lu  %5.2f%%  %5.2f%%  ", monitor_instance_cpu(ins),
+        printf("[%03d]    %9lu %9lu  %5.2f%% %6.2f%%  ", monitor_instance_cpu(ins),
                 ctx.l3_cache_references[ins].incremental, ctx.l3_cache_misses[ins].incremental,
                 hit, run);
         if (ctx.cpuinfo.vendor == X86_VENDOR_AMD) {
