@@ -65,6 +65,7 @@ void sched_init(int nr_list, struct tp_list **tp_list)
 {
     int i, j;
     int wakeup_id, switch_id, cpus;
+    int sched_switch_without_filter = 0;
 
     if (inited)
         return ;
@@ -87,19 +88,21 @@ to_check_switch:
             // The sched_switch event cannot have any filters present.
             // Otherwise, it will affect the accuracy of sched_wakeup_unnecessary().
             if (tp->id == switch_id && !(tp->filter && tp->filter[0]))
-                goto to_enable;
+                sched_switch_without_filter = 1;
         }
     }
-    return ;
 
-to_enable:
+    inited = 1;
     sched_wakeup_new = !tep__event_has_field(wakeup_id, "success");
     sched_wakeup_id = wakeup_id;
-    sched_switch_id = switch_id;
-    cpus = get_present_cpus();
-    percpu_running = calloc(cpus, sizeof(struct running_oncpu));
-    if (percpu_running)
-        inited = 1;
+
+    if (sched_switch_without_filter) {
+        sched_switch_id = switch_id;
+        cpus = get_present_cpus();
+        percpu_running = calloc(cpus, sizeof(struct running_oncpu));
+        if (percpu_running)
+            inited = 2;
+    }
 
     if (inited) {
         printf("Trick: Enable userland unnecessary detection of sched:sched_wakeup events.\n");
@@ -116,10 +119,7 @@ void sched_event(void *raw, int size, int cpu)
 {
     union sched_event *sched = raw;
 
-    if (!inited)
-        return ;
-
-    if (sched->common_type == sched_switch_id) {
+    if (inited == 2 && sched->common_type == sched_switch_id) {
         sched_switch(&sched->sched_switch, cpu);
     }
 }
@@ -223,8 +223,9 @@ bool sched_wakeup_unnecessary(void *raw, int size)
 
     if (sched->common_type == sched_wakeup_id) {
         int target_cpu = sched_wakeup_new ? sched->sched_wakeup_new.target_cpu : sched->sched_wakeup.target_cpu;
-        if (percpu_running[target_cpu].pid == sched->sched_wakeup.pid ||
-            sched->sched_wakeup.common_pid == sched->sched_wakeup.pid)
+        if (sched->sched_wakeup.common_pid == sched->sched_wakeup.pid ||
+            (inited == 2 &&
+             percpu_running[target_cpu].pid == sched->sched_wakeup.pid))
             return true;
     }
     return false;
