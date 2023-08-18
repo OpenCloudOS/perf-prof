@@ -200,7 +200,7 @@ void perf_evlist__enable(struct perf_evlist *evlist)
 	struct perf_evsel *evsel;
 
 	perf_evlist__for_each_entry(evlist, evsel)
-		perf_evsel__enable(evsel);
+		perf_evsel__enable_group(evsel);
 }
 
 void perf_evlist__disable(struct perf_evlist *evlist)
@@ -208,7 +208,7 @@ void perf_evlist__disable(struct perf_evlist *evlist)
 	struct perf_evsel *evsel;
 
 	perf_evlist__for_each_entry(evlist, evsel)
-		perf_evsel__disable(evsel);
+		perf_evsel__disable_group(evsel);
 }
 
 u64 perf_evlist__read_format(struct perf_evlist *evlist)

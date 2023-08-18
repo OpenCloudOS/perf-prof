@@ -374,6 +374,20 @@ int perf_evsel__enable(struct perf_evsel *evsel)
 	return err;
 }
 
+int perf_evsel__enable_group(struct perf_evsel *evsel)
+{
+	int i;
+	int err = 0;
+
+	if (evsel->keep_disable) return 0;
+	if (evsel->leader != evsel) return 0;
+
+	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
+		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_ENABLE, (void *)PERF_IOC_FLAG_GROUP, i);
+	return err;
+}
+
+
 int perf_evsel__disable_cpu(struct perf_evsel *evsel, int cpu)
 {
 	return perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_DISABLE, NULL, cpu);
@@ -388,6 +402,19 @@ int perf_evsel__disable(struct perf_evsel *evsel)
 
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_DISABLE, NULL, i);
+	return err;
+}
+
+int perf_evsel__disable_group(struct perf_evsel *evsel)
+{
+	int i;
+	int err = 0;
+
+	if (evsel->keep_disable) return 0;
+	if (evsel->leader != evsel) return 0;
+
+	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
+		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_DISABLE, (void *)PERF_IOC_FLAG_GROUP, i);
 	return err;
 }
 
