@@ -30,16 +30,25 @@ static int comm_filter(struct tp_filter *tp_filter, const char *s, const char *c
     return ret;
 }
 
-// pid==x || pid==y || pid==z
-static int pid_filter(struct tp_filter *tp_filter, int pid, const char *pid_field)
+// pid==x || pid==y || (pid>=z0&&pid<=z1)
+static int pid_filter(struct tp_filter *tp_filter, int pid_start, int pid_end, const char *pid_field)
 {
-    int ret;
+    int ret = 0;
 
-    if (tp_filter->pid == NULL)
-        ret = asprintf(&tp_filter->pid, "%s==%d", pid_field, pid);
-    else {
+    if (pid_start < 0 || pid_end < 0)
+        return -1;
+
+    if (tp_filter->pid == NULL) {
+        if (pid_start == pid_end)
+            ret = asprintf(&tp_filter->pid, "%s==%d", pid_field, pid_start);
+        else
+            ret = asprintf(&tp_filter->pid, "(%s>=%d&&%s<=%d)", pid_field, pid_start, pid_field, pid_end);
+    } else {
         char *tmp;
-        ret = asprintf(&tmp, "%s || %s==%d", tp_filter->pid, pid_field, pid);
+        if (pid_start == pid_end)
+            ret = asprintf(&tmp, "%s || %s==%d", tp_filter->pid, pid_field, pid_start);
+        else
+            ret = asprintf(&tmp, "%s || (%s>=%d&&%s<=%d)", tp_filter->pid, pid_field, pid_start, pid_field, pid_end);
         if (ret >= 0) {
             free(tp_filter->pid);
             tp_filter->pid = tmp;
@@ -87,13 +96,21 @@ struct tp_filter *tp_filter_new(struct perf_thread_map *threads, const char *pid
 
         tp_filter->filter = tp_filter->comm;
     } else if (threads) {
-        int pid;
+        int pid, pid_1 = -2, pid_start = -2;
         int idx;
 
         perf_thread_map__for_each_thread(pid, idx, threads) {
-            if (pid >= 0)
-                pid_filter(tp_filter, pid, pid_field);
+            if (pid >= 0) {
+                // The pids are sorted from small to large and can be used to
+                // judge whether they are numerically continuous.
+                if (pid_1 + 1 != pid) {
+                    pid_filter(tp_filter, pid_start, pid_1, pid_field);
+                    pid_start = pid;
+                }
+                pid_1 = pid;
+            }
         }
+        pid_filter(tp_filter, pid_start, pid_1, pid_field);
         tp_filter->filter = tp_filter->pid;
     }
 
@@ -112,6 +129,7 @@ void tp_filter_free(struct tp_filter *tp_filter)
             free(tp_filter->comm);
         if (tp_filter->pid)
             free(tp_filter->pid);
+        free(tp_filter);
     }
 }
 

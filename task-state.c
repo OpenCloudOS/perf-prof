@@ -191,21 +191,21 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
 
             if (env->interruptible && env->uninterruptible) {
                 if (prev_filter) {
-                    snprintf(filter, sizeof(filter), "(%s) && (prev_state==%d || prev_state==%d || prev_state==%d)",
-                            prev_filter->filter, TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
+                    snprintf(filter, sizeof(filter), "(prev_state==%d || prev_state==%d || prev_state==%d) && (%s)",
+                            TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE, prev_filter->filter);
                 } else
                     snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d || prev_state==%d",
                             TASK_INTERRUPTIBLE, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
             } else if (env->interruptible) {
                 if (prev_filter)
-                    snprintf(filter, sizeof(filter), "(%s) && prev_state==%d",
-                            prev_filter->filter, TASK_INTERRUPTIBLE);
+                    snprintf(filter, sizeof(filter), "prev_state==%d && (%s)",
+                            TASK_INTERRUPTIBLE, prev_filter->filter);
                 else
                     snprintf(filter, sizeof(filter), "prev_state==%d", TASK_INTERRUPTIBLE);
             } else if (env->uninterruptible) {
                 if (prev_filter)
-                    snprintf(filter, sizeof(filter), "(%s) && (prev_state==%d || prev_state==%d)",
-                            prev_filter->filter, TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
+                    snprintf(filter, sizeof(filter), "(prev_state==%d || prev_state==%d) && (%s)",
+                            TASK_UNINTERRUPTIBLE, TASK_KILLABLE, prev_filter->filter);
                 else
                     snprintf(filter, sizeof(filter), "prev_state==%d || prev_state==%d",
                             TASK_UNINTERRUPTIBLE, TASK_KILLABLE);
