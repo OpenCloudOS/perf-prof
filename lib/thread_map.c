@@ -29,6 +29,13 @@ static int filter(const struct dirent *dir)
 		return 1;
 }
 
+static int cmp_pid_t(const void *a, const void *b)
+{
+	const struct thread_map_data *aa = a;
+	const struct thread_map_data *bb = b;
+	return aa->pid - bb->pid;
+}
+
 #define thread_map__alloc(__nr) perf_thread_map__realloc(NULL, __nr)
 
 struct perf_thread_map *thread_map__new_by_pid(pid_t pid)
@@ -49,6 +56,7 @@ struct perf_thread_map *thread_map__new_by_pid(pid_t pid)
 		for (i = 0; i < items; i++)
 			perf_thread_map__set_pid(threads, i, atoi(namelist[i]->d_name));
 		threads->nr = items;
+		qsort(threads->map, threads->nr, sizeof(threads->map[0]), cmp_pid_t);
 		refcount_set(&threads->refcnt, 1);
 	}
 
@@ -138,6 +146,8 @@ static struct perf_thread_map *__thread_map__new_all_cpus(uid_t uid)
 
 		threads->nr += items;
 	}
+	if (threads)
+		qsort(threads->map, threads->nr, sizeof(threads->map[0]), cmp_pid_t);
 
 out_closedir:
 	closedir(proc);
@@ -224,6 +234,8 @@ static struct perf_thread_map *thread_map__new_by_pid_str(const char *pid_str)
 		threads->nr = total_tasks;
 		free(namelist);
 	}
+	if (threads)
+		qsort(threads->map, threads->nr, sizeof(threads->map[0]), cmp_pid_t);
 
 out:
 	strlist__delete(slist);
@@ -279,6 +291,8 @@ struct perf_thread_map *thread_map__new_by_tid_str(const char *tid_str)
 		perf_thread_map__set_pid(threads, ntasks - 1, tid);
 		threads->nr = ntasks;
 	}
+	if (threads)
+		qsort(threads->map, threads->nr, sizeof(threads->map[0]), cmp_pid_t);
 out:
 	if (threads)
 		refcount_set(&threads->refcnt, 1);
