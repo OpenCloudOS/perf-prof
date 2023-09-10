@@ -16,6 +16,8 @@
 #include <latency_helpers.h>
 #include <two-event.h>
 
+#define TASK_COMM_LEN 16
+
 static int two_event_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct two_event *two = container_of(rbn, struct two_event, rbnode);
@@ -438,8 +440,12 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     double p99 = tdigest_quantile(node->td, 0.99);
     bool than = !!opts->greater_than;
 
-    if (opts->perins)
+    if (opts->perins) {
         printf("%-*lu ", opts->keylen, node->instance);
+        // if (comm) node->instance means pid.
+        if (opts->comm)
+            printf("%-*s ", TASK_COMM_LEN, tep__pid_to_comm((int)node->instance));
+    }
     printf("%*s", delay_class->max_len1, two->tp1->alias ?: two->tp1->name);
     printf(" => %-*s", delay_class->max_len2, two->tp2->alias ?: two->tp2->name);
     printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f",
@@ -474,8 +480,11 @@ static int delay_print_header(struct two_event *two)
         print_time(stdout);
         printf("\n");
 
-        if (opts->perins)
+        if (opts->perins) {
             printf("%-*s ", opts->keylen, opts->keyname);
+            if (opts->comm)
+                printf("%-*s ", TASK_COMM_LEN, "comm");
+        }
 
         printf("%*s => %-*s", delay_class->max_len1, "start", delay_class->max_len2, "end");
         if (!opts->env->tsc)
@@ -493,6 +502,10 @@ static int delay_print_header(struct two_event *two)
         if (opts->perins) {
             for (i=0; i<opts->keylen; i++) printf("-");
             printf(" ");
+            if (opts->comm) {
+                for (i=0; i<TASK_COMM_LEN; i++) printf("-");
+                printf(" ");
+            }
         }
         for (i=0; i<delay_class->max_len1; i++) printf("-");
         printf("    ");

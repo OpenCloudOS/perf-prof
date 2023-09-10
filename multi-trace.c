@@ -76,6 +76,7 @@ static struct multi_trace_ctx {
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
     struct perf_thread_map *thread_map; // profiler rundelay
+    bool comm; // profiler rundelay
     struct env *env;
 } ctx;
 
@@ -345,6 +346,7 @@ static int monitor_ctx_init(struct env *env)
     struct two_event_options options = {
         .keyname = monitor_instance_oncpu() ? "CPU" : "THREAD",
         .perins = env->perins,
+        .comm = ctx.comm,
         .only_print_greater_than = env->only_print_greater_than,
         .greater_than = env->greater_than,
         .lower_than = env->lower_than,
@@ -1612,7 +1614,9 @@ static int rundelay_init(struct perf_evlist *evlist, struct env *env)
             fprintf(stderr, "The rundelay profiler cannot be attached to CPU.\n");
             return -1;
         }
+        tep__ref();
     } else {
+        int pid, idx;
         /**
          * sched:sched_switch and sched:sched_wakeup are not suitable for binding to threads
         **/
@@ -1620,6 +1624,11 @@ static int rundelay_init(struct perf_evlist *evlist, struct env *env)
         perf_cpu_map__put(rundelay.cpus);
         rundelay.cpus = perf_cpu_map__new(NULL);
         rundelay.threads = perf_thread_map__new_dummy();
+
+        tep__ref();
+        perf_thread_map__for_each_thread(pid, idx, ctx.thread_map)
+            tep__update_comm(NULL, pid);
+        ctx.comm = 1;
     }
 
     return multi_trace_init(evlist, env);
@@ -1628,6 +1637,7 @@ static int rundelay_init(struct perf_evlist *evlist, struct env *env)
 static void rundelay_deinit(struct perf_evlist *evlist)
 {
     multi_trace_exit(evlist);
+    tep__unref();
 }
 
 static int rundelay_filter(struct perf_evlist *evlist, struct env *env)

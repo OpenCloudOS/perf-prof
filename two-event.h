@@ -15,6 +15,7 @@ struct two_event_options {
     const char *keyname;
     int keylen;
     bool perins;
+    bool comm;
     bool only_print_greater_than;
     unsigned long greater_than;
     unsigned long lower_than;
