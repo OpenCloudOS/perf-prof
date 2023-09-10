@@ -105,6 +105,7 @@ enum tp_event_type {
 
 struct tp_list *tp_list_new(char *event_str);
 void tp_list_free(struct tp_list *tp_list);
+void tp_update_filter(struct tp *tp, const char *filter);
 static inline bool tp_kernel(struct tp *tp)
 {
     return tp->kernel;

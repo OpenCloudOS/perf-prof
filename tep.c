@@ -491,7 +491,7 @@ struct tp_list *tp_list_new(char *event_str)
         tp->id = id;
         tp->sys = sys;
         tp->name = name;
-        tp->filter = filter;
+        tp->filter = (filter && filter[0]) ? strdup(filter) : NULL;
         tp->stack = stack;
         tp->max_stack = max_stack;
         tp->alias = alias;
@@ -553,6 +553,8 @@ void tp_list_free(struct tp_list *tp_list)
         return ;
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
+        if (tp->filter)
+            free(tp->filter);
         for (j = 0; j < tp->nr_top; j++) {
             if (tp->top_add[j].field_prog)
                 expr_destroy(tp->top_add[j].field_prog);
@@ -575,6 +577,13 @@ void tp_list_free(struct tp_list *tp_list)
             vcpu_info_free(tp->vcpu);
     }
     free(tp_list);
+}
+
+void tp_update_filter(struct tp *tp, const char *filter)
+{
+    if (tp->filter)
+        free(tp->filter);
+    tp->filter = strdup(filter);
 }
 
 void tp_print_marker(struct tp *tp)

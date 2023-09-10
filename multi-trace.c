@@ -15,6 +15,7 @@
 #include <two-event.h>
 
 static profiler *base_profiler;
+static profiler rundelay;
 
 struct timeline_node {
     struct rb_node timeline_node;
@@ -74,6 +75,7 @@ static struct multi_trace_ctx {
     u64 sched_wakeup_unnecessary;
     struct callchain_ctx *cc;
     struct perf_evlist *evlist;
+    struct perf_thread_map *thread_map; // profiler rundelay
     struct env *env;
 } ctx;
 
@@ -1601,4 +1603,138 @@ static profiler nested_trace = {
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(nested_trace);
+
+
+static int rundelay_init(struct perf_evlist *evlist, struct env *env)
+{
+    if (monitor_instance_oncpu()) {
+        if (!env->filter) {
+            fprintf(stderr, "The rundelay profiler cannot be attached to CPU.\n");
+            return -1;
+        }
+    } else {
+        /**
+         * sched:sched_switch and sched:sched_wakeup are not suitable for binding to threads
+        **/
+        ctx.thread_map = rundelay.threads;
+        perf_cpu_map__put(rundelay.cpus);
+        rundelay.cpus = perf_cpu_map__new(NULL);
+        rundelay.threads = perf_thread_map__new_dummy();
+    }
+
+    return multi_trace_init(evlist, env);
+}
+
+static void rundelay_deinit(struct perf_evlist *evlist)
+{
+    multi_trace_exit(evlist);
+}
+
+static int rundelay_filter(struct perf_evlist *evlist, struct env *env)
+{
+    int i, j, err;
+    int sched_wakeup = tep__event_id("sched", "sched_wakeup");
+    int sched_wakeup_new = tep__event_id("sched", "sched_wakeup_new");
+    int sched_switch = tep__event_id("sched", "sched_switch");
+    int match = 0;
+
+    for (i = 0; i < ctx.nr_list; i++) {
+        for (j = 0; j < ctx.tp_list[i]->nr_tp; j++) {
+            struct tp *tp = &ctx.tp_list[i]->tp[j];
+
+            if (tp->id == sched_wakeup || tp->id == sched_wakeup_new || tp->id == sched_switch) {
+                struct tp_filter *tp_filter = NULL;
+                char buff[4096];
+                char *filter = NULL;
+
+                if (tp->id == sched_wakeup || tp->id == sched_wakeup_new) {
+                    if (i == 0 && strcmp(tp->key, "pid") == 0) {
+                        match ++;
+                        tp_filter = tp_filter_new(ctx.thread_map, "pid", env->filter, "comm");
+                    }
+                } else if (tp->id == sched_switch) {
+                    if (i == 0 && strcmp(tp->key, "prev_pid") == 0) {
+                        match ++;
+                        tp_filter = tp_filter_new(ctx.thread_map, "prev_pid", env->filter, "prev_comm");
+                        if (tp_filter) {
+                            snprintf(buff, sizeof(buff), "prev_state==0 && (%s)", tp_filter->filter);
+                            filter = buff;
+                        }
+                    }
+                    if (i == 1 && strcmp(tp->key, "next_pid") == 0) {
+                        match ++;
+                        tp_filter = tp_filter_new(ctx.thread_map, "next_pid", env->filter, "next_comm");
+                    }
+                }
+
+                if (tp_filter) {
+                    if (!filter)
+                        filter = tp_filter->filter;
+                    if (env->verbose >= VERBOSE_NOTICE)
+                        printf("%s:%s filter \"%s\"\n", tp->sys, tp->name, filter);
+                    tp_update_filter(tp, filter);
+                    tp_filter_free(tp_filter);
+                }
+            }
+
+            if (tp->filter && tp->filter[0]) {
+                err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+                if (err < 0)
+                    return err;
+            }
+        }
+    }
+
+    if (match != 4) {
+        fprintf(stderr, "rundelay filter failed, found %d matching events.\n", match);
+        return -1;
+    }
+    sched_reinit(ctx.nr_list, ctx.tp_list);
+    return 0;
+}
+
+static void rundelay_help(struct help_ctx *hctx)
+{
+    struct env *env = hctx->env;
+    const char *common = PROGRAME " rundelay";
+    char *oldimpl = env->impl;
+    env->impl = strdup(TWO_EVENT_DELAY_IMPL);
+    __multi_trece_help(hctx, common, TWO_EVENT_DELAY_IMPL, true);
+    free(env->impl);
+    env->impl = oldimpl;
+}
+
+static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
+    "[OPTION...] -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\\n"
+    "        -e sched:sched_switch//key=next_pid/ -k pid [--filter comm] [--than ns] [--detail] [--perins] [--heatmap file]",
+    "Schedule rundelay.",
+    "",
+    "SYNOPSIS",
+    "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.",
+    "",
+    "EXAMPLES",
+    "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
+    "                       -e sched:sched_switch//key=next_pid/ -k pid -p 1234 --than 4ms",
+    "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
+    "                       -e sched:sched_switch//key=next_pid/ -k pid --filter java --than 4ms");
+static const char *rundelay_argv[] = PROFILER_ARGV("nested-trace",
+    PROFILER_ARGV_OPTION,
+    PROFILER_ARGV_CALLCHAIN_FILTER,
+    PROFILER_ARGV_PROFILER, "event", "key", "than", "detail", "perins", "heatmap", "filter");
+static profiler rundelay = {
+    .name = "rundelay",
+    .desc = rundelay_desc,
+    .argv = rundelay_argv,
+    .pages = 64,
+    .help = rundelay_help,
+    .init = rundelay_init,
+    .filter = rundelay_filter,
+    .enabled = multi_trace_enabled,
+    .deinit = rundelay_deinit,
+    .sigusr1 = multi_trace_sigusr1,
+    .interval = multi_trace_interval,
+    .lost = multi_trace_lost,
+    .sample = multi_trace_sample,
+};
+PROFILER_REGISTER(rundelay);
 

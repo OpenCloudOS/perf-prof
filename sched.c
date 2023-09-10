@@ -109,6 +109,14 @@ to_check_switch:
     }
 }
 
+void sched_reinit(int nr_list, struct tp_list **tp_list)
+{
+    inited = 0;
+    if (percpu_running)
+        free(percpu_running);
+    sched_init(nr_list, tp_list);
+}
+
 static void sched_switch(struct sched_switch *sched_switch, int cpu)
 {
     percpu_running[cpu].pid = sched_switch->next_pid;

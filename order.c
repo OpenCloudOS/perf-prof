@@ -109,12 +109,6 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int err;
 
-    if (ctx.base->lost) {
-        ctx.lost_records = calloc(monitor_nr_instance(), sizeof(struct lost_record));
-        if (!ctx.lost_records)
-            return -1;
-    }
-
     ctx.env = env;
     ctx.base->reinit = ctx.order.reinit;
     ctx.base->pages = ctx.order.pages;
@@ -140,6 +134,12 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
         ctx.order.lost = order_lost;
     if (env->interval && (ctx.base->interval || env->overwrite))
         ctx.order.interval = order_interval;
+
+    if (ctx.base->lost) {
+        ctx.lost_records = calloc(monitor_nr_instance(), sizeof(struct lost_record));
+        if (!ctx.lost_records)
+            return -1;
+    }
 
     ordered_events__init(&ctx.oe, ordered_events__deliver, NULL);
     ordered_events__set_copy_on_queue(&ctx.oe, true);
