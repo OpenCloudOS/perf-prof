@@ -1100,6 +1100,21 @@ static void interval_handle(struct timer *timer)
         monitor->interval();
 }
 
+static void print_marker_and_interval(int fd, unsigned int revents, void *ptr)
+{
+    char buf[512];
+
+    if (revents & EPOLLIN) {
+        char *line = fgets(buf, sizeof(buf), stdin);
+        if (line) {
+            if (ptr)
+                interval_handle(ptr);
+            print_time(stdout);
+            printf("%s", line);
+        }
+    }
+}
+
 static int libperf_print(enum libperf_print_level level,
                          const char *fmt, va_list ap)
 {
@@ -1150,6 +1165,11 @@ int main(int argc, char *argv[])
         dup2(STDOUT_FILENO, STDERR_FILENO);
     }
 
+    if (!isatty(STDIN_FILENO))
+        main_epoll_add(STDIN_FILENO, EPOLLIN, env.interval ? &interval_args.timer : NULL,
+                       print_marker_and_interval);
+
+    setlinebuf(stdin);
     setlinebuf(stdout);
     setlinebuf(stderr);
     libperf_init(libperf_print);
@@ -1257,6 +1277,7 @@ reinit:
 
     signal(SIGCHLD, sig_handler);
     signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
     signal(SIGUSR1, monitor->sigusr1 ? : SIG_IGN);
     signal(SIGUSR2, sigusr2_handler);
 
