@@ -1652,7 +1652,7 @@ static int rundelay_filter(struct perf_evlist *evlist, struct env *env)
         for (j = 0; j < ctx.tp_list[i]->nr_tp; j++) {
             struct tp *tp = &ctx.tp_list[i]->tp[j];
 
-            if (!tp->untraced &&
+            if (!tp->untraced && tp->key &&
                 (tp->id == sched_wakeup || tp->id == sched_wakeup_new || tp->id == sched_switch)) {
                 struct tp_filter *tp_filter = NULL;
                 char buff[4096];
