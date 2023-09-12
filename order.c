@@ -132,8 +132,7 @@ static int order_init(struct perf_evlist *evlist, struct env *env)
     ctx.order.sample = order_sample;
     if (ctx.base->lost)
         ctx.order.lost = order_lost;
-    if (env->interval && (ctx.base->interval || env->overwrite))
-        ctx.order.interval = order_interval;
+    ctx.order.interval = order_interval;
 
     if (ctx.base->lost) {
         ctx.lost_records = calloc(monitor_nr_instance(), sizeof(struct lost_record));
