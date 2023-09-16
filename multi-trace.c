@@ -802,7 +802,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     struct multi_trace_type_header *e2 = event2 ? (void *)event2->sample.array : NULL;
     bool match;
 
-    if (!(ctx.env->samecpu || ctx.env->samepid || ctx.env->samekey))
+    if (!(ctx.env->samecpu || ctx.env->samepid || ctx.env->sametid || ctx.env->samekey))
         return true;
 
     // tp_kernel: Compare key values directly.
@@ -817,6 +817,11 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     if (ctx.env->samepid && match)
     if (e->tid_entry.pid == e1->tid_entry.pid ||
         (e2 && e->tid_entry.pid == e2->tid_entry.pid))
+        return true;
+
+    if (ctx.env->sametid && match)
+    if (e->tid_entry.tid == e1->tid_entry.tid ||
+        (e2 && e->tid_entry.tid == e2->tid_entry.tid))
         return true;
 
     if (ctx.env->samekey && match)

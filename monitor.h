@@ -131,6 +131,7 @@ struct env {
         unsigned long after_event2; // unit: ns
         bool samecpu;
         bool samepid;
+        bool sametid;
         bool samekey;
     char *device;
     int ldlat;
