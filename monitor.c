@@ -1251,7 +1251,19 @@ reinit:
 
     err = perf_evlist__open(evlist);
     if (err) {
-        fprintf(stderr, "failed to open evlist, %d\n", err);
+        if (err == -ESRCH && !env.cgroups) {
+            int idx, thread;
+            perf_thread_map__for_each_thread(thread, idx, threads) {
+                if (thread >= 0) {
+                    if (kill(thread, 0) < 0 && errno == ESRCH) {
+                        fprintf(stderr, "thread %d %s. reinit.\n", thread, strerror(errno));
+                        monitor->reinit = 1;
+                    }
+                }
+            }
+        }
+        if (!monitor->reinit)
+            fprintf(stderr, "failed to open evlist, %d\n", err);
         goto out_exit;
     }
 
