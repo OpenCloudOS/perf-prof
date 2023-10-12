@@ -1163,7 +1163,7 @@ int main(int argc, char *argv[])
     // workload output to stdout & stderr
     // perf-prof output to env.output file
     if (env.output) {
-        if (!freopen(env.output, "w+", stdout))
+        if (!freopen(env.output, "a", stdout))
             return -1;
         dup2(STDOUT_FILENO, STDERR_FILENO);
     }
