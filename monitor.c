@@ -783,6 +783,11 @@ static int workload_prepare(struct workload *workload, char *argv[])
         prctl(PR_SET_NAME, "perf-exec");
 
         /*
+         * Kill me when my parent dies.
+         */
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
+
+        /*
          * Tell the parent we're ready to go
          */
         close(child_ready_pipe[1]);
