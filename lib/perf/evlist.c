@@ -5,6 +5,7 @@
 #include <linux/list.h>
 #include <linux/hash.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <internal/evlist.h>
 #include <internal/evsel.h>
 #include <internal/xyarray.h>
@@ -173,6 +174,17 @@ int perf_evlist__open(struct perf_evlist *evlist)
 {
 	struct perf_evsel *evsel;
 	int err;
+	struct rlimit rl;
+
+	if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+		rl.rlim_cur += evlist->nr_entries * evlist->cpus->nr * evlist->threads->nr;
+		if (rl.rlim_cur > rl.rlim_max)
+			rl.rlim_max = rl.rlim_cur;
+		if (setrlimit(RLIMIT_NOFILE, &rl) < 0) {
+			err = -errno;
+			goto out_err;
+		}
+	}
 
 	perf_evlist__for_each_entry(evlist, evsel) {
 		err = perf_evsel__open(evsel, evsel->cpus, evsel->threads);
