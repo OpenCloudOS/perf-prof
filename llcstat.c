@@ -266,7 +266,7 @@ static void llcstat_interval(void)
 
 
 static const char *llcstat_desc[] = PROFILER_DESC("llcstat",
-    "[OPTION...]",
+    "[OPTION...] [--exclude-host]",
     "Last level cache state on x86 platform.", "",
     "EXAMPLES", "",
     "    "PROGRAME" llcstat -i 1000",
@@ -275,7 +275,9 @@ static const char *llcstat_argv[] = PROFILER_ARGV("llcstat",
     "OPTION:",
     "cpus",
     "interval", "output", "order", "order-mem", "mmap-pages",
-    "version", "verbose", "quiet", "help");
+    "version", "verbose", "quiet", "help",
+    "FILTER OPTION:",
+    "exclude-host");
 static profiler llcstat = {
     .name = "llcstat",
     .desc = llcstat_desc,

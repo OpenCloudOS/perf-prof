@@ -1730,9 +1730,9 @@ static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
     "",
     "EXAMPLES",
     "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid -p 1234 --than 4ms",
+    "                       -e sched:sched_switch//key=next_pid/ -k pid --order -p 1234 --than 4ms",
     "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid --filter java --than 4ms");
+    "                       -e sched:sched_switch//key=next_pid/ -k pid --order --filter java --than 4ms");
 static const char *rundelay_argv[] = PROFILER_ARGV("nested-trace",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
