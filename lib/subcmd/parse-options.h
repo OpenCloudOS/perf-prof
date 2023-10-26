@@ -38,6 +38,7 @@ enum parse_opt_flags {
 	PARSE_OPT_KEEP_UNKNOWN = 8,
 	PARSE_OPT_NO_INTERNAL_HELP = 16,
 	PARSE_OPT_INTERNAL_HELP_NO_ORDER = 32,
+	PARSE_OPT_BASH_COMPLETION = 64,
 };
 
 enum parse_opt_option_flags {
@@ -212,6 +213,7 @@ struct parse_opt_ctx_t {
 	const char **out;
 	int argc, cpidx;
 	const char *opt;
+	const struct option *last_opt, *err_opt;
 	const struct option *excl_opt;
 	int flags;
 };

@@ -64,6 +64,9 @@ static int get_arg(struct parse_opt_ctx_t *p, const struct option *opt,
 	} else if (p->argc > 1 && (**(p->argv + 1) != '-')) {
 		p->argc--;
 		res = *++p->argv;
+	} else if (p->flags & PARSE_OPT_BASH_COMPLETION) {
+		p->err_opt = opt;
+		return -2; // unknown
 	} else
 		return opterror(opt, "requires a value", flags);
 	if (arg)
@@ -84,6 +87,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		return opterror(opt, "isn't available", flags);
 	if (opt->flags & PARSE_OPT_DISABLED)
 		return opterror(opt, "is not usable", flags);
+
+	p->last_opt = opt;
 
 	if (opt->flags & PARSE_OPT_EXCLUSIVE) {
 		if (p->excl_opt && p->excl_opt != opt) {
@@ -256,8 +261,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 			return (*opt->callback)(opt, NULL, 0) ? (-1) : 0;
 		if (opt->flags & PARSE_OPT_OPTARG && !p->opt)
 			return (*opt->callback)(opt, NULL, 0) ? (-1) : 0;
-		if (get_arg(p, opt, flags, &arg))
-			return -1;
+		if ((err = get_arg(p, opt, flags, &arg)))
+			return err;
 		return (*opt->callback)(opt, arg, 0) ? (-1) : 0;
 
 	case OPTION_INTEGER:
@@ -269,8 +274,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 			*(int *)opt->value = opt->defval;
 			return 0;
 		}
-		if (get_arg(p, opt, flags, &arg))
-			return -1;
+		if ((err = get_arg(p, opt, flags, &arg)))
+			return err;
 		*(int *)opt->value = strtol(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
@@ -285,8 +290,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 			*(unsigned int *)opt->value = opt->defval;
 			return 0;
 		}
-		if (get_arg(p, opt, flags, &arg))
-			return -1;
+		if ((err = get_arg(p, opt, flags, &arg)))
+			return err;
 		if (arg[0] == '-')
 			return opterror(opt, "expects an unsigned numerical value", flags);
 		*(unsigned int *)opt->value = strtol(arg, (char **)&s, 0);
@@ -303,8 +308,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 			*(long *)opt->value = opt->defval;
 			return 0;
 		}
-		if (get_arg(p, opt, flags, &arg))
-			return -1;
+		if ((err = get_arg(p, opt, flags, &arg)))
+			return err;
 		*(long *)opt->value = strtol(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
@@ -319,8 +324,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 			*(unsigned long *)opt->value = opt->defval;
 			return 0;
 		}
-		if (get_arg(p, opt, flags, &arg))
-			return -1;
+		if ((err = get_arg(p, opt, flags, &arg)))
+			return err;
 		*(unsigned long *)opt->value = strtoul(arg, (char **)&s, 0);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
@@ -335,8 +340,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 			*(u64 *)opt->value = opt->defval;
 			return 0;
 		}
-		if (get_arg(p, opt, flags, &arg))
-			return -1;
+		if ((err = get_arg(p, opt, flags, &arg)))
+			return err;
 		if (arg[0] == '-')
 			return opterror(opt, "expects an unsigned numerical value", flags);
 		*(u64 *)opt->value = strtoull(arg, (char **)&s, 0);
@@ -422,6 +427,8 @@ retry:
 			/* abbreviated? */
 			if (!strncmp(options->long_name, arg, arg_end - arg)) {
 is_abbreviated:
+				if (p->flags & PARSE_OPT_BASH_COMPLETION)
+					continue;
 				if (abbrev_option) {
 					/*
 					 * If this is abbreviated, it is
@@ -514,8 +521,8 @@ static void parse_options_start(struct parse_opt_ctx_t *ctx,
 	ctx->cpidx = ((flags & PARSE_OPT_KEEP_ARGV0) != 0);
 	ctx->flags = flags;
 	if ((flags & PARSE_OPT_KEEP_UNKNOWN) &&
-	    (flags & PARSE_OPT_STOP_AT_NON_OPTION))
-		die("STOP_AT_NON_OPTION and KEEP_UNKNOWN don't go together");
+	    (flags & (PARSE_OPT_STOP_AT_NON_OPTION | PARSE_OPT_BASH_COMPLETION)))
+		die("STOP_AT_NON_OPTION/BASH_COMPLETION and KEEP_UNKNOWN don't go together");
 }
 
 static int usage_with_options_internal(const char * const *,
@@ -536,6 +543,9 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 	for (; ctx->argc; ctx->argc--, ctx->argv++) {
 		arg = ctx->argv[0];
 		if (*arg != '-' || !arg[1]) {
+			if (*arg == '-' && /* "-" */
+			    (ctx->flags & PARSE_OPT_BASH_COMPLETION))
+				goto unknown;
 			if (ctx->flags & PARSE_OPT_STOP_AT_NON_OPTION)
 				break;
 			ctx->out[ctx->cpidx++] = ctx->argv[0];
@@ -584,7 +594,9 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 			continue;
 		}
 
-		if (!arg[2]) { /* "--" */
+		if (!arg[2]) { /* "--", "-- sleep 5" */
+			if (ctx->argc == 1 && ctx->flags & PARSE_OPT_BASH_COMPLETION)
+				goto unknown;
 			if (!(ctx->flags & PARSE_OPT_KEEP_DASHDASH)) {
 				ctx->argc--;
 				ctx->argv++;
@@ -640,6 +652,135 @@ static int parse_options_end(struct parse_opt_ctx_t *ctx)
 	return ctx->cpidx + ctx->argc;
 }
 
+static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct option *options, int reason)
+{
+	const char *arg;
+	int short_opt = 0;
+	int long_opt = 0;
+	char *no_long_name = NULL;
+
+	/* Assumptions: the -p option takes arguments, and the -g option takes
+	 * no arguments.
+	 *
+	 * Last Option     Class   Compgen
+	 *
+	 * -p 5[TAB]        Done   Nothing
+	 * -p 5 [TAB]       Done   Nothing
+	 * -p5[TAB]         Done   Nothing
+	 * -g[TAB]          Done   -g
+	 * -g [TAB]         Done   Nothing
+	 *
+	 * -p[TAB]         Error   -p
+	 * -p [TAB]        Error   Nothing
+	 * -p -g[TAB]      Error   Nothing(-p is not the last option)
+	 *
+	 * -g -[TAB]     Unknown   All short options and long options.
+	 * -g -T[TAB]    Unknown   All short options starting with T.
+	 * -g --[TAB]    Unknown   All long options.
+	 * -g --t[TAB]   Unknown   All long options starting with t.
+	 *
+	 * -g ls[TAB]       Done   Nothing(PARSE_OPT_STOP_AT_NON_OPTION)
+	 * -g -- ls[TAB]    Done   Nothing(PARSE_OPT_KEEP_DASHDASH)
+	 */
+
+	// The last option is done.
+	if (reason == PARSE_OPT_DONE) {
+		const struct option *last_opt = ctx->last_opt;
+		bool noarg = false;
+
+		if (ctx->argc /* PARSE_OPT_STOP_AT_NON_OPTION */ ||
+		    !last_opt /* in parse_options_start() ctx->argc == 0 */)
+			return -1;
+
+		if (last_opt->flags & PARSE_OPT_NOARG)
+			noarg = true;
+		else if (last_opt->type <= OPTION_SET_PTR)
+			noarg = true;
+
+		if (noarg) { // -g[TAB]
+			arg = ctx->argv[-1];
+			goto start;
+		}
+		return 0;
+	}
+
+	/* PARSE_OPT_UNKNOWN */
+
+	arg = ctx->argv[0];
+
+	// The last option is wrong.
+	if (ctx->err_opt) {
+		if (ctx->argc == 1) { // -p[TAB]
+			goto start;
+		} else if (ctx->argc > 1) {
+			int i;
+			if (ctx->err_opt->long_name)
+				fprintf(stderr, " Warning: option `%s' argc = %d: ", ctx->err_opt->long_name, ctx->argc);
+			else if (isshort(ctx->err_opt->short_name))
+				fprintf(stderr, " Warning: option `%c' argc = %d: ", ctx->err_opt->short_name, ctx->argc);
+			else
+				fprintf(stderr, " Warning: option `%d' argc = %d: ", ctx->err_opt->short_name, ctx->argc);
+			for (i = 0; i < ctx->argc; i++)
+				fprintf(stderr, "%s, ", ctx->argv[i]);
+			fprintf(stderr, "\n");
+		}
+		return 0;
+	}
+
+	// The last option is unknown.
+start:
+	// "", "-", "--", "-e", "--e"
+	if (arg[0] == '-') {
+		arg ++;
+		if (arg[0] == '\0') {
+			short_opt = long_opt = 1;
+		} else if (arg[0] == '-') {
+			arg ++;
+			long_opt = 1;
+		} else
+			short_opt = 1;
+	}
+
+	if (short_opt == 0 && long_opt == 0)
+		return 0;
+
+retry:
+	for (; options->type != OPTION_END; options++) {
+		if (options->type == OPTION_GROUP || options->type == OPTION_ARGUMENT)
+			continue;
+		if (options->flags & (PARSE_OPT_DISABLED | PARSE_OPT_NOBUILD))
+			continue;
+
+		if (short_opt && isshort(options->short_name) &&
+		    (!arg[0] || arg[0] == options->short_name))
+			printf("-%c\n", options->short_name);
+
+		if (long_opt && options->long_name) {
+			if (!arg[0]) {
+				printf("--%s\n", options->long_name);
+				if (!(options->flags & PARSE_OPT_NONEG))
+					printf("--no-%s\n", options->long_name);
+			} else {
+				if (strstarts(options->long_name, arg))
+					printf("--%s\n", options->long_name);
+				if (!(options->flags & PARSE_OPT_NONEG) &&
+					asprintf(&no_long_name, "no-%s", options->long_name) > 0) {
+					if (strstarts(no_long_name, arg))
+						printf("--no-%s\n", options->long_name);
+					free(no_long_name);
+				}
+			}
+		}
+	}
+
+	if (options->parent) {
+		options = options->parent;
+		goto retry;
+	}
+
+	return 0;
+}
+
 int parse_options_subcommand(int argc, const char **argv, const struct option *options,
 			const char *const subcommands[], const char *usagestr[], int flags)
 {
@@ -666,6 +807,9 @@ int parse_options_subcommand(int argc, const char **argv, const struct option *o
 	case PARSE_OPT_HELP:
 		exit(129);
 	case PARSE_OPT_DONE:
+		if (flags & PARSE_OPT_BASH_COMPLETION &&
+			compgen_possible_options(&ctx, options, PARSE_OPT_DONE) == 0)
+			exit (130);
 		break;
 	case PARSE_OPT_LIST_OPTS:
 		while (options->type != OPTION_END) {
@@ -683,6 +827,10 @@ int parse_options_subcommand(int argc, const char **argv, const struct option *o
 		putchar('\n');
 		exit(130);
 	default: /* PARSE_OPT_UNKNOWN */
+		if (flags & PARSE_OPT_BASH_COMPLETION) {
+			compgen_possible_options(&ctx, options, PARSE_OPT_UNKNOWN);
+			exit (130);
+		}
 		if (ctx.argv[0][1] == '-')
 			astrcatf(&error_buf, "unknown option `%s'",
 				 ctx.argv[0] + 2);
