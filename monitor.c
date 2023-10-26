@@ -6,6 +6,7 @@
 #include <time.h>
 #include <pthread.h>
 #include <signal.h>
+#include <ctype.h>
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <linux/perf_event.h>
@@ -476,6 +477,47 @@ static void disable_help(void)
     }
 }
 
+static void flush_main_options(profiler *p)
+{
+    struct option *opts;
+    int i;
+
+    if (!p->argv)
+        return ;
+
+    // disable all opts
+    opts = main_options;
+    for (; opts->type != OPTION_END; opts++) {
+        if (opts->type == OPTION_GROUP) {
+            if (!opts->argh)
+                opts->argh = opts->help;
+            opts->help = NULL;
+        } else
+            opts->flags |= PARSE_OPT_DISABLED;
+    }
+
+    // enable profiler opts
+    opts = main_options;
+    for (; opts->type != OPTION_END; opts++) {
+        for (i = 0; p->argv[i]; i ++) {
+            if (p->argv[i][1] == '\0' &&
+                opts->short_name < 256 && isalnum(opts->short_name) && /* isshort */
+                p->argv[i][0] == opts->short_name)
+                goto enable;
+            if (opts->long_name && strcmp(opts->long_name, p->argv[i]) == 0)
+                goto enable;
+            if (opts->type == OPTION_GROUP && strcmp(opts->argh, p->argv[i]) == 0)
+                goto enable;
+        }
+        continue;
+    enable:
+        if (opts->type == OPTION_GROUP) {
+            opts->help = opts->argh;
+        } else
+            opts->flags &= (~PARSE_OPT_DISABLED);
+    }
+}
+
 #ifndef CONFIG_LIBBPF
 static const char *LIBBPF_BUILD = "NO CONFIG_LIBBPF=y";
 #endif
@@ -484,6 +526,9 @@ static int parse_main_options(int argc, char *argv[])
 {
     bool stop_at_non_option = true;
     bool dashdash = false;
+    char *COMP_TYPE = getenv("COMP_TYPE"); // Bash Completion COMP_TYPE variable
+    int comp_type = COMP_TYPE ? atoi(COMP_TYPE) : 0;
+    bool enable_optcomp = false;
 
 #ifndef CONFIG_LIBBPF
     set_option_nobuild(main_options, 0,    "irqs_disabled", LIBBPF_BUILD, true);
@@ -496,20 +541,27 @@ static int parse_main_options(int argc, char *argv[])
     while (argc > 0) {
         argc = parse_options(argc, (const char **)argv, main_options, main_usage,
                              PARSE_OPT_NO_INTERNAL_HELP | PARSE_OPT_KEEP_DASHDASH |
+                             (enable_optcomp ? PARSE_OPT_BASH_COMPLETION : 0) |
                              (stop_at_non_option ? PARSE_OPT_STOP_AT_NON_OPTION :
                                                    PARSE_OPT_KEEP_ARGV0 | PARSE_OPT_KEEP_UNKNOWN));
-        if (argc && argv[0][0] != '-' && argv[0][1] != '-') {
+        if (argc && argv[0][0] != '\0' && argv[0][0] != '-') {
             struct monitor *m = monitor_find(argv[0]);
             if (m != NULL) {
                 env.help_monitor = monitor;
                 monitor = m;
+                flush_main_options(m);
+                enable_optcomp = comp_type ? true : false;
                 continue;
+            } else if (comp_type) {
+                break;
             } else if (stop_at_non_option) {
                 stop_at_non_option = false;
                 disable_help();
                 continue;
             }
         }
+        if (comp_type)
+            break;
         // --
         if (argc && argv[0][0] == '-' && argv[0][1] == '-') {
             argc--;
@@ -518,6 +570,21 @@ static int parse_main_options(int argc, char *argv[])
             dashdash = true;
         }
         break;
+    }
+
+    if (comp_type) {
+        if (monitor) {
+            if (argc == 0)
+                printf(monitor->compgen ? "\"%s %s\"\n" : "%s%s\n", monitor->name, monitor->compgen ?: "");
+        } else {
+            struct monitor *m = NULL;
+            while((m = monitor_next(m))) {
+                if (!argc || argv[0][0] == '\0' ||
+                    strncmp(m->name, argv[0], strlen(argv[0])) == 0)
+                    printf(m->compgen ? "\"%s %s\"\n" : "%s%s\n", m->name, m->compgen ?: "");
+            }
+        }
+        exit(0);
     }
 
     if (monitor == NULL && env.symbols == NULL)

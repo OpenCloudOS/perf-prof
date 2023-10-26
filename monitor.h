@@ -167,6 +167,7 @@ typedef struct monitor {
     const char *name;
     const char **desc;
     const char **argv;
+    const char *compgen;
     int pages;
     int reinit;
     bool dup; //dup event
