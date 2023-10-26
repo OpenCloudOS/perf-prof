@@ -43,12 +43,12 @@ strip -g %{name}
 
 %install
 rm -rf %{buildroot}
-mkdir -p %{buildroot}/usr/bin/ %{buildroot}%{PLUGINS_DIR}
+mkdir -p %{buildroot}/usr/bin/ %{buildroot}%{PLUGINS_DIR} %{buildroot}/etc/bash_completion.d/
 install -m 0755 -o root -g root %{name} %{buildroot}/usr/bin/
 install -m 0755 -o root -g root flamegraph.pl %{buildroot}/usr/bin/
 install -m 0755 -o root -g root trace2heatmap.pl %{buildroot}/usr/bin/
 install -m 0755 -o root -g root lib/traceevent/plugins/*.so %{buildroot}%{PLUGINS_DIR}
-
+cp packages/%{name} %{buildroot}/etc/bash_completion.d/
 
 %files
 /usr/bin/%{name}
@@ -56,6 +56,7 @@ install -m 0755 -o root -g root lib/traceevent/plugins/*.so %{buildroot}%{PLUGIN
 /usr/bin/trace2heatmap.pl
 %{TRACEEVENT_DIR}
 %{PLUGINS_DIR}
+/etc/bash_completion.d/%{name}
 
 
 %changelog
