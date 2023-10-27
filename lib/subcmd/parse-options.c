@@ -81,14 +81,14 @@ static int get_value(struct parse_opt_ctx_t *p,
 	const int unset = flags & OPT_UNSET;
 	int err;
 
+	p->last_opt = opt;
+
 	if (unset && p->opt)
 		return opterror(opt, "takes no value", flags);
 	if (unset && (opt->flags & PARSE_OPT_NONEG))
 		return opterror(opt, "isn't available", flags);
 	if (opt->flags & PARSE_OPT_DISABLED)
 		return opterror(opt, "is not usable", flags);
-
-	p->last_opt = opt;
 
 	if (opt->flags & PARSE_OPT_EXCLUSIVE) {
 		if (p->excl_opt && p->excl_opt != opt) {
@@ -359,6 +359,7 @@ static int get_value(struct parse_opt_ctx_t *p,
 
 static int parse_short_opt(struct parse_opt_ctx_t *p, const struct option *options)
 {
+	p->last_opt = NULL;
 retry:
 	for (; options->type != OPTION_END; options++) {
 		if (isshort(options->short_name) && options->short_name == *p->opt) {
@@ -386,6 +387,7 @@ static int parse_long_opt(struct parse_opt_ctx_t *p, const char *arg,
 	if (!arg_end)
 		arg_end = arg + strlen(arg);
 
+	p->last_opt = NULL;
 retry:
 	for (; options->type != OPTION_END; options++) {
 		const char *rest;
@@ -529,6 +531,24 @@ static int usage_with_options_internal(const char * const *,
 				       const struct option *, int,
 				       struct parse_opt_ctx_t *);
 
+static int skip_erropt(struct parse_opt_ctx_t *ctx, int err)
+{
+	if (!(ctx->flags & PARSE_OPT_BASH_COMPLETION))
+		return 0;
+
+	if (ctx->argc <= 1)
+		return 0;
+
+	fprintf(stderr, " Skip option `%s', argc = %d, err = %d\n", ctx->argv[0], ctx->argc, err);
+	if (ctx->argc > 1 && (**(ctx->argv + 1) != '-')) {
+		ctx->argc--;
+		ctx->argv++;
+		fprintf(stderr, " Skip argument `%s'\n", ctx->argv[0]);
+	}
+	ctx->opt = NULL;
+	return 1;
+}
+
 static int parse_options_step(struct parse_opt_ctx_t *ctx,
 			      const struct option *options,
 			      const char * const usagestr[])
@@ -536,6 +556,7 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 	int internal_help = !(ctx->flags & PARSE_OPT_NO_INTERNAL_HELP);
 	int excl_short_opt = 1;
 	const char *arg;
+	int err;
 
 	/* we must reset ->opt, unknown short option leave it dangling */
 	ctx->opt = NULL;
@@ -557,7 +578,9 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 			if (internal_help && *ctx->opt == 'h') {
 				return usage_with_options_internal(usagestr, options, 0, ctx);
 			}
-			switch (parse_short_opt(ctx, options)) {
+			err = parse_short_opt(ctx, options);
+			if (err < 0 && !skip_erropt(ctx, err))
+			switch (err) {
 			case -1:
 				return parse_options_usage(usagestr, options, arg, 1);
 			case -2:
@@ -573,7 +596,9 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 				if (internal_help && *ctx->opt == 'h')
 					return usage_with_options_internal(usagestr, options, 0, ctx);
 				arg = ctx->opt;
-				switch (parse_short_opt(ctx, options)) {
+				err = parse_short_opt(ctx, options);
+				if (err < 0 && !skip_erropt(ctx, err))
+				switch (err) {
 				case -1:
 					return parse_options_usage(usagestr, options, arg, 1);
 				case -2:
@@ -582,8 +607,10 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 					 *
 					 * This is leaky, too bad.
 					 */
-					ctx->argv[0] = strdup(ctx->opt - 1);
-					*(char *)ctx->argv[0] = '-';
+					if (!(ctx->flags & PARSE_OPT_BASH_COMPLETION)) {
+						ctx->argv[0] = strdup(arg - 1);
+						*(char *)ctx->argv[0] = '-';
+					}
 					goto unknown;
 				case -3:
 					goto exclusive;
@@ -613,7 +640,9 @@ static int parse_options_step(struct parse_opt_ctx_t *ctx,
 			return PARSE_OPT_LIST_OPTS;
 		if (!strcmp(arg, "list-cmds"))
 			return PARSE_OPT_LIST_SUBCMDS;
-		switch (parse_long_opt(ctx, arg, options)) {
+		err = parse_long_opt(ctx, arg, options);
+		if (err < 0 && !skip_erropt(ctx, err))
+		switch (err) {
 		case -1:
 			return parse_options_usage(usagestr, options, arg, 0);
 		case -2:
@@ -667,12 +696,12 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 	 * -p 5[TAB]        Done   Nothing
 	 * -p 5 [TAB]       Done   Nothing
 	 * -p5[TAB]         Done   Nothing
-	 * -g[TAB]          Done   -g
+	 * -g[TAB]          Done   -g  // argc == 0 && noarg
 	 * -g [TAB]         Done   Nothing
 	 *
-	 * -p[TAB]         Error   -p
+	 * -p[TAB]         Error   -p  // argc == 1
 	 * -p [TAB]        Error   Nothing
-	 * -p -g[TAB]      Error   Nothing(-p is not the last option)
+	 * -p -g[TAB]       Done   -g (skip_erropt -p)
 	 *
 	 * -g -[TAB]     Unknown   All short options and long options.
 	 * -g -T[TAB]    Unknown   All short options starting with T.
@@ -688,15 +717,15 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 		const struct option *last_opt = ctx->last_opt;
 		bool noarg = false;
 
-		if (ctx->argc /* PARSE_OPT_STOP_AT_NON_OPTION */ ||
-		    !last_opt /* in parse_options_start() ctx->argc == 0 */)
+		if (ctx->argc /* PARSE_OPT_STOP_AT_NON_OPTION */)
 			return -1;
 
-		if (last_opt->flags & PARSE_OPT_NOARG)
-			noarg = true;
-		else if (last_opt->type <= OPTION_SET_PTR)
-			noarg = true;
-
+		if (last_opt) {
+			if (last_opt->flags & PARSE_OPT_NOARG)
+				noarg = true;
+			else if (last_opt->type <= OPTION_SET_PTR)
+				noarg = true;
+		}
 		if (noarg) { // -g[TAB]
 			arg = ctx->argv[-1];
 			goto start;
@@ -729,6 +758,9 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 
 	// The last option is unknown.
 start:
+
+	fprintf(stderr, "\n Last option: %s\n", arg);
+
 	// "", "-", "--", "-e", "--e"
 	if (arg[0] == '-') {
 		arg ++;
@@ -737,7 +769,7 @@ start:
 		} else if (arg[0] == '-') {
 			arg ++;
 			long_opt = 1;
-		} else
+		} else if (arg[1] == '\0')
 			short_opt = 1;
 	}
 
@@ -807,7 +839,7 @@ int parse_options_subcommand(int argc, const char **argv, const struct option *o
 	case PARSE_OPT_HELP:
 		exit(129);
 	case PARSE_OPT_DONE:
-		if (flags & PARSE_OPT_BASH_COMPLETION &&
+		if (flags & PARSE_OPT_BASH_COMPLETION && argc > 1 /* has been parsed */ &&
 			compgen_possible_options(&ctx, options, PARSE_OPT_DONE) == 0)
 			exit (130);
 		break;
