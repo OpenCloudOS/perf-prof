@@ -254,16 +254,16 @@ static int get_value(struct parse_opt_ctx_t *p,
 	case OPTION_CALLBACK:
 		if (opt->set)
 			*(bool *)opt->set = true;
-
+		#define BASH_COMP(p) (p->flags & PARSE_OPT_BASH_COMPLETION)
 		if (unset)
-			return (*opt->callback)(opt, NULL, 1) ? (-1) : 0;
+			return !BASH_COMP(p) && (*opt->callback)(opt, NULL, 1) ? (-1) : 0;
 		if (opt->flags & PARSE_OPT_NOARG)
-			return (*opt->callback)(opt, NULL, 0) ? (-1) : 0;
+			return !BASH_COMP(p) && (*opt->callback)(opt, NULL, 0) ? (-1) : 0;
 		if (opt->flags & PARSE_OPT_OPTARG && !p->opt)
-			return (*opt->callback)(opt, NULL, 0) ? (-1) : 0;
+			return !BASH_COMP(p) && (*opt->callback)(opt, NULL, 0) ? (-1) : 0;
 		if ((err = get_arg(p, opt, flags, &arg)))
 			return err;
-		return (*opt->callback)(opt, arg, 0) ? (-1) : 0;
+		return !BASH_COMP(p) && (*opt->callback)(opt, arg, 0) ? (-1) : 0;
 
 	case OPTION_INTEGER:
 		if (unset) {
