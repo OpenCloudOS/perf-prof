@@ -712,6 +712,9 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 	 * -g -- ls[TAB]    Done   Nothing(PARSE_OPT_KEEP_DASHDASH)
 	 */
 
+	fprintf(stderr, "\n Last option is '%s'\n", reason == PARSE_OPT_DONE ? "Done" :
+						(ctx->err_opt ? "Error" : "Unknown"));
+
 	// The last option is done.
 	if (reason == PARSE_OPT_DONE) {
 		const struct option *last_opt = ctx->last_opt;
@@ -721,7 +724,7 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 			return -1;
 
 		if (last_opt) {
-			if (last_opt->flags & PARSE_OPT_NOARG)
+			if (last_opt->flags & (PARSE_OPT_NOARG|PARSE_OPT_OPTARG))
 				noarg = true;
 			else if (last_opt->type <= OPTION_SET_PTR)
 				noarg = true;
@@ -759,7 +762,7 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 	// The last option is unknown.
 start:
 
-	fprintf(stderr, "\n Last option: %s\n", arg);
+	fprintf(stderr, " Last option: %s\n", arg);
 
 	// "", "-", "--", "-e", "--e"
 	if (arg[0] == '-') {
@@ -780,7 +783,7 @@ retry:
 	for (; options->type != OPTION_END; options++) {
 		if (options->type == OPTION_GROUP || options->type == OPTION_ARGUMENT)
 			continue;
-		if (options->flags & (PARSE_OPT_DISABLED | PARSE_OPT_NOBUILD))
+		if (options->flags & PARSE_OPT_DISABLED)
 			continue;
 
 		if (short_opt && isshort(options->short_name) &&
@@ -790,11 +793,16 @@ retry:
 		if (long_opt && options->long_name) {
 			if (!arg[0]) {
 				printf("--%s\n", options->long_name);
+				if ((options->flags & PARSE_OPT_OPTARG) && options->type >= OPTION_STRING)
+					printf("--%s=\n", options->long_name);
 				if (!(options->flags & PARSE_OPT_NONEG))
 					printf("--no-%s\n", options->long_name);
 			} else {
-				if (strstarts(options->long_name, arg))
+				if (strstarts(options->long_name, arg)) {
 					printf("--%s\n", options->long_name);
+					if ((options->flags & PARSE_OPT_OPTARG) && options->type >= OPTION_STRING)
+						printf("--%s=\n", options->long_name);
+				}
 				if (!(options->flags & PARSE_OPT_NONEG) &&
 					asprintf(&no_long_name, "no-%s", options->long_name) > 0) {
 					if (strstarts(no_long_name, arg))
