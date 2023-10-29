@@ -211,7 +211,7 @@ enum {
 struct parse_opt_ctx_t {
 	const char **argv;
 	const char **out;
-	int argc, cpidx;
+	int argc, cpidx, comp_type;
 	const char *opt;
 	const struct option *last_opt, *err_opt;
 	const struct option *excl_opt;

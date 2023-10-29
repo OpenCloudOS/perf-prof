@@ -516,12 +516,14 @@ static void check_typos(const char *arg, const struct option *options)
 static void parse_options_start(struct parse_opt_ctx_t *ctx,
 				int argc, const char **argv, int flags)
 {
+	char *COMP_TYPE = getenv("COMP_TYPE"); // Bash Completion COMP_TYPE variable;
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->argc = argc - 1;
 	ctx->argv = argv + 1;
 	ctx->out  = argv;
 	ctx->cpidx = ((flags & PARSE_OPT_KEEP_ARGV0) != 0);
 	ctx->flags = flags;
+	ctx->comp_type = COMP_TYPE ? atoi(COMP_TYPE) : 0;
 	if ((flags & PARSE_OPT_KEEP_UNKNOWN) &&
 	    (flags & (PARSE_OPT_STOP_AT_NON_OPTION | PARSE_OPT_BASH_COMPLETION)))
 		die("STOP_AT_NON_OPTION/BASH_COMPLETION and KEEP_UNKNOWN don't go together");
@@ -687,6 +689,8 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 	int short_opt = 0;
 	int long_opt = 0;
 	char *no_long_name = NULL;
+	int output;
+	bool optarg;
 
 	/* Assumptions: the -p option takes arguments, and the -g option takes
 	 * no arguments.
@@ -786,29 +790,137 @@ retry:
 		if (options->flags & PARSE_OPT_DISABLED)
 			continue;
 
-		if (short_opt && isshort(options->short_name) &&
-		    (!arg[0] || arg[0] == options->short_name))
-			printf("-%c\n", options->short_name);
-
-		if (long_opt && options->long_name) {
-			if (!arg[0]) {
-				printf("--%s\n", options->long_name);
-				if ((options->flags & PARSE_OPT_OPTARG) && options->type >= OPTION_STRING)
-					printf("--%s=\n", options->long_name);
-				if (!(options->flags & PARSE_OPT_NONEG))
+		// print no- opt
+		if (long_opt && options->long_name && !(options->flags & PARSE_OPT_NONEG)) {
+			if (!arg[0])
+				printf("--no-%s\n", options->long_name);
+			else if(asprintf(&no_long_name, "no-%s", options->long_name) > 0) {
+				if (strstarts(no_long_name, arg))
 					printf("--no-%s\n", options->long_name);
-			} else {
-				if (strstarts(options->long_name, arg)) {
-					printf("--%s\n", options->long_name);
-					if ((options->flags & PARSE_OPT_OPTARG) && options->type >= OPTION_STRING)
-						printf("--%s=\n", options->long_name);
+				free(no_long_name);
+			}
+		}
+
+		output = 0;
+		optarg = (options->flags & PARSE_OPT_OPTARG) && options->type >= OPTION_STRING;
+
+		/* COMP_TYPE
+		 *     Set to an integer value corresponding to the type of completion attempted that
+		 *     caused a completion function to be called: TAB, for normal completion, '?', for
+		 *     listing completions after successive tabs, '!', for listing  alternatives  on
+		 *     partial word completion, '@', to list completions if the word is not unmodified,
+		 *     or '%', for menu completion.
+		 *
+		 * COMP_TYPE = 9
+		 *     $ perf-prof t[Tab]
+		 *
+		 * COMP_TYPE = '?'
+		 *     $ perf-prof t[Tab][Tab]
+		 *     task-state  tlbstat     top         trace
+		 *
+		 * COMP_TYPE = '%'
+		 *     $ bind '"\C-g": menu-complete'
+		 *     $ perf-prof t[Ctrl+g][Ctrl+g][Ctrl+g]
+		 *
+		 * COMP_TYPE = '!'
+		 *     $ set show-all-if-ambiguous on  # /etc/inputrc
+		 *     $ perf-prof t[Tab]
+		 *     task-state  tlbstat     top         trace
+		 *
+		 * COMP_TYPE = '@'
+		 *     $ set show-all-if-unmodified on  # /etc/inputrc
+		 *     $ perf-prof t[Tab]
+		 *     task-state  tlbstat     top         trace
+		 *
+		 * COMP_TYPE = '*'
+		 *     $ bind -p | grep insert-completions
+		 *     "\e*": insert-completions
+		 *     $ perf-prof t[Esc+*]
+		 *     $ perf-prof task-state tlbstat top trace
+		 */
+
+		if (ctx->comp_type != '?') {
+			if (short_opt && isshort(options->short_name) &&
+				(!arg[0] || (arg[0] == options->short_name && !optarg)))
+				printf("-%c\n", options->short_name);
+
+			if (long_opt && options->long_name &&
+				(!arg[0] || strstarts(options->long_name, arg))) {
+				printf("--%s\n", options->long_name);
+				if (optarg)
+					printf("--%s=\n", options->long_name);
+			}
+		} else { // [Tab][Tab]
+			if (short_opt && isshort(options->short_name) &&
+				(!arg[0] || arg[0] == options->short_name))
+				output += printf("\"-%c", options->short_name);
+
+			if (long_opt && options->long_name &&
+				(!arg[0] || strstarts(options->long_name, arg))) {
+				output += printf("%s--%s", output ? ", " : "\"", options->long_name);
+			}
+
+			if (output) {
+				switch (options->type) {
+				case OPTION_ARGUMENT:
+					break;
+				case OPTION_LONG:
+				case OPTION_ULONG:
+				case OPTION_U64:
+				case OPTION_INTEGER:
+				case OPTION_UINTEGER:
+					if (options->argh) {
+						if (options->flags & PARSE_OPT_OPTARG)
+							if (long_opt && options->long_name)
+								output += printf("[=<%s>]", options->argh);
+							else
+								output += printf("[<%s>]", options->argh);
+						else
+							output += printf(" <%s>", options->argh);
+					} else {
+						if (options->flags & PARSE_OPT_OPTARG)
+							if (long_opt && options->long_name)
+								output += printf("[=<n>]");
+							else
+								output += printf("[<n>]");
+						else
+							output += printf(" <n>");
+					}
+					break;
+				case OPTION_CALLBACK:
+					if (options->flags & PARSE_OPT_NOARG)
+						break;
+					/* FALLTHROUGH */
+				case OPTION_STRING:
+					if (options->argh) {
+						if (options->flags & PARSE_OPT_OPTARG)
+							if (long_opt && options->long_name)
+								output += printf("[=<%s>]", options->argh);
+							else
+								output += printf("[<%s>]", options->argh);
+						else
+							output += printf(" <%s>", options->argh);
+					} else {
+						if (options->flags & PARSE_OPT_OPTARG)
+							if (long_opt && options->long_name)
+								output += printf("[=...]");
+							else
+								output += printf("[...]");
+						else
+							output += printf(" ...");
+					}
+					break;
+				default: /* OPTION_{BIT,BOOLEAN,SET_UINT,SET_PTR} */
+				case OPTION_END:
+				case OPTION_GROUP:
+				case OPTION_BIT:
+				case OPTION_BOOLEAN:
+				case OPTION_INCR:
+				case OPTION_SET_UINT:
+				case OPTION_SET_PTR:
+					break;
 				}
-				if (!(options->flags & PARSE_OPT_NONEG) &&
-					asprintf(&no_long_name, "no-%s", options->long_name) > 0) {
-					if (strstarts(no_long_name, arg))
-						printf("--no-%s\n", options->long_name);
-					free(no_long_name);
-				}
+				printf("\"\n");
 			}
 		}
 	}
