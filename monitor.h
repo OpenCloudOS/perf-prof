@@ -141,6 +141,7 @@ struct env {
     bool cycle;
     bool tsc;
     u64  tsc_offset;
+    int usage_self;
 
     /* kvmmmu */
     bool spte;
@@ -228,7 +229,7 @@ typedef struct monitor {
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", \
     "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset", \
-    "version", "verbose", "quiet", "help"
+    "usage-self", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
     "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", \

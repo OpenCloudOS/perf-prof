@@ -507,7 +507,7 @@ static const char *watchdog_desc[] = PROFILER_DESC("watchdog",
     "    "PROGRAME" watchdog -C 0 -F 1 -g -v");
 static const char *watchdog_argv[] = PROFILER_ARGV("watchdog",
     "OPTION:",
-    "cpus", "output", "mmap-pages", "exit-N",
+    "cpus", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "freq", "call-graph");
 struct monitor watchdog = {

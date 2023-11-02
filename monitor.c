@@ -328,6 +328,7 @@ struct option main_options[] = {
     OPT_LONG_NONEG  ('N',      "exit-N", &env.exit_n, "N",                 "Exit after N events have been sampled."),
     OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf time to tsc time."),
     OPT_U64_NONEG   ( 0 ,  "tsc-offset", &env.tsc_offset,  NULL,           "Sum with tsc-offset to get the final tsc time."),
+    OPT_INT_NONEG   ( 0 ,  "usage-self", &env.usage_self,  "ms",           "Periodically output the CPU usage of perf-prof itself, Unit: ms"),
     OPT_PARSE_NOARG ('V',     "version", NULL,             NULL,           "Version info"),
     OPT__VERBOSITY(&env.verbose),
     OPT_HELP(),
@@ -652,6 +653,11 @@ static void sigusr2_handler(int sig)
         stime += sys;
         tv = t;
     }
+}
+
+static void usage_self_handle(struct timer *timer)
+{
+    sigusr2_handler(0);
 }
 
 int get_present_cpus(void)
@@ -1212,6 +1218,7 @@ int main(int argc, char *argv[])
         struct perf_thread_map *threads;
         int max_read_size;
     } interval_args;
+    struct timer usage_self;
     bool deinited;
 
     sigusr2_handler(0);
@@ -1378,6 +1385,10 @@ reinit:
         timer_init(&interval_args.timer, interval_handle);
         timer_start(&interval_args.timer, env.interval * 1000000UL, false);
     }
+    if (env.usage_self) {
+        timer_init(&usage_self, usage_self_handle);
+        timer_start(&usage_self, env.usage_self * 1000000UL, false);
+    }
 
     while (!exiting && !monitor->reinit) {
         int fds = event_poll__poll(main_epoll, -1);
@@ -1396,6 +1407,9 @@ reinit:
 
     if (env.interval) {
         timer_destroy(&interval_args.timer);
+    }
+    if (env.usage_self) {
+        timer_destroy(&usage_self);
     }
 
     perf_evlist__disable(evlist);

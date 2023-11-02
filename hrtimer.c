@@ -392,7 +392,7 @@ static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
     "        'sched_switch==0 && sched_wakeup==0'");
 static const char *hrtimer_argv[] = PROFILER_ARGV("hrtimer",
     "OPTION:",
-    "cpus", "output", "mmap-pages", "exit-N",
+    "cpus", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
     PROFILER_ARGV_PROFILER, "event", "freq", "period", "call-graph");
@@ -470,7 +470,7 @@ static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
     "    "PROGRAME" irq-off -C 0 --period 10ms --than 20ms -g -i 200");
 static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
     "OPTION:",
-    "cpus", "interval", "output", "mmap-pages", "exit-N",
+    "cpus", "interval", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
     PROFILER_ARGV_PROFILER, "freq", "period", "than", "call-graph");

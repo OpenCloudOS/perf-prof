@@ -235,7 +235,7 @@ static const char *tlbstat_desc[] = PROFILER_DESC("tlbstat",
 static const char *tlbstat_argv[] = PROFILER_ARGV("tlbstat",
     "OPTION:",
     "cpus",
-    "interval", "output", "order", "order-mem", "mmap-pages",
+    "interval", "output", "order", "order-mem", "mmap-pages", "usage-self",
     "version", "verbose", "quiet", "help",
     "FILTER OPTION:",
     "exclude-host");

@@ -491,7 +491,7 @@ static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
 static const char *blktrace_argv[] = PROFILER_ARGV("blktrace",
     "OPTION:",
     "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset",
-    "version", "verbose", "quiet", "help",
+    "usage-self", "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "device", "than");
 static profiler blktrace = {
     .name = "blktrace",
