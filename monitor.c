@@ -489,12 +489,7 @@ static void flush_main_options(profiler *p)
     // disable all opts
     opts = main_options;
     for (; opts->type != OPTION_END; opts++) {
-        if (opts->type == OPTION_GROUP) {
-            if (!opts->argh)
-                opts->argh = opts->help;
-            opts->help = NULL;
-        } else
-            opts->flags |= PARSE_OPT_DISABLED;
+        opts->flags |= PARSE_OPT_DISABLED;
     }
 
     // enable profiler opts
@@ -507,15 +502,12 @@ static void flush_main_options(profiler *p)
                 goto enable;
             if (opts->long_name && strcmp(opts->long_name, p->argv[i]) == 0)
                 goto enable;
-            if (opts->type == OPTION_GROUP && strcmp(opts->argh, p->argv[i]) == 0)
+            if (opts->type == OPTION_GROUP && strcmp(opts->help, p->argv[i]) == 0)
                 goto enable;
         }
         continue;
     enable:
-        if (opts->type == OPTION_GROUP) {
-            opts->help = opts->argh;
-        } else
-            opts->flags &= (~PARSE_OPT_DISABLED);
+        opts->flags &= (~PARSE_OPT_DISABLED);
     }
 }
 
