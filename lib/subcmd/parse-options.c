@@ -1009,6 +1009,8 @@ static void print_option_help(const struct option *opts, int full)
 	size_t pos;
 	int pad;
 
+	if (opts->flags & PARSE_OPT_DISABLED)
+		return;
 	if (opts->type == OPTION_GROUP) {
 		fputc('\n', stderr);
 		if (*opts->help)
@@ -1016,8 +1018,6 @@ static void print_option_help(const struct option *opts, int full)
 		return;
 	}
 	if (!full && (opts->flags & PARSE_OPT_HIDDEN))
-		return;
-	if (opts->flags & PARSE_OPT_DISABLED)
 		return;
 
 	pos = fprintf(stderr, "  ");
