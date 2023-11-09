@@ -332,9 +332,16 @@ void perf_evlist_poll__init(struct perf_evlist *evlist)
 	epoll->data = NULL;
 }
 
-void perf_evlist_poll__external(struct perf_evlist *evlist, bool external)
+void perf_evlist_poll__external(struct perf_evlist *evlist, void *external)
 {
 	evlist->epoll.external = external;
+}
+
+void *perf_evlist_poll__get_external(struct perf_evlist *evlist, struct perf_mmap *map)
+{
+	if (!evlist && map)
+		evlist = map->evlist;
+	return evlist->epoll.external;
 }
 
 int perf_evlist_poll__alloc(struct perf_evlist *evlist)
@@ -485,6 +492,7 @@ static struct perf_mmap* perf_evlist__alloc_mmap(struct perf_evlist *evlist, boo
 		 */
 		perf_mmap__init(&map[i], prev, overwrite, NULL);
 		map[i].idx = i;
+		map[i].evlist = evlist;
 	}
 
 	return map;

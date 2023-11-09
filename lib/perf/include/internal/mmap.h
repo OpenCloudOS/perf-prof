@@ -33,6 +33,7 @@ struct perf_mmap {
 	bool			 overwrite;
 	u64			 flush;
 	libperf_unmap_cb_t	 unmap_cb;
+	struct perf_evlist	*evlist;
 	char			 event_copy[PERF_SAMPLE_MAX_SIZE] __aligned(8);
 	struct perf_mmap	*next;
 };

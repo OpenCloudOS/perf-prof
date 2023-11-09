@@ -59,6 +59,7 @@ LIBPERF_0.0.1 {
 		perf_evlist__next;
 		perf_evlist__set_maps;
 		perf_evlist_poll__external;
+		perf_evlist_poll__get_external;
 		perf_evlist_poll__foreach_fd;
 		perf_evlist__poll_map;
 		perf_evlist__poll;

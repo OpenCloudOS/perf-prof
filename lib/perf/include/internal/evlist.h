@@ -17,7 +17,7 @@ struct perf_evlist_poll {
 	int epfd;
 	int maxevents;
 	struct epoll_event *events;
-	bool external;
+	void *external;
 	int nr;
 	int nr_alloc;
 	struct perf_evlist_poll_data {
