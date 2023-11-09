@@ -1575,6 +1575,7 @@ static void nested_trace_help(struct help_ctx *hctx)
     ctx.nested = 1;
     for (impl = 0; impl < NUM(impl_str); impl++)
         __multi_trece_help(hctx, common, impl_str[impl], false);
+    ctx.nested = 0;
 }
 
 static const char *nested_trace_desc[] = PROFILER_DESC("nested-trace",
@@ -1715,6 +1716,12 @@ static void rundelay_help(struct help_ctx *hctx)
     struct env *env = hctx->env;
     const char *common = PROGRAME " rundelay";
     char *oldimpl = env->impl;
+
+    // Only make the simplest conditions.
+    if (hctx->nr_list < 2 ||
+        hctx->tp_list[0]->nr_tp < 3)
+        return ;
+
     env->impl = strdup(TWO_EVENT_DELAY_IMPL);
     __multi_trece_help(hctx, common, TWO_EVENT_DELAY_IMPL, true);
     free(env->impl);
