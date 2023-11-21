@@ -188,8 +188,10 @@ static struct two_event_class *two_event_class_new(struct two_event_impl *impl, 
 
 static void two_event_class_delete(struct two_event_class *class)
 {
-    rblist__exit(&class->two_events);
-    free(class);
+    if (class) {
+        rblist__exit(&class->two_events);
+        free(class);
+    }
 }
 
 static void impl_init(struct two_event_impl *impl)
