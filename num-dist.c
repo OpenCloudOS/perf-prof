@@ -11,19 +11,16 @@
 #include <stack_helpers.h>
 #include <latency_helpers.h>
 
-static profiler num_dist;
-
-static struct monitor_ctx {
+struct num_dist_ctx {
     int nr_ins;
     int nr_points;
     struct tp_list *tp_list;
     struct latency_dist *dist;
     int max_len;
-    struct perf_evlist *evlist;
     struct callchain_ctx *cc;
     struct heatmap **heatmaps;
-    struct env *env;
-} ctx;
+    bool print_header;
+};
 
 // in linux/perf_event.h
 // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
@@ -55,44 +52,49 @@ struct sample_type_raw {
     } raw;
 };
 
-
-static int monitor_ctx_init(struct env *env)
+static void monitor_ctx_exit(struct prof_dev *dev);
+static int monitor_ctx_init(struct prof_dev *dev)
 {
     int i, stacks = 0;
-
-    if (!env->event)
+    struct env *env = dev->env;
+    struct num_dist_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
         return -1;
+    dev->private = ctx;
+
+    if (!env->event) {
+        free(ctx);
+        return -1;
+    }
 
     tep__ref();
 
-    ctx.nr_ins = monitor_nr_instance();
+    ctx->nr_ins = prof_dev_nr_ins(dev);
 
-    ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list) {
-        return -1;
-    }
-    if (ctx.tp_list->nr_num == 0) {
+    ctx->tp_list = tp_list_new(dev, env->event);
+    if (!ctx->tp_list)
+        goto failed;
+
+    if (ctx->tp_list->nr_num_prog == 0) {
         fprintf(stderr, "Please use the multi-trace profiler\n");
-        tp_list_free(ctx.tp_list);
-        return -1;
+        goto failed;
     }
-    if (ctx.tp_list->nr_tp != ctx.tp_list->nr_num) {
+    if (ctx->tp_list->nr_tp != ctx->tp_list->nr_num_prog) {
         fprintf(stderr, "The number of 'num' attr is not equal to the number of event\n");
-        tp_list_free(ctx.tp_list);
-        return -1;
+        goto failed;
     }
 
-    ctx.nr_points = ctx.tp_list->nr_tp;
+    ctx->nr_points = ctx->tp_list->nr_tp;
 
-    ctx.dist = latency_dist_new_quantile(env->perins, true, 0);
-    if (!ctx.dist)
-        return -1;
+    ctx->dist = latency_dist_new_quantile(env->perins, true, 0);
+    if (!ctx->dist)
+        goto failed;
 
-    for (i = 0; i < ctx.nr_points; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < ctx->nr_points; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
 
-        if (strlen(tp->alias?:tp->name) > ctx.max_len)
-            ctx.max_len = strlen(tp->alias?:tp->name);
+        if (strlen(tp->alias?:tp->name) > ctx->max_len)
+            ctx->max_len = strlen(tp->alias?:tp->name);
         stacks += tp->stack;
 
         if (env->verbose)
@@ -100,44 +102,53 @@ static int monitor_ctx_init(struct env *env)
     }
 
     if (stacks || env->callchain) {
-        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
-        num_dist.pages *= 2;
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL), stdout);
+        dev->pages *= 2;
     } else
-        ctx.cc = NULL;
+        ctx->cc = NULL;
 
     if (env->heatmap) {
         char buff[1024];
         struct tp *tp;
 
-        ctx.heatmaps = calloc(ctx.nr_points, sizeof(*ctx.heatmaps));
-        if (!ctx.heatmaps)
-            return -1;
-        for (i = 0; i < ctx.nr_points; i++) {
-            tp = &ctx.tp_list->tp[i];
+        ctx->heatmaps = calloc(ctx->nr_points, sizeof(*ctx->heatmaps));
+        if (!ctx->heatmaps)
+            goto failed;
+        for (i = 0; i < ctx->nr_points; i++) {
+            tp = &ctx->tp_list->tp[i];
             snprintf(buff, sizeof(buff), "%s-%s", env->heatmap, tp->name);
-            ctx.heatmaps[i] = heatmap_open("ns", "ns", buff);
+            ctx->heatmaps[i] = heatmap_open("ns", "ns", buff);
         }
     }
-    ctx.env = env;
+
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    tp_list_free(ctx.tp_list);
-    latency_dist_free(ctx.dist);
-    callchain_ctx_free(ctx.cc);
-    if (ctx.env->heatmap) {
+    struct num_dist_ctx *ctx = dev->private;
+    tp_list_free(ctx->tp_list);
+    latency_dist_free(ctx->dist);
+    callchain_ctx_free(ctx->cc);
+    if (ctx->heatmaps) {
         int i;
-        for (i = 0; i < ctx.nr_points; i++)
-            heatmap_close(ctx.heatmaps[i]);
-        free(ctx.heatmaps);
+        for (i = 0; i < ctx->nr_points; i++)
+            heatmap_close(ctx->heatmaps[i]);
+        free(ctx->heatmaps);
     }
     tep__unref();
+    free(ctx);
 }
 
-static int num_dist_init(struct perf_evlist *evlist, struct env *env)
+static int num_dist_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct num_dist_ctx *ctx;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -148,19 +159,20 @@ static int num_dist_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
-        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL),
         .watermark     = 1,
     };
     int i;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
-    attr.wakeup_watermark = (num_dist.pages << 12) / 3;
-    for (i = 0; i < ctx.nr_points; i++) {
+    attr.wakeup_watermark = (dev->pages << 12) / 3;
+    for (i = 0; i < ctx->nr_points; i++) {
         struct perf_evsel *evsel;
-        struct tp *tp = &ctx.tp_list->tp[i];
+        struct tp *tp = &ctx->tp_list->tp[i];
 
         attr.config = tp->id;
         if (!env->callchain) {
@@ -171,25 +183,26 @@ static int num_dist_init(struct perf_evlist *evlist, struct env *env)
         }
         attr.sample_max_stack = tp->max_stack;
         evsel = perf_evsel__new(&attr);
-        if (!evsel) {
-            return -1;
-        }
+        if (!evsel)
+            goto failed;
         perf_evlist__add(evlist, evsel);
 
         tp->evsel = evsel;
     }
-
-    ctx.evlist = evlist;
-
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static int num_dist_filter(struct perf_evlist *evlist, struct env *env)
+static int num_dist_filter(struct prof_dev *dev)
 {
+    struct num_dist_ctx *ctx = dev->private;
     int i, err;
 
-    for (i = 0; i < ctx.nr_points; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < ctx->nr_points; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -199,68 +212,62 @@ static int num_dist_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-struct print_info {
-    bool started;
-};
 static void print_num_node(void *opaque, struct latency_node *node)
 {
-    struct print_info *info = opaque;
-    int oncpu = monitor_instance_oncpu();
-    struct tp *tp = &ctx.tp_list->tp[node->key];
+    struct prof_dev *dev = opaque;
+    struct env *env = dev->env;
+    struct num_dist_ctx *ctx = dev->private;
+    int oncpu = prof_dev_ins_oncpu(dev);
+    struct tp *tp = &ctx->tp_list->tp[node->key];
     double p99 = tdigest_quantile(node->td, 0.99);
     int i;
 
-    if (!info->started) {
-        info->started = true;
+    if (ctx->print_header) {
+        ctx->print_header = false;
 
         print_time(stdout);
         printf("\n");
 
-        if (ctx.env->perins)
+        if (env->perins)
             printf(oncpu ? "[CPU] " : "[THREAD] ");
-        printf("%-*s", ctx.max_len, "event");
+        printf("%-*s", ctx->max_len, "event");
         printf(" %8s %16s %12s %12s %12s %12s\n", "calls", "total", "min", "avg", "p99", "max");
 
-        if (ctx.env->perins)
+        if (env->perins)
             printf(oncpu ? "----- " : "-------- ");
-        for (i=0; i<ctx.max_len; i++) printf("-");
+        for (i=0; i<ctx->max_len; i++) printf("-");
         printf(" %8s %16s %12s %12s %12s %12s\n",
                         "--------", "----------------", "------------", "------------", "------------", "------------");
     }
 
-    if (ctx.env->perins) {
+    if (env->perins) {
         if (oncpu)
-            printf("[%03d] ", monitor_instance_cpu(node->instance));
+            printf("[%03d] ", prof_dev_ins_cpu(dev, node->instance));
         else
-            printf("%-8d ", monitor_instance_thread(node->instance));
+            printf("%-8d ", prof_dev_ins_thread(dev, node->instance));
     }
-    printf("%*s", ctx.max_len, tp->alias ?: tp->name);
+    printf("%*s", ctx->max_len, tp->alias ?: tp->name);
     printf(" %8lu %16lu %12lu %12lu %12lu %12lu\n",
         node->n, node->sum, node->min, node->sum/node->n, (u64)p99, node->max);
 }
 
-static void print_interval(void)
+static void num_dist_interval(struct prof_dev *dev)
 {
-    struct print_info info;
+    struct num_dist_ctx *ctx = dev->private;
 
-    info.started = false;
-    latency_dist_print(ctx.dist, print_num_node, &info);
+    ctx->print_header = true;
+    latency_dist_print(ctx->dist, print_num_node, dev);
 }
 
-static void num_dist_interval(void)
+static void num_dist_exit(struct prof_dev *dev)
 {
-    print_interval();
+    num_dist_interval(dev);
+    monitor_ctx_exit(dev);
 }
 
-static void num_dist_exit(struct perf_evlist *evlist)
+static void __raw_size(union perf_event *event, void **praw, int *psize, bool callchain)
 {
-    num_dist_interval();
-    monitor_ctx_exit();
-}
-
-static void __raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp)
-{
-    if (tp->stack || ctx.env->callchain) {
+    if (callchain) {
         struct sample_type_callchain *data = (void *)event->sample.array;
         struct {
             __u32   size;
@@ -275,51 +282,53 @@ static void __raw_size(union perf_event *event, void **praw, int *psize, struct 
     }
 }
 
-static void __print_callchain(union perf_event *event, struct tp *tp)
+static void __print_callchain(struct num_dist_ctx *ctx, union perf_event *event, struct tp *tp)
 {
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (tp->stack || ctx.env->callchain) {
-        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
-    }
+    print_callchain_common(ctx->cc, &data->callchain, data->h.tid_entry.pid);
 }
 
-static void num_dist_sample(union perf_event *event, int instance)
+static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct num_dist_ctx *ctx = dev->private;
+    struct env *env = dev->env;
     struct sample_type_header *hdr = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct tp *tp;
+    bool callchain;
     int i;
     void *raw;
     int size;
     __u64 delta;
 
-    evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->stream_id, NULL);
     if (!evsel)
         return;
 
-    for (i = 0; i < ctx.nr_points; i++) {
-        if (ctx.tp_list->tp[i].evsel == evsel)
+    for (i = 0; i < ctx->nr_points; i++) {
+        if (ctx->tp_list->tp[i].evsel == evsel)
             break;
     }
-    if (i == ctx.nr_points)
+    if (i == ctx->nr_points)
         return ;
 
-    tp = &ctx.tp_list->tp[i];
-    __raw_size(event, &raw, &size, tp);
+    tp = &ctx->tp_list->tp[i];
+    callchain = tp->stack || env->callchain;
+    __raw_size(event, &raw, &size, callchain);
 
     delta = tp_get_num(tp, raw, size);
-    latency_dist_input(ctx.dist, ctx.env->perins?instance:0, i, delta, ctx.env->greater_than);
+    latency_dist_input(ctx->dist, env->perins?instance:0, i, delta, env->greater_than);
 
-    if (ctx.env->heatmap)
-        heatmap_write(ctx.heatmaps[i], hdr->time, delta);
+    if (env->heatmap)
+        heatmap_write(ctx->heatmaps[i], hdr->time, delta);
 
-    if ((ctx.env->greater_than && delta > ctx.env->greater_than) ||
-        ctx.env->verbose >= VERBOSE_EVENT) {
+    if ((env->greater_than && delta > env->greater_than) ||
+        env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
         tep__update_comm(NULL, hdr->tid_entry.tid);
         tep__print_event(hdr->time/1000, hdr->cpu_entry.cpu, raw, size);
-        __print_callchain(event, tp);
+        __print_callchain(ctx, event, tp);
     }
 }
 
@@ -328,7 +337,7 @@ static void num_dist_help(struct help_ctx *hctx)
     int i, j;
     struct env *env = hctx->env;
 
-    printf(PROGRAME " %s ", num_dist.name);
+    printf(PROGRAME " num-dist ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
@@ -366,7 +375,7 @@ static void num_dist_help(struct help_ctx *hctx)
 static const char *num_dist_desc[] = PROFILER_DESC("num-dist",
     "[OPTION...] -e EVENT [--perins] [--than ns] [--heatmap file] [-g]",
     "Numerical distribution. Get 'num' data from the event itself.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" num-dist -e sched:sched_stat_runtime help",
     "    "PROGRAME" num-dist -e sched:sched_stat_runtime//num=runtime/ -C 0 -i 1000",
     "    "PROGRAME" num-dist -e 'sched:sched_stat_runtime//num=\"runtime/1000\"/alias=runtime(us)/' -C 0 -i 1000");
