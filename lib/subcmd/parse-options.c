@@ -266,6 +266,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		return !BASH_COMP(p) && (*opt->callback)(opt, arg, 0) ? (-1) : 0;
 
 	case OPTION_INTEGER:
+		if (opt->set)
+			*(bool *)opt->set = true;
 		if (unset) {
 			*(int *)opt->value = 0;
 			return 0;
@@ -282,6 +284,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		return 0;
 
 	case OPTION_UINTEGER:
+		if (opt->set)
+			*(bool *)opt->set = true;
 		if (unset) {
 			*(unsigned int *)opt->value = 0;
 			return 0;
@@ -300,6 +304,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		return 0;
 
 	case OPTION_LONG:
+		if (opt->set)
+			*(bool *)opt->set = true;
 		if (unset) {
 			*(long *)opt->value = 0;
 			return 0;
@@ -316,6 +322,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		return 0;
 
 	case OPTION_ULONG:
+		if (opt->set)
+			*(bool *)opt->set = true;
 		if (unset) {
 			*(unsigned long *)opt->value = 0;
 			return 0;
@@ -332,6 +340,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		return 0;
 
 	case OPTION_U64:
+		if (opt->set)
+			*(bool *)opt->set = true;
 		if (unset) {
 			*(u64 *)opt->value = 0;
 			return 0;
