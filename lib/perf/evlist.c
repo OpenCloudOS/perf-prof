@@ -177,13 +177,12 @@ int perf_evlist__open(struct perf_evlist *evlist)
 	struct rlimit rl;
 
 	if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
-		rl.rlim_cur += evlist->nr_entries * evlist->cpus->nr * evlist->threads->nr;
+		rl.rlim_cur += evlist->nr_entries * perf_cpu_map__nr(evlist->cpus) *
+					perf_thread_map__nr(evlist->threads);
 		if (rl.rlim_cur > rl.rlim_max)
 			rl.rlim_max = rl.rlim_cur;
-		if (setrlimit(RLIMIT_NOFILE, &rl) < 0) {
-			err = -errno;
-			goto out_err;
-		}
+		if (setrlimit(RLIMIT_NOFILE, &rl) < 0)
+			return -errno;
 	}
 
 	perf_evlist__for_each_entry(evlist, evsel) {
@@ -202,6 +201,13 @@ out_err:
 void perf_evlist__close(struct perf_evlist *evlist)
 {
 	struct perf_evsel *evsel;
+	struct rlimit rl;
+
+	if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+		rl.rlim_cur -= evlist->nr_entries * perf_cpu_map__nr(evlist->cpus) *
+					perf_thread_map__nr(evlist->threads);
+		setrlimit(RLIMIT_NOFILE, &rl);
+	}
 
 	perf_evlist__for_each_entry_reverse(evlist, evsel)
 		perf_evsel__close(evsel);
