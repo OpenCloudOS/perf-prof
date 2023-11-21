@@ -11,41 +11,50 @@
 
 #define START_OF_KERNEL 0xffff000000000000UL
 
-static profiler ldlat_loads;
-static struct monitor_ctx {
+struct ldlat_ctx {
     struct latency_dist *lat_dist;
     struct callchain_ctx *ccx;
-    struct env *env;
-} ctx;
+};
 
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct ldlat_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
     if (get_cpu_vendor() != X86_VENDOR_INTEL) {
         fprintf(stderr, "Only supports Intel platforms\n");
+        free(ctx);
         return -1;
     }
 
-    ctx.lat_dist = latency_dist_new(env->perins, true, 0);
-    ctx.ccx = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
-    callchain_ctx_config(ctx.ccx, 1, 1, 1, 0, 0, '\n', '\n');
-    ctx.env = env;
+    ctx->lat_dist = latency_dist_new(env->perins, true, 0);
+    ctx->ccx = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+    callchain_ctx_config(ctx->ccx, 1, 1, 1, 0, 0, '\n', '\n');
+
     return 0;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    latency_dist_free(ctx.lat_dist);
-    callchain_ctx_free(ctx.ccx);
+    struct ldlat_ctx *ctx = dev->private;
+    latency_dist_free(ctx->lat_dist);
+    callchain_ctx_free(ctx->ccx);
+    free(ctx);
 }
 
-static int ldlat_loads_init(struct perf_evlist *evlist, struct env *env)
+static int ldlat_loads_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_RAW,
         .config        = 0x1cd,  //MEM_TRANS_RETIRED.* /sys/bus/event_source/devices/cpu/events/mem-loads
         .size          = sizeof(struct perf_event_attr),
         //Every trigger_freq memory load, the PEBS hardware triggers an assist and causes a PEBS record to be written
-        .sample_period = env->trigger_freq,
+        .sample_period = env->trigger_freq ?: 1000,
         .sample_type   = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
                          PERF_SAMPLE_WEIGHT | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_PHYS_ADDR,
         .read_format   = 0,
@@ -56,26 +65,30 @@ static int ldlat_loads_init(struct perf_evlist *evlist, struct env *env)
         .precise_ip    = 3, // enable PEBS
         .config1       = env->ldlat <= 0 ? 3 : env->ldlat, // MSR_PEBS_LD_LAT_THRESHOLD MSR
         .watermark     = 1,
-        .wakeup_watermark = (ldlat_loads.pages << 12) / 2, // enable large PEBS, PERF_X86_EVENT_LARGE_PEBS
+        .wakeup_watermark = (dev->pages << 12) / 2, // enable large PEBS, PERF_X86_EVENT_LARGE_PEBS
     };
     struct perf_evsel *evsel;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void ldlat_loads_interval(void);
-static void ldlat_loads_exit(struct perf_evlist *evlist)
+static void ldlat_loads_interval(struct prof_dev *dev);
+static void ldlat_loads_exit(struct prof_dev *dev)
 {
-    ldlat_loads_interval();
-    monitor_ctx_exit();
+    ldlat_loads_interval(dev);
+    monitor_ctx_exit(dev);
 }
 
 // in linux/perf_event.h
@@ -342,52 +355,57 @@ static int perf_script__meminfo_scnprintf(char *out, size_t sz, struct mem_info 
 
 static void ldlat_print_node(void *opaque, struct latency_node *node)
 {
-    int oncpu = (int)(u64)opaque;
+    struct prof_dev *dev = opaque;
+    int oncpu = prof_dev_ins_oncpu(dev);
     struct mem_info mem_info;
     char buf[128];
 
     mem_info.data_src.val = node->key;
     perf_script__meminfo_scnprintf(buf, sizeof(buf), &mem_info);
 
-    if (ctx.env->perins) {
+    if (dev->env->perins) {
         if (oncpu)
-            printf("[%03d] ", monitor_instance_cpu(node->instance));
+            printf("[%03d] ", prof_dev_ins_cpu(dev, node->instance));
         else
-            printf("%-8d ", monitor_instance_thread(node->instance));
+            printf("%-8d ", prof_dev_ins_thread(dev, node->instance));
     }
     printf("%-60s %8lu %16lu %12lu %12lu %12lu\n", buf,
         node->n, node->sum, node->min, node->sum/node->n, node->max);
 }
 
-static void ldlat_loads_interval(void)
+static void ldlat_loads_interval(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct ldlat_ctx *ctx = dev->private;
     int i;
-    int oncpu = monitor_instance_oncpu();
+    int oncpu = prof_dev_ins_oncpu(dev);
 
-    if (latency_dist_empty(ctx.lat_dist))
+    if (latency_dist_empty(ctx->lat_dist))
         return ;
 
     print_time(stdout);
     printf("\n");
 
-    if (ctx.env->perins)
+    if (env->perins)
         printf(oncpu ? "[CPU] " : "[THREAD] ");
 
     printf("%-60s %8s %16s %12s %12s %12s\n", "Mem Load Latency",
                  "samples", "total(cycles)", "min(cycles)", "avg(cycles)", "max(cycles)");
 
-    if (ctx.env->perins)
+    if (env->perins)
         printf(oncpu ? "----- " : "-------- ");
     for (i=0; i<60; i++) printf("-");
     printf(" %8s %16s %12s %12s %12s\n",
                     "--------", "----------------", "------------", "------------", "------------");
 
-    latency_dist_print(ctx.lat_dist, ldlat_print_node, (void *)(u64)oncpu);
+    latency_dist_print(ctx->lat_dist, ldlat_print_node, dev);
     return ;
 }
 
-static void ldlat_loads_sample(union perf_event *event, int instance)
+static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct env *env = dev->env;
+    struct ldlat_ctx *ctx = dev->private;
     struct sample_type_header *data = (void *)event->sample.array;
     struct mem_info mem_info;
     char buf[64];
@@ -396,8 +414,8 @@ static void ldlat_loads_sample(union perf_event *event, int instance)
         __u64 ips[2];
     } callchain;
 
-    if (ctx.env->verbose || (ctx.env->greater_than &&
-        data->weight.full > ctx.env->greater_than)) {
+    if (env->verbose || (env->greater_than &&
+        data->weight.full > env->greater_than)) {
         callchain.nr = 2;
         callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
         callchain.ips[1] = data->ip;
@@ -408,18 +426,18 @@ static void ldlat_loads_sample(union perf_event *event, int instance)
         printf("CPU %3u PID %6u TID %6u DATA ADDR %016lx PHYS %016lx latency %6llu cycles %s RIP ",
                 data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid,
                 data->addr, data->phys_addr, data->weight.full, buf);
-        print_callchain(ctx.ccx, (struct callchain *)&callchain, data->tid_entry.pid);
+        print_callchain(ctx->ccx, (struct callchain *)&callchain, data->tid_entry.pid);
     }
 
-    latency_dist_input(ctx.lat_dist, instance, data->data_src, data->weight.full, ctx.env->greater_than);
+    latency_dist_input(ctx->lat_dist, instance, data->data_src, data->weight.full, env->greater_than);
 }
 
 static const char *ldlat_loads_desc[] = PROFILER_DESC("ldlat-loads",
     "[OPTION...] [--ldlat cycles] [-T trigger] [--perins] [--than cycles]",
     "Load Latency Performance Monitoring on Intel Platform.", "",
-    "SYNOPSIS", "",
+    "SYNOPSIS",
     "    Load Latency Performance Monitoring Facility", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" ldlat-loads -C 0 -i 1000",
     "    "PROGRAME" ldlat-loads -p 2347 --ldlat 10 --than 100 -i 1000");
 static const char *ldlat_loads_argv[] = PROFILER_ARGV("ldlat-loads",
@@ -443,16 +461,16 @@ static profiler ldlat_loads = {
 PROFILER_REGISTER(ldlat_loads);
 
 
-
-static profiler ldlat_stores;
-static int ldlat_stores_init(struct perf_evlist *evlist, struct env *env)
+static int ldlat_stores_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_RAW,
         .config        = 0x82d0, //MEM_UOPS_RETIRED.ALL_STORES /sys/bus/event_source/devices/cpu/events/mem-stores
         .size          = sizeof(struct perf_event_attr),
         //Every trigger_freq memory load, the PEBS hardware triggers an assist and causes a PEBS record to be written
-        .sample_period = env->trigger_freq,
+        .sample_period = env->trigger_freq ?: 1000,
         .sample_type   = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
                          PERF_SAMPLE_WEIGHT | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_PHYS_ADDR,
         .read_format   = 0,
@@ -462,26 +480,30 @@ static int ldlat_stores_init(struct perf_evlist *evlist, struct env *env)
         .exclude_host = env->exclude_host,
         .precise_ip    = 3, // enable PEBS
         .watermark     = 1,
-        .wakeup_watermark = (ldlat_stores.pages << 12) / 2, // enable large PEBS, PERF_X86_EVENT_LARGE_PEBS
+        .wakeup_watermark = (dev->pages << 12) / 2, // enable large PEBS, PERF_X86_EVENT_LARGE_PEBS
     };
     struct perf_evsel *evsel;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
 
 static const char *ldlat_stores_desc[] = PROFILER_DESC("ldlat-stores",
     "[OPTION...] [-T trigger] [--perins]",
     "PEBS Data Address Profiling on Intel Platform.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" ldlat-stores -C 0 -i 1000",
     "    "PROGRAME" ldlat-stores -p 2347 -v -i 1000");
 static const char *ldlat_stores_argv[] = PROFILER_ARGV("ldlat-stores",
