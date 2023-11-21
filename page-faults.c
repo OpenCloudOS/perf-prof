@@ -28,34 +28,28 @@
 #endif
 
 
-static profiler page_faults;
-static struct monitor_ctx {
-    struct perf_evlist *evlist;
-    struct callchain_ctx *cc;
-    struct env *env;
-} ctx;
-
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
     tep__ref();
-    if (env->callchain) {
-        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-        page_faults.pages *= 2;
+    if (dev->env->callchain) {
+        dev->private = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        dev->pages *= 2;
     }
-    ctx.env = env;
     return 0;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    if (ctx.env->callchain) {
-        callchain_ctx_free(ctx.cc);
+    if (dev->env->callchain) {
+        callchain_ctx_free(dev->private);
     }
     tep__unref();
 }
 
-static int page_faults_init(struct perf_evlist *evlist, struct env *env)
+static int page_faults_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_SOFTWARE,
         .config        = PERF_COUNT_SW_PAGE_FAULTS,
@@ -67,28 +61,31 @@ static int page_faults_init(struct perf_evlist *evlist, struct env *env)
         .sample_regs_user = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
-        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
-    ctx.evlist = evlist;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void page_faults_exit(struct perf_evlist *evlist)
+static void page_faults_exit(struct prof_dev *dev)
 {
-    monitor_ctx_exit();
+    monitor_ctx_exit(dev);
 }
 
 
@@ -147,11 +144,11 @@ static void print_regs_user(struct sample_regs_user *regs_user, u64 unused)
 #endif
 }
 
-static void page_faults_sample(union perf_event *event, int instance)
+static void page_faults_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct sample_type_header *data = (void *)event->sample.array;
     struct sample_regs_user *regs_user;
-    bool callchain = ctx.env->callchain;
+    bool callchain = dev->env->callchain;
 
     print_time(stdout);
     tep__update_comm(NULL, data->tid_entry.tid);
@@ -160,14 +157,14 @@ static void page_faults_sample(union perf_event *event, int instance)
 
     if (callchain) {
         regs_user = (struct sample_regs_user *)&data->callchain.ips[data->callchain.nr];
-        print_callchain_common_cbs(ctx.cc, &data->callchain, data->tid_entry.pid, NULL, (callchain_cbs)print_regs_user, regs_user);
+        print_callchain_common_cbs(dev->private, &data->callchain, data->tid_entry.pid, NULL, (callchain_cbs)print_regs_user, regs_user);
     }
 }
 
 static const char *page_faults_desc[] = PROFILER_DESC("page-faults",
     "[OPTION...] [-g]",
     "Print the user mode regs and stack when a page fault occurs.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" page-faults -p 2347 -g",
     "    "PROGRAME" page-faults -C 0 -g");
 static const char *page_faults_argv[] = PROFILER_ARGV("page-faults",
