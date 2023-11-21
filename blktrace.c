@@ -43,8 +43,7 @@ struct block_iostat {
     __u64 than;
 };
 
-static struct blktrace_ctx {
-    struct perf_evlist *evlist;
+struct blktrace_ctx {
     struct block_iostat stats[BLOCK_MAX];
     dev_t  dev;
     int partition;
@@ -52,8 +51,7 @@ static struct blktrace_ctx {
     sector_t end_sector;
     int max_name_len;
     struct rblist rq_tracks;
-    struct env *env;
-} ctx;
+};
 
 struct trace_block_getrq {
     unsigned short common_type;//       offset:0;       size:2; signed:0;
@@ -183,15 +181,15 @@ static void request_track_node_delete(struct rblist *rblist, struct rb_node *rb_
     free(rq);
 }
 
-static void iostat_reset(void)
+static void iostat_reset(struct blktrace_ctx *ctx)
 {
     int i;
     for (i = 0; i < BLOCK_MAX; i ++) {
-        ctx.stats[i].min = ~0UL;
-        ctx.stats[i].max = 0UL;
-        ctx.stats[i].n = 0UL;
-        ctx.stats[i].sum = 0UL;
-        ctx.stats[i].than = 0UL;
+        ctx->stats[i].min = ~0UL;
+        ctx->stats[i].max = 0UL;
+        ctx->stats[i].n = 0UL;
+        ctx->stats[i].sum = 0UL;
+        ctx->stats[i].than = 0UL;
     }
 }
 
@@ -205,8 +203,10 @@ static inline unsigned get_dev_minor(u32 dev)
     return (dev & 0xff) | ((dev >> 12) & 0xfff00);
 }
 
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct blktrace_ctx *ctx;
     struct stat st;
     char path[4096];
     unsigned int major, minor;
@@ -219,58 +219,71 @@ static int monitor_ctx_init(struct env *env)
     if (stat(env->device, &st) < 0)
         return -1;
 
-    ctx.dev = new_decode_dev((u32)st.st_rdev);
+    ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
+    ctx->dev = new_decode_dev((u32)st.st_rdev);
     major = get_dev_major((u32)st.st_rdev);
     minor = get_dev_minor((u32)st.st_rdev);
 
     memset(path, 0, 4096);
     sprintf(path, "dev/block/%u:%u/partition", major, minor);
     if (sysfs__read_str(path, &buf, &len) < 0)
-        ctx.partition = 0;
+        ctx->partition = 0;
     else {
-        ctx.partition = atoi(buf);
-        ctx.dev -= ctx.partition;
+        ctx->partition = atoi(buf);
+        ctx->dev -= ctx->partition;
         free(buf);
 
         memset(path, 0, 4096);
         sprintf(path, "dev/block/%u:%u/start", major, minor);
         if (sysfs__read_str(path, &buf, &len) < 0)
-            return -1;
+            goto failed;
         else {
-            ctx.start_sector = atol(buf);
+            ctx->start_sector = atol(buf);
             free(buf);
         }
 
         memset(path, 0, 4096);
         sprintf(path, "dev/block/%u:%u/size", major, minor);
         if (sysfs__read_str(path, &buf, &len) < 0)
-            return -1;
+            goto failed;
         else {
-            ctx.end_sector = ctx.start_sector + atol(buf);
+            ctx->end_sector = ctx->start_sector + atol(buf);
             free(buf);
         }
     }
 
-    iostat_reset();
+    iostat_reset(ctx);
 
-    rblist__init(&ctx.rq_tracks);
-    ctx.rq_tracks.node_cmp = request_track_node_cmp;
-    ctx.rq_tracks.node_new = request_track_node_new;
-    ctx.rq_tracks.node_delete = request_track_node_delete;
+    rblist__init(&ctx->rq_tracks);
+    ctx->rq_tracks.node_cmp = request_track_node_cmp;
+    ctx->rq_tracks.node_new = request_track_node_new;
+    ctx->rq_tracks.node_delete = request_track_node_delete;
 
     tep__ref();
-    ctx.env = env;
+
     return 0;
+
+failed:
+    free(ctx);
+    return -1;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    rblist__exit(&ctx.rq_tracks);
+    struct blktrace_ctx *ctx = dev->private;
+    rblist__exit(&ctx->rq_tracks);
     tep__unref();
+    free(ctx);
 }
 
-static struct perf_evsel *add_tp_event(struct perf_evlist *evlist, const char *sys, const char *name, int i)
+static struct perf_evsel *add_tp_event(struct prof_dev *dev, const char *sys, const char *name, int i)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct blktrace_ctx *ctx = dev->private;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -289,7 +302,7 @@ static struct perf_evsel *add_tp_event(struct perf_evlist *evlist, const char *s
     if (id < 0)
         return NULL;
 
-    reduce_wakeup_times(&blktrace, &attr);
+    reduce_wakeup_times(dev, &attr);
 
     attr.config = id;
     evsel = perf_evsel__new(&attr);
@@ -298,40 +311,45 @@ static struct perf_evsel *add_tp_event(struct perf_evlist *evlist, const char *s
     }
     perf_evlist__add(evlist, evsel);
 
-    ctx.stats[i].name = name;
-    ctx.stats[i].type = id;
-    if (strlen(name) > ctx.max_name_len)
-        ctx.max_name_len = strlen(name);
+    ctx->stats[i].name = name;
+    ctx->stats[i].type = id;
+    if (strlen(name) > ctx->max_name_len)
+        ctx->max_name_len = strlen(name);
 
     return evsel;
 }
 
-static int blktrace_init(struct perf_evlist *evlist, struct env *env)
+static int blktrace_init(struct prof_dev *dev)
 {
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
 
-    add_tp_event(evlist, "block", "block_getrq", BLOCK_GETRQ);
-    add_tp_event(evlist, "block", "block_rq_insert", BLOCK_RQ_INSERT);
-    add_tp_event(evlist, "block", "block_rq_issue", BLOCK_RQ_ISSUE);
-    add_tp_event(evlist, "block", "block_rq_complete", BLOCK_RQ_COMPLETE);
+    if (!add_tp_event(dev, "block", "block_getrq", BLOCK_GETRQ)) goto failed;
+    if (!add_tp_event(dev, "block", "block_rq_insert", BLOCK_RQ_INSERT)) goto failed;
+    if (!add_tp_event(dev, "block", "block_rq_issue", BLOCK_RQ_ISSUE)) goto failed;
+    if (!add_tp_event(dev, "block", "block_rq_complete", BLOCK_RQ_COMPLETE)) goto failed;
 
-    ctx.evlist = evlist;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static int blktrace_filter(struct perf_evlist *evlist, struct env *env)
+static int blktrace_filter(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct blktrace_ctx *ctx = dev->private;
     char filter[256];
     struct perf_evsel *evsel;
     int err;
 
-    if (ctx.partition)
+    if (ctx->partition)
         snprintf(filter, sizeof(filter), "dev==%u && sector>=%lu && sector<=%lu", \
-                    (unsigned int)ctx.dev, ctx.start_sector, ctx.end_sector);
+                    (unsigned int)ctx->dev, ctx->start_sector, ctx->end_sector);
     else
-        snprintf(filter, sizeof(filter), "dev==%u", (unsigned int)ctx.dev);
-    if (ctx.env->verbose)
+        snprintf(filter, sizeof(filter), "dev==%u", (unsigned int)ctx->dev);
+    if (dev->env->verbose)
         printf("%s\n", filter);
     perf_evlist__for_each_evsel(evlist, evsel) {
         err = perf_evsel__apply_filter(evsel, filter);
@@ -341,27 +359,29 @@ static int blktrace_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void blktrace_interval(void)
+static void blktrace_interval(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct blktrace_ctx *ctx = dev->private;
     int i;
-    bool than = !!ctx.env->greater_than;
+    bool than = !!env->greater_than;
 
     print_time(stdout);
     printf("\n");
 
-    printf("%*s => %-*s %8s %16s %12s %12s %12s", ctx.max_name_len, "start", ctx.max_name_len, "end", "reqs",
-                    ctx.env->tsc ? "total(kcyc)" : "total(us)",
-                    ctx.env->tsc ? "min(kcyc)" : "min(us)",
-                    ctx.env->tsc ? "avg(kcyc)" : "avg(us)",
-                    ctx.env->tsc ? "max(kcyc)" : "max(us)");
+    printf("%*s => %-*s %8s %16s %12s %12s %12s", ctx->max_name_len, "start", ctx->max_name_len, "end", "reqs",
+                    env->tsc ? "total(kcyc)" : "total(us)",
+                    env->tsc ? "min(kcyc)" : "min(us)",
+                    env->tsc ? "avg(kcyc)" : "avg(us)",
+                    env->tsc ? "max(kcyc)" : "max(us)");
     if (than)
         printf("    than(reqs)\n");
     else
         printf("\n");
 
-    for (i=0; i<ctx.max_name_len; i++) printf("-");
+    for (i=0; i<ctx->max_name_len; i++) printf("-");
     printf("    ");
-    for (i=0; i<ctx.max_name_len; i++) printf("-");
+    for (i=0; i<ctx->max_name_len; i++) printf("-");
     printf(" %8s %16s %12s %12s %12s",
                     "--------", "----------------", "------------", "------------", "------------");
     if (than)
@@ -370,11 +390,11 @@ static void blktrace_interval(void)
         printf("\n");
 
     for (i = 1; i < BLOCK_MAX; i++) {
-        struct block_iostat *iostat1 = &ctx.stats[i-1];
-        struct block_iostat *iostat = &ctx.stats[i];
+        struct block_iostat *iostat1 = &ctx->stats[i-1];
+        struct block_iostat *iostat = &ctx->stats[i];
         printf("%*s => %-*s %8llu %16.3f %12.3f %12.3f %12.3f",
-                ctx.max_name_len, iostat1->name,
-                ctx.max_name_len, iostat->name,
+                ctx->max_name_len, iostat1->name,
+                ctx->max_name_len, iostat->name,
                 iostat->n, iostat->sum/1000.0, iostat->n ? iostat->min/1000.0 : 0.0,
                 iostat->n ? iostat->sum/iostat->n/1000.0 : 0.0, iostat->max/1000.0);
         if (than)
@@ -385,25 +405,27 @@ static void blktrace_interval(void)
         else
             printf("\n");
     }
-    iostat_reset();
+    iostat_reset(ctx);
 }
 
-static void blktrace_exit(struct perf_evlist *evlist)
+static void blktrace_exit(struct prof_dev *dev)
 {
-    blktrace_interval();
-    monitor_ctx_exit();
+    blktrace_interval(dev);
+    monitor_ctx_exit(dev);
 }
 
 #define IF(i, trace) \
-if (common_type == ctx.stats[i].type) { \
+if (common_type == ctx->stats[i].type) { \
     r.tp = i; \
     r.dev = data->raw.trace.dev; \
     r.sector = data->raw.trace.sector; \
     r.nr_sector = data->raw.trace.nr_sector; \
 }
 
-static void blktrace_sample(union perf_event *event, int instance)
+static void blktrace_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct env *env = dev->env;
+    struct blktrace_ctx *ctx = dev->private;
     struct sample_type_raw *data = (void *)event->sample.array;
     void *raw = data->raw.data;
     int size = data->raw.size;
@@ -413,7 +435,7 @@ static void blktrace_sample(union perf_event *event, int instance)
     struct rb_node *rbn = NULL;
     u64 delta;
     const char *print = NULL;
-    int verbose = ctx.env->verbose;
+    int verbose = dev->env->verbose;
 
     r.time = data->time;
     IF(BLOCK_GETRQ, getrq)
@@ -426,9 +448,9 @@ static void blktrace_sample(union perf_event *event, int instance)
     if (r.sector == (sector_t)-1)
         return;
 
-    iostat = &ctx.stats[r.tp];
+    iostat = &ctx->stats[r.tp];
 
-    rbn = rblist__find(&ctx.rq_tracks, &r);
+    rbn = rblist__find(&ctx->rq_tracks, &r);
     if (rbn) {
         prev_rq = container_of(rbn, struct request_track, rbnode);
 
@@ -446,13 +468,13 @@ static void blktrace_sample(union perf_event *event, int instance)
             iostat->min = delta;
         if (delta > iostat->max)
             iostat->max = delta;
-        if (ctx.env->greater_than && delta > ctx.env->greater_than)
+        if (env->greater_than && delta > env->greater_than)
             iostat->than ++;
         iostat->n ++;
         iostat->sum += delta;
 
-        if (ctx.env->greater_than &&
-            delta > ctx.env->greater_than) {
+        if (env->greater_than &&
+            delta > env->greater_than) {
             print = "GREATER_THAN";
             verbose = VERBOSE_NOTICE;
         }
@@ -465,10 +487,10 @@ static void blktrace_sample(union perf_event *event, int instance)
             rq->nr_sector = r.nr_sector;
             rq->time = r.time;
         } else
-            rblist__remove_node(&ctx.rq_tracks, rbn);
+            rblist__remove_node(&ctx->rq_tracks, rbn);
     }
     else if (r.tp != BLOCK_RQ_COMPLETE)
-        rblist__add_node(&ctx.rq_tracks, &r);
+        rblist__add_node(&ctx->rq_tracks, &r);
 
     if (verbose &&
         (print || verbose >= VERBOSE_EVENT)) {
@@ -483,9 +505,9 @@ static void blktrace_sample(union perf_event *event, int instance)
 static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
     "[OPTION...] -d device [--than ns]",
     "Track IO latency on block devices.", "",
-    "TRACEPOINT", "",
+    "TRACEPOINT",
     "    block:block_getrq, block:block_rq_insert, block:block_rq_issue, block:block_rq_complete", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000 --than 10ms");
 static const char *blktrace_argv[] = PROFILER_ARGV("blktrace",
