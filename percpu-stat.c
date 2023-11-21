@@ -5,8 +5,6 @@
 #include "trace_helpers.h"
 #include "tep.h"
 
-static profiler percpu_stat;
-
 struct swevent_stat {
     uint64_t count;
     uint64_t diff;
@@ -22,14 +20,13 @@ struct evsel_node {
     struct swevent_stat *total_stats;
 };
 
-static struct monitor_ctx {
+struct percpu_stat_ctx {
     int nr_ins;
     struct evsel_node *first;
     struct evsel_node **p_next;
     struct rblist evsel_list;
     struct tp_list *tp_list;
-    struct env *env;
-} ctx;
+};
 
 static int evsel_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -46,6 +43,7 @@ static int evsel_node_cmp(struct rb_node *rbn, const void *entry)
 
 static struct rb_node *evsel_node_new(struct rblist *rlist, const void *new_entry)
 {
+    struct percpu_stat_ctx *ctx = container_of(rlist, struct percpu_stat_ctx, evsel_list);
     const struct evsel_node *n = new_entry;
     struct evsel_node *e = malloc(sizeof(*e));
     if (e) {
@@ -54,14 +52,14 @@ static struct rb_node *evsel_node_new(struct rblist *rlist, const void *new_entr
         e->name = n->name;
         e->name_len = (int)strlen(e->name);
         e->cpu_idle = n->cpu_idle;
-        e->perins_stats = calloc(ctx.nr_ins + 1, sizeof(*e->perins_stats));
+        e->perins_stats = calloc(ctx->nr_ins + 1, sizeof(*e->perins_stats));
         if (!e->perins_stats) {
             free(e);
             return NULL;
         }
-        e->total_stats = e->perins_stats + ctx.nr_ins;
-        *ctx.p_next = e;
-        ctx.p_next = &e->next;
+        e->total_stats = e->perins_stats + ctx->nr_ins;
+        *ctx->p_next = e;
+        ctx->p_next = &e->next;
         RB_CLEAR_NODE(&e->rbnode);
         return &e->rbnode;
     } else
@@ -75,27 +73,33 @@ static void evsel_node_delete(struct rblist *rblist, struct rb_node *rb_node)
     free(e);
 }
 
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
-    ctx.nr_ins = monitor_nr_instance();
+    struct percpu_stat_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
 
-    ctx.first = NULL;
-    ctx.p_next = &ctx.first;
+    ctx->nr_ins = prof_dev_nr_ins(dev);
 
-    rblist__init(&ctx.evsel_list);
-    ctx.evsel_list.node_cmp = evsel_node_cmp;
-    ctx.evsel_list.node_new = evsel_node_new;
-    ctx.evsel_list.node_delete = evsel_node_delete;
+    ctx->first = NULL;
+    ctx->p_next = &ctx->first;
 
-    ctx.env = env;
+    rblist__init(&ctx->evsel_list);
+    ctx->evsel_list.node_cmp = evsel_node_cmp;
+    ctx->evsel_list.node_new = evsel_node_new;
+    ctx->evsel_list.node_delete = evsel_node_delete;
+
     tep__ref();
     return 0;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
+    struct percpu_stat_ctx *ctx = dev->private;
     tep__unref();
-    rblist__exit(&ctx.evsel_list);
+    rblist__exit(&ctx->evsel_list);
+    free(ctx);
 }
 
 static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *sys, const char *name)
@@ -130,7 +134,6 @@ static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *
 
 static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
 {
-    static bool leader = true;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_SOFTWARE,
         .config        = 0,
@@ -140,7 +143,7 @@ static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
         .sample_type   = 0,
         .read_format   = 0,
         .pinned        = 0,
-        .disabled      = leader ? 1 : 0,
+        .disabled      = 0,
     };
     struct perf_evsel *evsel;
 
@@ -150,25 +153,30 @@ static struct perf_evsel *perf_sw_event(struct perf_evlist *evlist, int config)
         return NULL;
     }
     perf_evlist__add(evlist, evsel);
-    leader = false;
+
     return evsel;
 }
 
-static void __evsel_name(struct perf_evsel *evsel, const char *name, bool cpu_idle)
+static void __evsel_name(struct percpu_stat_ctx *ctx, struct perf_evsel *evsel, const char *name, bool cpu_idle)
 {
     struct evsel_node n;
     if (evsel) {
         n.evsel = evsel;
         n.name = name;
         n.cpu_idle = cpu_idle;
-        rblist__add_node(&ctx.evsel_list, &n);
+        rblist__add_node(&ctx->evsel_list, &n);
     }
 }
-#define evsel_name(evsel, name) __evsel_name((evsel), (name), false)
-static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
+#define evsel_name(evsel, name) __evsel_name(ctx, (evsel), (name), false)
+static int percpu_stat_init(struct prof_dev *dev)
 {
-    if (monitor_ctx_init(env) < 0)
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct percpu_stat_ctx *ctx;
+
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
     if (env->interval == 0)
         env->interval = 1000;
@@ -202,22 +210,23 @@ static int percpu_stat_init(struct perf_evlist *evlist, struct env *env)
     evsel_name(perf_tp_event(evlist, "filemap", "mm_filemap_add_to_page_cache"), " PAGE cache");
     evsel_name(perf_tp_event(evlist, "writeback", "wbc_writepage"), " WB pages");
     //cpu_idle
-    __evsel_name(perf_tp_event(evlist, "power", "cpu_idle"), " idle", true);
+    __evsel_name(ctx, perf_tp_event(evlist, "power", "cpu_idle"), " idle", true);
 
     perf_evlist__set_leader(evlist);
 
     return 0;
 }
 
-static void percpu_stat_exit(struct perf_evlist *evlist)
+static void percpu_stat_exit(struct prof_dev *dev)
 {
-    monitor_ctx_exit();
+    monitor_ctx_exit(dev);
 }
 
-static int percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int percpu_stat_read(struct prof_dev *dev, struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
+    struct percpu_stat_ctx *ctx = dev->private;
     struct evsel_node n = {.evsel = evsel};
-    struct rb_node *rbn = rblist__find(&ctx.evsel_list, &n);
+    struct rb_node *rbn = rblist__find(&ctx->evsel_list, &n);
     struct evsel_node *e = rbn ? container_of(rbn, struct evsel_node, rbnode) : NULL;
 
     if (e == NULL)
@@ -236,9 +245,10 @@ static int percpu_stat_read(struct perf_evsel *evsel, struct perf_counts_values 
     return 0;
 }
 
-static void percpu_stat_interval(void)
+static void percpu_stat_interval(struct prof_dev *dev)
 {
-    struct evsel_node *next = ctx.first;
+    struct percpu_stat_ctx *ctx = dev->private;
+    struct evsel_node *next = ctx->first;
     int ins;
 
     print_time(stdout);
@@ -248,10 +258,10 @@ static void percpu_stat_interval(void)
         next = next->next;
     }
 
-    if (ctx.env->perins)
-    for (ins = 0; ins < ctx.nr_ins; ins ++) {
-        printf("\n[%03d] ", monitor_instance_cpu(ins));
-        next = ctx.first;
+    if (dev->env->perins)
+    for (ins = 0; ins < ctx->nr_ins; ins ++) {
+        printf("\n[%03d] ", prof_dev_ins_cpu(dev, ins));
+        next = ctx->first;
         while (next) {
             printf("%*lu ", next->name_len, next->perins_stats[ins].diff);
             next = next->next;
@@ -259,7 +269,7 @@ static void percpu_stat_interval(void)
     }
 
     printf("\n[ALL] ");
-    next = ctx.first;
+    next = ctx->first;
     while (next) {
         printf("%*lu ", next->name_len, next->total_stats->diff);
         next->total_stats->diff = 0;
@@ -268,7 +278,7 @@ static void percpu_stat_interval(void)
     printf("\n");
 }
 
-static void percpu_stat_sample(union perf_event *event, int instance)
+static void percpu_stat_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
 }
 
@@ -276,7 +286,7 @@ static void percpu_stat_sample(union perf_event *event, int instance)
 static const char *percpu_stat_desc[] = PROFILER_DESC("percpu-stat",
     "[OPTION...] [--syscalls]",
     "Handpicked event statistics.", "",
-    "TRACEPOINT", "",
+    "TRACEPOINT",
     "    PERF_COUNT_SW_CONTEXT_SWITCHES  PERF_COUNT_SW_CPU_MIGRATIONS",
     "    PERF_COUNT_SW_PAGE_FAULTS_MIN   PERF_COUNT_SW_PAGE_FAULTS_MAJ",
     "    irq:irq_handler_entry           irq:softirq_entry",
@@ -287,7 +297,7 @@ static const char *percpu_stat_desc[] = PROFILER_DESC("percpu-stat",
     "    migrate:mm_migrate_pages        vmscan:mm_vmscan_direct_reclaim_begin",
     "    writeback:wbc_writepage         filemap:mm_filemap_add_to_page_cache",
     "    raw_syscalls:sys_enter          power:cpu_idle", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" percpu-stat -C 0",
     "    "PROGRAME" percpu-stat --syscalls -i 2000");
 static const char *percpu_stat_argv[] = PROFILER_ARGV("percpu-stat",
