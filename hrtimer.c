@@ -4,16 +4,16 @@
 #include "trace_helpers.h"
 #include "stack_helpers.h"
 
-static profiler hrtimer;
-typedef int (*analyzer)(int instance, int nr_tp, u64 *counters);
+struct hrtimer_ctx;
+typedef int (*analyzer)(struct hrtimer_ctx *ctx, int instance, int nr_tp, u64 *counters);
 
 #define BREAK 0
 #define PRINT 1
 
-static struct monitor_ctx {
+static char *expression = NULL;
+struct hrtimer_ctx {
     char *expression;
     struct expr_prog *prog;
-    struct perf_evlist *evlist;
     struct callchain_ctx *cc;
     struct perf_evsel *leader;
     struct tp_list *tp_list;
@@ -21,99 +21,119 @@ static struct monitor_ctx {
     u64 *ins_counters;
     analyzer analyzer;
     struct bpf_filter filter;
-    struct env *env;
-} ctx;
+    struct prof_dev *dev;
+};
 
-static int __analyzer(int instance, int nr_tp, u64 *counters)
+static int __analyzer(struct hrtimer_ctx *ctx, int instance, int nr_tp, u64 *counters)
 {
-    if (expr_load_data(ctx.prog, counters, nr_tp+1) != 0)
+    if (expr_load_data(ctx->prog, counters, nr_tp+1) != 0)
         return BREAK;
-    return (int)expr_run(ctx.prog);
+    return (int)expr_run(ctx->prog);
 }
 
-static int __analyzer_irq_off(int instance, int nr_tp, u64 *counters)
+static int __analyzer_irq_off(struct hrtimer_ctx *ctx, int instance, int nr_tp, u64 *counters)
 {
-    if (nr_tp == 0 && counters[0] > ctx.env->greater_than)
+    if (nr_tp == 0 && counters[0] > ctx->dev->env->greater_than)
         return PRINT;
     else
         return BREAK;
 }
 
-static int monitor_ctx_init(struct env *env)
+static void monitor_ctx_exit(struct prof_dev *dev);
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct hrtimer_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+    ctx->dev = dev;
+
     if (env->event) {
         tep__ref();
 
-        ctx.tp_list = tp_list_new(env->event);
-        if (!ctx.tp_list)
-            return -1;
+        ctx->tp_list = tp_list_new(dev, env->event);
+        if (!ctx->tp_list)
+            goto failed;
 
-        ctx.counters = calloc(1, monitor_nr_instance() * (ctx.tp_list->nr_tp + 1) * sizeof(u64));
-        if (!ctx.counters)
-            return -1;
+        ctx->counters = calloc(1, prof_dev_nr_ins(dev) * (ctx->tp_list->nr_tp + 1) * sizeof(u64));
+        if (!ctx->counters)
+            goto failed;
 
-        ctx.ins_counters = malloc((ctx.tp_list->nr_tp + 1) * sizeof(u64));
-        if (!ctx.ins_counters)
-            return -1;
+        ctx->ins_counters = malloc((ctx->tp_list->nr_tp + 1) * sizeof(u64));
+        if (!ctx->ins_counters)
+            goto failed;
 
-        ctx.analyzer = __analyzer;
+        ctx->analyzer = __analyzer;
 
-        if (bpf_filter_init(&ctx.filter, env))
-            bpf_filter_open(&ctx.filter);
+        if (bpf_filter_init(&ctx->filter, env))
+            bpf_filter_open(&ctx->filter);
+
+        ctx->expression = expression;
     } else if (env->greater_than) {
-        ctx.counters = calloc(1, monitor_nr_instance() * sizeof(u64));
-        if (!ctx.counters)
-            return -1;
+        ctx->counters = calloc(1, prof_dev_nr_ins(dev) * sizeof(u64));
+        if (!ctx->counters)
+            goto failed;
 
-        ctx.ins_counters = malloc(sizeof(u64));
-        if (!ctx.ins_counters)
-            return -1;
+        ctx->ins_counters = malloc(sizeof(u64));
+        if (!ctx->ins_counters)
+            goto failed;
 
-        ctx.analyzer = __analyzer_irq_off;
+        ctx->analyzer = __analyzer_irq_off;
 
-        if (bpf_filter_init(&ctx.filter, env))
-            bpf_filter_open(&ctx.filter);
+        if (bpf_filter_init(&ctx->filter, env))
+            bpf_filter_open(&ctx->filter);
     }
 
     if (env->callchain) {
-        ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL), stdout);
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL), stdout);
     }
 
-    ctx.env = env;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    if (ctx.env->callchain) {
-        callchain_ctx_free(ctx.cc);
+    struct hrtimer_ctx *ctx = dev->private;
+
+    if (dev->env->callchain) {
+        callchain_ctx_free(ctx->cc);
     }
 
-    if (ctx.counters)
-        free(ctx.counters);
-    if (ctx.ins_counters)
-        free(ctx.ins_counters);
+    if (ctx->counters)
+        free(ctx->counters);
+    if (ctx->ins_counters)
+        free(ctx->ins_counters);
 
-    if (ctx.env->event) {
-        bpf_filter_close(&ctx.filter);
-        tp_list_free(ctx.tp_list);
+    if (dev->env->event) {
+        bpf_filter_close(&ctx->filter);
+        tp_list_free(ctx->tp_list);
         tep__unref();
-    } else if (ctx.env->greater_than) {
-        bpf_filter_close(&ctx.filter);
+    } else if (dev->env->greater_than) {
+        bpf_filter_close(&ctx->filter);
     }
+
+    free(ctx);
 }
 
 static int hrtimer_argc_init(int argc, char *argv[])
 {
     if (argc >= 1)
-        ctx.expression = strdup(argv[0]);
+        expression = strdup(argv[0]);
     else
-        ctx.expression = NULL;
+        expression = NULL;
     return 0;
 }
 
-static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
+static int hrtimer_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct hrtimer_ctx *ctx;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_SOFTWARE,
         .config        = PERF_COUNT_SW_CPU_CLOCK,
@@ -129,8 +149,8 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
         .exclude_host = env->exclude_host,
-        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL),
-        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL),
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL),
         .watermark     = 1,
     };
     struct perf_event_attr tp_attr = {
@@ -147,51 +167,51 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
-    if (!monitor_instance_oncpu())
+    if (!prof_dev_ins_oncpu(dev))
         return -1;
     if (env->sample_period == 0 && env->freq == 0)
         return -1;
-    if (env->event && !ctx.expression) {
+    if (env->event && !expression) {
         fprintf(stderr, " {expression} needs to be specified.\n");
         return -1;
     }
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
     if (!env->event && !env->greater_than) {
         // perf-prof hrtimer -C 0-1 -F 100
         // no events, no sampling, only hrtimer
-        current_base_profiler()->pages = 0;
-        current_base_profiler()->sample = NULL;
+        dev->pages = 0;
     }
 
     if (env->callchain) {
-        current_base_profiler()->pages *= 2;
+        dev->pages *= 2;
     }
-    attr.wakeup_watermark = (current_base_profiler()->pages << 12) / 2;
+    attr.wakeup_watermark = (dev->pages << 12) / 2;
 
-    reduce_wakeup_times(current_base_profiler(), &attr);
+    reduce_wakeup_times(dev, &attr);
 
-    ctx.leader = evsel = perf_evsel__new(&attr);
+    ctx->leader = evsel = perf_evsel__new(&attr);
     if (!evsel) {
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
     if (env->event) {
         struct global_var_declare *declare = NULL;
 
-        declare = calloc(ctx.tp_list->nr_tp+2, sizeof(*declare));
+        declare = calloc(ctx->tp_list->nr_tp+2, sizeof(*declare));
         if (!declare)
-            return -1;
+            goto failed;
 
-        for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx.tp_list->tp[i];
+        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+            struct tp *tp = &ctx->tp_list->tp[i];
 
             tp_attr.config = tp->id;
             evsel = perf_evsel__new(&tp_attr);
             if (!evsel) {
-                return -1;
+                goto failed;
             }
             perf_evlist__add(evlist, evsel);
 
@@ -205,35 +225,39 @@ static int hrtimer_init(struct perf_evlist *evlist, struct env *env)
         declare[i].offset = i * sizeof(u64);
         declare[i].size = declare[i].elementsize = sizeof(u64);
 
-        ctx.prog = expr_compile(ctx.expression, declare);
-        if (!ctx.prog)
-            return -1;
+        ctx->prog = expr_compile(ctx->expression, declare);
         free(declare);
+        if (!ctx->prog)
+            goto failed;
 
         if(env->verbose)
-            expr_dump(ctx.prog);
+            expr_dump(ctx->prog);
     }
     perf_evlist__set_leader(evlist);
 
-    ctx.evlist = evlist;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static int hrtimer_filter(struct perf_evlist *evlist, struct env *env)
+static int hrtimer_filter(struct prof_dev *dev)
 {
+    struct hrtimer_ctx *ctx = dev->private;
     int i, err;
 
-    if (ctx.env->event) {
-        for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx.tp_list->tp[i];
+    if (dev->env->event) {
+        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+            struct tp *tp = &ctx->tp_list->tp[i];
             if (tp->filter && tp->filter[0]) {
                 err = perf_evsel__apply_filter(tp->evsel, tp->filter);
                 if (err < 0)
                     return err;
             }
         }
-        if (ctx.filter.bpf_fd >= 0) {
-            err = perf_evsel__set_bpf(ctx.leader, ctx.filter.bpf_fd);
+        if (ctx->filter.bpf_fd >= 0) {
+            err = perf_evsel__set_bpf(ctx->leader, ctx->filter.bpf_fd);
             if (err < 0)
                 return err;
         }
@@ -241,17 +265,20 @@ static int hrtimer_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void hrtimer_exit(struct perf_evlist *evlist)
+static void hrtimer_exit(struct prof_dev *dev)
 {
-    if (ctx.expression)
-        free(ctx.expression);
-    if (ctx.prog)
-        expr_destroy(ctx.prog);
-    monitor_ctx_exit();
+    struct hrtimer_ctx *ctx = dev->private;
+    if (ctx->expression)
+        free(ctx->expression);
+    if (ctx->prog)
+        expr_destroy(ctx->prog);
+    monitor_ctx_exit(dev);
 }
 
-static void hrtimer_sample(union perf_event *event, int instance)
+static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct env *env = dev->env;
+    struct hrtimer_ctx *ctx = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
     struct sample_type_data {
@@ -273,11 +300,11 @@ static void hrtimer_sample(union perf_event *event, int instance)
         } groups;
     } *data = (void *)event->sample.array;
     struct callchain *callchain;
-    int n = ctx.env->event ? ctx.tp_list->nr_tp : 0;
-    u64 *jcounter = ctx.counters + instance * (n + 1);
+    int n = env->event ? ctx->tp_list->nr_tp : 0;
+    u64 *jcounter = ctx->counters + instance * (n + 1);
     u64 counter, cpu_clock = 0;
     u64 i, j, print = BREAK;
-    int verbose = ctx.env->verbose;
+    int verbose = env->verbose;
     int header_end = 0;
 
     if (verbose) {
@@ -288,13 +315,13 @@ static void hrtimer_sample(union perf_event *event, int instance)
 
     for (i = 0; i < data->groups.nr; i++) {
         struct perf_evsel *evsel;
-        evsel = perf_evlist__id_to_evsel(ctx.evlist, data->groups.ctnr[i].id, NULL);
+        evsel = perf_evlist__id_to_evsel(dev->evlist, data->groups.ctnr[i].id, NULL);
         if (!evsel)
             continue;
-        if (evsel == ctx.leader) {
+        if (evsel == ctx->leader) {
             cpu_clock = data->groups.ctnr[i].value - jcounter[n];
             jcounter[n] = data->groups.ctnr[i].value;
-            ctx.ins_counters[n] = cpu_clock;
+            ctx->ins_counters[n] = cpu_clock;
             if (verbose) {
                 if (!header_end) {
                     printf(" %lu ns\n", cpu_clock);
@@ -305,11 +332,11 @@ static void hrtimer_sample(union perf_event *event, int instance)
             continue;
         }
         for (j = 0; j < n; j++) {
-            struct tp *tp = &ctx.tp_list->tp[j];
+            struct tp *tp = &ctx->tp_list->tp[j];
             if (tp->evsel == evsel) {
                 counter = data->groups.ctnr[i].value - jcounter[j];
                 jcounter[j] = data->groups.ctnr[i].value;
-                ctx.ins_counters[j] = counter;
+                ctx->ins_counters[j] = counter;
                 if (verbose) {
                     if (!header_end) {
                         printf("\n");
@@ -322,7 +349,7 @@ static void hrtimer_sample(union perf_event *event, int instance)
         }
     }
 
-    print = ctx.analyzer(instance, n, ctx.ins_counters);
+    print = ctx->analyzer(ctx, instance, n, ctx->ins_counters);
 
     if (print == PRINT || verbose) {
         if (!verbose) {
@@ -330,9 +357,9 @@ static void hrtimer_sample(union perf_event *event, int instance)
             printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, cpu_clock);
         }
-        if (ctx.env->callchain) {
+        if (dev->env->callchain) {
             callchain = (struct callchain *)&data->groups.ctnr[data->groups.nr];
-            print_callchain_common(ctx.cc, callchain, data->tid_entry.pid);
+            print_callchain_common(ctx->cc, callchain, data->tid_entry.pid);
         }
     }
 }
@@ -342,7 +369,7 @@ static void hrtimer_help(struct help_ctx *hctx)
     int i, j;
     struct env *env = hctx->env;
 
-    printf(PROGRAME " %s ", hrtimer.name);
+    printf(PROGRAME " hrtimer ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
@@ -411,10 +438,11 @@ static profiler hrtimer = {
 PROFILER_REGISTER(hrtimer);
 
 
-static int irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count, int instance)
+static int irq_off_read(struct prof_dev *dev, struct perf_evsel *ev, struct perf_counts_values *count, int instance)
 {
-    int n = ctx.env->event ? ctx.tp_list->nr_tp : 0;
-    u64 *jcounter = ctx.counters + instance * (n + 1);
+    struct hrtimer_ctx *ctx = dev->private;
+    int n = dev->env->event ? ctx->tp_list->nr_tp : 0;
+    u64 *jcounter = ctx->counters + instance * (n + 1);
     u64 counter, cpu_clock = 0;
     struct {
         u64 nr;
@@ -424,33 +452,33 @@ static int irq_off_read(struct perf_evsel *ev, struct perf_counts_values *count,
         } ctnr[0];
     } *groups = (void *)count;
     int i, j, print = BREAK;
-    int verbose = ctx.env->verbose;
+    int verbose = dev->env->verbose;
 
     for (i = 0; i < groups->nr; i++) {
         struct perf_evsel *evsel;
-        evsel = perf_evlist__id_to_evsel(ctx.evlist, groups->ctnr[i].id, NULL);
+        evsel = perf_evlist__id_to_evsel(dev->evlist, groups->ctnr[i].id, NULL);
         if (!evsel)
             continue;
-        if (evsel == ctx.leader) {
+        if (evsel == ctx->leader) {
             cpu_clock = groups->ctnr[i].value - jcounter[n];
-            ctx.ins_counters[n] = cpu_clock;
+            ctx->ins_counters[n] = cpu_clock;
             continue;
         }
         for (j = 0; j < n; j++) {
-            struct tp *tp = &ctx.tp_list->tp[j];
+            struct tp *tp = &ctx->tp_list->tp[j];
             if (tp->evsel == evsel) {
                 counter = groups->ctnr[i].value - jcounter[j];
-                ctx.ins_counters[j] = counter;
+                ctx->ins_counters[j] = counter;
                 break;
             }
         }
     }
 
-    print = ctx.analyzer(instance, n, ctx.ins_counters);
+    print = ctx->analyzer(ctx, instance, n, ctx->ins_counters);
 
     if (print == PRINT || verbose) {
         print_time(stdout);
-        printf(" %13s [%03d]  cpu-clock: %lu ns\n", "read", monitor_instance_cpu(instance), cpu_clock);
+        printf(" %13s [%03d]  cpu-clock: %lu ns\n", "read", prof_dev_ins_cpu(dev, instance), cpu_clock);
     }
     return 0;
 }
