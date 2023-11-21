@@ -4,7 +4,7 @@ perf-prof-y += lib/ filter/ arch/
 perf-prof-y += monitor.o tep.o timer.o convert.o net.o event-spread.o vcpu_info.o
 perf-prof-y += sched.o
 
-#perf-prof-y += split-lock.o
+perf-prof-y += split-lock.o
 #perf-prof-y += profile.o
 perf-prof-y += trace.o
 #perf-prof-y += signal.o

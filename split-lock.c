@@ -31,34 +31,47 @@ static void *do_split_lock(void *unused) {
 /******************************************************
 split-lock ctx
 ******************************************************/
-static struct monitor_ctx {
+struct split_lock_ctx {
     int nr_cpus;
     uint64_t *counter;
     uint64_t *polling;
-} ctx;
+};
 
-static int monitor_ctx_init(void)
+static void monitor_ctx_exit(struct prof_dev *dev);
+static int monitor_ctx_init(struct prof_dev *dev)
 {
-    ctx.nr_cpus = get_present_cpus();
-    ctx.counter = calloc(ctx.nr_cpus, sizeof(uint64_t));
-    ctx.polling = calloc(ctx.nr_cpus, sizeof(uint64_t));
-    return ctx.counter && ctx.polling ? 0 : -1;
+    struct split_lock_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+    ctx->nr_cpus = get_present_cpus();
+    ctx->counter = calloc(ctx->nr_cpus, sizeof(uint64_t));
+    if (!ctx->counter)
+        goto failed;
+    ctx->polling = calloc(ctx->nr_cpus, sizeof(uint64_t));
+    if (!ctx->polling)
+        goto failed;
+    return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    if (ctx.counter) {
-        free(ctx.counter);
-        ctx.counter = NULL;
-    }
-    if (ctx.polling) {
-        free(ctx.polling);
-        ctx.polling = NULL;
-    }
+    struct split_lock_ctx *ctx = dev->private;
+    if (ctx->counter)
+        free(ctx->counter);
+    if (ctx->polling)
+        free(ctx->polling);
+    free(ctx);
 }
 
-static int split_lock_init(struct perf_evlist *evlist, struct env *env)
+static int split_lock_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
     struct perf_event_attr attr = {
         .type        = PERF_TYPE_RAW,
         .config      = 0x10f4,   //split_lock, Intel
@@ -97,34 +110,36 @@ static int split_lock_init(struct perf_evlist *evlist, struct env *env)
     if (env->test)
         pthread_create(&t, NULL, do_split_lock, NULL);
 
-    if (!env->interval)
-        split_lock.read = NULL;
-
-    if (monitor_ctx_init() < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init split-lock\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void split_lock_exit(struct perf_evlist *evlist)
+static void split_lock_exit(struct prof_dev *dev)
 {
-    monitor_ctx_exit();
+    monitor_ctx_exit(dev);
 }
 
-static int split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int split_lock_read(struct prof_dev *dev, struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
-    int cpu = monitor_instance_cpu(instance);
+    struct split_lock_ctx *ctx = dev->private;
+    int cpu = prof_dev_ins_cpu(dev, instance);
     uint64_t counter = 0;
 
-    if (count->val > ctx.polling[cpu]) {
-        counter = count->val - ctx.polling[cpu];
-        ctx.polling[cpu] = count->val;
+    if (count->val > ctx->polling[cpu]) {
+        counter = count->val - ctx->polling[cpu];
+        ctx->polling[cpu] = count->val;
     }
     if (counter) {
         print_time(stdout);
@@ -133,8 +148,9 @@ static int split_lock_read(struct perf_evsel *evsel, struct perf_counts_values *
     return 0;
 }
 
-static void split_lock_sample(union perf_event *event, int instance)
+static void split_lock_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct split_lock_ctx *ctx = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_CPU | PERF_SAMPLE_READ
     struct sample_type_data {
@@ -148,15 +164,11 @@ static void split_lock_sample(union perf_event *event, int instance)
         }    cpu_entry;
         __u64 counter; //split-lock次数
     } *data = (void *)event->sample.array;
-    __u32 size = event->header.size - sizeof(struct perf_event_header);
     uint64_t counter = 0;
 
-    if (size != sizeof(struct sample_type_data)) {
-        fprintf(stderr, "size != sizeof sample_type_data\n");
-    }
-    if (data->counter > ctx.counter[data->cpu_entry.cpu]) {
-        counter = data->counter - ctx.counter[data->cpu_entry.cpu];
-        ctx.counter[data->cpu_entry.cpu] = data->counter;
+    if (data->counter > ctx->counter[data->cpu_entry.cpu]) {
+        counter = data->counter - ctx->counter[data->cpu_entry.cpu];
+        ctx->counter[data->cpu_entry.cpu] = data->counter;
     }
     if (counter) {
         print_time(stdout);
@@ -166,18 +178,18 @@ static void split_lock_sample(union perf_event *event, int instance)
 
 
 static const char *split_lock_desc[] = PROFILER_DESC("split-lock",
-    "[OPTION...] [-T trigger] [-G] [--test]",
+    "[OPTION...] [-T trig] [-G] [--test]",
     "Split-lock on x86 platform.", "",
-    "SYNOPSIS", "",
+    "SYNOPSIS",
     "    Super Queue lock splits across a cache line.", "",
-    "EXAMPLES", "",
-    "    "PROGRAME" split-lock -T 0 -i 1000 --test",
+    "EXAMPLES",
+    "    "PROGRAME" split-lock -i 1000 --test",
     "    "PROGRAME" split-lock -T 1000 -i 1000 -G");
 static const char *split_lock_argv[] = PROFILER_ARGV("split-lock",
     PROFILER_ARGV_OPTION,
     "FILTER OPTION:",
     "exclude-host",
-    PROFILER_ARGV_PROFILER, "trigger", "perins");
+    PROFILER_ARGV_PROFILER, "trigger", "perins", "test");
 struct monitor split_lock = {
     .name = "split-lock",
     .desc = split_lock_desc,
