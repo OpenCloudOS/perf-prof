@@ -20,10 +20,7 @@
 
 #define TASK_COMM_LEN 16
 
-static profiler top;
-struct termios save;
-static struct monitor_ctx {
-    struct perf_evlist *evlist;
+struct top_ctx {
     struct tp_list *tp_list;
     struct rblist top_list;
     unsigned long nr_events;
@@ -42,11 +39,8 @@ static struct monitor_ctx {
     bool show_comm; // show COMM
     bool only_comm; // only COMM
 
-    int ws_row;
-    int ws_col;
-    bool tty;
-    struct env *env;
-} ctx;
+    bool altwin;
+};
 
 struct top_info {
     struct rb_node rbnode;
@@ -54,6 +48,11 @@ struct top_info {
     char comm[TASK_COMM_LEN];
     char *pcomm;
     unsigned long counter[0];
+};
+
+struct tmp_entry {
+    struct top_ctx *ctx;
+    struct top_info *info;
 };
 
 static int top_info_node_cmp(struct rb_node *rbn, const void *entry)
@@ -71,7 +70,8 @@ static int top_info_node_cmp(struct rb_node *rbn, const void *entry)
 
 static struct rb_node *top_info_node_new(struct rblist *rlist, const void *new_entry)
 {
-    int size = offsetof(struct top_info, counter[ctx.nr_fields]);
+    struct top_ctx *ctx = container_of(rlist, struct top_ctx, top_list);
+    int size = offsetof(struct top_info, counter[ctx->nr_fields]);
     const struct top_info *e = new_entry;
     struct top_info *t = malloc(size);
     if (t) {
@@ -110,20 +110,22 @@ static void top_info_node_delete_empty(struct rblist *rblist, struct rb_node *rb
 static int top_info_sorted_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct top_info *t = container_of(rbn, struct top_info, rbnode);
-    const struct top_info *e = entry;
+    const struct tmp_entry *tmp = entry;
+    const struct top_ctx *ctx = tmp->ctx;
+    const struct top_info *e = tmp->info;
     int i;
 
-    if (ctx.nr_top_by)
-    for (i = 0; i < ctx.nr_fields; i++) {
-        if (!ctx.fields[i].top_by)
+    if (ctx->nr_top_by)
+    for (i = 0; i < ctx->nr_fields; i++) {
+        if (!ctx->fields[i].top_by)
             continue;
         if (t->counter[i] > e->counter[i])
             return -1;
         else if (t->counter[i] < e->counter[i])
             return 1;
     }
-    for (i = 0; i < ctx.nr_fields; i++) {
-        if (ctx.fields[i].top_by)
+    for (i = 0; i < ctx->nr_fields; i++) {
+        if (ctx->fields[i].top_by)
             continue;
         if (t->counter[i] > e->counter[i])
             return -1;
@@ -134,7 +136,8 @@ static int top_info_sorted_node_cmp(struct rb_node *rbn, const void *entry)
 }
 static struct rb_node *top_info_sorted_node_new(struct rblist *rlist, const void *new_entry)
 {
-    struct top_info *t = (void *)new_entry;
+    struct tmp_entry *tmp = (void *)new_entry;
+    struct top_info *t = tmp->info;
     RB_CLEAR_NODE(&t->rbnode);
     return &t->rbnode;
 }
@@ -149,18 +152,53 @@ static void set_term_quiet_input(struct termios *old)
     tc.c_cc[VTIME] = 0;
     tcsetattr(0, TCSANOW, &tc);
 }
-
-static void sig_winch(int sig)
+struct termios save;
+static void altwin_new(void)
 {
-    struct winsize size;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0) {
-        ctx.ws_row = size.ws_row;
-        ctx.ws_col = size.ws_col;
-    }
+    set_term_quiet_input(&save);
+    /* ANSI Escape Codes
+     * ESC[?1049h  enables the alternative buffer
+     * ESC[?25l    make cursor invisible
+     * ESC[H       moves cursor to home position (0, 0)
+     * ESC[2J      erase entire screen
+    **/
+    printf("\033[?1049h\033[?25l\033[H\033[2J\n");
 }
 
-static int monitor_ctx_init(struct env *env)
+static void altwin_end(void)
 {
+    tcsetattr(0, TCSANOW, &save);
+    /*
+     * ESC[?25h	    make cursor visible
+     * ESC[?1049l   disables the alternative buffer
+    **/
+    printf("\033[?25h\033[?1049l\n");
+}
+
+static void altwin_title_begin(void)
+{
+    /*
+     * ESC[H       moves cursor to home position (0, 0)
+     * ESC[2J      erase entire screen
+     * ESC[?25h    make cursor visible
+     * ESC[7m      set inverse mode
+    **/
+    printf("\033[H\033[2J\033[?25h\033[7m");
+}
+
+static void altwin_title_end(void)
+{
+    /*
+     * ESC[0m      reset all modes (styles and colors)
+    **/
+    printf("\033[0m");
+}
+
+static void monitor_ctx_exit(struct prof_dev *dev);
+static int monitor_ctx_init(struct prof_dev *dev)
+{
+    struct env *env = dev->env;
+    struct top_ctx *ctx;
     struct tep_handle *tep;
     int i, j, f = 0;
     int len;
@@ -170,40 +208,45 @@ static int monitor_ctx_init(struct env *env)
     if (!env->event)
         return -1;
 
+    ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
     tep = tep__ref();
 
-    ctx.EVENT = strdup(env->event);
-    len = strlen(ctx.EVENT);
+    ctx->EVENT = strdup(env->event);
+    len = strlen(ctx->EVENT);
     for (i = 0; i < len; i++)
-        ctx.EVENT[i] = (char)toupper(ctx.EVENT[i]);
+        ctx->EVENT[i] = (char)toupper(ctx->EVENT[i]);
 
-    ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
-        return -1;
+    ctx->tp_list = tp_list_new(dev, env->event);
+    if (!ctx->tp_list)
+        goto failed;
 
-    ctx.nr_fields = ctx.tp_list->nr_top;
-    ctx.fields = calloc(ctx.nr_fields, sizeof(*ctx.fields));
-    if (!ctx.fields)
-        return -1;
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    ctx->nr_fields = ctx->tp_list->nr_top;
+    ctx->fields = calloc(ctx->nr_fields, sizeof(*ctx->fields));
+    if (!ctx->fields)
+        goto failed;
+    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
         for (j = 0; j < tp->nr_top; j++) {
             char *field = (j == 0 && tp->alias) ? tp->alias : tp->top_add[j].field;
-            ctx.fields[f].field = ctx.EVENT + (field - env->event);
-            ctx.fields[f].len = strlen(field);
-            ctx.fields[f].field[ctx.fields[f].len] = '\0';
-            ctx.fields[f].top_by = tp->top_add[j].top_by;
-            if (ctx.fields[f].len < 12)
-                ctx.fields[f].len = 12;
-            if (ctx.fields[f].top_by)
-                ctx.nr_top_by ++;
+            ctx->fields[f].field = ctx->EVENT + (field - env->event);
+            ctx->fields[f].len = strlen(field);
+            ctx->fields[f].field[ctx->fields[f].len] = '\0';
+            ctx->fields[f].top_by = tp->top_add[j].top_by;
+            if (ctx->fields[f].len < 12)
+                ctx->fields[f].len = 12;
+            if (ctx->fields[f].top_by)
+                ctx->nr_top_by ++;
             f ++;
         }
         if (env->key && !tp->key) {
             struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
             if (!tep_find_any_field(event, env->key)) {
                 fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
-                return -1;
+                goto failed;
             }
             tp->key_prog = tp_new_prog(tp, env->key);
             tp->key = env->key;
@@ -219,7 +262,7 @@ static int monitor_ctx_init(struct env *env)
                 if (!tp->comm_prog && tep_find_any_field(event, "comm")) {
                     tp->comm_prog = tp_new_prog(tp, (char *)"comm");
                     tp->comm = "comm";
-                    ctx.tp_list->nr_comm += 1;
+                    ctx->tp_list->nr_comm += 1;
                 }
             }
         }
@@ -241,73 +284,69 @@ static int monitor_ctx_init(struct env *env)
         len = strlen(key_name);
         for (i = 0; i < len; i++)
             key_name[i] = (char)toupper(key_name[i]);
-        ctx.key_name = key_name;
+        ctx->key_name = key_name;
 
         // key!=PID, whether to display COMM is determined by the comm attr.
-        ctx.show_comm = !!ctx.tp_list->nr_comm;
+        ctx->show_comm = !!ctx->tp_list->nr_comm;
     } else {
-        ctx.key_name = strdup("PID");
+        ctx->key_name = strdup("PID");
 
         // key=PID can display COMM
-        ctx.show_comm = true;
+        ctx->show_comm = true;
     }
-    ctx.key_len = strlen(ctx.key_name);
-    if (ctx.key_len < 8)
-        ctx.key_len = 8;
+    ctx->key_len = strlen(ctx->key_name);
+    if (ctx->key_len < 8)
+        ctx->key_len = 8;
 
     if (comm) {
         len = strlen(comm);
         for (i = 0; i < len; i++)
             comm[i] = (char)toupper(comm[i]);
-        ctx.comm = comm;
+        ctx->comm = comm;
     } else
-        ctx.comm = strdup("COMM");
+        ctx->comm = strdup("COMM");
 
-    ctx.only_comm = env->only_comm;
-    if (ctx.only_comm && !ctx.show_comm) {
+    ctx->only_comm = env->only_comm;
+    if (ctx->only_comm && !ctx->show_comm) {
         fprintf(stderr, "--only-comm need 'comm' attr\n");
-        return -1;
+        goto failed;
     }
 
-    rblist__init(&ctx.top_list);
-    ctx.top_list.node_cmp = top_info_node_cmp;
-    ctx.top_list.node_new = top_info_node_new;
-    ctx.top_list.node_delete = top_info_node_delete;
+    rblist__init(&ctx->top_list);
+    ctx->top_list.node_cmp = top_info_node_cmp;
+    ctx->top_list.node_new = top_info_node_new;
+    ctx->top_list.node_delete = top_info_node_delete;
 
-    ctx.ws_row = ctx.ws_col = 0;
-    ctx.tty = false;
-    if (isatty(STDOUT_FILENO)) {
-        ctx.tty = true;
-        sig_winch(SIGWINCH);
-        signal(SIGWINCH, sig_winch);
-        set_term_quiet_input(&save);
-        printf("\033[?1049h\033[?25l\033[H\033[2J\n");
-    }
+    ctx->altwin = false;
 
     if (env->interval == 0)
         env->interval = 1000;
 
-    ctx.env = env;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    if (ctx.tty) {
-        tcsetattr(0, TCSANOW, &save);
-        printf("\033[?25h\n\033[?1049l");
-    }
-    rblist__exit(&ctx.top_list);
-    free(ctx.fields);
-    free(ctx.EVENT);
-    free(ctx.key_name);
-    free(ctx.comm);
-    tp_list_free(ctx.tp_list);
+    struct top_ctx *ctx = dev->private;
+    if (ctx->altwin) altwin_end();
+    rblist__exit(&ctx->top_list);
+    if (ctx->fields) free(ctx->fields);
+    if (ctx->EVENT) free(ctx->EVENT);
+    if (ctx->key_name) free(ctx->key_name);
+    if (ctx->comm) free(ctx->comm);
+    tp_list_free(ctx->tp_list);
     tep__unref();
+    free(ctx);
 }
 
-static int top_init(struct perf_evlist *evlist, struct env *env)
+static int top_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct top_ctx *ctx;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -320,23 +359,24 @@ static int top_init(struct perf_evlist *evlist, struct env *env)
         .pinned        = 1,
         .disabled      = 1,
         .watermark     = 1,
-        .wakeup_watermark = (top.pages << 12) / 2,
+        .wakeup_watermark = (dev->pages << 12) / 2,
     };
     struct perf_evsel *evsel;
     int i;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
 
         attr.config = tp->id;
 
         evsel = perf_evsel__new(&attr);
-        if (!evsel) {
-            return -1;
-        }
+        if (!evsel)
+            goto failed;
+
         perf_evlist__add(evlist, evsel);
         if (!tp_kernel(tp))
             perf_evsel__keep_disable(evsel, true);
@@ -346,16 +386,20 @@ static int top_init(struct perf_evlist *evlist, struct env *env)
         attr.comm = 0;
     }
 
-    ctx.evlist = evlist;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static int top_filter(struct perf_evlist *evlist, struct env *env)
+static int top_filter(struct prof_dev *dev)
 {
+    struct top_ctx *ctx = dev->private;
     int i, err;
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -365,11 +409,57 @@ static int top_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void top_interval(void);
-static void top_exit(struct perf_evlist *evlist)
+static void top_interval(struct prof_dev *dev);
+static void top_exit(struct prof_dev *dev)
 {
-    top_interval();
-    monitor_ctx_exit();
+    struct top_ctx *ctx = dev->private;
+    if (!ctx->altwin)
+        top_interval(dev);
+    monitor_ctx_exit(dev);
+}
+
+static void top_sigwinch(struct prof_dev *dev)
+{
+    struct top_ctx *ctx = dev->private;
+    bool altwin = false;
+
+    if (dev->tty.istty && !dev->tty.shared) {
+        int printed = 0;
+        int i;
+        if (!ctx->only_comm)
+            printed += ctx->key_len + 1;
+        for (i = 0; i < ctx->nr_fields; i++)
+            printed += ctx->fields[i].len + 1;
+        if (ctx->show_comm)
+            printed += TASK_COMM_LEN;
+
+        if (printed < dev->tty.col)
+            altwin = true;
+    }
+    if (altwin != ctx->altwin) {
+        ctx->altwin = altwin;
+        if (ctx->altwin) altwin_new();
+        else altwin_end();
+    }
+}
+
+static void top_enabled(struct prof_dev *dev)
+{
+    struct top_ctx *ctx = dev->private;
+    top_sigwinch(dev);
+    if (ctx->altwin)
+        top_interval(dev);
+}
+
+static void top_sigusr(struct prof_dev *dev, int signum)
+{
+    struct top_ctx *ctx = dev->private;
+    if (signum == SIGWINCH) {
+        if (ctx->altwin) {
+            top_sigwinch(dev);
+            top_interval(dev);
+        }
+    }
 }
 
 // in linux/perf_event.h
@@ -394,8 +484,9 @@ struct sample_type_raw {
     } raw;
 };
 
-static void top_sample(union perf_event *event, int instance)
+static void top_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct top_ctx *ctx = dev->private;
     struct sample_type_raw *raw = (void *)event->sample.array;
     unsigned short common_type = raw->raw.common_type;
     void *data = raw->raw.data;
@@ -407,8 +498,8 @@ static void top_sample(union perf_event *event, int instance)
     struct rb_node *rbn;
     struct top_info *p;
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tmp = &ctx.tp_list->tp[i];
+    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+        struct tp *tmp = &ctx->tp_list->tp[i];
         if (common_type == tmp->id) {
             tp = tmp;
             break;
@@ -419,7 +510,7 @@ static void top_sample(union perf_event *event, int instance)
     if (tp == NULL)
         return;
 
-    if (ctx.env->verbose >= VERBOSE_EVENT) {
+    if (dev->env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
         tp_print_marker(tp);
         tep__print_event(raw->time/1000, raw->cpu_entry.cpu, data, size);
@@ -427,7 +518,7 @@ static void top_sample(union perf_event *event, int instance)
 
     tp_broadcast_event(tp, event);
 
-    if (!ctx.only_comm) {
+    if (!ctx->only_comm) {
         if (tp->key_prog)
             info.key = tp_get_key(tp, data, size);
         else
@@ -435,7 +526,7 @@ static void top_sample(union perf_event *event, int instance)
     } else
         info.key = 0;
 
-    if (ctx.show_comm) {
+    if (ctx->show_comm) {
         if (tp->comm_prog)
             info.pcomm = tp_get_comm(tp, data, size);
         else {
@@ -447,7 +538,7 @@ static void top_sample(union perf_event *event, int instance)
     } else
         info.pcomm = NULL;
 
-    rbn = rblist__findnew(&ctx.top_list, &info);
+    rbn = rblist__findnew(&ctx->top_list, &info);
     if (!rbn)
         return;
 
@@ -459,7 +550,7 @@ static void top_sample(union perf_event *event, int instance)
             p->counter[field] += 1;
     }
 
-    ctx.nr_events ++;
+    ctx->nr_events ++;
 }
 
 static inline int top_print_time(const char *fmt)
@@ -471,69 +562,80 @@ static inline int top_print_time(const char *fmt)
     return printf(fmt, timebuff);
 }
 
-static void top_interval(void)
+static inline void top_print_title(struct prof_dev *dev)
 {
-    struct rb_node *rbn;
-    struct top_info *t;
-    struct rblist sorted;
-    int row = 3;
+    struct top_ctx *ctx = dev->private;
     int printed;
     int i;
 
-    if (!ctx.tty)
-        print_time(stdout);
-    else {
-        printf("\033[H\033[2J\033[?25h\033[7m");
-    }
+    if (!ctx->altwin && rblist__empty(&ctx->top_list))
+        return;
+
+    if (ctx->altwin) altwin_title_begin();
+    else print_time(stdout);
 
     printed = top_print_time("perf-prof - %s  ");
-    printed += printf("sample %lu events", ctx.nr_events);
-    printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
+    printed += printf("sample %lu events", ctx->nr_events);
+    printf("%*s\n", ctx->altwin && dev->tty.col>printed ? dev->tty.col-printed : 0, "");
 
     // PID FIELD FIELD ... COMM
     printed = 0;
-    if (!ctx.only_comm)
-        printed += printf("%*s ", ctx.key_len, ctx.key_name);
-    for (i = 0; i < ctx.nr_fields; i++)
-        printed += printf("%*s ", ctx.fields[i].len, ctx.fields[i].field);
-    if (ctx.show_comm)
-        printed += printf("%s", ctx.comm);
-    printf("%*s\n", ctx.tty && ctx.ws_col>printed ? ctx.ws_col-printed : 0, "");
+    if (!ctx->only_comm)
+        printed += printf("%*s ", ctx->key_len, ctx->key_name);
+    for (i = 0; i < ctx->nr_fields; i++)
+        printed += printf("%*s ", ctx->fields[i].len, ctx->fields[i].field);
+    if (ctx->show_comm)
+        printed += printf("%s", ctx->comm);
+    printf("%*s\n", ctx->altwin && dev->tty.col>printed ? dev->tty.col-printed : 0, "");
 
-    if (ctx.tty) printf("\033[0m");
+    if (ctx->altwin) altwin_title_end();
+}
+
+static void top_interval(struct prof_dev *dev)
+{
+    struct top_ctx *ctx = dev->private;
+    struct rb_node *rbn;
+    struct top_info *t;
+    struct rblist sorted;
+    struct tmp_entry tmp;
+    int row = 3;
+    int i;
+
+    top_print_title(dev);
 
     //pid_list is empty still print header
-    if (rblist__empty(&ctx.top_list))
+    if (rblist__empty(&ctx->top_list))
         return;
 
     rblist__init(&sorted);
     sorted.node_cmp = top_info_sorted_node_cmp;
     sorted.node_new = top_info_sorted_node_new;
-    sorted.node_delete = ctx.top_list.node_delete;
-    ctx.top_list.node_delete = top_info_node_delete_empty; //empty, not really delete
+    sorted.node_delete = ctx->top_list.node_delete;
+    ctx->top_list.node_delete = top_info_node_delete_empty; //empty, not really delete
 
-    /* sort, remove from `ctx.pid_list', add to `sorted'. */
+    /* sort, remove from `ctx->pid_list', add to `sorted'. */
+    tmp.ctx = ctx;
     do {
-        rbn = rblist__entry(&ctx.top_list, 0);
-        t = container_of(rbn, struct top_info, rbnode);
-        rblist__remove_node(&ctx.top_list, rbn);
-        rblist__add_node(&sorted, t);
-    } while (!rblist__empty(&ctx.top_list));
+        rbn = rblist__entry(&ctx->top_list, 0);
+        tmp.info = container_of(rbn, struct top_info, rbnode);
+        rblist__remove_node(&ctx->top_list, rbn);
+        rblist__add_node(&sorted, &tmp);
+    } while (!rblist__empty(&ctx->top_list));
 
     do {
         rbn = rblist__entry(&sorted, 0);
 
-        if (!ctx.tty || !ctx.ws_row || ++row < ctx.ws_row) {
+        if (!ctx->altwin || !dev->tty.row || ++row < dev->tty.row) {
             t = container_of(rbn, struct top_info, rbnode);
-            if (!ctx.only_comm) {
+            if (!ctx->only_comm) {
                 if (t->key < 100000000UL)
-                    printf("%*lu ", ctx.key_len, t->key);
+                    printf("%*lu ", ctx->key_len, t->key);
                 else
-                    printf("0x%*lx ", ctx.key_len, t->key);
+                    printf("0x%*lx ", ctx->key_len, t->key);
             }
-            for (i = 0; i < ctx.nr_fields; i++)
-                printf("%*lu ", ctx.fields[i].len, t->counter[i]);
-            if (ctx.show_comm)
+            for (i = 0; i < ctx->nr_fields; i++)
+                printf("%*lu ", ctx->fields[i].len, t->counter[i]);
+            if (ctx->show_comm)
                 printf("%-s", t->pcomm);
             printf("\n");
         }
@@ -541,7 +643,7 @@ static void top_interval(void)
         rblist__remove_node(&sorted, rbn);
     } while (!rblist__empty(&sorted));
 
-    ctx.top_list.node_delete = sorted.node_delete;
+    ctx->top_list.node_delete = sorted.node_delete;
 }
 
 static void top_help(struct help_ctx *hctx)
@@ -551,7 +653,7 @@ static void top_help(struct help_ctx *hctx)
     bool top_by, top_add;
     bool has_key = false;
 
-    printf(PROGRAME " %s ", top.name);
+    printf(PROGRAME " top ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
         for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
@@ -657,7 +759,9 @@ static profiler top = {
     .help = top_help,
     .init = top_init,
     .filter = top_filter,
+    .enabled = top_enabled,
     .deinit = top_exit,
+    .sigusr = top_sigusr,
     .interval = top_interval,
     .comm   = monitor_tep__comm,
     .sample = top_sample,
