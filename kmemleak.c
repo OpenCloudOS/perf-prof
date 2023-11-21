@@ -15,8 +15,6 @@
 #define TASK_INTERRUPTIBLE	1
 #define TASK_UNINTERRUPTIBLE	2
 
-
-struct monitor kmemleak;
 struct kmemleak_stat {
     __u64 alloc_num;
     __u64 free_num;
@@ -25,8 +23,7 @@ struct kmemleak_stat {
     __u64 total_alloc;
     __u64 total_free;
 };
-static struct kmemleak_ctx {
-    struct perf_evlist *evlist;
+struct kmemleak_ctx {
     struct callchain_ctx *cc;
     struct flame_graph *flame;
     struct tp_list *tp_alloc;
@@ -36,14 +33,14 @@ static struct kmemleak_ctx {
     struct kmemleak_stat stat;
     bool report_leaked_bytes;
     bool user;
-    struct env *env;
-} ctx;
+};
 struct perf_event_backup {
     struct rb_node rbnode;
     __u64    ptr;
     unsigned long bytes_alloc;
     __u64    is_alloc:1;
     __u64    is_free:1;
+    __u64    callchain:1;
     union perf_event event;
 };
 struct perf_event_entry {
@@ -52,6 +49,7 @@ struct perf_event_entry {
     int      insert;
     int      is_alloc:1;
     int      is_free:1;
+    int      callchain:1;
     union perf_event *event;
 };
 
@@ -93,6 +91,7 @@ static int perf_event_backup_node_cmp(struct rb_node *rbn, const void *entry)
 
 static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const void *new_entry)
 {
+    struct kmemleak_ctx *ctx;
     const struct perf_event_entry *e = new_entry;
     const union perf_event *event = e->event;
     size_t size = offsetof(struct perf_event_backup, event) + event->header.size;
@@ -102,14 +101,17 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
         b->bytes_alloc = e->bytes_alloc;
         b->is_alloc = e->is_alloc;
         b->is_free = e->is_free;
+        b->callchain = e->callchain;
         RB_CLEAR_NODE(&b->rbnode);
         memmove(&b->event, event, event->header.size);
         if (b->is_alloc) {
-            ctx.stat.alloc_num ++;
-            ctx.stat.alloc_mem += size;
+            ctx = container_of(rlist, struct kmemleak_ctx, alloc);
+            ctx->stat.alloc_num ++;
+            ctx->stat.alloc_mem += size;
         } else if (b->is_free) {
-            ctx.stat.free_num ++;
-            ctx.stat.free_mem += size;
+            ctx = container_of(rlist, struct kmemleak_ctx, gc_free);
+            ctx->stat.free_num ++;
+            ctx->stat.free_mem += size;
         }
         return &b->rbnode;
     } else
@@ -117,14 +119,17 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
 }
 static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
+    struct kmemleak_ctx *ctx;
     struct perf_event_backup *b = container_of(rb_node, struct perf_event_backup, rbnode);
     size_t size = offsetof(struct perf_event_backup, event) + b->event.header.size;
     if (b->is_alloc) {
-        ctx.stat.alloc_num --;
-        ctx.stat.alloc_mem -= size;
+        ctx = container_of(rblist, struct kmemleak_ctx, alloc);
+        ctx->stat.alloc_num --;
+        ctx->stat.alloc_mem -= size;
     } else if (b->is_free) {
-        ctx.stat.free_num --;
-        ctx.stat.free_mem -= size;
+        ctx = container_of(rblist, struct kmemleak_ctx, gc_free);
+        ctx->stat.free_num --;
+        ctx->stat.free_mem -= size;
     }
     free(b);
 }
@@ -178,48 +183,65 @@ static struct rb_node *perf_event_backup_sorted_node_new(struct rblist *rlist, c
     RB_CLEAR_NODE(&b->rbnode);
     return &b->rbnode;
 }
-
-static int monitor_ctx_init(struct env *env)
+static void perf_event_backup_sorted_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
-    if (!env->tp_alloc ||
-        !env->tp_free)
+    struct perf_event_backup *b = container_of(rb_node, struct perf_event_backup, rbnode);
+    free(b);
+}
+
+static int monitor_ctx_init(struct prof_dev *dev)
+{
+    struct env *env = dev->env;
+    struct kmemleak_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
         return -1;
+    dev->private = ctx;
+
+    if (!env->tp_alloc ||
+        !env->tp_free) {
+        free(ctx);
+        return -1;
+    }
 
     tep__ref();
-    ctx.user = !monitor_instance_oncpu();
+    ctx->user = !prof_dev_ins_oncpu(dev);
 
-    rblist__init(&ctx.alloc);
-    ctx.alloc.node_cmp = perf_event_backup_node_cmp;
-    ctx.alloc.node_new = perf_event_backup_node_new;
-    ctx.alloc.node_delete = perf_event_backup_node_delete;
+    rblist__init(&ctx->alloc);
+    ctx->alloc.node_cmp = perf_event_backup_node_cmp;
+    ctx->alloc.node_new = perf_event_backup_node_new;
+    ctx->alloc.node_delete = perf_event_backup_node_delete;
 
-    rblist__init(&ctx.gc_free);
-    ctx.gc_free.node_cmp = perf_event_backup_gc_free_node_cmp;
-    ctx.gc_free.node_new = perf_event_backup_node_new;
-    ctx.gc_free.node_delete = perf_event_backup_node_delete;
+    rblist__init(&ctx->gc_free);
+    ctx->gc_free.node_cmp = perf_event_backup_gc_free_node_cmp;
+    ctx->gc_free.node_new = perf_event_backup_node_new;
+    ctx->gc_free.node_delete = perf_event_backup_node_delete;
 
-    memset(&ctx.stat, 0, sizeof(ctx.stat));
-    ctx.report_leaked_bytes = false;
-    ctx.env = env;
+    memset(&ctx->stat, 0, sizeof(ctx->stat));
+    ctx->report_leaked_bytes = false;
+
     return 0;
 }
 
-static void report_kmemleak(void);
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    report_kmemleak();
-    rblist__exit(&ctx.alloc);
-    rblist__exit(&ctx.gc_free);
-    callchain_ctx_free(ctx.cc);
-    if (ctx.env->flame_graph) {
-        flame_graph_output(ctx.flame);
-        flame_graph_close(ctx.flame);
+    struct kmemleak_ctx *ctx = dev->private;
+
+    rblist__exit(&ctx->alloc);
+    rblist__exit(&ctx->gc_free);
+    callchain_ctx_free(ctx->cc);
+    if (dev->env->flame_graph) {
+        flame_graph_output(ctx->flame);
+        flame_graph_close(ctx->flame);
     }
+    tp_list_free(ctx->tp_alloc);
+    tp_list_free(ctx->tp_free);
     tep__unref();
+    free(ctx);
 }
 
-static int add_tp_list(struct perf_evlist *evlist, struct tp_list *tp_list, bool callchain)
+static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callchain)
 {
+    struct perf_evlist *evlist = dev->evlist;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -230,13 +252,13 @@ static int add_tp_list(struct perf_evlist *evlist, struct tp_list *tp_list, bool
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = monitor_instance_oncpu(),
+        .exclude_callchain_user = prof_dev_ins_oncpu(dev),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
     int i;
 
-    reduce_wakeup_times(&kmemleak, &attr);
+    reduce_wakeup_times(dev, &attr);
 
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
@@ -266,61 +288,69 @@ static int add_tp_list(struct perf_evlist *evlist, struct tp_list *tp_list, bool
     return 0;
 }
 
-static int kmemleak_init(struct perf_evlist *evlist, struct env *env)
+static int kmemleak_init(struct prof_dev *dev)
 {
-    if (monitor_ctx_init(env) < 0)
-        return -1;
+    struct env *env = dev->env;
+    struct kmemleak_ctx *ctx;
 
-    ctx.tp_alloc = tp_list_new(env->tp_alloc);
-    if (!ctx.tp_alloc)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
-    ctx.tp_free = tp_list_new(env->tp_free);
-    if (!ctx.tp_free)
-        return -1;
+    ctx->tp_alloc = tp_list_new(dev, env->tp_alloc);
+    if (!ctx->tp_alloc)
+        goto failed;
+
+    ctx->tp_free = tp_list_new(dev, env->tp_free);
+    if (!ctx->tp_free)
+        goto failed;
 
     if (!env->callchain)
-        env->callchain = (ctx.tp_alloc->nr_need_stack == ctx.tp_alloc->nr_tp);
+        env->callchain = (ctx->tp_alloc->nr_need_stack == ctx->tp_alloc->nr_tp);
 
-    if (add_tp_list(evlist, ctx.tp_alloc, env->callchain) < 0)
-        return -1;
-    if (add_tp_list(evlist, ctx.tp_free, false) < 0)
-        return -1;
-
-    if (env->callchain || ctx.tp_alloc->nr_need_stack || ctx.tp_free->nr_need_stack) {
-        int user = ctx.user ? CALLCHAIN_USER : 0;
-        ctx.cc = callchain_ctx_new(CALLCHAIN_KERNEL | user, stdout);
+    if (env->callchain || ctx->tp_alloc->nr_need_stack || ctx->tp_free->nr_need_stack) {
+        int user = ctx->user ? CALLCHAIN_USER : 0;
+        ctx->cc = callchain_ctx_new(CALLCHAIN_KERNEL | user, stdout);
         if (env->flame_graph)
-            ctx.flame = flame_graph_open(CALLCHAIN_KERNEL | user, env->flame_graph);
-        kmemleak.pages *= 2;
+            ctx->flame = flame_graph_open(CALLCHAIN_KERNEL | user, env->flame_graph);
+        dev->pages *= 2;
     }
 
-    if (ctx.tp_alloc->nr_mem_size == ctx.tp_alloc->nr_tp) {
-        ctx.report_leaked_bytes = true;
+    if (add_tp_list(dev, ctx->tp_alloc, env->callchain) < 0)
+        goto failed;
+    if (add_tp_list(dev, ctx->tp_free, false) < 0)
+        goto failed;
+
+    if (ctx->tp_alloc->nr_mem_size == ctx->tp_alloc->nr_tp) {
+        ctx->report_leaked_bytes = true;
         if (!env->verbose && !env->callchain)
             fprintf(stderr, "Support LEAKED BYTES REPORT, need -g to enable callchain.\n");
         if (!env->verbose && env->callchain && env->flame_graph)
             fprintf(stderr, "Support LEAKED BYTES REPORT, will disable flame graph.\n");
     }
 
-    ctx.evlist = evlist;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static int kmemleak_filter(struct perf_evlist *evlist, struct env *env)
+static int kmemleak_filter(struct prof_dev *dev)
 {
+    struct kmemleak_ctx *ctx = dev->private;
     int i, err;
 
-    for (i = 0; i < ctx.tp_alloc->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_alloc->tp[i];
+    for (i = 0; i < ctx->tp_alloc->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_alloc->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
                 return err;
         }
     }
-    for (i = 0; i < ctx.tp_free->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_free->tp[i];
+    for (i = 0; i < ctx->tp_free->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_free->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -330,11 +360,11 @@ static int kmemleak_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void kmemleak_exit(struct perf_evlist *evlist)
+static void report_kmemleak(struct prof_dev *dev);
+static void kmemleak_exit(struct prof_dev *dev)
 {
-    monitor_ctx_exit();
-    tp_list_free(ctx.tp_alloc);
-    tp_list_free(ctx.tp_free);
+    report_kmemleak(dev);
+    monitor_ctx_exit(dev);
 }
 
 struct sample_type_callchain {
@@ -366,18 +396,19 @@ static void __raw_size(union perf_event *event, bool callchain, void **praw, int
     }
 }
 
-static void __print_callchain(union perf_event *event, bool callchain)
+static void __print_callchain(struct prof_dev *dev, union perf_event *event, bool callchain)
 {
+    struct kmemleak_ctx *ctx = dev->private;
     struct sample_type_callchain *data = (void *)event->sample.array;
 
     if (callchain) {
-        print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
-        if (ctx.env->flame_graph) {
-            if (ctx.user) {
+        print_callchain_common(ctx->cc, &data->callchain, data->h.tid_entry.pid);
+        if (dev->env->flame_graph) {
+            if (ctx->user) {
                 const char *comm = tep__pid_to_comm((int)data->h.tid_entry.tid);
-                flame_graph_add_callchain(ctx.flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
+                flame_graph_add_callchain(ctx->flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
             } else
-                flame_graph_add_callchain(ctx.flame, &data->callchain, 0/*only kernel stack*/, NULL);
+                flame_graph_add_callchain(ctx->flame, &data->callchain, 0/*only kernel stack*/, NULL);
         }
     }
 }
@@ -387,15 +418,15 @@ struct leaked_bytes {
     int pid;
 };
 
-static void collect_leaked_bytes(struct key_value_paires *kv_pairs, struct perf_event_backup *alloc)
+static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_paires *kv_pairs, struct perf_event_backup *alloc)
 {
     union perf_event *event = &alloc->event;
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain) {
+    if (alloc->callchain) {
         struct leaked_bytes *leaked = keyvalue_pairs_add_key(kv_pairs, (struct_key *)&data->callchain);
         leaked->leaked += alloc->bytes_alloc;
-        if (ctx.user)
+        if (ctx->user)
             leaked->pid = data->h.tid_entry.pid;
         else
             leaked->pid = 0;
@@ -417,19 +448,20 @@ static int __leak_cmp(void **value1, void **value2)
 
 static void __print_leak(void *opaque, struct_key *key, void *value, unsigned int n)
 {
+    struct kmemleak_ctx *ctx = opaque;
     struct leaked_bytes *leaked = value;
     printf("Leak of %lu bytes in %u objects allocated from:\n", leaked->leaked, n);
-    print_callchain_common(ctx.cc, key, leaked->pid);
+    print_callchain_common(ctx->cc, key, leaked->pid);
 }
 
-static int gc_need_free(union perf_event *event)
+static int gc_need_free(struct kmemleak_ctx *ctx, union perf_event *event)
 {
     struct sample_type_header *data = (void *)event->sample.array, *data0;
     struct rb_node *rbn;
     struct perf_event_backup *free;
 
-    if (rblist__nr_entries(&ctx.gc_free) > 1) {
-        rbn = rblist__entry(&ctx.gc_free, 0);
+    if (rblist__nr_entries(&ctx->gc_free) > 1) {
+        rbn = rblist__entry(&ctx->gc_free, 0);
         free = container_of(rbn, struct perf_event_backup, rbnode);
         data0 = (void *)free->event.sample.array;
         if (data->time > data0->time &&
@@ -440,49 +472,52 @@ static int gc_need_free(union perf_event *event)
     return 0;
 }
 
-static void __gc_free_first(void)
+static void __gc_free_first(struct kmemleak_ctx *ctx)
 {
     struct rb_node *rbn, *rbn_alloc;
     struct perf_event_backup *free;
     struct perf_event_entry entry;
 
-    rbn = rblist__entry(&ctx.gc_free, 0);
+    rbn = rblist__entry(&ctx->gc_free, 0);
     free = container_of(rbn, struct perf_event_backup, rbnode);
 
     entry.ptr = free->ptr;
     entry.insert = 0;
     entry.event = &free->event;
-    rbn_alloc = rblist__find(&ctx.alloc, &entry);
+    rbn_alloc = rblist__find(&ctx->alloc, &entry);
     if (rbn_alloc)
-        rblist__remove_node(&ctx.alloc, rbn_alloc);
-    rblist__remove_node(&ctx.gc_free, rbn);
+        rblist__remove_node(&ctx->alloc, rbn_alloc);
+    rblist__remove_node(&ctx->gc_free, rbn);
 }
 
-static void gc_free(union perf_event *event)
+static void gc_free(struct kmemleak_ctx *ctx, union perf_event *event)
 {
     do {
-        __gc_free_first();
-    } while (gc_need_free(event));
+        __gc_free_first(ctx);
+    } while (gc_need_free(ctx, event));
 }
 
-static void report_kmemleak_stat(bool from_sigusr1)
+static void report_kmemleak_stat(struct kmemleak_ctx *ctx, bool from_sigusr1)
 {
+    if (ctx->stat.total_alloc == 0)
+        return;
     print_time(stdout);
     printf("\nKMEMLEAK STATS:\n");
     if (from_sigusr1)
         printf("ALLOC LIST num %llu mem %llu\n"
            "FREE LIST  num %llu mem %llu\n"
            "TOTAL alloc %llu free %llu\n\n",
-           ctx.stat.alloc_num, ctx.stat.alloc_mem,
-           ctx.stat.free_num, ctx.stat.free_mem,
-           ctx.stat.total_alloc, ctx.stat.total_free);
+           ctx->stat.alloc_num, ctx->stat.alloc_mem,
+           ctx->stat.free_num, ctx->stat.free_mem,
+           ctx->stat.total_alloc, ctx->stat.total_free);
     else
         printf("TOTAL alloc %llu free %llu\n\n",
-           ctx.stat.total_alloc, ctx.stat.total_free);
+           ctx->stat.total_alloc, ctx->stat.total_free);
 }
 
-static void report_kmemleak(void)
+static void report_kmemleak(struct prof_dev *dev)
 {
+    struct kmemleak_ctx *ctx = dev->private;
     struct rb_node *rbn;
     struct perf_event_backup *alloc;
     union perf_event *event;
@@ -492,34 +527,34 @@ static void report_kmemleak(void)
     struct rblist sorted;
     struct key_value_paires *kv_pairs = NULL;
 
-    while (!rblist__empty(&ctx.gc_free)) {
-        __gc_free_first();
+    while (!rblist__empty(&ctx->gc_free)) {
+        __gc_free_first(ctx);
     }
 
-    report_kmemleak_stat(false);
+    report_kmemleak_stat(ctx, false);
 
-    if (rblist__empty(&ctx.alloc))
+    if (rblist__empty(&ctx->alloc))
         return;
 
     rblist__init(&sorted);
     sorted.node_cmp = perf_event_backup_sorted_node_cmp;
     sorted.node_new = perf_event_backup_sorted_node_new;
-    sorted.node_delete = ctx.alloc.node_delete;
-    ctx.alloc.node_delete = perf_event_backup_node_delete_empty; //empty, not really delete
+    sorted.node_delete = perf_event_backup_sorted_node_delete;
+    ctx->alloc.node_delete = perf_event_backup_node_delete_empty; //empty, not really delete
 
-    /* sort, remove from `ctx.alloc', add to `sorted'. */
+    /* sort, remove from `ctx->alloc', add to `sorted'. */
     do {
-        rbn = rblist__entry(&ctx.alloc, 0);
+        rbn = rblist__entry(&ctx->alloc, 0);
         alloc = container_of(rbn, struct perf_event_backup, rbnode);
-        rblist__remove_node(&ctx.alloc, rbn);
+        rblist__remove_node(&ctx->alloc, rbn);
         rblist__add_node(&sorted, alloc);
-    } while (!rblist__empty(&ctx.alloc));
+    } while (!rblist__empty(&ctx->alloc));
 
 
-    if (ctx.report_leaked_bytes) {
+    if (ctx->report_leaked_bytes) {
         kv_pairs = keyvalue_pairs_new(sizeof(struct leaked_bytes));
     }
-    if (!kv_pairs || ctx.env->verbose) {
+    if (!kv_pairs || dev->env->verbose) {
         printf("KMEMLEAK REPORT: %u\n", rblist__nr_entries(&sorted));
     }
     do {
@@ -529,12 +564,12 @@ static void report_kmemleak(void)
         data = (void *)event->sample.array;
 
         if (kv_pairs) {
-            collect_leaked_bytes(kv_pairs, alloc);
+            collect_leaked_bytes(ctx, kv_pairs, alloc);
         }
-        if (!kv_pairs || ctx.env->verbose) {
-            __raw_size(event, true, &raw, &size);
+        if (!kv_pairs || dev->env->verbose) {
+            __raw_size(event, alloc->callchain, &raw, &size);
             tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-            __print_callchain(event, true);
+            __print_callchain(dev, event, alloc->callchain);
         }
 
         rblist__remove_node(&sorted, rbn);
@@ -542,17 +577,17 @@ static void report_kmemleak(void)
 
     if (kv_pairs) {
         printf("LEAKED BYTES REPORT:\n");
-        keyvalue_pairs_sorted_foreach(kv_pairs, __leak_cmp, __print_leak, NULL);
+        keyvalue_pairs_sorted_foreach(kv_pairs, __leak_cmp, __print_leak, ctx);
         keyvalue_pairs_free(kv_pairs);
     }
 }
 
-static bool config_is_alloc(__u64 config, struct tp **p)
+static bool config_is_alloc(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
 {
     int i;
 
-    for (i = 0; i < ctx.tp_alloc->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_alloc->tp[i];
+    for (i = 0; i < ctx->tp_alloc->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_alloc->tp[i];
         if (tp->id == config) {
             *p = tp;
             return true;
@@ -561,12 +596,12 @@ static bool config_is_alloc(__u64 config, struct tp **p)
     return false;
 }
 
-static bool config_is_free(__u64 config, struct tp **p)
+static bool config_is_free(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
 {
     int i;
 
-    for (i = 0; i < ctx.tp_free->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_free->tp[i];
+    for (i = 0; i < ctx->tp_free->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_free->tp[i];
         if (tp->id == config) {
             *p = tp;
             return true;
@@ -575,8 +610,9 @@ static bool config_is_free(__u64 config, struct tp **p)
     return false;
 }
 
-static void kmemleak_sample(union perf_event *event, int instance)
+static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct kmemleak_ctx *ctx = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
     struct sample_type_header *data = (void *)event->sample.array;
@@ -600,28 +636,28 @@ static void kmemleak_sample(union perf_event *event, int instance)
      * You can use the common_type of traceevent, but you need to get the raw location first.
      * To get the raw location, you must know whether there is a callchain in perf_event.
      */
-    evsel = perf_evlist__id_to_evsel(ctx.evlist, data->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->stream_id, NULL);
     if (!evsel)
         return;
 
     config = perf_evsel__attr(evsel)->config;
-    is_alloc = config_is_alloc(config, &tp);
+    is_alloc = config_is_alloc(ctx, config, &tp);
     if (!is_alloc)
-        config_is_free(config, &tp);
+        config_is_free(ctx, config, &tp);
 
-    callchain = (is_alloc && ctx.env->callchain) || tp->stack;
+    callchain = (is_alloc && dev->env->callchain) || tp->stack;
     __raw_size(event, callchain, &raw, &size);
 
-    if (ctx.user) {
+    if (ctx->user) {
         if (!tep_is_pid_registered(tep__ref(), data->tid_entry.tid))
             tep__update_comm(NULL, data->tid_entry.tid);
         tep__unref();
     }
 
-    if (ctx.env->verbose >= VERBOSE_EVENT) {
+    if (dev->env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-        __print_callchain(event, callchain);
+        __print_callchain(dev, event, callchain);
     }
 
     if (is_alloc) {
@@ -634,15 +670,16 @@ static void kmemleak_sample(union perf_event *event, int instance)
         entry.insert = 1;
         entry.is_alloc = 1;
         entry.is_free = 0;
+        entry.callchain = callchain;
         entry.event = event;
-        rc = rblist__add_node(&ctx.alloc, &entry);
+        rc = rblist__add_node(&ctx->alloc, &entry);
         if (rc == -EEXIST) {
             fprintf(stderr, "ptr %p EEXIST\n", (void*)ptr);
-            rbn = rblist__find(&ctx.alloc, &entry);
-            rblist__remove_node(&ctx.alloc, rbn);
-            rblist__add_node(&ctx.alloc, &entry);
+            rbn = rblist__find(&ctx->alloc, &entry);
+            rblist__remove_node(&ctx->alloc, rbn);
+            rblist__add_node(&ctx->alloc, &entry);
         }
-        ctx.stat.total_alloc ++;
+        ctx->stat.total_alloc ++;
     } else {
         ptr = tp_get_mem_ptr(tp, raw, size);
 
@@ -650,23 +687,25 @@ static void kmemleak_sample(union perf_event *event, int instance)
         entry.insert = 0;
         entry.is_alloc = 0;
         entry.is_free = 1;
+        entry.callchain = callchain;
         entry.event = event;
-        rbn = rblist__find(&ctx.alloc, &entry);
+        rbn = rblist__find(&ctx->alloc, &entry);
         if (rbn == NULL) {
             entry.insert = 1;
-            rc = rblist__add_node(&ctx.gc_free, &entry);
-            if (gc_need_free(event)) {
-                gc_free(event);
+            rc = rblist__add_node(&ctx->gc_free, &entry);
+            if (gc_need_free(ctx, event)) {
+                gc_free(ctx, event);
             }
         } else
-            rblist__remove_node(&ctx.alloc, rbn);
-        ctx.stat.total_free ++;
+            rblist__remove_node(&ctx->alloc, rbn);
+        ctx->stat.total_free ++;
     }
 }
 
-static void kmemleak_sigusr1(int signum)
+static void kmemleak_sigusr(struct prof_dev *dev, int signum)
 {
-    report_kmemleak_stat(true);
+    if (signum == SIGUSR1)
+        report_kmemleak_stat(dev->private, true);
 }
 
 static void kmemleak_help(struct help_ctx *hctx)
@@ -680,7 +719,7 @@ static void kmemleak_help(struct help_ctx *hctx)
 
     tp_alloc = hctx->tp_list[0];
     tp_free = hctx->tp_list[1];
-    printf(PROGRAME " %s ", kmemleak.name);
+    printf(PROGRAME " kmemleak ");
     printf("--alloc \"");
     for (j = 0; j < tp_alloc->nr_tp; j++) {
         struct tp *tp = &tp_alloc->tp[j];
@@ -725,11 +764,11 @@ static void kmemleak_help(struct help_ctx *hctx)
 static const char *kmemleak_desc[] = PROFILER_DESC("kmemleak",
     "[OPTION...] --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]]",
     "Memory leak analysis. Both user and kernel allocators are supported.", "",
-    "SYNOPSIS", "",
+    "SYNOPSIS",
     "    Memory leak: Allocated but not freed.", "",
     "    --alloc specify memory allocation events. --free specify memory free events.",
     "    'alloc' and 'free' events are associated via 'ptr' ATTR.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ --free kmem:kfree//ptr=ptr/ --order --order-mem 64M -m 128 -g",
     "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/,kmem:kmalloc_node//ptr=ptr/size=bytes_alloc/stack/ \\",
     "                       --free kmem:kfree//ptr=ptr/ --order --order-mem 64M -m 128 -g");
@@ -745,7 +784,7 @@ struct monitor kmemleak = {
     .init = kmemleak_init,
     .filter = kmemleak_filter,
     .deinit = kmemleak_exit,
-    .sigusr1 = kmemleak_sigusr1,
+    .sigusr = kmemleak_sigusr,
     .comm   = monitor_tep__comm,
     .sample = kmemleak_sample,
 };
