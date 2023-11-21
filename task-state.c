@@ -33,16 +33,14 @@
 #define TASK_TRACED		(TASK_WAKEKILL | __TASK_TRACED)
 
 
-struct monitor task_state;
-static struct monitor_ctx {
+struct task_state_ctx {
     struct callchain_ctx *cc;
     struct flame_graph *flame;
     struct perf_thread_map *thread_map;
     __u64 sched_switch;
     __u64 sched_wakeup;
     struct rblist backup;
-    struct env *env;
-} ctx;
+};
 struct perf_event_backup {
     struct rb_node rbnode;
     __u32    tid;
@@ -83,41 +81,52 @@ static void node_delete(struct rblist *rblist, struct rb_node *rb_node)
     free(b);
 }
 
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct task_state_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
     tep__ref();
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+            ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         else
-            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
-        task_state.pages *= 2;
+            ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
+        dev->pages *= 2;
     }
-    rblist__init(&ctx.backup);
-    ctx.backup.node_cmp = node_cmp;
-    ctx.backup.node_new = node_new;
-    ctx.backup.node_delete = node_delete;
-    ctx.env = env;
+    rblist__init(&ctx->backup);
+    ctx->backup.node_cmp = node_cmp;
+    ctx->backup.node_new = node_new;
+    ctx->backup.node_delete = node_delete;
+
     return 0;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    perf_thread_map__put(ctx.thread_map);
-    rblist__exit(&ctx.backup);
-    if (ctx.env->callchain) {
-        if (!ctx.env->flame_graph)
-            callchain_ctx_free(ctx.cc);
+    struct task_state_ctx *ctx = dev->private;
+    perf_thread_map__put(ctx->thread_map);
+    rblist__exit(&ctx->backup);
+    if (dev->env->callchain) {
+        if (!dev->env->flame_graph)
+            callchain_ctx_free(ctx->cc);
         else {
-            flame_graph_output(ctx.flame);
-            flame_graph_close(ctx.flame);
+            flame_graph_output(ctx->flame);
+            flame_graph_close(ctx->flame);
         }
     }
     tep__unref();
+    free(ctx);
 }
 
-static int task_state_init(struct perf_evlist *evlist, struct env *env)
+static int task_state_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct task_state_ctx *ctx;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -128,66 +137,73 @@ static int task_state_init(struct perf_evlist *evlist, struct env *env)
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
-        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
-        .wakeup_events = 1, //1个事件
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
     int id;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
-    reduce_wakeup_times(&task_state, &attr);
+    reduce_wakeup_times(dev, &attr);
 
     /**
      * sched:sched_switch and sched:sched_wakeup are not suitable for binding to threads
     **/
-    if (!monitor_instance_oncpu()) {
-        ctx.thread_map = task_state.threads;
-        perf_cpu_map__put(task_state.cpus);
-        task_state.cpus = perf_cpu_map__new(NULL);
-        task_state.threads = perf_thread_map__new_dummy();
+    if (!prof_dev_ins_oncpu(dev)) {
+        ctx->thread_map = dev->threads;
+        perf_cpu_map__put(dev->cpus);
+        dev->cpus = perf_cpu_map__new(NULL);
+        dev->threads = perf_thread_map__new_dummy();
     }
 
     id = tep__event_id("sched", "sched_switch");
     if (id < 0)
-        return -1;
-    attr.config = ctx.sched_switch = id;
+        goto failed;
+    attr.config = ctx->sched_switch = id;
     evsel = perf_evsel__new(&attr);
-    if (!evsel) {
-        return -1;
-    }
+    if (!evsel)
+        goto failed;
     perf_evlist__add(evlist, evsel);
 
     id = tep__event_id("sched", "sched_wakeup");
     if (id < 0)
-        return -1;
+        goto failed;
     attr.comm = 1;
     attr.task = 1;
-    attr.config = ctx.sched_wakeup = id;
+    attr.config = ctx->sched_wakeup = id;
     evsel = perf_evsel__new(&attr);
-    if (!evsel) {
-        return -1;
-    }
+    if (!evsel)
+        goto failed;
     perf_evlist__add(evlist, evsel);
+
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static int task_state_filter(struct perf_evlist *evlist, struct env *env)
+static int task_state_filter(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct task_state_ctx *ctx = dev->private;
     char filter[1024];
     struct perf_evsel *evsel;
     int err;
 
     perf_evlist__for_each_evsel(evlist, evsel) {
         struct perf_event_attr *attr = perf_evsel__attr(evsel);
-        if (attr->config == ctx.sched_switch) {
+        if (attr->config == ctx->sched_switch) {
             struct tp_filter *prev_filter = NULL;
             struct tp_filter *next_filter = NULL;
 
-            prev_filter = tp_filter_new(ctx.thread_map, "prev_pid", env->filter, "prev_comm");
-            next_filter = tp_filter_new(ctx.thread_map, "next_pid", env->filter, "next_comm");
+            prev_filter = tp_filter_new(ctx->thread_map, "prev_pid", env->filter, "prev_comm");
+            next_filter = tp_filter_new(ctx->thread_map, "next_pid", env->filter, "next_comm");
 
             if (env->interruptible && env->uninterruptible) {
                 if (prev_filter) {
@@ -228,10 +244,10 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
                 fprintf(stderr, "sched:sched_switch filter \"%s\"\n", filter);
                 return err;
             }
-        } else if (attr->config == ctx.sched_wakeup) {
+        } else if (attr->config == ctx->sched_wakeup) {
             struct tp_filter *tp_filter = NULL;
 
-            tp_filter = tp_filter_new(ctx.thread_map, "pid", env->filter, "comm");
+            tp_filter = tp_filter_new(ctx->thread_map, "pid", env->filter, "comm");
             if (tp_filter) {
                 if (env->verbose >= VERBOSE_NOTICE)
                     printf("sched:sched_wakeup filter \"%s\"\n", tp_filter->filter);
@@ -248,9 +264,9 @@ static int task_state_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void task_state_deinit(struct perf_evlist *evlist)
+static void task_state_deinit(struct prof_dev *dev)
 {
-    monitor_ctx_exit();
+    monitor_ctx_exit(dev);
 }
 
 // in linux/perf_event.h
@@ -278,9 +294,9 @@ struct sample_type_raw {
     } raw;
 };
 
-static void __raw_size(union perf_event *event, void **praw, int *psize)
+static void __raw_size(struct prof_dev *dev, union perf_event *event, void **praw, int *psize)
 {
-    if (ctx.env->callchain) {
+    if (dev->env->callchain) {
         struct sample_type_callchain *data = (void *)event->sample.array;
         struct {
             __u32   size;
@@ -295,22 +311,24 @@ static void __raw_size(union perf_event *event, void **praw, int *psize)
     }
 }
 
-static inline void __print_callchain(union perf_event *event)
+static inline void __print_callchain(struct prof_dev *dev, union perf_event *event)
 {
+    struct task_state_ctx *ctx = dev->private;
     struct sample_type_callchain *data = (void *)event->sample.array;
 
-    if (ctx.env->callchain) {
-        if (!ctx.env->flame_graph)
-            print_callchain_common(ctx.cc, &data->callchain, data->h.tid_entry.pid);
+    if (dev->env->callchain) {
+        if (!dev->env->flame_graph)
+            print_callchain_common(ctx->cc, &data->callchain, data->h.tid_entry.pid);
         else {
             const char *comm = tep__pid_to_comm((int)data->h.tid_entry.pid);
-            flame_graph_add_callchain(ctx.flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
+            flame_graph_add_callchain(ctx->flame, &data->callchain, data->h.tid_entry.pid, !strcmp(comm, "<...>") ? NULL : comm);
         }
     }
 }
 
-static void task_state_sample(union perf_event *event, int instance)
+static void task_state_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct task_state_ctx *ctx = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
     struct sample_type_header *data = (void *)event->sample.array, *data0;
@@ -327,13 +345,13 @@ static void task_state_sample(union perf_event *event, int instance)
     void *raw;
     int size;
 
-    __raw_size(event, &raw, &size);
+    __raw_size(dev, event, &raw, &size);
 
-    if (ctx.env->greater_than == 0) {
+    if (dev->env->greater_than == 0) {
         tep__update_comm(NULL, data->tid_entry.tid);
         print_time(stdout);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-        __print_callchain(event);
+        __print_callchain(dev, event);
         return;
     }
 
@@ -349,7 +367,7 @@ static void task_state_sample(union perf_event *event, int instance)
     type = tep_data_type(tep, &record);
 
     e = tep_find_event_by_record(tep, &record);
-    if (type == ctx.sched_switch) {
+    if (type == ctx->sched_switch) {
         if (tep_get_field_val(&s, e, "prev_pid", &record, &pid, 1) < 0) {
             trace_seq_putc(&s, '\n');
             trace_seq_do_fprintf(&s, stderr);
@@ -358,18 +376,18 @@ static void task_state_sample(union perf_event *event, int instance)
 
         entry.tid = (__u32)pid;
         entry.event = event;
-        rc = rblist__add_node(&ctx.backup, &entry);
+        rc = rblist__add_node(&ctx->backup, &entry);
         if (rc == -EEXIST) {
-            rbn = rblist__find(&ctx.backup, &entry);
+            rbn = rblist__find(&ctx->backup, &entry);
             sched_switch = container_of(rbn, struct perf_event_backup, rbnode);
             if (sched_switch->event.header.size == event->header.size) {
                 memmove(&sched_switch->event, event, event->header.size);
             } else {
-                rblist__remove_node(&ctx.backup, rbn);
-                rblist__add_node(&ctx.backup, &entry);
+                rblist__remove_node(&ctx->backup, rbn);
+                rblist__add_node(&ctx->backup, &entry);
             }
         }
-    } else if (type == ctx.sched_wakeup) {
+    } else if (type == ctx->sched_wakeup) {
         if (tep_get_field_val(&s, e, "pid", &record, &pid, 1) < 0) {
             trace_seq_putc(&s, '\n');
             trace_seq_do_fprintf(&s, stderr);
@@ -378,14 +396,14 @@ static void task_state_sample(union perf_event *event, int instance)
 
         entry.tid = (__u32)pid;
         entry.event = event;
-        rbn = rblist__find(&ctx.backup, &entry);
+        rbn = rblist__find(&ctx->backup, &entry);
         if (rbn == NULL)
             goto __return;
         sched_switch = container_of(rbn, struct perf_event_backup, rbnode);
         data0 = (void *)sched_switch->event.sample.array;
 
         if (data->time > data0->time &&
-            data->time - data0->time > ctx.env->greater_than) {
+            data->time - data0->time > dev->env->greater_than) {
             const char *comm;
             int len;
 
@@ -397,38 +415,39 @@ static void task_state_sample(union perf_event *event, int instance)
             print_time(stdout);
             printf(" == %s %d WAIT %llu ms\n", tep__pid_to_comm((int)pid), (int)pid, (data->time - data0->time)/1000000UL);
 
-            __raw_size(&sched_switch->event, &raw, &size);
+            __raw_size(dev, &sched_switch->event, &raw, &size);
             tep__print_event(data0->time/1000, data0->cpu_entry.cpu, raw, size);
-            __print_callchain(&sched_switch->event);
+            __print_callchain(dev, &sched_switch->event);
 
-            __raw_size(event, &raw, &size);
+            __raw_size(dev, event, &raw, &size);
             tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
-            __print_callchain(event);
+            __print_callchain(dev, event);
         }
 
-        rblist__remove_node(&ctx.backup, rbn);
+        rblist__remove_node(&ctx->backup, rbn);
     }
 __return:
     trace_seq_destroy(&s);
     tep__unref();
 }
 
-static void task_state_exit(union perf_event *event, int instance)
+static void task_state_exit(struct prof_dev *dev, union perf_event *event, int instance)
 {
     task_exit_free_syms(event);
 }
 
-static void task_state_sigusr1(int signum)
+static void task_state_sigusr(struct prof_dev *dev, int signum)
 {
-    obj__stat(stderr);
+    if (signum == SIGUSR1)
+        obj__stat(stderr);
 }
 
 static const char *task_state_desc[] = PROFILER_DESC("task-state",
     "[OPTION...] [-S] [-D] [--than ns] [--filter comm] [-g [--flame-graph file]]",
     "Trace task state, wakeup, switch, INTERRUPTIBLE, UNINTERRUPTIBLE.", "",
-    "TRACEPOINT", "",
+    "TRACEPOINT",
     "    sched:sched_switch, sched:sched_wakeup", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" task-state -p 2347 -SD --than 20ms -g",
     "    "PROGRAME" task-state --filter 'java,python*' -S --than 100ms -g",
     "    "PROGRAME" task-state -- ip link show eth0");
@@ -444,7 +463,7 @@ struct monitor task_state = {
     .init = task_state_init,
     .filter = task_state_filter,
     .deinit = task_state_deinit,
-    .sigusr1 = task_state_sigusr1,
+    .sigusr = task_state_sigusr,
     .comm   = monitor_tep__comm,
     .exit   = task_state_exit,
     .sample = task_state_sample,
