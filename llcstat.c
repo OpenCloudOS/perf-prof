@@ -10,13 +10,11 @@
 #include <tep.h>
 #include <stack_helpers.h>
 
-static profiler llcstat;
-
 struct cache {
     uint64_t counter;
     uint64_t incremental;
 };
-static struct monitor_ctx {
+struct llcstat_ctx {
     int nr_ins;
     struct cpuinfo_x86 cpuinfo;
     struct perf_evlist *evlist;
@@ -31,10 +29,14 @@ static struct monitor_ctx {
     __u64 l3_cache_miss_config;
     __u64 l3_cache_miss_latency_config;
     __u64 l3_misses_by_request_type_config;
-} ctx;
+};
 
-static int llcstat_init(struct perf_evlist *evlist, struct env *env)
+static void llcstat_exit(struct prof_dev *dev);
+static int llcstat_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct llcstat_ctx *ctx = zalloc(sizeof(*ctx));
     struct perf_event_attr attr = {
         .type        = PERF_TYPE_HARDWARE,
         .config      = 0,
@@ -54,22 +56,26 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
     __u64 l3_cache_miss_latency = 0;
     __u64 l3_misses_by_request_type = 0;
 
-    if (get_cpuinfo(&ctx.cpuinfo) < 0)
+    if (!ctx)
         return -1;
+    dev->private = ctx;
 
-    if (!monitor_instance_oncpu()) {
+    if (get_cpuinfo(&ctx->cpuinfo) < 0)
+        goto failed;
+
+    if (!prof_dev_ins_oncpu(dev)) {
         fprintf(stderr, "can only be bound to CPU\n");
-        return -1;
+        goto failed;
     }
 
     if (env->interval == 0)
         env->interval = 1000;
 
-    if (ctx.cpuinfo.vendor == X86_VENDOR_INTEL) {
+    if (ctx->cpuinfo.vendor == X86_VENDOR_INTEL) {
         type = PERF_TYPE_HARDWARE;
         l3_cache_reference = PERF_COUNT_HW_CACHE_REFERENCES;
         l3_cache_miss = PERF_COUNT_HW_CACHE_MISSES;
-    } else if (ctx.cpuinfo.vendor == X86_VENDOR_AMD) {
+    } else if (ctx->cpuinfo.vendor == X86_VENDOR_AMD) {
         int err;
         char *cpumask = NULL;
         size_t size = 0;
@@ -78,42 +84,42 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
         if ((err = sysfs__read_int("bus/event_source/devices/amd_l3/type", &type)) < 0) {
             fprintf(stderr, "failed to read /sys/bus/event_source/devices/amd_l3/type."
                             "Not Supported.\n");
-            return -1;
+            goto failed;
         }
         if ((err = sysfs__read_str("bus/event_source/devices/amd_l3/cpumask", &cpumask, &size)) < 0 &&
             size == 0) {
             fprintf(stderr, "failed to read /sys/bus/event_source/devices/amd_l3/cpumask."
                             "Not Supported.\n");
-            return -1;
+            goto failed;
         }
         cpus = perf_cpu_map__new(cpumask);
-        llcstat.cpus = perf_cpu_map__and(llcstat.cpus, cpus);
+        dev->cpus = perf_cpu_map__and(dev->cpus, cpus);
         perf_cpu_map__put(cpus);
         free(cpumask);
 
-        if (ctx.cpuinfo.family == 0x17) { // AMD rome
+        if (ctx->cpuinfo.family == 0x17) { // AMD rome
             l3_cache_reference = 0xFF0F00000040FF04UL;
             l3_cache_miss = 0xFF0F000000400104UL;
             l3_cache_miss_latency = 0xFF0F000000400090UL;
             l3_misses_by_request_type = 0xFF0F000000401F9AUL;
-        } else if (ctx.cpuinfo.family == 0x19) { // AMD milan
+        } else if (ctx->cpuinfo.family == 0x19) { // AMD milan
             l3_cache_reference = 0x0300C0000040FF04UL;
             l3_cache_miss = 0x0300C00000400104UL;
             l3_cache_miss_latency = 0x0300C00000400090UL;
             l3_misses_by_request_type = 0x0300C00000401F9AUL;
         } else
-            return -1;
+            goto failed;
     } else
-        return -1;
+        goto failed;
 
-    ctx.nr_ins = perf_cpu_map__nr(llcstat.cpus);
-    ctx.total_time_enabled = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.total_time_running = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.l3_cache_references = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.l3_cache_misses = calloc(ctx.nr_ins, sizeof(struct cache));
-    if (!ctx.total_time_enabled || !ctx.total_time_running ||
-        !ctx.l3_cache_references || !ctx.l3_cache_misses)
-        return -1;
+    ctx->nr_ins = perf_cpu_map__nr(dev->cpus);
+    ctx->total_time_enabled = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->total_time_running = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->l3_cache_references = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->l3_cache_misses = calloc(ctx->nr_ins, sizeof(struct cache));
+    if (!ctx->total_time_enabled || !ctx->total_time_running ||
+        !ctx->l3_cache_references || !ctx->l3_cache_misses)
+        goto failed;
 
     // PERF_FORMAT_GROUP
     //     Use the leader event to read all counters at once. Read the l3_cache_references event
@@ -125,68 +131,73 @@ static int llcstat_init(struct perf_evlist *evlist, struct env *env)
     //
     attr.type = type;
     attr.read_format = PERF_FORMAT_ID | PERF_FORMAT_GROUP | PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
-    ctx.l3_cache_reference_config = attr.config = l3_cache_reference;
+    ctx->l3_cache_reference_config = attr.config = l3_cache_reference;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init l3_cache_reference counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
-    ctx.leader = evsel;
-    ctx.evlist = evlist;
+    ctx->leader = evsel;
+    ctx->evlist = evlist;
 
     attr.read_format = PERF_FORMAT_ID;
-    ctx.l3_cache_miss_config = attr.config = l3_cache_miss;
+    ctx->l3_cache_miss_config = attr.config = l3_cache_miss;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init l3_cache_miss counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
-    if (ctx.cpuinfo.vendor != X86_VENDOR_AMD)
+    if (ctx->cpuinfo.vendor != X86_VENDOR_AMD)
         goto set_leader;
 
-    ctx.l3_cache_miss_latency = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.l3_misses_by_request_type = calloc(ctx.nr_ins, sizeof(struct cache));
-    if (!ctx.l3_cache_miss_latency || !ctx.l3_misses_by_request_type)
-        return -1;
+    ctx->l3_cache_miss_latency = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->l3_misses_by_request_type = calloc(ctx->nr_ins, sizeof(struct cache));
+    if (!ctx->l3_cache_miss_latency || !ctx->l3_misses_by_request_type)
+        goto failed;
 
-    ctx.l3_cache_miss_latency_config = attr.config = l3_cache_miss_latency;
+    ctx->l3_cache_miss_latency_config = attr.config = l3_cache_miss_latency;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init l3_cache_miss_latency counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
-    ctx.l3_misses_by_request_type_config = attr.config = l3_misses_by_request_type;
+    ctx->l3_misses_by_request_type_config = attr.config = l3_misses_by_request_type;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init l3_misses_by_request_type counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
 set_leader:
     perf_evlist__set_leader(evlist);
     return 0;
+
+failed:
+    llcstat_exit(dev);
+    return -1;
 }
 
-static void llcstat_exit(struct perf_evlist *evlist)
+static void llcstat_exit(struct prof_dev *dev)
 {
-    free(ctx.total_time_enabled);
-    free(ctx.total_time_running);
-    free(ctx.l3_cache_references);
-    free(ctx.l3_cache_misses);
-    if (ctx.cpuinfo.vendor != X86_VENDOR_AMD)
-        return ;
-    free(ctx.l3_cache_miss_latency);
-    free(ctx.l3_misses_by_request_type);
+    struct llcstat_ctx *ctx = dev->private;
+    if(ctx->total_time_enabled) free(ctx->total_time_enabled);
+    if(ctx->total_time_running) free(ctx->total_time_running);
+    if(ctx->l3_cache_references) free(ctx->l3_cache_references);
+    if(ctx->l3_cache_misses) free(ctx->l3_cache_misses);
+    if(ctx->l3_cache_miss_latency) free(ctx->l3_cache_miss_latency);
+    if(ctx->l3_misses_by_request_type) free(ctx->l3_misses_by_request_type);
+    free(ctx);
 }
 
-static int llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int llcstat_read(struct prof_dev *dev, struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
+    struct llcstat_ctx *ctx = dev->private;
     struct perf_counts {
         u64 nr;
         u64 total_time_enabled;
@@ -205,33 +216,33 @@ static int llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *cou
         cache[instance].counter = c; \
     }
 
-    if (evsel != ctx.leader)
+    if (evsel != ctx->leader)
         return 0;
 
-    cache = ctx.total_time_enabled;
+    cache = ctx->total_time_enabled;
     UPDATE_COUNTER(groups->total_time_enabled);
 
-    cache = ctx.total_time_running;
+    cache = ctx->total_time_running;
     UPDATE_COUNTER(groups->total_time_running);
 
     for (i = 0; i < groups->nr; i++) {
         __u64 config;
         u64 value = groups->ctnr[i].value;
 
-        evsel = perf_evlist__id_to_evsel(ctx.evlist, groups->ctnr[i].id, NULL);
+        evsel = perf_evlist__id_to_evsel(ctx->evlist, groups->ctnr[i].id, NULL);
         if (!evsel)
             continue;
 
         config = perf_evsel__attr(evsel)->config;
 
-        if (config == ctx.l3_cache_reference_config)
-            cache = ctx.l3_cache_references;
-        else if (config == ctx.l3_cache_miss_config)
-            cache = ctx.l3_cache_misses;
-        else if (config == ctx.l3_cache_miss_latency_config)
-            cache = ctx.l3_cache_miss_latency;
-        else if (config == ctx.l3_misses_by_request_type_config)
-            cache = ctx.l3_misses_by_request_type;
+        if (config == ctx->l3_cache_reference_config)
+            cache = ctx->l3_cache_references;
+        else if (config == ctx->l3_cache_miss_config)
+            cache = ctx->l3_cache_misses;
+        else if (config == ctx->l3_cache_miss_latency_config)
+            cache = ctx->l3_cache_miss_latency;
+        else if (config == ctx->l3_misses_by_request_type_config)
+            cache = ctx->l3_misses_by_request_type;
         else
             continue;
 
@@ -240,25 +251,26 @@ static int llcstat_read(struct perf_evsel *evsel, struct perf_counts_values *cou
     return 1;
 }
 
-static void llcstat_interval(void)
+static void llcstat_interval(struct prof_dev *dev)
 {
+    struct llcstat_ctx *ctx = dev->private;
     int ins;
 
     print_time(stdout); printf("\n");
     printf("[CPU] L3 %9s %9s  %6s %7s  %12s\n", "REFERENCE", "MISSES", "HIT%", "RUN%", "MISS-LATENCY");
-    for (ins = 0; ins < ctx.nr_ins; ins ++) {
+    for (ins = 0; ins < ctx->nr_ins; ins ++) {
         float hit = 0.0;
         float run = 0.0;
-        if (ctx.l3_cache_references[ins].incremental > ctx.l3_cache_misses[ins].incremental)
-            hit = (ctx.l3_cache_references[ins].incremental - ctx.l3_cache_misses[ins].incremental) * 100.0 /
-                   ctx.l3_cache_references[ins].incremental;
-        run = ctx.total_time_running[ins].incremental * 100.0 / ctx.total_time_enabled[ins].incremental;
-        printf("[%03d]    %9lu %9lu  %5.2f%% %6.2f%%  ", monitor_instance_cpu(ins),
-                ctx.l3_cache_references[ins].incremental, ctx.l3_cache_misses[ins].incremental,
+        if (ctx->l3_cache_references[ins].incremental > ctx->l3_cache_misses[ins].incremental)
+            hit = (ctx->l3_cache_references[ins].incremental - ctx->l3_cache_misses[ins].incremental) * 100.0 /
+                   ctx->l3_cache_references[ins].incremental;
+        run = ctx->total_time_running[ins].incremental * 100.0 / ctx->total_time_enabled[ins].incremental;
+        printf("[%03d]    %9lu %9lu  %5.2f%% %6.2f%%  ", prof_dev_ins_cpu(dev, ins),
+                ctx->l3_cache_references[ins].incremental, ctx->l3_cache_misses[ins].incremental,
                 hit, run);
-        if (ctx.cpuinfo.vendor == X86_VENDOR_AMD) {
-            printf("%12lu\n", ctx.l3_cache_miss_latency[ins].incremental * 16 /
-                                ctx.l3_misses_by_request_type[ins].incremental);
+        if (ctx->cpuinfo.vendor == X86_VENDOR_AMD) {
+            printf("%12lu\n", ctx->l3_cache_miss_latency[ins].incremental * 16 /
+                                ctx->l3_misses_by_request_type[ins].incremental);
         } else
             printf("<not supported>\n");
     }
@@ -268,7 +280,7 @@ static void llcstat_interval(void)
 static const char *llcstat_desc[] = PROFILER_DESC("llcstat",
     "[OPTION...] [--exclude-host]",
     "Last level cache state on x86 platform.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" llcstat -i 1000",
     "    "PROGRAME" llcstat -C 0-3 -i 1000");
 static const char *llcstat_argv[] = PROFILER_ARGV("llcstat",
