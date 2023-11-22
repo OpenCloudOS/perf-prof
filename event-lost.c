@@ -5,37 +5,32 @@
 #include <tep.h>
 
 
-static profiler event_lost;
-
-static struct monitor_ctx {
-    struct perf_evlist *evlist;
-    struct tp_list *tp_list;
-    struct env *env;
-} ctx;
-
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+
     if (!env->event)
         return -1;
 
     tep__ref();
 
-    ctx.tp_list = tp_list_new(env->event);
-    if (!ctx.tp_list)
+    dev->private = tp_list_new(dev, env->event);
+    if (!dev->private)
         return -1;
 
-    ctx.env = env;
     return 0;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    tp_list_free(ctx.tp_list);
+    tp_list_free(dev->private);
     tep__unref();
 }
 
-static int event_lost_init(struct perf_evlist *evlist, struct env *env)
+static void event_lost_exit(struct prof_dev *dev);
+static int event_lost_init(struct prof_dev *dev)
 {
+    struct tp_list *tp_list;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -50,38 +45,43 @@ static int event_lost_init(struct perf_evlist *evlist, struct env *env)
     struct perf_evsel *evsel;
     int i;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    tp_list = dev->private;
 
-    reduce_wakeup_times(&event_lost, &attr);
+    reduce_wakeup_times(dev, &attr);
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < tp_list->nr_tp; i++) {
+        struct tp *tp = &tp_list->tp[i];
 
-        tp->counters = calloc(monitor_nr_instance(), sizeof(unsigned long));
-        if (!tp->counters)
-            return -1;
+        tp->private = calloc(prof_dev_nr_ins(dev), sizeof(unsigned long));
+        if (!tp->private)
+            goto failed;
 
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
-            return -1;
+            goto failed;
         }
-        perf_evlist__add(evlist, evsel);
+        perf_evlist__add(dev->evlist, evsel);
 
         tp->evsel = evsel;
     }
 
-    ctx.evlist = evlist;
+    return 0;
+
+failed:
+    event_lost_exit(dev);
     return 0;
 }
 
-static int event_lost_filter(struct perf_evlist *evlist, struct env *env)
+static int event_lost_filter(struct prof_dev *dev)
 {
+    struct tp_list *tp_list = dev->private;
     int i, err;
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < tp_list->nr_tp; i++) {
+        struct tp *tp = &tp_list->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -91,17 +91,18 @@ static int event_lost_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void event_lost_exit(struct perf_evlist *evlist)
+static void event_lost_exit(struct prof_dev *dev)
 {
+    struct tp_list *tp_list = dev->private;
     int i;
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
-        if (tp->counters)
-            free(tp->counters);
+    for (i = 0; i < tp_list->nr_tp; i++) {
+        struct tp *tp = &tp_list->tp[i];
+        if (tp->private)
+            free(tp->private);
     }
 
-    monitor_ctx_exit();
+    monitor_ctx_exit(dev);
 }
 
 // in linux/perf_event.h
@@ -122,21 +123,23 @@ struct sample_type_header {
     u64         id;
 };
 
-static void event_lost_sample(union perf_event *event, int instance)
+static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct tp_list *tp_list = dev->private;
     struct sample_type_header *hdr = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct tp *tp = NULL;
+    unsigned long *counters;
     int i;
 
-    evsel = perf_evlist__id_to_evsel(ctx.evlist, hdr->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->stream_id, NULL);
     if (!evsel) {
         fprintf(stderr, "failed to find evsel\n");
         return ;
     }
 
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        tp = &ctx.tp_list->tp[i];
+    for (i = 0; i < tp_list->nr_tp; i++) {
+        tp = &tp_list->tp[i];
         if (tp->evsel == evsel)
             goto found;
     }
@@ -144,17 +147,18 @@ static void event_lost_sample(union perf_event *event, int instance)
     return ;
 
 found:
-    if (hdr->counter - tp->counters[instance] != 1) {
-        fprintf(stderr, "lost %lu events\n", hdr->counter - tp->counters[instance] - 1);
+    counters = tp->private;
+    if (hdr->counter - counters[instance] != 1) {
+        fprintf(stderr, "%s:%s lost %lu events\n", tp->sys, tp->name, hdr->counter - counters[instance] - 1);
     }
-    tp->counters[instance] = hdr->counter;
+    counters[instance] = hdr->counter;
 }
 
 
 static const char *event_lost_desc[] = PROFILER_DESC("event-lost",
     "[OPTION...] -e EVENT",
     "Determine if any events are lost.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" event-lost -e sched:sched_wakeup -m 64");
 static const char *event_lost_argv[] = PROFILER_ARGV("event-lost",
     PROFILER_ARGV_OPTION,
