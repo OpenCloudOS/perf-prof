@@ -10,13 +10,11 @@
 #include <tep.h>
 #include <stack_helpers.h>
 
-static profiler tlbstat;
-
 struct cache {
     uint64_t counter;
     uint64_t incremental;
 };
-static struct monitor_ctx {
+struct tlbstat_ctx {
     int nr_ins;
     struct cpuinfo_x86 cpuinfo;
     struct perf_evlist *evlist;
@@ -31,15 +29,19 @@ static struct monitor_ctx {
     __u64 dTLB_loads_config;
     __u64 dTLB_store_misses_config;
     __u64 dTLB_stores_config;
-} ctx;
+};
 
 #define C(x) PERF_COUNT_HW_CACHE_##x
 
 #define CONFIG(cache_type, cache_op, cache_result) \
     ((C(cache_result)<<16) | (C(cache_op)<<8) | C(cache_type))
 
-static int tlbstat_init(struct perf_evlist *evlist, struct env *env)
+static void tlbstat_exit(struct prof_dev *dev);
+static int tlbstat_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct tlbstat_ctx *ctx;
     struct perf_event_attr attr = {
         .type        = PERF_TYPE_HW_CACHE,
         .config      = 0,
@@ -58,36 +60,41 @@ static int tlbstat_init(struct perf_evlist *evlist, struct env *env)
     __u64 dTLB_store_misses = 0;
     __u64 dTLB_stores = 0;
 
-    if (get_cpuinfo(&ctx.cpuinfo) < 0)
-        return -1;
-
-    if (!monitor_instance_oncpu()) {
+    if (!prof_dev_ins_oncpu(dev)) {
         fprintf(stderr, "can only be bound to CPU\n");
         return -1;
     }
 
+    ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
+    if (get_cpuinfo(&ctx->cpuinfo) < 0)
+        goto failed;
+
     if (env->interval == 0)
         env->interval = 1000;
 
-    if (ctx.cpuinfo.vendor == X86_VENDOR_INTEL) {
+    if (ctx->cpuinfo.vendor == X86_VENDOR_INTEL) {
         dTLB_load_misses = CONFIG(DTLB, OP_READ, RESULT_MISS);
         dTLB_loads = CONFIG(DTLB, OP_READ, RESULT_ACCESS);
         dTLB_store_misses = CONFIG(DTLB, OP_WRITE, RESULT_MISS);
         dTLB_stores = CONFIG(DTLB, OP_WRITE, RESULT_ACCESS);
     } else
-        return -1;
+        goto failed;
 
-    ctx.nr_ins = perf_cpu_map__nr(tlbstat.cpus);
-    ctx.total_time_enabled = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.total_time_running = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.dTLB_load_misses = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.dTLB_loads = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.dTLB_store_misses = calloc(ctx.nr_ins, sizeof(struct cache));
-    ctx.dTLB_stores = calloc(ctx.nr_ins, sizeof(struct cache));
-    if (!ctx.total_time_enabled || !ctx.total_time_running ||
-        !ctx.dTLB_load_misses || !ctx.dTLB_loads ||
-        !ctx.dTLB_store_misses || !ctx.dTLB_stores)
-        return -1;
+    ctx->nr_ins = perf_cpu_map__nr(dev->cpus);
+    ctx->total_time_enabled = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->total_time_running = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->dTLB_load_misses = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->dTLB_loads = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->dTLB_store_misses = calloc(ctx->nr_ins, sizeof(struct cache));
+    ctx->dTLB_stores = calloc(ctx->nr_ins, sizeof(struct cache));
+    if (!ctx->total_time_enabled || !ctx->total_time_running ||
+        !ctx->dTLB_load_misses || !ctx->dTLB_loads ||
+        !ctx->dTLB_store_misses || !ctx->dTLB_stores)
+        goto failed;
 
     // PERF_FORMAT_GROUP
     //     Use the leader event to read all counters at once.
@@ -97,57 +104,70 @@ static int tlbstat_init(struct perf_evlist *evlist, struct env *env)
     //    Use the leader event to get the running time of all events.
     //
     attr.read_format = PERF_FORMAT_ID | PERF_FORMAT_GROUP | PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
-    ctx.dTLB_load_misses_config = attr.config = dTLB_load_misses;
+    ctx->dTLB_load_misses_config = attr.config = dTLB_load_misses;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init dTLB_load_misses counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
-    ctx.leader = evsel;
-    ctx.evlist = evlist;
+    ctx->leader = evsel;
+    ctx->evlist = evlist;
 
     attr.read_format = PERF_FORMAT_ID;
-    ctx.dTLB_loads_config = attr.config = dTLB_loads;
+    ctx->dTLB_loads_config = attr.config = dTLB_loads;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init dTLB_loads counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
-    ctx.dTLB_store_misses_config = attr.config = dTLB_store_misses;
+    ctx->dTLB_store_misses_config = attr.config = dTLB_store_misses;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init dTLB_store_misses counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
-    ctx.dTLB_stores_config = attr.config = dTLB_stores;
+    ctx->dTLB_stores_config = attr.config = dTLB_stores;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init dTLB_stores counter\n");
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
     perf_evlist__set_leader(evlist);
     return 0;
+
+failed:
+    tlbstat_exit(dev);
+    return -1;
 }
 
-static void tlbstat_exit(struct perf_evlist *evlist)
+static void tlbstat_exit(struct prof_dev *dev)
 {
-    free(ctx.total_time_enabled);
-    free(ctx.total_time_running);
-    free(ctx.dTLB_load_misses);
-    free(ctx.dTLB_loads);
-    free(ctx.dTLB_store_misses);
-    free(ctx.dTLB_stores);
+    struct tlbstat_ctx *ctx = dev->private;
+    if (ctx->total_time_enabled)
+        free(ctx->total_time_enabled);
+    if (ctx->total_time_running)
+        free(ctx->total_time_running);
+    if (ctx->dTLB_load_misses)
+        free(ctx->dTLB_load_misses);
+    if (ctx->dTLB_loads)
+        free(ctx->dTLB_loads);
+    if (ctx->dTLB_store_misses)
+        free(ctx->dTLB_store_misses);
+    if (ctx->dTLB_stores)
+        free(ctx->dTLB_stores);
+    free(ctx);
 }
 
-static int tlbstat_read(struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
+static int tlbstat_read(struct prof_dev *dev, struct perf_evsel *evsel, struct perf_counts_values *count, int instance)
 {
+    struct tlbstat_ctx *ctx = dev->private;
     struct perf_counts {
         u64 nr;
         u64 total_time_enabled;
@@ -166,33 +186,33 @@ static int tlbstat_read(struct perf_evsel *evsel, struct perf_counts_values *cou
         cache[instance].counter = c; \
     }
 
-    if (evsel != ctx.leader)
+    if (evsel != ctx->leader)
         return 0;
 
-    cache = ctx.total_time_enabled;
+    cache = ctx->total_time_enabled;
     UPDATE_COUNTER(groups->total_time_enabled);
 
-    cache = ctx.total_time_running;
+    cache = ctx->total_time_running;
     UPDATE_COUNTER(groups->total_time_running);
 
     for (i = 0; i < groups->nr; i++) {
         __u64 config;
         u64 value = groups->ctnr[i].value;
 
-        evsel = perf_evlist__id_to_evsel(ctx.evlist, groups->ctnr[i].id, NULL);
+        evsel = perf_evlist__id_to_evsel(ctx->evlist, groups->ctnr[i].id, NULL);
         if (!evsel)
             continue;
 
         config = perf_evsel__attr(evsel)->config;
 
-        if (config == ctx.dTLB_load_misses_config)
-            cache = ctx.dTLB_load_misses;
-        else if (config == ctx.dTLB_loads_config)
-            cache = ctx.dTLB_loads;
-        else if (config == ctx.dTLB_store_misses_config)
-            cache = ctx.dTLB_store_misses;
-        else if (config == ctx.dTLB_stores_config)
-            cache = ctx.dTLB_stores;
+        if (config == ctx->dTLB_load_misses_config)
+            cache = ctx->dTLB_load_misses;
+        else if (config == ctx->dTLB_loads_config)
+            cache = ctx->dTLB_loads;
+        else if (config == ctx->dTLB_store_misses_config)
+            cache = ctx->dTLB_store_misses;
+        else if (config == ctx->dTLB_stores_config)
+            cache = ctx->dTLB_stores;
         else
             continue;
 
@@ -201,26 +221,27 @@ static int tlbstat_read(struct perf_evsel *evsel, struct perf_counts_values *cou
     return 1;
 }
 
-static void tlbstat_interval(void)
+static void tlbstat_interval(struct prof_dev *dev)
 {
+    struct tlbstat_ctx *ctx = dev->private;
     int ins;
 
     print_time(stdout); printf("\n");
     printf("[CPU] %9s %9s  %7s %9s %9s  %7s %7s\n", "LOADS", "MISSES", "HIT%", "STORES", "MISSES", "HIT%", "RUN%");
-    for (ins = 0; ins < ctx.nr_ins; ins ++) {
+    for (ins = 0; ins < ctx->nr_ins; ins ++) {
         float load_hit = 0.0;
         float store_hit = 0.0;
         float run = 0.0;
-        if (ctx.dTLB_loads[ins].incremental > ctx.dTLB_load_misses[ins].incremental)
-            load_hit = (ctx.dTLB_loads[ins].incremental - ctx.dTLB_load_misses[ins].incremental) * 100.0 /
-                        ctx.dTLB_loads[ins].incremental;
-        if (ctx.dTLB_stores[ins].incremental > ctx.dTLB_store_misses[ins].incremental)
-            store_hit = (ctx.dTLB_stores[ins].incremental - ctx.dTLB_store_misses[ins].incremental) * 100.0 /
-                        ctx.dTLB_stores[ins].incremental;
-        run = ctx.total_time_running[ins].incremental * 100.0 / ctx.total_time_enabled[ins].incremental;
-        printf("[%03d] %9lu %9lu  %6.2f%% %9lu %9lu  %6.2f%% %6.2f%%\n", monitor_instance_cpu(ins),
-                ctx.dTLB_loads[ins].incremental, ctx.dTLB_load_misses[ins].incremental, load_hit,
-                ctx.dTLB_stores[ins].incremental, ctx.dTLB_store_misses[ins].incremental, store_hit,
+        if (ctx->dTLB_loads[ins].incremental > ctx->dTLB_load_misses[ins].incremental)
+            load_hit = (ctx->dTLB_loads[ins].incremental - ctx->dTLB_load_misses[ins].incremental) * 100.0 /
+                        ctx->dTLB_loads[ins].incremental;
+        if (ctx->dTLB_stores[ins].incremental > ctx->dTLB_store_misses[ins].incremental)
+            store_hit = (ctx->dTLB_stores[ins].incremental - ctx->dTLB_store_misses[ins].incremental) * 100.0 /
+                        ctx->dTLB_stores[ins].incremental;
+        run = ctx->total_time_running[ins].incremental * 100.0 / ctx->total_time_enabled[ins].incremental;
+        printf("[%03d] %9lu %9lu  %6.2f%% %9lu %9lu  %6.2f%% %6.2f%%\n", prof_dev_ins_cpu(dev, ins),
+                ctx->dTLB_loads[ins].incremental, ctx->dTLB_load_misses[ins].incremental, load_hit,
+                ctx->dTLB_stores[ins].incremental, ctx->dTLB_store_misses[ins].incremental, store_hit,
                 run);
     }
 }
@@ -229,7 +250,7 @@ static void tlbstat_interval(void)
 static const char *tlbstat_desc[] = PROFILER_DESC("tlbstat",
     "[OPTION...] [--exclude-host]",
     "dTLB state on x86 platform.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" tlbstat -i 1000",
     "    "PROGRAME" tlbstat -C 0-3 -i 1000");
 static const char *tlbstat_argv[] = PROFILER_ARGV("tlbstat",

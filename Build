@@ -33,7 +33,7 @@ endif
 perf-prof-y += usdt.o
 perf-prof-y += expr.o
 perf-prof-y += breakpoint.o
-#perf-prof-y += tlbstat.o
+perf-prof-y += tlbstat.o
 
 bin-y += perf-prof
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a
