@@ -28,7 +28,7 @@ perf-prof-y += hrtimer.o
 perf-prof-y += event-lost.o
 perf-prof-y += hrcount.o
 ifeq ($(SRCARCH),x86)
-#perf-prof-y += kvmmmu.o
+perf-prof-y += kvmmmu.o
 endif
 perf-prof-y += usdt.o
 perf-prof-y += expr.o

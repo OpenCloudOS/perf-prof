@@ -13,7 +13,6 @@
 #include <monitor.h>
 #include <tep.h>
 
-struct monitor kvm_mmu;
 
 #define MMU_MAX_LEVEL 5
 
@@ -40,7 +39,7 @@ struct kvm_mmu_gen {
     __u64 kvm_mmu_set_spte;
 };
 
-static struct monitor_ctx {
+struct kvmmmu_ctx {
     __u64 kvm_mmu_get_page;
     __u64 kvm_mmu_prepare_zap_page;
     __u64 kvm_mmu_set_spte;
@@ -49,8 +48,7 @@ static struct monitor_ctx {
     unsigned long current_valid_gen;
     struct list_head kvm_mmu_gen_list;
     struct tp_list *tp_list;
-    struct env *env;
-} ctx;
+};
 
 union kvm_mmu_page_role {
     u32 word;
@@ -211,7 +209,7 @@ static void kvm_mmu_page_node_delete(struct rblist *rblist, struct rb_node *rb_n
     free(b);
 }
 
-static int kvm_mmu_gen_get_page(unsigned long mmu_valid_gen, struct kvm_mmu_page *entry, bool created)
+static int kvm_mmu_gen_get_page(struct kvmmmu_ctx *ctx, unsigned long mmu_valid_gen, struct kvm_mmu_page *entry, bool created)
 {
     struct kvm_mmu_gen *mmu_gen;
     union kvm_mmu_page_role role;
@@ -220,7 +218,7 @@ static int kvm_mmu_gen_get_page(unsigned long mmu_valid_gen, struct kvm_mmu_page
     struct rblist *rblist;
     int i, ret = 0;
 
-    list_for_each_entry(mmu_gen, &ctx.kvm_mmu_gen_list, list) {
+    list_for_each_entry(mmu_gen, &ctx->kvm_mmu_gen_list, list) {
         if (mmu_gen->mmu_valid_gen == mmu_valid_gen)
             goto found;
     }
@@ -242,7 +240,7 @@ static int kvm_mmu_gen_get_page(unsigned long mmu_valid_gen, struct kvm_mmu_page
     mmu_gen->kvm_mmu_get_page_created = 0;
     mmu_gen->kvm_mmu_prepare_zap_page = 0;
     mmu_gen->kvm_mmu_set_spte = 0;
-    list_add(&mmu_gen->list, &ctx.kvm_mmu_gen_list);
+    list_add(&mmu_gen->list, &ctx->kvm_mmu_gen_list);
 
 found:
     role.word = entry->role;
@@ -283,7 +281,7 @@ found:
     return ret;
 }
 
-static int kvm_mmu_gen_zap_page(unsigned long mmu_valid_gen, struct kvm_mmu_page *entry)
+static int kvm_mmu_gen_zap_page(struct kvmmmu_ctx *ctx, unsigned long mmu_valid_gen, struct kvm_mmu_page *entry)
 {
     struct kvm_mmu_gen *mmu_gen;
     union kvm_mmu_page_role role;
@@ -293,7 +291,7 @@ static int kvm_mmu_gen_zap_page(unsigned long mmu_valid_gen, struct kvm_mmu_page
     int i, ret = 0;
     bool remove = false;
 
-    list_for_each_entry(mmu_gen, &ctx.kvm_mmu_gen_list, list) {
+    list_for_each_entry(mmu_gen, &ctx->kvm_mmu_gen_list, list) {
         if (mmu_gen->mmu_valid_gen == mmu_valid_gen)
             goto found;
     }
@@ -371,7 +369,7 @@ found:
     return ret;
 }
 
-static int kvm_mmu_gen_set_spte(unsigned long mmu_valid_gen, u64 gfn, u8 level, u8 flags)
+static int kvm_mmu_gen_set_spte(struct kvmmmu_ctx *ctx, unsigned long mmu_valid_gen, u64 gfn, u8 level, u8 flags)
 {
     struct kvm_mmu_gen *mmu_gen;
     union kvm_mmu_page_role role;
@@ -381,7 +379,7 @@ static int kvm_mmu_gen_set_spte(unsigned long mmu_valid_gen, u64 gfn, u8 level, 
     __u64 gfn_end;
     int bit;
 
-    list_for_each_entry(mmu_gen, &ctx.kvm_mmu_gen_list, list) {
+    list_for_each_entry(mmu_gen, &ctx->kvm_mmu_gen_list, list) {
         if (mmu_gen->mmu_valid_gen == mmu_valid_gen)
             goto found;
     }
@@ -515,29 +513,39 @@ static void kvm_mmu_gen_dump(struct kvm_mmu_gen *mmu_gen, int level, bool root, 
     }
 }
 
-static int monitor_ctx_init(struct env *env)
+static void monitor_ctx_exit(struct prof_dev *dev);
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
+    struct kvmmmu_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
 
     tep__ref();
 
-    INIT_LIST_HEAD(&ctx.kvm_mmu_gen_list);
+    INIT_LIST_HEAD(&ctx->kvm_mmu_gen_list);
 
     if (env->event) {
-        ctx.tp_list = tp_list_new(env->event);
-        if (!ctx.tp_list)
-            return -1;
+        ctx->tp_list = tp_list_new(dev, env->event);
+        if (!ctx->tp_list)
+            goto failed;
     }
 
-    ctx.env = env;
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
+    struct kvmmmu_ctx *ctx = dev->private;
     struct kvm_mmu_gen *mmu_gen, *next;
     int i;
 
-    list_for_each_entry_safe(mmu_gen, next, &ctx.kvm_mmu_gen_list, list) {
+    list_for_each_entry_safe(mmu_gen, next, &ctx->kvm_mmu_gen_list, list) {
         for (i = 0; i < MMU_MAX_LEVEL; i++) {
             struct rblist *rblist = &mmu_gen->kvm_mmu_pages[i];
             rblist__exit(rblist);
@@ -545,12 +553,16 @@ static void monitor_ctx_exit(void)
         list_del(&mmu_gen->list);
         free(mmu_gen);
     }
-    tp_list_free(ctx.tp_list);
+    tp_list_free(ctx->tp_list);
     tep__unref();
+    free(ctx);
 }
 
-static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
+static int kvm_mmu_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct kvmmmu_ctx *ctx;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
         .config        = 0,
@@ -561,34 +573,35 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
         .pinned        = 1,
         .disabled      = 1,
         .watermark     = 1,
-        .wakeup_watermark = (kvm_mmu.pages << 12) / 3,
+        .wakeup_watermark = (dev->pages << 12) / 3,
     };
     struct perf_evsel *evsel;
     int id, i;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
     // kvmmmu:kvm_mmu_get_page
     id = tep__event_id("kvmmmu", "kvm_mmu_get_page");
     if (id < 0)
-        return -1;
-    attr.config = ctx.kvm_mmu_get_page = id;
+        goto failed;
+    attr.config = ctx->kvm_mmu_get_page = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
-    ctx.mmu_valid_gen_size = tep__event_field_size(id, "mmu_valid_gen");
+    ctx->mmu_valid_gen_size = tep__event_field_size(id, "mmu_valid_gen");
 
     // kvmmmu:kvm_mmu_prepare_zap_page
     id = tep__event_id("kvmmmu", "kvm_mmu_prepare_zap_page");
     if (id < 0)
-        return -1;
-    attr.config = ctx.kvm_mmu_prepare_zap_page = id;
+        goto failed;
+    attr.config = ctx->kvm_mmu_prepare_zap_page = id;
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
-        return -1;
+        goto failed;
     }
     perf_evlist__add(evlist, evsel);
 
@@ -596,12 +609,12 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
     if (env->spte) {
         id = tep__event_id("kvmmmu", "kvm_mmu_set_spte");
         if (id < 0)
-            ctx.kvm_mmu_set_spte = ~0UL;
+            ctx->kvm_mmu_set_spte = ~0UL;
         else {
-            attr.config = ctx.kvm_mmu_set_spte = id;
+            attr.config = ctx->kvm_mmu_set_spte = id;
             evsel = perf_evsel__new(&attr);
             if (!evsel) {
-                return -1;
+                goto failed;
             }
             perf_evlist__add(evlist, evsel);
         }
@@ -611,50 +624,55 @@ static int kvm_mmu_init(struct perf_evlist *evlist, struct env *env)
     if (env->mmio) {
         id = tep__event_id("kvmmmu", "mark_mmio_spte");
         if (id < 0)
-            ctx.mark_mmio_spte = ~0UL;
+            ctx->mark_mmio_spte = ~0UL;
         else {
-            attr.config = ctx.mark_mmio_spte = id;
+            attr.config = ctx->mark_mmio_spte = id;
             evsel = perf_evsel__new(&attr);
             if (!evsel) {
-                return -1;
+                goto failed;
             }
             perf_evlist__add(evlist, evsel);
         }
     }
 
     // env->event
-    if (ctx.tp_list)
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    if (ctx->tp_list)
+    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
 
-        if (tp->id == ctx.kvm_mmu_get_page ||
-            tp->id == ctx.kvm_mmu_prepare_zap_page ||
-            (env->spte && tp->id == ctx.kvm_mmu_set_spte) ||
-            (env->mmio && tp->id == ctx.mark_mmio_spte)) {
+        if (tp->id == ctx->kvm_mmu_get_page ||
+            tp->id == ctx->kvm_mmu_prepare_zap_page ||
+            (env->spte && tp->id == ctx->kvm_mmu_set_spte) ||
+            (env->mmio && tp->id == ctx->mark_mmio_spte)) {
             fprintf(stderr, "The additional event %s:%s cannot be any of kvmmmu:kvm_mmu_get_page, "
                     "kvmmmu:kvm_mmu_prepare_zap_page, kvmmmu:kvm_mmu_set_spte and kvmmmu:mark_mmio_spte.\n",
                     tp->sys, tp->name);
-            return -1;
+            goto failed;
         }
 
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
-            return -1;
+            goto failed;
         }
         perf_evlist__add(evlist, evsel);
 
         tp->evsel = evsel;
     }
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void kvm_mmu_interval(void)
+static void kvm_mmu_interval(struct prof_dev *dev)
 {
+    struct kvmmmu_ctx *ctx = dev->private;
     struct kvm_mmu_gen *mmu_gen;
     int i, level = 0;
 
-    list_for_each_entry(mmu_gen, &ctx.kvm_mmu_gen_list, list) {
+    list_for_each_entry(mmu_gen, &ctx->kvm_mmu_gen_list, list) {
 
         if (mmu_gen->kvm_mmu_get_page == 0 &&
             mmu_gen->kvm_mmu_get_page_created == 0 &&
@@ -680,18 +698,19 @@ static void kvm_mmu_interval(void)
                 printf("    level %d nr %d\n", level, rblist__nr_entries(rblist));
             }
         }
-        if (ctx.env->detail)
+        if (dev->env->detail)
             kvm_mmu_gen_dump(mmu_gen, level, true, 0, 0UL, ~0UL);
     }
 }
 
-static int kvm_mmu_filter(struct perf_evlist *evlist, struct env *env)
+static int kvm_mmu_filter(struct prof_dev *dev)
 {
+    struct kvmmmu_ctx *ctx = dev->private;
     int i, err;
 
-    if (ctx.tp_list)
-    for (i = 0; i < ctx.tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx.tp_list->tp[i];
+    if (ctx->tp_list)
+    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+        struct tp *tp = &ctx->tp_list->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -701,15 +720,15 @@ static int kvm_mmu_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void kvm_mmu_deinit(struct perf_evlist *evlist)
+static void kvm_mmu_deinit(struct prof_dev *dev)
 {
-    kvm_mmu_interval();
-    monitor_ctx_exit();
+    kvm_mmu_interval(dev);
+    monitor_ctx_exit(dev);
 }
 
-static inline unsigned long __mmu_valid_gen(unsigned long gen)
+static inline unsigned long __mmu_valid_gen(struct kvmmmu_ctx *ctx, unsigned long gen)
 {
-    switch(ctx.mmu_valid_gen_size) {
+    switch(ctx->mmu_valid_gen_size) {
         case sizeof(__u8):
             return (__u8)gen;
         case sizeof(unsigned long):
@@ -719,40 +738,41 @@ static inline unsigned long __mmu_valid_gen(unsigned long gen)
     }
 }
 
-static void kvm_mmu_sample(union perf_event *event, int instance)
+static void kvm_mmu_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct kvmmmu_ctx *ctx = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
     struct sample_type_raw *raw = (void *)event->sample.array;
     unsigned short common_type = raw->raw.common_type;
     unsigned long mmu_valid_gen;
     struct kvm_mmu_page entry;
-    int ret = -1, verbose = ctx.env->verbose;
+    int ret = -1, verbose = dev->env->verbose;
 
-    if (common_type == ctx.kvm_mmu_get_page) {
+    if (common_type == ctx->kvm_mmu_get_page) {
         bool created = raw->raw.kvm_mmu_get_page.created;
 
-        mmu_valid_gen = __mmu_valid_gen(raw->raw.kvm_mmu_get_page.mmu_valid_gen);
+        mmu_valid_gen = __mmu_valid_gen(ctx, raw->raw.kvm_mmu_get_page.mmu_valid_gen);
         entry.gfn = raw->raw.kvm_mmu_get_page.gfn;
         entry.role = raw->raw.kvm_mmu_get_page.role;
         entry.root_count = raw->raw.kvm_mmu_get_page.root_count;
 
         if (created)
-            ctx.current_valid_gen = mmu_valid_gen;
+            ctx->current_valid_gen = mmu_valid_gen;
 
-        ret = kvm_mmu_gen_get_page(mmu_valid_gen, &entry, created);
-    } else if (common_type == ctx.kvm_mmu_prepare_zap_page) {
-        mmu_valid_gen = __mmu_valid_gen(raw->raw.kvm_mmu_prepare_zap_page.mmu_valid_gen);
+        ret = kvm_mmu_gen_get_page(ctx, mmu_valid_gen, &entry, created);
+    } else if (common_type == ctx->kvm_mmu_prepare_zap_page) {
+        mmu_valid_gen = __mmu_valid_gen(ctx, raw->raw.kvm_mmu_prepare_zap_page.mmu_valid_gen);
         entry.gfn = raw->raw.kvm_mmu_prepare_zap_page.gfn;
         entry.role = raw->raw.kvm_mmu_prepare_zap_page.role;;
         entry.root_count = raw->raw.kvm_mmu_prepare_zap_page.root_count;
 
-        ret = kvm_mmu_gen_zap_page(mmu_valid_gen, &entry);
-    } else if (common_type == ctx.kvm_mmu_set_spte) {
-        ret = kvm_mmu_gen_set_spte(ctx.current_valid_gen, raw->raw.kvm_mmu_set_spte.gfn,
+        ret = kvm_mmu_gen_zap_page(ctx, mmu_valid_gen, &entry);
+    } else if (common_type == ctx->kvm_mmu_set_spte) {
+        ret = kvm_mmu_gen_set_spte(ctx, ctx->current_valid_gen, raw->raw.kvm_mmu_set_spte.gfn,
                 raw->raw.kvm_mmu_set_spte.level, SPTE_SET);
-    } else if (common_type == ctx.mark_mmio_spte) {
-        ret = kvm_mmu_gen_set_spte(ctx.current_valid_gen, raw->raw.mark_mmio_spte.gfn,
+    } else if (common_type == ctx->mark_mmio_spte) {
+        ret = kvm_mmu_gen_set_spte(ctx, ctx->current_valid_gen, raw->raw.mark_mmio_spte.gfn,
                 1, SPTE_SET | SPTE_MMIO);
     } else {
         verbose = VERBOSE_NOTICE;
@@ -767,10 +787,10 @@ static void kvm_mmu_sample(union perf_event *event, int instance)
 static const char *kvmmmu_desc[] = PROFILER_DESC("kvmmmu",
     "[OPTION...] [--spte] [--mmio] [--detail]",
     "Observe the kvm_mmu_page mapping on x86 platforms.", "",
-    "TRACEPOINT", "",
+    "TRACEPOINT",
     "    kvmmmu:kvm_mmu_get_page, kvmmmu:kvm_mmu_prepare_zap_page",
     "    kvmmmu:kvm_mmu_set_spte, kvmmmu:mark_mmio_spte", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" kvmmmu -p 2347 -i 5000 --mmio",
     "    "PROGRAME" kvmmmu -p 2347 -i 5000 --spte --mmio --detail");
 static const char *kvmmmu_argv[] = PROFILER_ARGV("kvmmmu",
