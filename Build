@@ -32,7 +32,7 @@ perf-prof-y += kvmmmu.o
 endif
 perf-prof-y += usdt.o
 perf-prof-y += expr.o
-#perf-prof-y += breakpoint.o
+perf-prof-y += breakpoint.o
 #perf-prof-y += tlbstat.o
 
 bin-y += perf-prof

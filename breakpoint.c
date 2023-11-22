@@ -34,36 +34,48 @@ struct hw_breakpoint {
     char typestr[4];
 };
 
-static struct breakpoint_ctx {
+static struct hw_breakpoint hwbp[HBP_NUM];
+struct breakpoint_ctx {
     struct hw_breakpoint hwbp[HBP_NUM];
     struct callchain_ctx *cc;
     struct flame_graph *flame;
-    struct env *env;
-} ctx;
+};
 
-static int monitor_ctx_init(struct env *env)
+static int monitor_ctx_init(struct prof_dev *dev)
 {
+    int i;
+    struct env *env = dev->env;
+    struct breakpoint_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
+    for (i = 0; i < HBP_NUM; i++)
+        ctx->hwbp[i] = hwbp[i];
+
     if (env->callchain) {
         if (!env->flame_graph)
-            ctx.cc = callchain_ctx_new(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+            ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
         else
-            ctx.flame = flame_graph_open(callchain_flags(CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
-        breakpoint.pages *= 2;
+            ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
+        dev->pages *= 2;
     }
-    ctx.env = env;
+
     return 0;
 }
 
-static void monitor_ctx_exit(void)
+static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    if (ctx.env->callchain) {
-        if (!ctx.env->flame_graph)
-            callchain_ctx_free(ctx.cc);
+    struct breakpoint_ctx *ctx = dev->private;
+    if (dev->env->callchain) {
+        if (!dev->env->flame_graph)
+            callchain_ctx_free(ctx->cc);
         else {
-            flame_graph_output(ctx.flame);
-            flame_graph_close(ctx.flame);
+            flame_graph_output(ctx->flame);
+            flame_graph_close(ctx->flame);
         }
     }
+    free(ctx);
 }
 
 static int breakpoint_argc_init(int argc, char *argv[])
@@ -126,14 +138,14 @@ static int breakpoint_argc_init(int argc, char *argv[])
             type = HW_BREAKPOINT_X;
         }
 
-        ctx.hwbp[i].address = value;
-        ctx.hwbp[i].len = len;
-        ctx.hwbp[i].type = type;
+        hwbp[i].address = value;
+        hwbp[i].len = len;
+        hwbp[i].type = type;
         j = 0;
-        if (type & HW_BREAKPOINT_R) ctx.hwbp[i].typestr[j++] = 'R';
-        if (type & HW_BREAKPOINT_W) ctx.hwbp[i].typestr[j++] = 'W';
-        if (type & HW_BREAKPOINT_X) ctx.hwbp[i].typestr[j++] = 'X';
-        ctx.hwbp[i].typestr[j] = '\0';
+        if (type & HW_BREAKPOINT_R) hwbp[i].typestr[j++] = 'R';
+        if (type & HW_BREAKPOINT_W) hwbp[i].typestr[j++] = 'W';
+        if (type & HW_BREAKPOINT_X) hwbp[i].typestr[j++] = 'X';
+        hwbp[i].typestr[j] = '\0';
 
         free(s);
     }
@@ -141,8 +153,11 @@ static int breakpoint_argc_init(int argc, char *argv[])
     return 0;
 }
 
-static int breakpoint_init(struct perf_evlist *evlist, struct env *env)
+static int breakpoint_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct breakpoint_ctx *ctx;
     struct perf_event_attr attr = {
         .type        = PERF_TYPE_BREAKPOINT,
         .config      = 0,
@@ -154,41 +169,46 @@ static int breakpoint_init(struct perf_evlist *evlist, struct env *env)
         .sample_regs_intr = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
-        .exclude_callchain_user = exclude_callchain_user(CALLCHAIN_KERNEL | CALLCHAIN_USER),
-        .exclude_callchain_kernel = exclude_callchain_kernel(CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
     int i;
 
-    if (monitor_ctx_init(env) < 0)
+    if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
-    reduce_wakeup_times(&breakpoint, &attr);
+    reduce_wakeup_times(dev, &attr);
 
     for (i = 0; i < HBP_NUM; i++) {
-        if (ctx.hwbp[i].address) {
+        if (ctx->hwbp[i].address) {
             if (env->verbose)
-                printf("%p len %d type %d\n", (void *)ctx.hwbp[i].address, ctx.hwbp[i].len, ctx.hwbp[i].type);
+                printf("%p len %d type %d\n", (void *)ctx->hwbp[i].address, ctx->hwbp[i].len, ctx->hwbp[i].type);
 
-            attr.bp_addr = ctx.hwbp[i].address;
-            attr.bp_type = ctx.hwbp[i].type;
-            attr.bp_len = ctx.hwbp[i].len;
+            attr.bp_addr = ctx->hwbp[i].address;
+            attr.bp_type = ctx->hwbp[i].type;
+            attr.bp_len = ctx->hwbp[i].len;
 
             evsel = perf_evsel__new(&attr);
             if (!evsel)
-                return -1;
+                goto failed;
 
             perf_evlist__add(evlist, evsel);
         } else
             break;
     }
     return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
-static void breakpoint_deinit(struct perf_evlist *evlist)
+static void breakpoint_deinit(struct prof_dev *dev)
 {
-    monitor_ctx_exit();
+    monitor_ctx_exit(dev);
 }
 
 struct sample_regs_intr {
@@ -227,8 +247,9 @@ static void print_regs_intr(struct sample_regs_intr *regs_intr, u64 unused)
 #endif
 }
 
-static void breakpoint_sample(union perf_event *event, int instance)
+static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct breakpoint_ctx *ctx = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU | PERF_SAMPLE_CALLCHAIN |
     // PERF_SAMPLE_REGS_INTR
@@ -250,21 +271,21 @@ static void breakpoint_sample(union perf_event *event, int instance)
     int i;
 
     for (i = 0; i < HBP_NUM; i++) {
-        if (ctx.hwbp[i].address == data->addr)
+        if (ctx->hwbp[i].address == data->addr)
             break;
     }
 
     print_time(stdout);
     printf(" pid %6d tid %6d [%03d] %llu.%06llu: 0x%llx/%d:%s @0x%llx\n", data->tid_entry.pid, data->tid_entry.tid,
             data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
-            data->addr, ctx.hwbp[i].len, ctx.hwbp[i].typestr, data->ip);
+            data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, data->ip);
 
-    if (ctx.env->callchain) {
+    if (dev->env->callchain) {
         regs_intr = (struct sample_regs_intr *)&data->callchain.ips[data->callchain.nr];
-        if (!ctx.env->flame_graph)
-            print_callchain_common_cbs(ctx.cc, &data->callchain, data->tid_entry.pid, (callchain_cbs)print_regs_intr, NULL, regs_intr);
+        if (!dev->env->flame_graph)
+            print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid, (callchain_cbs)print_regs_intr, NULL, regs_intr);
         else
-            flame_graph_add_callchain(ctx.flame, &data->callchain, data->tid_entry.pid, NULL);
+            flame_graph_add_callchain(ctx->flame, &data->callchain, data->tid_entry.pid, NULL);
     }
 }
 
