@@ -148,7 +148,7 @@ static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int
 
 found:
     counters = tp->private;
-    if (hdr->counter - counters[instance] != 1) {
+    if (hdr->counter - counters[instance] != hdr->period) {
         fprintf(stderr, "%s:%s lost %lu events\n", tp->sys, tp->name, hdr->counter - counters[instance] - 1);
     }
     counters[instance] = hdr->counter;
