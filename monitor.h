@@ -109,6 +109,7 @@ struct env {
     char *key;
     char *impl;
     char *output;
+    bool inherit;
     bool interruptible;
     bool uninterruptible;
     bool only_print_greater_than;

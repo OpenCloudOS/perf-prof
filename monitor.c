@@ -314,6 +314,7 @@ struct option main_options[] = {
     OPT_STRDUP_NONEG('p',        "pids", &env.pids,       "PID,...",       "Attach to processes"),
     OPT_STRDUP_NONEG('t',        "tids", &env.tids,       "TID,...",       "Attach to threads"),
     OPT_STRDUP_NONEG( 0 ,     "cgroups", &env.cgroups,    "cgroup,...",    "Attach to cgroups, support regular expression."),
+    OPT_BOOL_NONEG  ( 0 ,     "inherit", &env.inherit,                     "Child tasks do inherit counters."),
     OPT_INT_NONEG   ('i',    "interval", &env.interval,   "ms",            "Interval, Unit: ms"),
     OPT_STRDUP_NONEG('o',      "output", &env.output,     "file",          "Output file name"),
     OPT_BOOL_NONEG  ( 0 ,       "order", &env.order,                       "Order events by timestamp."),
@@ -1353,7 +1354,7 @@ reinit:
     if (env->pids || env->tids) {
         // attach to processes
         threads = thread_map__new_str(env->pids, env->tids, 0, 0);
-        cpus = perf_cpu_map__dummy_new();
+        cpus = env->inherit ? perf_cpu_map__new(NULL) : perf_cpu_map__dummy_new();
         if (!threads || !cpus) {
             fprintf(stderr, "failed to create pids\n");
             goto out_delete;
@@ -1361,7 +1362,7 @@ reinit:
     } else if (env->workload.pid) {
         // attach to workload
         threads = thread_map__new_by_pid(env->workload.pid);
-        cpus = perf_cpu_map__dummy_new();
+        cpus = env->inherit ? perf_cpu_map__new(NULL) : perf_cpu_map__dummy_new();
         if (!threads || !cpus) {
             fprintf(stderr, "failed attach to workload\n");
             goto out_delete;
