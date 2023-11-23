@@ -71,6 +71,7 @@ struct event_block {
     int remote_id;
     int pid_pos;
     int cpu_pos;
+    int id_pos;
     int stream_id_pos;
     int common_type_pos;
 };
@@ -151,7 +152,7 @@ static int block_event_convert(struct event_block *block, union perf_event *even
     data = (void *)event->sample.array;
     sample_type = attr->sample_type;
 
-    if (block->pid_pos == -1 && block->cpu_pos == -1 && block->stream_id_pos == -1 && block->common_type_pos == -1) {
+    if (block->pid_pos == -1 && block->cpu_pos == -1 && block->id_pos == -1 && block->stream_id_pos == -1 && block->common_type_pos == -1) {
         if (sample_type & PERF_SAMPLE_IDENTIFIER)
             pos += sizeof(u64);
         if (sample_type & PERF_SAMPLE_IP)
@@ -164,8 +165,10 @@ static int block_event_convert(struct event_block *block, union perf_event *even
             pos += sizeof(u64);
         if (sample_type & PERF_SAMPLE_ADDR)
             pos += sizeof(u64);
-        if (sample_type & PERF_SAMPLE_ID)
+        if (sample_type & PERF_SAMPLE_ID) {
+            block->id_pos = pos;
             pos += sizeof(u64);
+        }
         if (sample_type & PERF_SAMPLE_STREAM_ID) {
             block->stream_id_pos = pos;
             pos += sizeof(u64);
@@ -193,6 +196,11 @@ static int block_event_convert(struct event_block *block, union perf_event *even
             *(u32 *)(data + block->pid_pos) = tp->vcpu->thread_id[vcpu];
             *(u32 *)(data + block->pid_pos + sizeof(u32)) = tp->vcpu->thread_id[vcpu];
         }
+    }
+
+    if (sample_type & PERF_SAMPLE_ID) {
+        //u64           id;
+        *(u64 *)(data + block->id_pos) = perf_evsel__get_id(tp->evsel, cpuidx, 0);
     }
 
     if (sample_type & PERF_SAMPLE_STREAM_ID) {
@@ -588,6 +596,7 @@ static int block_new(struct event_block_list *eb_list, char *value)
 
     block->pid_pos = -1;
     block->cpu_pos = -1;
+    block->id_pos = -1;
     block->stream_id_pos = -1;
     block->common_type_pos = -1;
 

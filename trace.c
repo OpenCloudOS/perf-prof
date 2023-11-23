@@ -88,7 +88,7 @@ static int trace_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
                          PERF_SAMPLE_RAW | (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
@@ -168,14 +168,14 @@ static void trace_exit(struct prof_dev *dev)
 }
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct sample_type_header {
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
     __u64   time;
-    __u64   stream_id;
+    __u64   id;
     struct {
         __u32    cpu;
         __u32    reserved;
@@ -241,7 +241,7 @@ static inline bool have_callchain(struct prof_dev *dev, union perf_event *event,
     if (ctx->tp_list->need_stream_id) {
         struct sample_type_header *data = (void *)event->sample.array;
         if (!evsel) {
-            evsel = perf_evlist__id_to_evsel(dev->evlist, data->stream_id, NULL);
+            evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
             if (!evsel) {
                 fprintf(stderr, "Can't find evsel, please set read_format = PERF_FORMAT_ID\n");
                 exit(1);
@@ -265,7 +265,7 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
 
     if (ctx->tp_list->nr_push_to || ctx->tp_list->nr_pull_from || ctx->tp_list->nr_exec_prog) {
         int i;
-        evsel = perf_evlist__id_to_evsel(dev->evlist, data->stream_id, NULL);
+        evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
         for (i = 0; i < ctx->tp_list->nr_tp; i++) {
             tp = &ctx->tp_list->tp[i];
             if (tp->evsel == evsel) {

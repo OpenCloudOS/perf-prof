@@ -121,7 +121,7 @@ static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
@@ -182,7 +182,7 @@ static int watchdog_init(struct prof_dev *dev)
         .size          = sizeof(struct perf_event_attr),
         .sample_period = env->freq,
         .freq          = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU |
                          (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
@@ -330,14 +330,14 @@ static void watchdog_exit(struct prof_dev *dev)
 }
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW,
 struct sample_type_header {
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
     __u64   time;
-    __u64   stream_id;
+    __u64   id;
     struct {
         __u32    cpu;
         __u32    reserved;
@@ -495,11 +495,11 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
     __u32 type;
     __u64 config;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, data->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
     if (!evsel) {
         print_time(stderr);
         fprintf(stderr, "%16s %6u [%03d] %llu.%06llu: ID %llu TO EVSEL FAILED!\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
-                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->stream_id);
+                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->id);
         return ;
     }
 
@@ -566,7 +566,7 @@ static void watchdog_throttle(struct prof_dev *dev, union perf_event *event, int
     if (!dev->env->verbose)
         return;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, event->throttle.stream_id, &cpu);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, event->throttle.id, &cpu);
     if (!evsel)
         return;
 

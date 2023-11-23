@@ -36,7 +36,7 @@ static int event_lost_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_READ,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_READ,
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
@@ -106,21 +106,20 @@ static void event_lost_exit(struct prof_dev *dev)
 }
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_READ
 struct sample_type_header {
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
     __u64   time;
-    __u64   stream_id;
+    __u64   id;
     struct {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
     __u64		period;
     u64         counter;
-    u64         id;
 };
 
 static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -132,7 +131,7 @@ static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int
     unsigned long *counters;
     int i;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
     if (!evsel) {
         fprintf(stderr, "failed to find evsel\n");
         return ;

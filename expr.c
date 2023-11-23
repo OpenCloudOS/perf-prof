@@ -674,7 +674,7 @@ static int expr_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
                          PERF_SAMPLE_RAW,
         .read_format   = 0,
         .pinned        = 1,
@@ -770,14 +770,14 @@ static void expr_sample(struct prof_dev *dev, union perf_event *event, int insta
 {
     struct expression_info *info = dev->private;
     // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
     struct sample_type_header {
         struct {
             __u32    pid;
             __u32    tid;
         }    tid_entry;
         __u64   time;
-        __u64   stream_id;
+        __u64   id;
         struct {
             __u32    cpu;
             __u32    reserved;

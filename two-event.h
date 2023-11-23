@@ -128,14 +128,14 @@ bool impl_based_on_call(const char *name);
 
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct multi_trace_type_header {
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
     __u64   time;
-    __u64   stream_id;
+    __u64   id;
     struct {
         __u32    cpu;
         __u32    reserved;

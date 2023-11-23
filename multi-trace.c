@@ -532,7 +532,7 @@ static int __multi_trace_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
@@ -1110,7 +1110,7 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
     if (hdr->time > ctx->recent_time)
         ctx->recent_time = hdr->time;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
     if (!evsel)
         goto free_dup_event;
 

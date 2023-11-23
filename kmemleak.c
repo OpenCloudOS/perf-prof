@@ -54,14 +54,14 @@ struct perf_event_entry {
 };
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
 struct sample_type_header {
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
     __u64   time;
-    __u64   stream_id;
+    __u64   id;
     struct {
         __u32    cpu;
         __u32    reserved;
@@ -247,7 +247,7 @@ static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callc
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW |
                          (callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
@@ -629,14 +629,14 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
     bool is_alloc;
     bool callchain;
 
-    /* PERF_SAMPLE_STREAM_ID:
-     * alloc need stack, free does not need stack, PERF_SAMPLE_STREAM_ID must be set.
+    /* PERF_SAMPLE_ID:
+     * alloc need stack, free does not need stack, PERF_SAMPLE_ID must be set.
      * Because, there is no way to know whether there is a callchain in the perf_event sample.
      *
      * You can use the common_type of traceevent, but you need to get the raw location first.
      * To get the raw location, you must know whether there is a callchain in perf_event.
      */
-    evsel = perf_evlist__id_to_evsel(dev->evlist, data->stream_id, NULL);
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
     if (!evsel)
         return;
 
