@@ -19,9 +19,11 @@ int tep__event_size(int id);
 typedef struct global_var_declare event_fields;
 event_fields *tep__event_fields(int id);
 
-void monitor_tep__comm(union perf_event *event, int instance);
+struct prof_dev;
+void monitor_tep__comm(struct prof_dev *dev, union perf_event *event, int instance);
 
 struct tp {
+    struct prof_dev *dev;
     struct perf_evsel *evsel;
     int id;
     char *sys;
@@ -30,7 +32,7 @@ struct tp {
     int stack;
     int max_stack;
     char *alias;
-    unsigned long *counters; // Counter per instance
+    void *private;
 
     // top profiler
     struct {
@@ -71,6 +73,10 @@ struct tp {
     // vm
     struct vcpu_info *vcpu; // maybe NULL
     const char *vm;
+
+    // A public expression that can be executed by any profiler.
+    struct expr_prog *exec_prog;
+    const char *exec;
 };
 
 struct tp_list {
@@ -80,10 +86,11 @@ struct tp_list {
     int nr_top;
     int nr_comm;
     int nr_mem_size;
-    int nr_num;
+    int nr_num_prog;
     int nr_untraced;
     int nr_push_to;
     int nr_pull_from;
+    int nr_exec_prog;
     struct tp tp[0];
 };
 
@@ -103,7 +110,7 @@ enum tp_event_type {
     PERF_RECORD_TP = PERF_RECORD_HEADER_MAX + 1,
 };
 
-struct tp_list *tp_list_new(char *event_str);
+struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str);
 void tp_list_free(struct tp_list *tp_list);
 void tp_update_filter(struct tp *tp, const char *filter);
 static inline bool tp_kernel(struct tp *tp)

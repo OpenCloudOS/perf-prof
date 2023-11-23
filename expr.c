@@ -644,11 +644,12 @@ void expr_dump(struct expr_prog *prog)
  * expr profiler
  *
 **/
-static struct expression_info {
+char *expression = NULL;
+struct expression_info {
     char *expression;
     struct expr_prog *prog;
     struct tp_list *tp_list;
-} info;
+};
 
 static int expr_argc_init(int argc, char *argv[])
 {
@@ -656,14 +657,17 @@ static int expr_argc_init(int argc, char *argv[])
         fprintf(stderr, " {expression} needs to be specified.\n");
         help();
     } else {
-        info.expression = strdup(argv[0]);
+        expression = strdup(argv[0]);
     }
     return 0;
 }
 
-static int expr_init(struct perf_evlist *evlist, struct env *env)
+static void expr_deinit(struct prof_dev *dev);
+static int expr_init(struct prof_dev *dev)
 {
-    struct tp_list *tp_list;
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct expression_info *info;
     struct global_var_declare *declare;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -683,34 +687,42 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
     if (!env->event)
         return -1;
 
+    info = zalloc(sizeof(*info));
+    if (!info)
+        return -1;
+    dev->private = info;
+    info->expression = expression;
+    expression = NULL;
+
     tep__ref();
 
-    tp_list = tp_list_new(env->event);
-    if (!tp_list)
-        return -1;
-    if (tp_list->nr_tp != 1) {
+    info->tp_list = tp_list_new(dev, env->event);
+    if (!info->tp_list)
+        goto failed;
+    if (info->tp_list->nr_tp != 1) {
         fprintf(stderr, "Only a single event is allowed to be specified.\n");
-        return -1;
+        goto failed;
     }
 
-    declare = tep__event_fields(tp_list->tp[0].id);
+    declare = tep__event_fields(info->tp_list->tp[0].id);
     if (!declare)
-        return -1;
+        goto failed;
 
-    printf("expression: %s\n", info.expression);
-    info.prog = expr_compile(info.expression, declare);
-    if (!info.prog)
-        return -1;
-    info.prog->debug = env->verbose;
-    expr_dump(info.prog);
+    printf("expression: %s\n", info->expression);
+    info->prog = expr_compile(info->expression, declare);
+    free(declare);
+    if (!info->prog)
+        goto failed;
+    info->prog->debug = env->verbose;
+    expr_dump(info->prog);
 
-    for (i = 0; i < tp_list->nr_tp; i++) {
-        struct tp *tp = &tp_list->tp[i];
+    for (i = 0; i < info->tp_list->nr_tp; i++) {
+        struct tp *tp = &info->tp_list->tp[i];
 
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
-            return -1;
+            goto failed;
         }
         perf_evlist__add(evlist, evsel);
         if (!tp_kernel(tp))
@@ -718,20 +730,22 @@ static int expr_init(struct perf_evlist *evlist, struct env *env)
         tp->evsel = evsel;
     }
 
-    free(declare);
-    info.tp_list = tp_list;
-
     // Only test a small number of events.
     if (env->exit_n == 0) env->exit_n = 5;
     return 0;
+
+failed:
+    expr_deinit(dev);
+    return -1;
 }
 
-static int expr_filter(struct perf_evlist *evlist, struct env *env)
+static int expr_filter(struct prof_dev *dev)
 {
+    struct expression_info *info = dev->private;
     int i, err;
 
-    for (i = 0; i < info.tp_list->nr_tp; i++) {
-        struct tp *tp = &info.tp_list->tp[i];
+    for (i = 0; i < info->tp_list->nr_tp; i++) {
+        struct tp *tp = &info->tp_list->tp[i];
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -741,16 +755,20 @@ static int expr_filter(struct perf_evlist *evlist, struct env *env)
     return 0;
 }
 
-static void expr_deinit(struct perf_evlist *evlist)
+static void expr_deinit(struct prof_dev *dev)
 {
-    free(info.expression);
-    expr_destroy(info.prog);
-    tp_list_free(info.tp_list);
+    struct expression_info *info = dev->private;
+    if (info->expression)
+        free(info->expression);
+    expr_destroy(info->prog);
+    tp_list_free(info->tp_list);
     tep__unref();
+    free(info);
 }
 
-static void expr_sample(union perf_event *event, int instance)
+static void expr_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct expression_info *info = dev->private;
     // in linux/perf_event.h
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
     struct sample_type_header {
@@ -773,11 +791,11 @@ static void expr_sample(union perf_event *event, int instance)
     long result;
 
     print_time(stdout);
-    tp_print_marker(&info.tp_list->tp[0]);
+    tp_print_marker(&info->tp_list->tp[0]);
     tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
-    expr_load_data(info.prog, raw->raw.data, raw->raw.size);
-    result = expr_run(info.prog);
+    expr_load_data(info->prog, raw->raw.data, raw->raw.size);
+    result = expr_run(info->prog);
     printf("result: 0x%lx\n", result);
 }
 

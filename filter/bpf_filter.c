@@ -108,28 +108,28 @@ int bpf_filter_init(struct bpf_filter *filter, struct env *env)
     filter->obj = NULL;
     filter->bpf_fd = -1;
 
-    if (env->irqs_disabled >= 0) {
+    if (env->irqs_disabled_set) {
         filter->filter_irqs_disabled = true;
         filter->irqs_disabled = env->irqs_disabled;
         need_bpf ++;
     }
 
-    if (env->tif_need_resched >= 0) {
+    if (env->tif_need_resched_set) {
         filter->filter_tif_need_resched = true;
         filter->tif_need_resched = env->tif_need_resched;
         need_bpf ++;
     }
 
-    if (env->exclude_pid >= 0) {
+    if (env->exclude_pid_set) {
         filter->filter_exclude_pid = true;
         filter->exclude_pid = env->exclude_pid;
         need_bpf ++;
     }
 
-    if (env->nr_running_min >= 0 || env->nr_running_max >= 0) {
+    if (env->nr_running_min_set || env->nr_running_max_set) {
         filter->filter_nr_running = true;
-        filter->nr_running_min = env->nr_running_min >= 0 ? env->nr_running_min : 0;
-        filter->nr_running_max = env->nr_running_max >= 0 ? env->nr_running_max : 0xffffffff;
+        filter->nr_running_min = env->nr_running_min_set ? env->nr_running_min : 0;
+        filter->nr_running_max = env->nr_running_max_set ? env->nr_running_max : 0xffffffff;
         need_bpf ++;
     }
 

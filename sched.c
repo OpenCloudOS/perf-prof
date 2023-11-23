@@ -3,7 +3,6 @@
 #include <string.h>
 #include <monitor.h>
 
-static int inited;
 static int sched_wakeup_new;
 static int sched_wakeup_id;
 static int sched_switch_id;
@@ -61,14 +60,12 @@ union sched_event {
     struct sched_switch sched_switch;
 };
 
-void sched_init(int nr_list, struct tp_list **tp_list)
+int sched_init(int nr_list, struct tp_list **tp_list)
 {
     int i, j;
     int wakeup_id, switch_id, cpus;
     int sched_switch_without_filter = 0;
-
-    if (inited)
-        return ;
+    int level = 0;
 
     wakeup_id = tep__event_id("sched", "sched_wakeup");
     for (i = 0; i < nr_list; i++) {
@@ -78,7 +75,7 @@ void sched_init(int nr_list, struct tp_list **tp_list)
                 goto to_check_switch;
         }
     }
-    return ;
+    return 0;
 
 to_check_switch:
     switch_id = tep__event_id("sched", "sched_switch");
@@ -92,29 +89,24 @@ to_check_switch:
         }
     }
 
-    inited = 1;
+    level = 1;
     sched_wakeup_new = !tep__event_has_field(wakeup_id, "success");
     sched_wakeup_id = wakeup_id;
 
     if (sched_switch_without_filter) {
-        sched_switch_id = switch_id;
-        cpus = get_present_cpus();
-        percpu_running = calloc(cpus, sizeof(struct running_oncpu));
+        if (!percpu_running) {
+            sched_switch_id = switch_id;
+            cpus = get_present_cpus();
+            percpu_running = calloc(cpus, sizeof(struct running_oncpu));
+        }
         if (percpu_running)
-            inited = 2;
+            level = 2;
     }
 
-    if (inited) {
+    if (level) {
         printf("Trick: Enable userland unnecessary detection of sched:sched_wakeup events.\n");
     }
-}
-
-void sched_reinit(int nr_list, struct tp_list **tp_list)
-{
-    inited = 0;
-    if (percpu_running)
-        free(percpu_running);
-    sched_init(nr_list, tp_list);
+    return level;
 }
 
 static void sched_switch(struct sched_switch *sched_switch, int cpu)
@@ -123,11 +115,11 @@ static void sched_switch(struct sched_switch *sched_switch, int cpu)
     memcpy(percpu_running[cpu].comm, sched_switch->next_comm, 16);
 }
 
-void sched_event(void *raw, int size, int cpu)
+void sched_event(int level, void *raw, int size, int cpu)
 {
     union sched_event *sched = raw;
 
-    if (inited == 2 && sched->common_type == sched_switch_id) {
+    if (level == 2 && sched->common_type == sched_switch_id) {
         sched_switch(&sched->sched_switch, cpu);
     }
 }
@@ -222,17 +214,17 @@ CASE 2:
  For the multi-trace profiler, when an isolated sched:sched_wakeup event is detected, it is no longer backed up to &ctx.backup.
 
  */
-bool sched_wakeup_unnecessary(void *raw, int size)
+bool sched_wakeup_unnecessary(int level, void *raw, int size)
 {
     union sched_event *sched = raw;
 
-    if (!inited)
+    if (!level)
         return false;
 
     if (sched->common_type == sched_wakeup_id) {
         int target_cpu = sched_wakeup_new ? sched->sched_wakeup_new.target_cpu : sched->sched_wakeup.target_cpu;
         if (sched->sched_wakeup.common_pid == sched->sched_wakeup.pid ||
-            (inited == 2 &&
+            (level == 2 &&
              percpu_running[target_cpu].pid == sched->sched_wakeup.pid))
             return true;
     }

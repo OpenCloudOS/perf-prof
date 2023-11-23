@@ -84,8 +84,9 @@ static void print_events_format(struct help_ctx *ctx)
     }
 }
 
-static int help_init(struct perf_evlist *evlist, struct env *env)
+static int help_init(struct prof_dev *dev)
 {
+    struct env *env = dev->env;
     struct help_ctx _ctx;
     struct help_ctx *ctx = &_ctx;
     int i;
@@ -101,18 +102,18 @@ static int help_init(struct perf_evlist *evlist, struct env *env)
     tep__ref();
 
     for (i = 0; i < env->nr_events; i++) {
-        ctx->tp_list[i] = tp_list_new(env->events[i]);
+        ctx->tp_list[i] = tp_list_new(dev, env->events[i]);
         if (!ctx->tp_list[i]) {
             exit(-1);
         }
     }
     if (env->tp_alloc) {
-        ctx->tp_list[i++] = tp_list_new(env->tp_alloc);
+        ctx->tp_list[i++] = tp_list_new(dev, env->tp_alloc);
         if (!ctx->tp_list[i-1])
             exit(1);
     }
     if (env->tp_free) {
-        ctx->tp_list[i++] = tp_list_new(env->tp_free);
+        ctx->tp_list[i++] = tp_list_new(dev, env->tp_free);
         if (!ctx->tp_list[i-1])
             exit(1);
     }
@@ -129,7 +130,7 @@ static int help_init(struct perf_evlist *evlist, struct env *env)
     exit(0);
 }
 
-static void help_exit(struct perf_evlist *evlist)
+static void help_exit(struct prof_dev *dev)
 {
 
 }
@@ -137,14 +138,15 @@ static void help_exit(struct perf_evlist *evlist)
 static const char *help_desc[] = PROFILER_DESC("",
     "[profiler] [PROFILER OPTION...] help",
     "Helps writing profiler commands, event attrs, event filters.", "",
-    "SYNOPSIS", "",
+    "SYNOPSIS",
     "    Helps writing event attrs, event filters, 'help' can be added anywhere",
     "    in the command, but must be after the profiler.", "",
     "    Profiler can be omitted.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" trace -e sched:sched_wakeup help",
     "    "PROGRAME" -e sched:sched_wakeup,sched:sched_switch help");
 static const char *help_argv[] = PROFILER_ARGV("help",
+    "OPTION:", "help",
     PROFILER_ARGV_PROFILER, "event", "alloc", "free");
 static profiler help_profiler = {
     .name = "help",

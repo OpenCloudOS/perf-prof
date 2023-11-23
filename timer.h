@@ -1,6 +1,8 @@
 #ifndef __TIMER_H__
 #define __TIMER_H__
 
+#include <sys/timerfd.h>
+
 struct timer {
     int fd;
     int started;

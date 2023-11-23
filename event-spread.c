@@ -272,13 +272,14 @@ static int block_process_event(struct event_block *block, union perf_event *even
             break;
     }
 
-    perf_event_process_record(event, ins, true, true);
+    perf_event_process_record(block->eb_list->tp->dev, event, ins, true, true);
     return 0;
 }
 
 static int tcp_process_event(union perf_event *event, struct tcp_socket_ops *ops)
 {
-    struct event_block *block = container_of(ops, struct event_block, u.tcp.ops);
+    /* Compatible with accept client and connect client. */
+    struct event_block *block = container_of(ops->server_ops ?: ops, struct event_block, u.tcp.ops);
     return block_process_event(block, event);
 }
 

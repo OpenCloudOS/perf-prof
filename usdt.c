@@ -453,10 +453,10 @@ static int usdt_argc_init(int argc, char *argv[])
 static const char *usdt_desc[] = PROFILER_DESC("usdt",
     "[OPTION...] {add|del|list} [[profider:]name@]binpath[@addr] ...",
     "User Statically-Defined Tracing.", "",
-    "SYNOPSIS", "",
+    "SYNOPSIS",
     "    Find the location of the static trace point from the .note.stapsdt section",
     "    of the elf file, and add the kernel uprobe event.", "",
-    "EXAMPLES", "",
+    "EXAMPLES",
     "    "PROGRAME" usdt list /usr/lib64/libc.so.6",
     "    "PROGRAME" usdt add /usr/lib64/libc.so.6",
     "    "PROGRAME" usdt del /usr/lib64/libc.so.6");

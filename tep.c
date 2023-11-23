@@ -215,7 +215,9 @@ event_fields *tep__event_fields(int id)
     struct tep_format_field **common_fields;
     struct tep_format_field **fields;
     int nr_common = 0, nr_fields = 0, nr_dynamic = 0;
+    int extra_len = 0;
     event_fields *ef = NULL;
+    char *extra = NULL;
     int i = 0, f = 0;
 
     tep__ref();
@@ -230,14 +232,17 @@ event_fields *tep__event_fields(int id)
 
     while (common_fields[nr_common]) nr_common++;
     while (fields[nr_fields]) {
-        if (fields[nr_fields]->flags & TEP_FIELD_IS_DYNAMIC)
+        if (fields[nr_fields]->flags & TEP_FIELD_IS_DYNAMIC) {
             nr_dynamic++;
+            extra_len += 2*strlen(fields[nr_fields]->name) + sizeof("_offset") + sizeof("_len");
+        }
         nr_fields++;
     }
 
-    ef = calloc(nr_common + nr_fields + nr_dynamic + 1, sizeof(*ef));
+    ef = calloc(1, (nr_common + nr_fields + nr_dynamic + 1) * sizeof(*ef) + extra_len);
     if (!ef)
         goto _free;
+    extra = (char *)ef + (nr_common + nr_fields + nr_dynamic + 1) * sizeof(*ef);
 
     f = 0;
     while (common_fields[f]) {
@@ -251,16 +256,15 @@ event_fields *tep__event_fields(int id)
     f = 0;
     while (fields[f]) {
         if (fields[f]->flags & TEP_FIELD_IS_DYNAMIC) {
-            int len = strlen(fields[f]->name);
-            ef[i].name = malloc(len + sizeof("_offset")); //TODO need free
-            sprintf((char *)ef[i].name, "%s_offset", fields[f]->name);
+            ef[i].name = extra;
+            extra += sprintf((char *)ef[i].name, "%s_offset", fields[f]->name)+1;
             ef[i].offset = fields[f]->offset;
             ef[i].size = 2;
             ef[i].elementsize = 2;
             i++;
 
-            ef[i].name = malloc(len + sizeof("_len")); //TODO need free
-            sprintf((char *)ef[i].name, "%s_len", fields[f]->name);
+            ef[i].name = extra;
+            extra += sprintf((char *)ef[i].name, "%s_len", fields[f]->name)+1;
             ef[i].offset = fields[f]->offset + 2;
             ef[i].size = 2;
             ef[i].elementsize = 2;
@@ -283,7 +287,7 @@ _return:
     return ef;
 }
 
-void monitor_tep__comm(union perf_event *event, int instance)
+void monitor_tep__comm(struct prof_dev *dev, union perf_event *event, int instance)
 {
     tep__update_comm(event->comm.comm, event->comm.tid);
 }
@@ -302,7 +306,7 @@ static char *next_sep(char *s, int c)
     return NULL;
 }
 
-struct tp_list *tp_list_new(char *event_str)
+struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 {
     char *s = event_str;
     char *sep;
@@ -396,7 +400,7 @@ struct tp_list *tp_list_new(char *event_str)
                 char *value = NULL;
                 *sep = '\0';
                 s = sep + 1;
-                if ((sep = strchr(attr, '=')) != NULL) {
+                if ((sep = next_sep(attr, '=')) != NULL) {
                     *sep = '\0';
                     value = sep + 1;
                 }
@@ -483,10 +487,18 @@ struct tp_list *tp_list_new(char *event_str)
                     tp->vcpu = vcpu_info_new(value);
                     if (tp->vcpu)
                         tp->vm = value;
+                } else  if (strcmp(attr, "exec") == 0){
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->exec_prog = prog;
+                    tp->exec = value;
                 }
             }
         }
 
+        tp->dev = dev;
         tp->evsel = NULL;
         tp->id = id;
         tp->sys = sys;
@@ -526,10 +538,11 @@ struct tp_list *tp_list_new(char *event_str)
         tp_list->nr_top += tp->nr_top;
         tp_list->nr_comm += !!tp->comm_prog;
         tp_list->nr_mem_size += !!tp->mem_size_prog;
-        tp_list->nr_num += !!tp->num_prog;
+        tp_list->nr_num_prog += !!tp->num_prog;
         tp_list->nr_untraced += !!tp->untraced;
         tp_list->nr_push_to += !!tp->broadcast;
         tp_list->nr_pull_from += !!tp->receive;
+        tp_list->nr_exec_prog += !!tp->exec_prog;
 
         if (fields)
             free(fields);
@@ -575,6 +588,8 @@ void tp_list_free(struct tp_list *tp_list)
         tp_receive_free(tp);
         if (tp->vcpu)
             vcpu_info_free(tp->vcpu);
+        if (tp->exec_prog)
+            expr_destroy(tp->exec_prog);
     }
     free(tp_list);
 }

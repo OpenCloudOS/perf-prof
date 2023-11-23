@@ -11,20 +11,7 @@
  *  { u32           pid, tid; } && PERF_SAMPLE_TID
  *  { u64           time;     } && PERF_SAMPLE_TIME
  */
-#define CONVERT_SAMPLE_TYPE_MASK (PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME)
-
-static struct perf_event_convert_ctx {
-    struct env *env;
-    u64 sample_type;
-
-    // tsc convert
-    bool need_tsc_conv;
-    int time_offset;
-    struct perf_tsc_conversion tsc_conv;
-
-    char __aligned(8) event_copy[PERF_SAMPLE_MAX_SIZE];
-} convert_ctx;
-
+#define SAMPLE_TYPE_MASK (PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME)
 
 u64 rdtsc(void)
 {
@@ -39,9 +26,9 @@ u64 rdtsc(void)
 #endif
 }
 
-static inline u64 perf_time_to_tsc(u64 ns)
+static inline u64 perf_time_to_tsc(struct prof_dev *dev, u64 ns)
 {
-    struct perf_tsc_conversion *tc = &convert_ctx.tsc_conv;
+    struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
     u64 t, quot, rem;
 
     t = ns - tc->time_zero;
@@ -49,7 +36,7 @@ static inline u64 perf_time_to_tsc(u64 ns)
     rem  = t % tc->time_mult;
     return (quot << tc->time_shift) +
            (rem << tc->time_shift) / tc->time_mult +
-           convert_ctx.env->tsc_offset;
+           dev->env->tsc_offset;
 }
 
 static inline bool is_sampling_event(struct perf_event_attr *attr)
@@ -57,79 +44,106 @@ static inline bool is_sampling_event(struct perf_event_attr *attr)
 	return attr->sample_period != 0;
 }
 
-int perf_event_convert_init(struct perf_evlist *evlist, struct env *env)
+int perf_sample_time_init(struct prof_dev *dev)
 {
+    struct perf_evlist *evlist = dev->evlist;
     struct perf_evsel *evsel;
     u64 sample_type = 0;
-
-    if (!env->tsc && !env->tsc_offset) {
-        convert_ctx.need_tsc_conv = false;
-        return 0;
-    }
 
     perf_evlist__for_each_evsel(evlist, evsel) {
         struct perf_event_attr *attr = perf_evsel__attr(evsel);
         if (is_sampling_event(attr)) {
             if (sample_type == 0) {
-                sample_type = attr->sample_type & CONVERT_SAMPLE_TYPE_MASK;
-            } else if (sample_type != (attr->sample_type & CONVERT_SAMPLE_TYPE_MASK)) {
-                fprintf(stderr, "Could not convert: sample_type mismatch.\n");
+                sample_type = attr->sample_type & SAMPLE_TYPE_MASK;
+            } else if (sample_type != (attr->sample_type & SAMPLE_TYPE_MASK)) {
+                fprintf(stderr, "Could not init: sample_type mismatch.\n");
                 return -1;
             }
         }
     }
 
-    convert_ctx.env = env;
-    convert_ctx.sample_type = sample_type;
+    dev->time_ctx.sample_type = sample_type;
+    dev->time_ctx.time_offset = 0;
 
     if (sample_type & PERF_SAMPLE_TIME) {
-        convert_ctx.env->tsc = true;
-        convert_ctx.need_tsc_conv = true;
-        convert_ctx.time_offset = 0;
         if (sample_type & PERF_SAMPLE_IDENTIFIER)
-            convert_ctx.time_offset += sizeof(u64);
+            dev->time_ctx.time_offset += sizeof(u64);
         if (sample_type & PERF_SAMPLE_IP)
-            convert_ctx.time_offset += sizeof(u64);
+            dev->time_ctx.time_offset += sizeof(u64);
         if (sample_type & PERF_SAMPLE_TID)
-            convert_ctx.time_offset += sizeof(u32) + sizeof(u32);
+            dev->time_ctx.time_offset += sizeof(u32) + sizeof(u32);
+    }
+    return 0;
+}
+
+int perf_event_convert_init(struct prof_dev *dev)
+{
+    struct env *env = dev->env;
+    u64 sample_type = 0;
+
+    if (!env->tsc && !env->tsc_offset) {
+        dev->convert.need_tsc_conv = false;
+        return 0;
+    }
+
+    if (perf_sample_time_init(dev) < 0)
+        return -1;
+
+    sample_type = dev->time_ctx.sample_type;
+    if (sample_type & PERF_SAMPLE_TIME) {
+        env->tsc = true;
+        dev->convert.need_tsc_conv = true;
+
+        dev->convert.event_copy = malloc(PERF_SAMPLE_MAX_SIZE);
+        if (!dev->convert.event_copy) {
+            fprintf(stderr, "Could not alloc event_copy.\n");
+            return -1;
+        }
     } else {
-        convert_ctx.env->tsc = false;
-        convert_ctx.env->tsc_offset = 0;
-        convert_ctx.need_tsc_conv = false;
+        env->tsc = false;
+        env->tsc_offset = 0;
+        dev->convert.need_tsc_conv = false;
     }
 
     return 0;
 }
 
-void perf_event_convert_read_tsc_conversion(struct perf_mmap *map)
+void perf_event_convert_deinit(struct prof_dev *dev)
 {
-    if (unlikely(convert_ctx.need_tsc_conv)) {
-        if (perf_mmap__read_tsc_conversion(map, &convert_ctx.tsc_conv) == -EOPNOTSUPP) {
+    if (dev->convert.event_copy)
+        free(dev->convert.event_copy);
+    dev->convert.need_tsc_conv = false;
+}
+
+void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mmap *map)
+{
+    if (unlikely(dev->convert.need_tsc_conv)) {
+        if (perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv) == -EOPNOTSUPP) {
             fprintf(stderr, "TSC conversion is not supported.\n");
-            convert_ctx.env->tsc = false;
-            convert_ctx.env->tsc_offset = 0;
-            convert_ctx.need_tsc_conv = false;
+            dev->env->tsc = false;
+            dev->env->tsc_offset = 0;
+            dev->convert.need_tsc_conv = false;
         }
     }
 }
 
-union perf_event *perf_event_convert(union perf_event *event, bool writable)
+union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable)
 {
     void *data;
     u64 *time;
 
-    if (likely(!convert_ctx.need_tsc_conv))
+    if (likely(!dev->convert.need_tsc_conv))
         return event;
 
     if (likely(!writable)) {
-        memcpy(convert_ctx.event_copy, event, event->header.size);
-        event = (union perf_event *)convert_ctx.event_copy;
+        memcpy(dev->convert.event_copy, event, event->header.size);
+        event = (union perf_event *)dev->convert.event_copy;
     }
 
     data = (void *)event->sample.array;
 
-    time = (u64 *)(data + convert_ctx.time_offset);
-    *time = perf_time_to_tsc(*time);
+    time = (u64 *)(data + dev->time_ctx.time_offset);
+    *time = perf_time_to_tsc(dev, *time);
 
     return event;
 }

@@ -11,22 +11,29 @@
 #include <perf/event.h>
 #include <parse-options.h>
 #include <tep.h>
+#include <timer.h>
+#include <signal.h>
 #include <localtime.h>
+#include <linux/list.h>
 #include <linux/epoll.h>
+#include <linux/zalloc.h>
+#include <linux/refcount.h>
+#include <linux/ordered-events.h>
 
 /* perf sample has 16 bits size limit */
 #define PERF_SAMPLE_MAX_SIZE (1 << 16)
 
 
 struct monitor;
+struct prof_dev;
+
 void monitor_register(struct monitor *m);
 struct monitor * monitor_find(char *name);
 struct monitor *monitor_next(struct monitor *m);
-int monitor_nr_instance(void);
-int monitor_instance_cpu(int ins);
-int monitor_instance_thread(int ins);
-int monitor_instance_oncpu(void);
-struct monitor *current_monitor(void);
+int prof_dev_nr_ins(struct prof_dev *dev);
+int prof_dev_ins_cpu(struct prof_dev *dev, int ins);
+int prof_dev_ins_thread(struct prof_dev *dev, int ins);
+int prof_dev_ins_oncpu(struct prof_dev *dev);
 
 int main_epoll_add(int fd, unsigned int events, void *ptr, handle_event handle);
 int main_epoll_del(int fd);
@@ -52,13 +59,13 @@ static inline int get_cpu_vendor(void) {
 };
 int in_guest(void);
 
-int callchain_flags(int default_flags);
-int exclude_callchain_user(int dflt_flags);
-int exclude_callchain_kernel(int dflt_flags);
+int callchain_flags(struct prof_dev *dev, int default_flags);
+int exclude_callchain_user(struct prof_dev *dev, int dflt_flags);
+int exclude_callchain_kernel(struct prof_dev *dev, int dflt_flags);
 
-void print_lost_fn(union perf_event *event, int ins);
+void print_lost_fn(struct prof_dev *dev, union perf_event *event, int ins);
 
-int perf_event_process_record(union perf_event *event, int instance, bool writable, bool converted);
+int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int instance, bool writable, bool converted);
 
 
 #define PROFILER_REGISTER_NAME(p, name) \
@@ -79,6 +86,11 @@ __attribute__((constructor)) static void __monitor_register_##name(void) \
 #define MAX_SLOTS 26
 struct hist {
     unsigned int slots[MAX_SLOTS];
+};
+
+struct workload {
+    int cork_fd;
+    pid_t pid;
 };
 
 struct env {
@@ -111,6 +123,8 @@ struct env {
     bool user_callchain, user_callchain_set;
     bool kernel_callchain, kernel_callchain_set;
     // ebpf
+    bool irqs_disabled_set, tif_need_resched_set, exclude_pid_set;
+    bool nr_running_min_set, nr_running_max_set;
     int  irqs_disabled;
     int  tif_need_resched;
     int  exclude_pid;
@@ -143,6 +157,9 @@ struct env {
     u64  tsc_offset;
     int usage_self;
 
+    /* workload */
+    struct workload workload;
+
     /* kvmmmu */
     bool spte;
     bool mmio;
@@ -163,6 +180,7 @@ struct help_ctx {
     struct env *env;
 };
 
+
 typedef struct monitor {
     struct monitor *next;
     const char *name;
@@ -170,56 +188,108 @@ typedef struct monitor {
     const char **argv;
     const char *compgen;
     int pages;
-    int reinit;
-    bool dup; //dup event
     bool order; // default enable order
-    struct perf_cpu_map *cpus;
-    struct perf_thread_map *threads;
 
     void (*help)(struct help_ctx *ctx);
 
     int (*argc_init)(int argc, char *argv[]);
 
-    int (*init)(struct perf_evlist *evlist, struct env *env);
-    int (*filter)(struct perf_evlist *evlist, struct env *env);
-    void (*enabled)(struct perf_evlist *evlist);
-    void (*deinit)(struct perf_evlist *evlist);
-    void (*sigusr1)(int signum);
-    void (*interval)(void);
+    int (*init)(struct prof_dev *dev);
+    int (*filter)(struct prof_dev *dev);
+    void (*enabled)(struct prof_dev *dev);
+    void (*deinit)(struct prof_dev *dev);
+    void (*sigusr)(struct prof_dev *dev, int signum);
+    void (*interval)(struct prof_dev *dev);
 
     // return 0:continue; 1:break;
-    int (*read)(struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
+    int (*read)(struct prof_dev *dev, struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
 
     /* PERF_RECORD_* */
 
     //PERF_RECORD_LOST          = 2,
-    void (*lost)(union perf_event *event, int instance, u64 lost_time);
+    void (*lost)(struct prof_dev *dev, union perf_event *event, int instance, u64 lost_time);
 
     //PERF_RECORD_COMM          = 3,
-    void (*comm)(union perf_event *event, int instance);
+    void (*comm)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_EXIT          = 4,
-    void (*exit)(union perf_event *event, int instance);
+    void (*exit)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_THROTTLE          = 5,
     //PERF_RECORD_UNTHROTTLE            = 6,
-    void (*throttle)(union perf_event *event, int instance);
-    void (*unthrottle)(union perf_event *event, int instance);
+    void (*throttle)(struct prof_dev *dev, union perf_event *event, int instance);
+    void (*unthrottle)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_FORK          = 7,
-    void (*fork)(union perf_event *event, int instance);
+    void (*fork)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_SAMPLE            = 9,
-    void (*sample)(union perf_event *event, int instance);
+    void (*sample)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_SWITCH            = 14,
     //PERF_RECORD_SWITCH_CPU_WIDE       = 15,
-    void (*context_switch)(union perf_event *event, int instance);
-    void (*context_switch_cpu)(union perf_event *event, int instance);
+    void (*context_switch)(struct prof_dev *dev, union perf_event *event, int instance);
+    void (*context_switch_cpu)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_NAMESPACES            = 16,
-    void (*namespace)(union perf_event *event, int instance);
+    void (*namespace)(struct prof_dev *dev, union perf_event *event, int instance);
 }profiler;
+
+/*
+ * Profiler device
+ * Contains sampling ringbuffer, environment, timer, profiler-specific memory, convert, order, etc.
+**/
+struct prof_dev {
+    profiler *prof;
+    struct list_head dev_link;
+    struct perf_cpu_map *cpus;
+    struct perf_thread_map *threads;
+    struct perf_evlist *evlist;
+    struct timer timer;  // interval
+    struct env *env;
+    void *private;
+    int pages;
+    int nr_pollfd;
+    bool auto_enable; // Can be disabled by init, Call prof_dev_enable to enable.
+    bool dup; //dup event
+    bool close; // Call prof_dev_close at the appropriate time.
+    int max_read_size;
+    long sampled_events;
+    struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
+        u64 sample_type;
+        int time_offset;
+    } time_ctx;
+    struct perf_event_convert {
+        // tsc convert
+        bool need_tsc_conv;
+        struct perf_tsc_conversion tsc_conv;
+
+        char *event_copy; //[PERF_SAMPLE_MAX_SIZE];
+    } convert;
+    struct order_ctx {
+        profiler *base;
+        profiler order;
+        struct ordered_events oe;
+        u32 nr_unordered_events;
+        u64 max_timestamp;
+        struct lost_record {
+            struct perf_record_lost lost;
+            int ins;
+            u64 lost_time;
+        } *lost_records;
+    } order;
+    struct tty_ctx {
+        bool istty;
+        bool shared;
+        int row; // TIOCGWINSZ
+        int col; // TIOCGWINSZ
+    } tty;
+};
+
+struct prof_dev *prof_dev_open(profiler *prof, struct env *env);
+void prof_dev_enable(struct prof_dev *dev);
+void prof_dev_close(struct prof_dev *dev);
+
 
 #define PROFILER_DESC(name, arg, ...) \
     {PROGRAME " " name " " arg, "", __VA_ARGS__, NULL}
@@ -240,12 +310,10 @@ typedef struct monitor {
 #define PROFILER_ARGV_PROFILER \
     "PROFILER OPTION:" \
 
-
-profiler *order(profiler *p);
-bool current_is_order(void);
-profiler *current_base_profiler(void);
-bool using_order(profiler *p);
-void reduce_wakeup_times(profiler *p, struct perf_event_attr *attr);
+// order.c
+void order(struct prof_dev *dev);
+bool using_order(struct prof_dev *dev);
+void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
 
 //help.c
 void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool interval, bool order, bool pages, bool verbose);
@@ -255,16 +323,17 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 
 //convert.c
 u64 rdtsc(void);
-int perf_event_convert_init(struct perf_evlist *evlist, struct env *env);
-void perf_event_convert_read_tsc_conversion(struct perf_mmap *map);
-union perf_event *perf_event_convert(union perf_event *event, bool writable);
+int perf_sample_time_init(struct prof_dev *dev);
+int perf_event_convert_init(struct prof_dev *dev);
+void perf_event_convert_deinit(struct prof_dev *dev);
+void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mmap *map);
+union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable);
 
 
 //sched.c
-void sched_init(int nr_list, struct tp_list **tp_list);
-void sched_reinit(int nr_list, struct tp_list **tp_list);
-void sched_event(void *raw, int size, int cpu);
-bool sched_wakeup_unnecessary(void *raw, int size);
+int sched_init(int nr_list, struct tp_list **tp_list);
+void sched_event(int level, void *raw, int size, int cpu);
+bool sched_wakeup_unnecessary(int level, void *raw, int size);
 
 
 #endif
