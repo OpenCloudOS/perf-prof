@@ -309,8 +309,8 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
 
     if (verbose) {
         print_time(stdout);
-        printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock:", data->tid_entry.pid, data->tid_entry.tid,
-                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL);
+        printf("    pid %6d tid %6d [%03d] %lu.%06lu: %s: cpu-clock ", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name);
     }
 
     for (i = 0; i < data->groups.nr; i++) {
@@ -354,8 +354,8 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
     if (print == PRINT || verbose) {
         if (!verbose) {
             print_time(stdout);
-            printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
-                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, cpu_clock);
+            printf("    pid %6d tid %6d [%03d] %lu.%06lu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name, cpu_clock);
         }
         if (dev->env->callchain) {
             callchain = (struct callchain *)&data->groups.ctnr[data->groups.nr];

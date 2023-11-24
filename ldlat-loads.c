@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <linux/zalloc.h>
 #include <linux/rblist.h>
+#include <linux/time64.h>
 #include <monitor.h>
 #include <stack_helpers.h>
 #include <latency_helpers.h>
@@ -423,8 +424,9 @@ static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, in
         mem_info.data_src.val = data->data_src;
         perf_mem__lvl_scnprintf(buf, sizeof(buf), &mem_info);
 
-        printf("CPU %3u PID %6u TID %6u DATA ADDR %016lx PHYS %016lx latency %6llu cycles %s RIP ",
-                data->cpu_entry.cpu, data->tid_entry.pid, data->tid_entry.tid,
+        printf("    pid %6u tid %6u [%03d] %lu.%06lu: %s: DATA ADDR %016lx PHYS %016lx latency %6llu cycles %s RIP ",
+                data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
+                data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, dev->prof->name,
                 data->addr, data->phys_addr, data->weight.full, buf);
         print_callchain(ctx->ccx, (struct callchain *)&callchain, data->tid_entry.pid);
     }

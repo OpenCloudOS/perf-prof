@@ -518,7 +518,7 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
             ctx->watchdog[cpu].print_sched ||
             dev->env->verbose >= VERBOSE_EVENT) {
             print_time(stdout);
-            printf("%16s %6u [%03d] %llu.%06llu: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+            printf("%16s %6u [%03d] %llu.%06llu: watchdog: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                     data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000);
             __print_callchain(dev, event);
             fflush(stdout);
