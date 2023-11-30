@@ -121,6 +121,8 @@ static int split_lock_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
+    reduce_wakeup_times(dev, &attr);
+
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         fprintf(stderr, "failed to init split-lock\n");
@@ -193,7 +195,7 @@ static void split_lock_sample(struct prof_dev *dev, union perf_event *event, int
         ctx->p[instance].counter = data->counter;
     }
     if (counter) {
-        print_time(stdout);
+        if (dev->print_title) print_time(stdout);
         printf("    pid %6d tid %6d [%03d] %llu.%06llu: split-lock: %lu ip %08llx\n", data->tid_entry.pid, data->tid_entry.tid,
                         data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter, data->ip);
         if (dev->env->callchain)

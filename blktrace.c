@@ -495,7 +495,7 @@ static void blktrace_sample(struct prof_dev *dev, union perf_event *event, int i
     if (verbose &&
         (print || verbose >= VERBOSE_EVENT)) {
         tep__update_comm(NULL, data->tid_entry.tid);
-        print_time(stdout);
+        if (dev->print_title) print_time(stdout);
         if (print)
             printf("%s", print);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
@@ -511,7 +511,7 @@ static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000 --than 10ms");
 static const char *blktrace_argv[] = PROFILER_ARGV("blktrace",
-    "OPTION:",
+    "OPTION:", "watermark",
     "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset",
     "usage-self", "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "device", "than");

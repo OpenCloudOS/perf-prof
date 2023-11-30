@@ -192,6 +192,8 @@ static int sched_migrate_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
+    reduce_wakeup_times(dev, &attr);
+
     attr.config = tep__event_id("sched", "sched_migrate_task");
     evsel = perf_evsel__new(&attr);
     if (!evsel)
@@ -302,7 +304,7 @@ static void sched_migrate_sample(struct prof_dev *dev, union perf_event *event, 
 
     if (print || dev->env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
-        print_time(stdout);
+        if (dev->print_title) print_time(stdout);
         tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
         __print_callchain(dev, event);
     }

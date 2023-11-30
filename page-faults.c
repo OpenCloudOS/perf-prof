@@ -70,6 +70,8 @@ static int page_faults_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
+    reduce_wakeup_times(dev, &attr);
+
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
         goto failed;
@@ -150,7 +152,7 @@ static void page_faults_sample(struct prof_dev *dev, union perf_event *event, in
     struct sample_regs_user *regs_user;
     bool callchain = dev->env->callchain;
 
-    print_time(stdout);
+    if (dev->print_title) print_time(stdout);
     tep__update_comm(NULL, data->tid_entry.tid);
     printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016lx\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                     data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr);

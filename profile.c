@@ -237,10 +237,9 @@ static void profile_sample(struct prof_dev *dev, union perf_event *event, int in
     uint64_t counter = 0;
     int print = 1;
 
-    if (data->counter > ctx->counter[instance]) {
+    if (data->counter > ctx->counter[instance])
         counter = data->counter - ctx->counter[instance];
-        ctx->counter[instance] = data->counter;
-    }
+    ctx->counter[instance] = data->counter;
 
     if (dev->env->greater_than) {
         uint64_t time = ctx->stat[instance].start_time;
@@ -257,7 +256,7 @@ static void profile_sample(struct prof_dev *dev, union perf_event *event, int in
     }
 
     if (print) {
-        print_time(stdout);
+        if (dev->print_title) print_time(stdout);
         tep__update_comm(NULL, data->tid_entry.tid);
         printf("%16s %6u [%03d] %llu.%06llu: profile: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                         data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
