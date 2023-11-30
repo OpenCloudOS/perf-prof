@@ -37,6 +37,7 @@ struct hrcount_ctx {
 static void hrcount_sigwinch(struct prof_dev *dev)
 {
     struct hrcount_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, len = 0;
 
     if (!dev->tty.istty)
@@ -51,7 +52,7 @@ static void hrcount_sigwinch(struct prof_dev *dev)
      */
     if (dev->env->perins)
         len += ctx->ins_oncpu ? 6 /*[%03d] */ : 9 /*[%06d] */;
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
+    for_each_real_tp(ctx->tp_list, tp, i) {
         len += ctx->pertp_max_len[i] + 1 /*|*/;
     }
     len += 1 /*|*/;
@@ -115,7 +116,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
         goto failed;
 
     ctx->period = env->sample_period;
-    ctx->pipe_char = ctx->hist_size > 1 || ctx->tp_list->nr_tp > 1;
+    ctx->pipe_char = ctx->hist_size > 1 || ctx->tp_list->nr_real_tp > 1;
 
     ctx->all_counters_max_len = 2;
     ctx->pertp_max_len = calloc(ctx->tp_list->nr_tp, sizeof(int));
@@ -123,8 +124,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
         goto failed;
     else {
         int i, len;
-        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx->tp_list->tp[i];
+        struct tp *tp;
+        for_each_real_tp(ctx->tp_list, tp, i) {
             ctx->pertp_max_len[i] = strlen(tp->alias ?: tp->name);
             len = ctx->hist_size * (ctx->all_counters_max_len+1/* ' ' */) - 1;
             if (ctx->pertp_max_len[i] < len)
@@ -190,6 +191,7 @@ static int hrcount_init(struct prof_dev *dev)
         .disabled      = 0,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int i;
 
     // For hrcount, it can only be attached to cpu.
@@ -212,9 +214,7 @@ static int hrcount_init(struct prof_dev *dev)
     }
     perf_evlist__add(evlist, evsel);
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
-
+    for_each_real_tp(ctx->tp_list, tp, i) {
         tp_attr.config = tp->id;
         evsel = perf_evsel__new(&tp_attr);
         if (!evsel) {
@@ -237,10 +237,10 @@ failed:
 static int hrcount_filter(struct prof_dev *dev)
 {
     struct hrcount_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -341,11 +341,6 @@ static void packed_print(void *opaque, struct count_node *node)
             ctx->ins_oncpu ? prof_dev_ins_cpu(dev, node->ins) : prof_dev_ins_thread(dev, node->ins));
     }
 
-    while (iter->id != node->id) {
-        iter->line_len += printf("%-*s", ctx->pertp_max_len[iter->id], "ERROR");
-        iter->id ++;
-    }
-
     h = (ctx->rounds % ctx->slots) * ctx->hist_size;
     if (ctx->pipe_char)
         len = printf("|%-*lu", max_len, node->hist[h++]) - 1/* '|' */;
@@ -361,7 +356,7 @@ static void packed_print(void *opaque, struct count_node *node)
     iter->line_len += printf("%*s", ctx->pertp_max_len[node->id] - len, "");
     iter->id ++;
 
-    if (iter->id == ctx->tp_list->nr_tp) {
+    if (iter->id == ctx->tp_list->nr_real_tp) {
         if (ctx->pipe_char)
             iter->line_len += printf("|");
         printf("\n");
@@ -402,10 +397,10 @@ static void __hrcount_interval(struct prof_dev *dev)
             int line_len;
             struct prof_dev *dev;
         } iter;
+        struct tp *tp;
         if (dev->env->perins)
             printf(ctx->ins_oncpu ? "[CPU] " : "[THREAD] ");
-        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx->tp_list->tp[i];
+        for_each_real_tp(ctx->tp_list, tp, i) {
             printf("%s%-*s", ctx->pipe_char ? "|" : "", ctx->pertp_max_len[i], tp->alias ?: tp->name);
         }
         printf("%s\n", ctx->pipe_char ? "|" : "");
@@ -462,6 +457,7 @@ static void hrcount_sample(struct prof_dev *dev, union perf_event *event, int in
 
     for (i = 0; i < data->groups.nr; i++) {
         struct perf_evsel *evsel;
+        struct tp *tp;
         evsel = perf_evlist__id_to_evsel(dev->evlist, data->groups.ctnr[i].id, NULL);
         if (!evsel)
             continue;
@@ -474,8 +470,7 @@ static void hrcount_sample(struct prof_dev *dev, union perf_event *event, int in
             }
             continue;
         }
-        for (j = 0; j < n; j++) {
-            struct tp *tp = &ctx->tp_list->tp[j];
+        for_each_real_tp(ctx->tp_list, tp, j) {
             if (tp->evsel == evsel) {
                 counter = data->groups.ctnr[i].value - ins_counter[j];
                 ins_counter[j] = data->groups.ctnr[i].value;
@@ -488,9 +483,9 @@ static void hrcount_sample(struct prof_dev *dev, union perf_event *event, int in
     ctx->perins_pos[instance] ++;
 
     if (verbose) {
-        print_time(stdout);
-        printf(" %6d/%-6d [%03d]  %lu.%06lu: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
-                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, cpu_clock);
+        if (dev->print_title) print_time(stdout);
+        printf(" %6d/%-6d [%03d]  %lu.%06lu: %s: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name, cpu_clock);
     }
 
     /* KERNEL BUG: maybe stuck
@@ -520,8 +515,8 @@ static void __common_help(struct help_ctx *hctx, const char *name)
     printf(PROGRAME " %s ", name);
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(hctx->tp_list[i], tp, j) {
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (tp->alias)
                 printf("alias=%s/", tp->alias);
@@ -608,6 +603,7 @@ static int stat_read(struct prof_dev *dev, struct perf_evsel *leader, struct per
 
     for (i = 0; i < groups->nr; i++) {
         struct perf_evsel *evsel;
+        struct tp *tp;
         evsel = perf_evlist__id_to_evsel(dev->evlist, groups->ctnr[i].id, NULL);
         if (!evsel)
             continue;
@@ -619,8 +615,7 @@ static int stat_read(struct prof_dev *dev, struct perf_evsel *leader, struct per
             }
             continue;
         }
-        for (j = 0; j < n; j++) {
-            struct tp *tp = &ctx->tp_list->tp[j];
+        for_each_real_tp(ctx->tp_list, tp, j) {
             if (tp->evsel == evsel) {
                 counter = groups->ctnr[i].value - ins_counter[j];
                 ins_counter[j] = groups->ctnr[i].value;

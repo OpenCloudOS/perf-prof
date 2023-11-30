@@ -576,11 +576,14 @@ static int kvm_mmu_init(struct prof_dev *dev)
         .wakeup_watermark = (dev->pages << 12) / 3,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int id, i;
 
     if (monitor_ctx_init(dev) < 0)
         return -1;
     ctx = dev->private;
+
+    reduce_wakeup_times(dev, &attr);
 
     // kvmmmu:kvm_mmu_get_page
     id = tep__event_id("kvmmmu", "kvm_mmu_get_page");
@@ -637,8 +640,7 @@ static int kvm_mmu_init(struct prof_dev *dev)
 
     // env->event
     if (ctx->tp_list)
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
 
         if (tp->id == ctx->kvm_mmu_get_page ||
             tp->id == ctx->kvm_mmu_prepare_zap_page ||
@@ -706,11 +708,11 @@ static void kvm_mmu_interval(struct prof_dev *dev)
 static int kvm_mmu_filter(struct prof_dev *dev)
 {
     struct kvmmmu_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, err;
 
     if (ctx->tp_list)
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)

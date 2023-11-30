@@ -204,6 +204,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     int len;
     char *key_name = NULL;
     char *comm = NULL;
+    struct tp *tp;
 
     if (!env->event)
         return -1;
@@ -228,8 +229,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->fields = calloc(ctx->nr_fields, sizeof(*ctx->fields));
     if (!ctx->fields)
         goto failed;
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
         for (j = 0; j < tp->nr_top; j++) {
             char *field = (j == 0 && tp->alias) ? tp->alias : tp->top_add[j].field;
             ctx->fields[f].field = ctx->EVENT + (field - env->event);
@@ -362,14 +362,16 @@ static int top_init(struct prof_dev *dev)
         .wakeup_watermark = (dev->pages << 12) / 2,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int i;
 
     if (monitor_ctx_init(dev) < 0)
         return -1;
     ctx = dev->private;
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    reduce_wakeup_times(dev, &attr);
+
+    for_each_real_tp(ctx->tp_list, tp, i) {
 
         attr.config = tp->id;
 
@@ -396,10 +398,10 @@ failed:
 static int top_filter(struct prof_dev *dev)
 {
     struct top_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -492,14 +494,14 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
     void *data = raw->raw.data;
     int size = raw->raw.size;
     struct tp *tp = NULL;
+    struct tp *tmp;
     int field = 0;
     int i;
     struct top_info info;
     struct rb_node *rbn;
     struct top_info *p;
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tmp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tmp, i) {
         if (common_type == tmp->id) {
             tp = tmp;
             break;
@@ -656,8 +658,8 @@ static void top_help(struct help_ctx *hctx)
     printf(PROGRAME " top ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(hctx->tp_list[i], tp, j) {
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             top_by = false;
             top_add = false;

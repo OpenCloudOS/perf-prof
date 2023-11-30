@@ -682,6 +682,7 @@ static int expr_init(struct prof_dev *dev)
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int i;
 
     if (!env->event)
@@ -716,9 +717,7 @@ static int expr_init(struct prof_dev *dev)
     info->prog->debug = env->verbose;
     expr_dump(info->prog);
 
-    for (i = 0; i < info->tp_list->nr_tp; i++) {
-        struct tp *tp = &info->tp_list->tp[i];
-
+    for_each_real_tp(info->tp_list, tp, i) {
         attr.config = tp->id;
         evsel = perf_evsel__new(&attr);
         if (!evsel) {
@@ -742,10 +741,10 @@ failed:
 static int expr_filter(struct prof_dev *dev)
 {
     struct expression_info *info = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < info->tp_list->nr_tp; i++) {
-        struct tp *tp = &info->tp_list->tp[i];
+    for_each_real_tp(info->tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)

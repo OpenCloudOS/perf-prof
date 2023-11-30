@@ -256,12 +256,12 @@ static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callc
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int i;
 
     reduce_wakeup_times(dev, &attr);
 
-    for (i = 0; i < tp_list->nr_tp; i++) {
-        struct tp *tp = &tp_list->tp[i];
+    for_each_real_tp(tp_list, tp, i) {
 
         if (!tp->mem_ptr) {
             fprintf(stderr, "%s:%s//ptr=?/ ptr attribute is not set\n", tp->sys, tp->name);
@@ -306,7 +306,7 @@ static int kmemleak_init(struct prof_dev *dev)
         goto failed;
 
     if (!env->callchain)
-        env->callchain = (ctx->tp_alloc->nr_need_stack == ctx->tp_alloc->nr_tp);
+        env->callchain = (ctx->tp_alloc->nr_need_stack == ctx->tp_alloc->nr_real_tp);
 
     if (env->callchain || ctx->tp_alloc->nr_need_stack || ctx->tp_free->nr_need_stack) {
         int user = ctx->user ? CALLCHAIN_USER : 0;
@@ -321,7 +321,7 @@ static int kmemleak_init(struct prof_dev *dev)
     if (add_tp_list(dev, ctx->tp_free, false) < 0)
         goto failed;
 
-    if (ctx->tp_alloc->nr_mem_size == ctx->tp_alloc->nr_tp) {
+    if (ctx->tp_alloc->nr_mem_size == ctx->tp_alloc->nr_real_tp) {
         ctx->report_leaked_bytes = true;
         if (!env->verbose && !env->callchain)
             fprintf(stderr, "Support LEAKED BYTES REPORT, need -g to enable callchain.\n");
@@ -339,18 +339,17 @@ failed:
 static int kmemleak_filter(struct prof_dev *dev)
 {
     struct kmemleak_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < ctx->tp_alloc->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_alloc->tp[i];
+    for_each_real_tp(ctx->tp_alloc, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
                 return err;
         }
     }
-    for (i = 0; i < ctx->tp_free->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_free->tp[i];
+    for_each_real_tp(ctx->tp_free, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -584,10 +583,10 @@ static void report_kmemleak(struct prof_dev *dev)
 
 static bool config_is_alloc(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
 {
+    struct tp *tp;
     int i;
 
-    for (i = 0; i < ctx->tp_alloc->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_alloc->tp[i];
+    for_each_real_tp(ctx->tp_alloc, tp, i) {
         if (tp->id == config) {
             *p = tp;
             return true;
@@ -598,10 +597,10 @@ static bool config_is_alloc(struct kmemleak_ctx *ctx, __u64 config, struct tp **
 
 static bool config_is_free(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
 {
+    struct tp *tp;
     int i;
 
-    for (i = 0; i < ctx->tp_free->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_free->tp[i];
+    for_each_real_tp(ctx->tp_free, tp, i) {
         if (tp->id == config) {
             *p = tp;
             return true;
@@ -713,6 +712,7 @@ static void kmemleak_help(struct help_ctx *hctx)
     int j;
     struct env *env = hctx->env;
     struct tp_list *tp_alloc, *tp_free;
+    struct tp *tp;
 
     if (hctx->nr_list != 2)
         return ;
@@ -721,8 +721,7 @@ static void kmemleak_help(struct help_ctx *hctx)
     tp_free = hctx->tp_list[1];
     printf(PROGRAME " kmemleak ");
     printf("--alloc \"");
-    for (j = 0; j < tp_alloc->nr_tp; j++) {
-        struct tp *tp = &tp_alloc->tp[j];
+    for_each_real_tp(tp_alloc, tp, j) {
         printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
                          tp->mem_ptr?:".");
         if (tp->mem_size)
@@ -737,8 +736,7 @@ static void kmemleak_help(struct help_ctx *hctx)
     printf("\" ");
 
     printf("--free \"");
-    for (j = 0; j < tp_free->nr_tp; j++) {
-        struct tp *tp = &tp_free->tp[j];
+    for_each_real_tp(tp_free, tp, j) {
         printf("%s:%s/%s/ptr=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
                          tp->mem_ptr?:".");
         if (j != tp_free->nr_tp - 1)

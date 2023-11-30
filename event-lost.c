@@ -43,6 +43,7 @@ static int event_lost_init(struct prof_dev *dev)
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int i;
 
     if (monitor_ctx_init(dev) < 0)
@@ -51,9 +52,7 @@ static int event_lost_init(struct prof_dev *dev)
 
     reduce_wakeup_times(dev, &attr);
 
-    for (i = 0; i < tp_list->nr_tp; i++) {
-        struct tp *tp = &tp_list->tp[i];
-
+    for_each_real_tp(tp_list, tp, i) {
         tp->private = calloc(prof_dev_nr_ins(dev), sizeof(unsigned long));
         if (!tp->private)
             goto failed;
@@ -78,10 +77,10 @@ failed:
 static int event_lost_filter(struct prof_dev *dev)
 {
     struct tp_list *tp_list = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < tp_list->nr_tp; i++) {
-        struct tp *tp = &tp_list->tp[i];
+    for_each_real_tp(tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -94,10 +93,10 @@ static int event_lost_filter(struct prof_dev *dev)
 static void event_lost_exit(struct prof_dev *dev)
 {
     struct tp_list *tp_list = dev->private;
+    struct tp *tp;
     int i;
 
-    for (i = 0; i < tp_list->nr_tp; i++) {
-        struct tp *tp = &tp_list->tp[i];
+    for_each_real_tp(tp_list, tp, i) {
         if (tp->private)
             free(tp->private);
     }
@@ -137,8 +136,7 @@ static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int
         return ;
     }
 
-    for (i = 0; i < tp_list->nr_tp; i++) {
-        tp = &tp_list->tp[i];
+    for_each_real_tp(tp_list, tp, i) {
         if (tp->evsel == evsel)
             goto found;
     }

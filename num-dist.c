@@ -56,6 +56,7 @@ static void monitor_ctx_exit(struct prof_dev *dev);
 static int monitor_ctx_init(struct prof_dev *dev)
 {
     int i, stacks = 0;
+    struct tp *tp;
     struct env *env = dev->env;
     struct num_dist_ctx *ctx = zalloc(sizeof(*ctx));
     if (!ctx)
@@ -79,7 +80,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
         fprintf(stderr, "Please use the multi-trace profiler\n");
         goto failed;
     }
-    if (ctx->tp_list->nr_tp != ctx->tp_list->nr_num_prog) {
+    if (ctx->tp_list->nr_real_tp != ctx->tp_list->nr_num_prog) {
         fprintf(stderr, "The number of 'num' attr is not equal to the number of event\n");
         goto failed;
     }
@@ -90,8 +91,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->dist)
         goto failed;
 
-    for (i = 0; i < ctx->nr_points; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
 
         if (strlen(tp->alias?:tp->name) > ctx->max_len)
             ctx->max_len = strlen(tp->alias?:tp->name);
@@ -109,13 +109,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     if (env->heatmap) {
         char buff[1024];
-        struct tp *tp;
 
         ctx->heatmaps = calloc(ctx->nr_points, sizeof(*ctx->heatmaps));
         if (!ctx->heatmaps)
             goto failed;
-        for (i = 0; i < ctx->nr_points; i++) {
-            tp = &ctx->tp_list->tp[i];
+        for_each_real_tp(ctx->tp_list, tp, i) {
             snprintf(buff, sizeof(buff), "%s-%s", env->heatmap, tp->name);
             ctx->heatmaps[i] = heatmap_open("ns", "ns", buff);
         }
@@ -163,6 +161,7 @@ static int num_dist_init(struct prof_dev *dev)
         .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL),
         .watermark     = 1,
     };
+    struct tp *tp;
     int i;
 
     if (monitor_ctx_init(dev) < 0)
@@ -170,9 +169,10 @@ static int num_dist_init(struct prof_dev *dev)
     ctx = dev->private;
 
     attr.wakeup_watermark = (dev->pages << 12) / 3;
-    for (i = 0; i < ctx->nr_points; i++) {
+    reduce_wakeup_times(dev, &attr);
+
+    for_each_real_tp(ctx->tp_list, tp, i) {
         struct perf_evsel *evsel;
-        struct tp *tp = &ctx->tp_list->tp[i];
 
         attr.config = tp->id;
         if (!env->callchain) {
@@ -199,10 +199,10 @@ failed:
 static int num_dist_filter(struct prof_dev *dev)
 {
     struct num_dist_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < ctx->nr_points; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -306,8 +306,8 @@ static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int i
     if (!evsel)
         return;
 
-    for (i = 0; i < ctx->nr_points; i++) {
-        if (ctx->tp_list->tp[i].evsel == evsel)
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        if (tp->evsel == evsel)
             break;
     }
     if (i == ctx->nr_points)
@@ -325,7 +325,7 @@ static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int i
 
     if ((env->greater_than && delta > env->greater_than) ||
         env->verbose >= VERBOSE_EVENT) {
-        print_time(stdout);
+        if (dev->print_title) print_time(stdout);
         tep__update_comm(NULL, hdr->tid_entry.tid);
         tep__print_event(hdr->time/1000, hdr->cpu_entry.cpu, raw, size);
         __print_callchain(ctx, event, tp);
@@ -340,8 +340,8 @@ static void num_dist_help(struct help_ctx *hctx)
     printf(PROGRAME " num-dist ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(hctx->tp_list[i], tp, j) {
             printf("%s:%s/%s/num=%s/alias=%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".",
                              tp->num?:".", tp->alias?:".");
             if (!env->callchain)

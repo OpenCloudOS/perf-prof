@@ -56,11 +56,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
         if (!ctx->tp_list)
             goto failed;
 
-        ctx->counters = calloc(1, prof_dev_nr_ins(dev) * (ctx->tp_list->nr_tp + 1) * sizeof(u64));
+        ctx->counters = calloc(1, prof_dev_nr_ins(dev) * (ctx->tp_list->nr_real_tp + 1) * sizeof(u64));
         if (!ctx->counters)
             goto failed;
 
-        ctx->ins_counters = malloc((ctx->tp_list->nr_tp + 1) * sizeof(u64));
+        ctx->ins_counters = malloc((ctx->tp_list->nr_real_tp + 1) * sizeof(u64));
         if (!ctx->ins_counters)
             goto failed;
 
@@ -165,7 +165,7 @@ static int hrtimer_init(struct prof_dev *dev)
         .disabled      = 0,
     };
     struct perf_evsel *evsel;
-    int i;
+    int i, j;
 
     if (!prof_dev_ins_oncpu(dev))
         return -1;
@@ -200,14 +200,13 @@ static int hrtimer_init(struct prof_dev *dev)
 
     if (env->event) {
         struct global_var_declare *declare = NULL;
+        struct tp *tp;
 
-        declare = calloc(ctx->tp_list->nr_tp+2, sizeof(*declare));
+        declare = calloc(ctx->tp_list->nr_real_tp+2, sizeof(*declare));
         if (!declare)
             goto failed;
-
-        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx->tp_list->tp[i];
-
+        i = 0;
+        for_each_real_tp(ctx->tp_list, tp, j) {
             tp_attr.config = tp->id;
             evsel = perf_evsel__new(&tp_attr);
             if (!evsel) {
@@ -220,6 +219,7 @@ static int hrtimer_init(struct prof_dev *dev)
             declare[i].name = tp->alias ? : tp->name;
             declare[i].offset = i * sizeof(u64);
             declare[i].size = declare[i].elementsize = sizeof(u64);
+            i++;
         }
         declare[i].name = (char *)"period";
         declare[i].offset = i * sizeof(u64);
@@ -248,8 +248,8 @@ static int hrtimer_filter(struct prof_dev *dev)
     int i, err;
 
     if (dev->env->event) {
-        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-            struct tp *tp = &ctx->tp_list->tp[i];
+        struct tp *tp;
+        for_each_real_tp(ctx->tp_list, tp, i) {
             if (tp->filter && tp->filter[0]) {
                 err = perf_evsel__apply_filter(tp->evsel, tp->filter);
                 if (err < 0)
@@ -300,21 +300,22 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
         } groups;
     } *data = (void *)event->sample.array;
     struct callchain *callchain;
-    int n = env->event ? ctx->tp_list->nr_tp : 0;
+    int n = env->event ? ctx->tp_list->nr_real_tp : 0;
     u64 *jcounter = ctx->counters + instance * (n + 1);
     u64 counter, cpu_clock = 0;
-    u64 i, j, print = BREAK;
+    u64 i, j = 0, k, print = BREAK;
     int verbose = env->verbose;
     int header_end = 0;
 
     if (verbose) {
-        print_time(stdout);
+        if (dev->print_title) print_time(stdout);
         printf("    pid %6d tid %6d [%03d] %lu.%06lu: %s: cpu-clock ", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name);
     }
 
     for (i = 0; i < data->groups.nr; i++) {
         struct perf_evsel *evsel;
+        struct tp *tp;
         evsel = perf_evlist__id_to_evsel(dev->evlist, data->groups.ctnr[i].id, NULL);
         if (!evsel)
             continue;
@@ -331,12 +332,13 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
             }
             continue;
         }
-        for (j = 0; j < n; j++) {
-            struct tp *tp = &ctx->tp_list->tp[j];
+
+        for_each_real_tp(ctx->tp_list, tp, k) {
             if (tp->evsel == evsel) {
                 counter = data->groups.ctnr[i].value - jcounter[j];
                 jcounter[j] = data->groups.ctnr[i].value;
                 ctx->ins_counters[j] = counter;
+                j++;
                 if (verbose) {
                     if (!header_end) {
                         printf("\n");
@@ -353,7 +355,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
 
     if (print == PRINT || verbose) {
         if (!verbose) {
-            print_time(stdout);
+            if (dev->print_title) print_time(stdout);
             printf("    pid %6d tid %6d [%03d] %lu.%06lu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name, cpu_clock);
         }
@@ -372,8 +374,8 @@ static void hrtimer_help(struct help_ctx *hctx)
     printf(PROGRAME " hrtimer ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(hctx->tp_list[i], tp, j) {
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (i != hctx->nr_list - 1 ||
                 j != hctx->tp_list[i]->nr_tp - 1)
@@ -419,7 +421,7 @@ static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
     "        'sched_switch==0 && sched_wakeup==0'");
 static const char *hrtimer_argv[] = PROFILER_ARGV("hrtimer",
     "OPTION:",
-    "cpus", "output", "mmap-pages", "exit-N", "usage-self",
+    "cpus", "watermark", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
     PROFILER_ARGV_PROFILER, "event", "freq", "period", "call-graph");
@@ -441,7 +443,7 @@ PROFILER_REGISTER(hrtimer);
 static int irq_off_read(struct prof_dev *dev, struct perf_evsel *ev, struct perf_counts_values *count, int instance)
 {
     struct hrtimer_ctx *ctx = dev->private;
-    int n = dev->env->event ? ctx->tp_list->nr_tp : 0;
+    int n = dev->env->event ? ctx->tp_list->nr_real_tp : 0;
     u64 *jcounter = ctx->counters + instance * (n + 1);
     u64 counter, cpu_clock = 0;
     struct {
@@ -498,7 +500,7 @@ static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
     "    "PROGRAME" irq-off -C 0 --period 10ms --than 20ms -g -i 200");
 static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
     "OPTION:",
-    "cpus", "interval", "output", "mmap-pages", "exit-N", "usage-self",
+    "cpus", "watermark", "interval", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
     PROFILER_ARGV_PROFILER, "freq", "period", "than", "call-graph");
