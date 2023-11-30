@@ -68,7 +68,7 @@ static void order_sample(struct prof_dev *dev, union perf_event *event, int inst
 {
     profiler *base = dev->order.base;
     void *data = (void *)event->sample.array;
-    u64 time = *(u64 *)(data + dev->time_ctx.time_offset);
+    u64 time = *(u64 *)(data + dev->time_ctx.time_pos);
 
     if (base->lost && unlikely(dev->order.lost_records[instance].lost.lost)) {
         base->lost(dev, (union perf_event *)&dev->order.lost_records[instance].lost, instance,
@@ -133,8 +133,10 @@ bool using_order(struct prof_dev *dev)
 
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
 {
-    u32 order_watermark = UINT_MAX;
-    u32 pages_watermark = UINT_MAX;
+    struct env *env = dev->env;
+    u32 wakeup_watermark = 0;
+    u32 wakeup_events = 0;
+    int watermark;
 
     if (!dev->pages)
         return;
@@ -142,26 +144,37 @@ void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
     if (attr->sample_period == 0)
         return;
 
-    if (!using_order(dev)) {
-        if (attr->watermark) {
-            if (attr->wakeup_watermark == 0)
-                attr->wakeup_watermark = (dev->pages << 12) / 2;
+    if (env->watermark_set)
+        watermark = env->watermark;
+    else {
+        if (!attr->watermark) {
+            watermark = 0;
+            wakeup_events = attr->wakeup_events;
+        } else {
+            watermark = 50;
+            wakeup_watermark = attr->wakeup_watermark;
         }
-        return;
     }
 
-    if (attr->watermark && attr->wakeup_watermark)
-        pages_watermark = attr->wakeup_watermark;
-    else
-        pages_watermark = (dev->pages << 12) / 4;
-    /*
-     * When order-mem is enabled and perf-prof is woken up, all perf_events must be
-     * read, so order-mem needs enough space to store perf_events.
-     */
-    if (dev->env->order_mem)
-        order_watermark = (u32)(dev->env->order_mem / prof_dev_nr_ins(dev) / 2);
+    if (watermark == 0) {
+        attr->watermark = 0;
+        attr->wakeup_events = wakeup_events ? : 1;
+    } else {
+        if (wakeup_watermark == 0) {
+            u32 order_watermark = UINT_MAX;
+            u32 pages_watermark = (dev->pages << 12);
 
-    attr->watermark = 1;
-    attr->wakeup_watermark = min(pages_watermark, order_watermark);
+            /*
+             * When order-mem is enabled and perf-prof is woken up, all perf_events must be
+             * read, so order-mem needs enough space to store perf_events.
+             */
+            if (using_order(dev) && env->order_mem)
+                order_watermark = (u32)(env->order_mem / prof_dev_nr_ins(dev));
+
+            wakeup_watermark = min(pages_watermark, order_watermark) * watermark / 100;
+        }
+        attr->watermark = 1;
+        attr->wakeup_watermark = wakeup_watermark;
+    }
 }
 

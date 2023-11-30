@@ -348,6 +348,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
      *    EVENT,EVENT,...
      * EVENT:
      *    sys:name[/filter/ATTR/ATTR/.../]
+     *    profiler[/option/ATTR/ATTR/.../]
      * ATTR:
      *    stack : sample_type PERF_SAMPLE_CALLCHAIN
      *    max-stack=int : sample_max_stack
@@ -358,6 +359,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     for (i = 0; i < nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
         struct tep_event *event = NULL;
+        char *slash = NULL;
         char *sys = NULL;
         char *name = NULL;
         char *filter = NULL;
@@ -365,36 +367,65 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         int max_stack = 0;
         bool top_by;
         char *alias = NULL;
-        int id;
+        int id = -1;
         event_fields *fields = NULL;
         struct expr_prog *prog = NULL;
+        profiler *prof = NULL;
+        struct env *env = NULL;
+
+        s = tp->name;
+        slash = next_sep(s, '/');
+        if (slash) {
+            *slash = '\0';
+            filter = slash + 1;
+            slash = next_sep(filter, '/');
+            if (!slash)
+                goto err_out;
+            *slash = '\0';
+        }
 
         sys = s = tp->name;
         sep = strchr(s, ':');
-        if (!sep)
-            goto err_out;
-        *sep = '\0';
-
-        name = s = sep + 1;
-        sep = next_sep(s, '/');
-        if (sep)
-            *sep = '\0';
-
-        id = tep__event_id(sys, name);
-        if (id < 0)
-            goto err_out;
-        event = tep_find_event_by_name(tep, sys, name);
-        if (!event)
-            goto err_out;
-
-        if (sep) {
-            filter = s = sep + 1;
-            sep = next_sep(s, '/');
-            if (!sep)
+        if (!sep) { // profiler/option/
+            prof = monitor_find(sys);
+            if (!prof)
                 goto err_out;
+            if (filter && filter[0])
+                filter[-1] = ' ';
+
+            // Remove single and double quotes around filter
+            if (filter && (filter[0] == '\'' || filter[0] == '"')) {
+                int len = strlen(filter);
+                if (filter[len-1] == filter[0]) {
+                    filter[len-1] = ' ';
+                    filter[0] = ' ';
+                }
+            }
+
+            env = parse_string_options(s);
+            // --tsc remains the same.
+            env->tsc = dev->env->tsc;
+            env->tsc_offset = dev->env->tsc_offset;
+            // Using (dev->cpus, dev->threads).
+            // Make sure instance is consistent between source_dev and dev.
+            tp->source_dev = prof_dev_open_cpu_thread_map(prof, env, dev->cpus, dev->threads);
+            name = sys;
+            sys = NULL;
+        } else { // sys:name/filter/
             *sep = '\0';
 
-            s = sep + 1;
+            name = sep + 1;
+            id = tep__event_id(sys, name);
+            if (id < 0)
+                goto err_out;
+            event = tep_find_event_by_name(tep, sys, name);
+            if (!event)
+                goto err_out;
+        }
+        // ATTR
+        if (slash) {
+            *slash = '\0';
+            s = slash + 1;
             while ((sep = next_sep(s, '/')) != NULL) {
                 char *attr = s;
                 char *value = NULL;
@@ -480,9 +511,9 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                 } else if (strcmp(attr, "trigger") == 0) {
                     tp->trigger = true;
                 } else if (strcmp(attr, "push") == 0) {
-                    if (tp_broadcast_new(tp, value) < 0) goto err_out;
+                    if (id >= 0 && tp_broadcast_new(tp, value) < 0) goto err_out;
                 } else if (strcmp(attr, "pull") == 0) {
-                    if (tp_receive_new(tp, value) < 0) goto err_out;
+                    if (id >= 0 && tp_receive_new(tp, value) < 0) goto err_out;
                 } else if (strcmp(attr, "vm") == 0) {
                     tp->vcpu = vcpu_info_new(value);
                     if (tp->vcpu)
@@ -499,7 +530,6 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         }
 
         tp->dev = dev;
-        tp->evsel = NULL;
         tp->id = id;
         tp->sys = sys;
         tp->name = name;
@@ -517,7 +547,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             tp->top_add[0].top_by = false;
         }
 
-        if (!tp->mem_ptr && tep_find_any_field(event, "ptr")) {
+        if (!tp->mem_ptr && event && tep_find_any_field(event, "ptr")) {
             if (!fields) fields = tep__event_fields(id);
             if (fields)  prog = expr_compile((char *)"ptr", fields);
             if (!prog) { free(fields); goto err_out; }
@@ -525,7 +555,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             tp->mem_ptr_prog = prog;
             tp->mem_ptr = "ptr";
         }
-        if (!tp->mem_size && tep_find_any_field(event, "bytes_alloc")) {
+        if (!tp->mem_size && event && tep_find_any_field(event, "bytes_alloc")) {
             if (!fields) fields = tep__event_fields(id);
             if (fields)  prog = expr_compile((char *)"bytes_alloc", fields);
             if (!prog) { free(fields); goto err_out; }
@@ -534,6 +564,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             tp->mem_size = "bytes_alloc";
         }
 
+        tp_list->nr_real_tp += id >= 0;
         tp_list->nr_need_stack += stack;
         tp_list->nr_top += tp->nr_top;
         tp_list->nr_comm += !!tp->comm_prog;
@@ -548,7 +579,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             free(fields);
     }
 
-    tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_tp);
+    tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_real_tp);
 
     tep__unref();
     return tp_list;
@@ -566,6 +597,8 @@ void tp_list_free(struct tp_list *tp_list)
         return ;
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
+        if (tp_is_dev(tp) && tp->source_dev)
+            prof_dev_close(tp->source_dev);
         if (tp->filter)
             free(tp->filter);
         for (j = 0; j < tp->nr_top; j++) {

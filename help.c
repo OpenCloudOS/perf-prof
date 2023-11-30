@@ -69,8 +69,8 @@ static void print_events_format(struct help_ctx *ctx)
     size_t size;
 
     for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(ctx->tp_list[i], tp, j) {
             printf("%s:%s\n", tp->sys, tp->name);
             snprintf(path, sizeof(path), "kernel/debug/tracing/events/%s/%s/format", tp->sys, tp->name);
             if (sysfs__read_str(path, &format, &size) == 0) {

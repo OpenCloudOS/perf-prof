@@ -29,6 +29,7 @@ struct watchdog_info {
 struct watchdog_ctx {
     int stage;
     struct prof_dev *dev_watchdog;
+    struct prof_dev *dev_stage_init;
     struct perf_evsel *perf_evsel_hrtimer_expire_entry;
     struct callchain_ctx *cc;
     int in_guest;
@@ -169,6 +170,7 @@ failed:
     return -1;
 }
 
+static void watchdog_exit(struct prof_dev *dev);
 static int watchdog_init(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
@@ -206,11 +208,12 @@ static int watchdog_init(struct prof_dev *dev)
      */
     ctx = dev_init->private;
     ctx->dev_watchdog = dev;
+    ctx->dev_stage_init = dev_init;
     dev->private = ctx;
     dev->pages = dev_init->pages;
     perf_cpu_map__put(dev->cpus);
     dev->cpus = perf_cpu_map__get(dev_init->cpus);
-    dev->auto_enable = false; // Keep disabled, enable in watchdog_stage_sample().
+    dev->state = PROF_DEV_STATE_OFF; // Keep off, enable in watchdog_stage_sample().
     if (env_init->cpumask)
         env->cpumask = strdup(env_init->cpumask);
 
@@ -248,7 +251,7 @@ static int watchdog_init(struct prof_dev *dev)
     return 0;
 
 failed:
-    prof_dev_close(dev_init);
+    watchdog_exit(dev);
     return -1;
 }
 
@@ -317,15 +320,15 @@ static int watchdog_filter(struct prof_dev *dev)
 
 static void watchdog_stage_deinit(struct prof_dev *dev)
 {
-    struct watchdog_ctx *ctx = dev->private;
 
-    // watchdog or stage_init init failed.
-    if (ctx->stage == STAGE_INIT)
-        monitor_ctx_exit(dev);
 }
 
 static void watchdog_exit(struct prof_dev *dev)
 {
+    struct watchdog_ctx *ctx = dev->private;
+
+    if (ctx->dev_stage_init)
+        prof_dev_close(ctx->dev_stage_init);
     monitor_ctx_exit(dev);
 }
 
@@ -393,7 +396,7 @@ static void watchdog_stage_sample(struct prof_dev *dev, union perf_event *event,
 
             ctx->stage = STAGE_MONITOR;
             ctx->perf_evsel_hrtimer_expire_entry = NULL;
-            dev->close = true; // close stage_init
+            prof_dev_disable(dev);
             watchdog_filter(ctx->dev_watchdog);
             prof_dev_enable(ctx->dev_watchdog);
         }
@@ -517,7 +520,7 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
         if (ctx->watchdog[cpu].print_stack ||
             ctx->watchdog[cpu].print_sched ||
             dev->env->verbose >= VERBOSE_EVENT) {
-            print_time(stdout);
+            if (dev->print_title) print_time(stdout);
             printf("%16s %6u [%03d] %llu.%06llu: watchdog: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                     data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000);
             __print_callchain(dev, event);

@@ -99,13 +99,14 @@ static int trace_init(struct prof_dev *dev)
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
+    struct tp *tp;
     int i;
 
     if (monitor_ctx_init(dev) < 0)
         return -1;
     ctx = dev->private;
 
-    if (ctx->tp_list->nr_tp == ctx->tp_list->nr_push_to) {
+    if (ctx->tp_list->nr_real_tp == ctx->tp_list->nr_push_to) {
         attr.watermark = 1;
         attr.wakeup_watermark = (dev->pages << 12) / 2;
     }
@@ -117,9 +118,7 @@ static int trace_init(struct prof_dev *dev)
     } else
         reduce_wakeup_times(dev, &attr);
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
-
+    for_each_real_tp(ctx->tp_list, tp, i) {
         attr.config = tp->id;
         if (!env->callchain) {
             if (tp->stack)
@@ -139,6 +138,11 @@ static int trace_init(struct prof_dev *dev)
 
         tp->evsel = evsel;
     }
+    for_each_dev_tp(ctx->tp_list, tp, i) {
+        struct prof_dev *source_dev = tp->source_dev;
+        if (source_dev)
+            prof_dev_forward(source_dev, dev);
+    }
 
     return 0;
 
@@ -150,10 +154,10 @@ failed:
 static int trace_filter(struct prof_dev *dev)
 {
     struct trace_ctx *ctx = dev->private;
+    struct tp *tp;
     int i, err;
 
-    for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-        struct tp *tp = &ctx->tp_list->tp[i];
+    for_each_real_tp(ctx->tp_list, tp, i) {
         if (tp->filter && tp->filter[0]) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0)
@@ -236,7 +240,7 @@ static inline bool have_callchain(struct prof_dev *dev, union perf_event *event,
     if (dev->env->callchain)
         return true;
 
-    if (ctx->tp_list->nr_need_stack == ctx->tp_list->nr_tp)
+    if (ctx->tp_list->nr_need_stack == ctx->tp_list->nr_real_tp)
         return true;
 
     if (ctx->tp_list->need_stream_id) {
@@ -264,11 +268,15 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     int size;
     bool callchain;
 
+    if (event->header.type == PERF_RECORD_DEV) {
+        perf_event_process_record(dev, event, instance, true, true);
+        return;
+    }
+
     if (ctx->tp_list->nr_push_to || ctx->tp_list->nr_pull_from || ctx->tp_list->nr_exec_prog) {
         int i;
         evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-        for (i = 0; i < ctx->tp_list->nr_tp; i++) {
-            tp = &ctx->tp_list->tp[i];
+        for_each_real_tp(ctx->tp_list, tp, i) {
             if (tp->evsel == evsel) {
                 if (tp_broadcast_event(tp, event)) return;
                 else break;
@@ -282,8 +290,10 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
 
     __raw_size(event, &raw, &size, callchain);
     tep__update_comm(NULL, data->tid_entry.tid);
-    print_time(stdout);
-    tp_print_marker(tp);
+    if (dev->print_title) {
+        print_time(stdout);
+        tp_print_marker(tp);
+    }
     tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
     if (tp && tp->exec_prog)
         tp_prog_run(tp, tp->exec_prog, raw, size);
@@ -309,8 +319,8 @@ static void trace_help(struct help_ctx *hctx)
     printf(PROGRAME " trace ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(hctx->tp_list[i], tp, j) {
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (!env->callchain)
                 printf("[stack/]");

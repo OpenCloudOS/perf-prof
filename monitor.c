@@ -44,7 +44,7 @@ void monitor_register(struct monitor *m)
     monitors_list = m;
 }
 
-struct monitor * monitor_find(char *name)
+struct monitor * monitor_find(const char *name)
 {
     struct monitor *m = monitors_list;
     while(m) {
@@ -105,7 +105,7 @@ perf-prof argc argv
 
 struct env env;
 
-static volatile bool exiting;
+static volatile int running = 0;
 
 const char *main_program_version = PROGRAME " 0.19";
 
@@ -310,15 +310,16 @@ static int parse_arg_cb(const struct option *opt, const char *arg, int unset)
 
 struct option main_options[] = {
     OPT_GROUP("OPTION:"),
-    OPT_STRDUP_NONEG('C',        "cpus", &env.cpumask,    "CPU[-CPU],...", "Monitor the specified CPU, Dflt: all cpu"),
-    OPT_STRDUP_NONEG('p',        "pids", &env.pids,       "PID,...",       "Attach to processes"),
-    OPT_STRDUP_NONEG('t',        "tids", &env.tids,       "TID,...",       "Attach to threads"),
+    OPT_STRDUP_NONEG('C',        "cpus", &env.cpumask,    "cpu[-cpu],...", "Monitor the specified CPU, Dflt: all cpu"),
+    OPT_STRDUP_NONEG('p',        "pids", &env.pids,       "pid,...",       "Attach to processes"),
+    OPT_STRDUP_NONEG('t',        "tids", &env.tids,       "tid,...",       "Attach to threads"),
     OPT_STRDUP_NONEG( 0 ,     "cgroups", &env.cgroups,    "cgroup,...",    "Attach to cgroups, support regular expression."),
     OPT_BOOL_NONEG  ( 0 ,     "inherit", &env.inherit,                     "Child tasks do inherit counters."),
+    OPT_INT_NONEG_SET( 0 ,  "watermark", &env.watermark,  &env.watermark_set, "0-100",  "Wake up "PROGRAME" watermark."),
     OPT_INT_NONEG   ('i',    "interval", &env.interval,   "ms",            "Interval, Unit: ms"),
     OPT_STRDUP_NONEG('o',      "output", &env.output,     "file",          "Output file name"),
     OPT_BOOL_NONEG  ( 0 ,       "order", &env.order,                       "Order events by timestamp."),
-    OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "Bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
+    OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
     OPT_INT_NONEG   ('m',  "mmap-pages", &env.mmap_pages, "pages",         "Number of mmap data pages and AUX area tracing mmap pages"),
     OPT_LONG_NONEG  ('N',      "exit-N", &env.exit_n, "N",                 "Exit after N events have been sampled."),
     OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf time to tsc time."),
@@ -337,7 +338,7 @@ struct option main_options[] = {
     OPT_BOOLEAN_SET ( 0 , "kernel-callchain", &env.kernel_callchain, &env.kernel_callchain_set, "include kernel callchains, no- prefix to exclude"),
     OPT_INT_OPTARG_SET( 0 ,    "irqs_disabled", &env.irqs_disabled,    &env.irqs_disabled_set,    1, "0|1",  "ebpf, irqs disabled or not."),
     OPT_INT_OPTARG_SET( 0 , "tif_need_resched", &env.tif_need_resched, &env.tif_need_resched_set, 1, "0|1",  "ebpf, TIF_NEED_RESCHED is set or not."),
-    OPT_INT_NONEG_SET ( 0 ,      "exclude_pid", &env.exclude_pid,      &env.exclude_pid_set,         "PID",  "ebpf, exclude pid"),
+    OPT_INT_NONEG_SET ( 0 ,      "exclude_pid", &env.exclude_pid,      &env.exclude_pid_set,         "pid",  "ebpf, exclude pid"),
     OPT_INT_NONEG_SET ( 0 ,   "nr_running_min", &env.nr_running_min,   &env.nr_running_min_set,       NULL,  "ebpf, minimum number of running processes for CPU runqueue."),
     OPT_INT_NONEG_SET ( 0 ,   "nr_running_max", &env.nr_running_max,   &env.nr_running_max_set,       NULL,  "ebpf, maximum number of running processes for CPU runqueue."),
 
@@ -345,6 +346,7 @@ struct option main_options[] = {
     OPT_PARSE_NONEG ('e', "event", NULL,    "EVENT,...",        "Event selector. use 'perf list tracepoint' to list available tp events.\n"
                                                                 "  EVENT,EVENT,...\n"
                                                                 "  EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
+                                                                "         profiler[/option/ATTR/ATTR/.../]\n"
                                                                 "  filter: ftrace filter\n"
                                                                 "  ATTR:\n"
                                                                 "      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
@@ -461,10 +463,10 @@ void help(void)
     struct monitor *m = monitor;
 
     if (m) {
-        if (monitor->argv && monitor->desc) {
+        if (m->argv && m->desc) {
             argc = 0;
-            while (monitor->argv[argc++] != NULL);
-            parse_options(argc - 1, monitor->argv, main_options, monitor->desc, PARSE_OPT_INTERNAL_HELP_NO_ORDER);
+            while (m->argv[argc++] != NULL);
+            parse_options(argc - 1, m->argv, main_options, m->desc, PARSE_OPT_INTERNAL_HELP_NO_ORDER);
         } else
             parse_options(argc, argv, main_options, main_usage, PARSE_OPT_INTERNAL_HELP_NO_ORDER);
     }
@@ -539,8 +541,9 @@ static void flush_main_options(profiler *p)
 static const char *LIBBPF_BUILD = "NO CONFIG_LIBBPF=y";
 #endif
 
-static int parse_main_options(int argc, char *argv[])
+static profiler *parse_main_options(int argc, char *argv[])
 {
+    profiler *prof = NULL;
     bool stop_at_non_option = true;
     bool dashdash = false;
     char *COMP_TYPE = getenv("COMP_TYPE"); // Bash Completion COMP_TYPE variable
@@ -564,8 +567,20 @@ static int parse_main_options(int argc, char *argv[])
         if (argc && argv[0][0] != '\0' && argv[0][0] != '-') {
             struct monitor *m = monitor_find(argv[0]);
             if (m != NULL) {
-                env.help_monitor = monitor;
-                monitor = m;
+                if (strcmp(m->name, "help") == 0)
+                    env.help_monitor = prof;
+#ifdef MULTI_PROF
+                else if (prof) {
+                    struct env *e = zalloc(sizeof(struct env));
+                    if (e) {
+                        *e = env;
+                        prof_dev_open(prof, e);
+                    }
+                    memset(&env, 0, sizeof(struct env));
+                }
+#endif
+                prof = m;
+                monitor = m; // monitor only used in help();
                 flush_main_options(m);
                 enable_optcomp = comp_type ? true : false;
                 continue;
@@ -590,9 +605,9 @@ static int parse_main_options(int argc, char *argv[])
     }
 
     if (comp_type) {
-        if (monitor) {
+        if (prof) {
             if (argc == 0)
-                printf(monitor->compgen ? "\"%s %s\"\n" : "%s%s\n", monitor->name, monitor->compgen ?: "");
+                printf(prof->compgen ? "\"%s %s\"\n" : "%s%s\n", prof->name, prof->compgen ?: "");
         } else {
             struct monitor *m = NULL;
             while((m = monitor_next(m))) {
@@ -613,12 +628,12 @@ static int parse_main_options(int argc, char *argv[])
         exit(0);
     }
 
-    if (monitor == NULL)
+    if (prof == NULL)
         help();
 
     if (!dashdash) {
-        if (monitor && monitor->argc_init)
-            argc = monitor->argc_init(argc, argv);
+        if (prof && prof->argc_init)
+            argc = prof->argc_init(argc, argv);
         else if (argc && env.verbose > 0) {
             int i;
             printf("Unparsed options:");
@@ -633,11 +648,35 @@ static int parse_main_options(int argc, char *argv[])
             goto failed;
     }
 
-    return 0;
+    return prof;
 
 failed:
     free_env(&env);
-    return -1;
+    return NULL;
+}
+
+struct env *parse_string_options(char *str)
+{
+    char *token;
+    int argc = 1; // argv[0] = "perf-prof"
+    char **argv = malloc((argc + 1)*sizeof(char*));
+
+    token = strtok(str, " ");
+    while (token && argv) {
+        argv[argc++] = token;
+        argv = realloc(argv, (argc + 1)*sizeof(char*));
+        token = strtok(NULL, " ");
+    }
+    if (!argv)
+        return NULL;
+
+    memset(&env, 0, sizeof(struct env));
+    if (parse_main_options(argc, argv)) {
+        struct env *e = malloc(sizeof(*e));
+        if (e) *e = env;
+        return e;
+    }
+    return NULL;
 }
 
 static void sigusr2_handler(int sig)
@@ -737,17 +776,18 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
                 int pid = waitpid(fdsi.ssi_pid, &status, WNOHANG);
                 if (pid > 0) {
                     list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
-                        if (dev->env->workload.pid == pid) {
+                        if (prof_dev_isowner(dev) && dev->env->workload.pid == pid) {
                             dev->env->workload.pid = 0;
                             // Automatically close prof_dev after the workload exits.
                             prof_dev_close(dev);
+                            break;
                         }
                 }
             }
             break;
         case SIGINT:
         case SIGTERM:
-            exiting = true;
+            running = 0;
             break;
         case SIGUSR1: {
                 list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
@@ -1146,10 +1186,54 @@ static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *
     }
 }
 
+static union perf_event *
+perf_event_forward(struct prof_dev *dev, union perf_event *event, int instance, bool writable, bool converted)
+{
+    struct perf_record_dev *event_dev = (void *)dev->forward.event_dev;
+    void *data;
+
+    memset(event_dev, 0, offsetof(struct perf_record_dev, event));
+    event_dev->header.size = offsetof(struct perf_record_dev, event) + event->header.size;
+    event_dev->header.type = PERF_RECORD_DEV;
+
+    memcpy(&event_dev->event, event, event->header.size);
+    if (!converted)
+        perf_event_convert(dev, &event_dev->event, true);
+
+    // Build perf_event with sample_type, PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU.
+    data = (void *)event_dev->event.sample.array;
+    event_dev->pid = *(u32 *)(data + dev->forward.tid_pos);
+    event_dev->tid = *(u32 *)(data + dev->forward.tid_pos + sizeof(u32));
+    event_dev->time = *(u64 *)(data + dev->forward.time_pos);
+    if (dev->forward.id_pos >= 0)
+        event_dev->id = *(u64 *)(data + dev->forward.id_pos);
+    event_dev->cpu = *(u32 *)(data + dev->forward.cpu_pos);
+    event_dev->instance = instance;
+    event_dev->dev = dev;
+
+    return (union perf_event *)event_dev;
+}
+
 int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int instance, bool writable, bool converted)
 {
-    profiler *prof = dev->prof;
-    struct env *env = dev->env;
+    profiler *prof;
+    struct env *env;
+
+    if (dev->forward.target) {
+        // Forward upward.
+        if (event->header.type == PERF_RECORD_SAMPLE)
+            event = perf_event_forward(dev, event, instance, writable, converted);
+        dev = dev->forward.target;
+        converted = true;
+    } else if (event->header.type == PERF_RECORD_DEV) {
+        // Return down.
+        struct perf_record_dev *event_dev = (void *)event;
+        event = &event_dev->event;
+        dev = event_dev->dev;
+        converted = true;
+    }
+    prof = dev->prof;
+    env = dev->env;
 
     switch (event->header.type) {
     case PERF_RECORD_LOST:
@@ -1188,13 +1272,14 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         else
             print_throttle_unthrottle_fn(dev, event, instance, 1);
         break;
+    case PERF_RECORD_DEV:
     case PERF_RECORD_SAMPLE:
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n) {
             if (prof->sample)
                 prof->sample(dev, unlikely(converted) ? event : perf_event_convert(dev, event, writable), instance);
         }
         if (unlikely(env->exit_n) && dev->sampled_events >= env->exit_n)
-            dev->close = true;
+            prof_dev_disable(dev);
         break;
     case PERF_RECORD_SWITCH:
         if (prof->context_switch)
@@ -1212,7 +1297,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n)
             fprintf(stderr, "unknown perf sample type %d\n", event->header.type);
         if (unlikely(env->exit_n) && dev->sampled_events >= env->exit_n)
-            dev->close = true;
+            prof_dev_disable(dev);
         return -1;
     }
     return 0;
@@ -1244,11 +1329,10 @@ static void perf_event_handle(int fd, unsigned int revents, void *ptr)
     if (revents & EPOLLHUP) {
         main_epoll_del(fd);
         dev->nr_pollfd --;
+        // dev->nr_pollfd == 0, All attached processes exit.
+        if (dev->nr_pollfd == 0)
+            prof_dev_disable(dev);
     }
-    // dev->nr_pollfd == 0, All attached processes exit.
-    // dev->close, Actively close. -N 100 etc.
-    if (dev->nr_pollfd == 0 || dev->close)
-        prof_dev_close(dev);
 }
 
 static int __addfn(int fd, unsigned events, struct perf_mmap *mmap)
@@ -1279,6 +1363,12 @@ static void interval_handle(struct timer *timer)
             perf_event_handle_mmap(dev, map);
         }
     }
+    // Recursively refresh the source prof_dev.
+    if (!list_empty(&dev->forward.source_list)) {
+        struct prof_dev *source, *next;
+        list_for_each_entry_safe(source, next, &dev->forward.source_list, forward.link_to_target)
+            interval_handle(&source->timer);
+    }
 
     if (prof->read) {
         struct perf_evsel *evsel;
@@ -1305,12 +1395,10 @@ static void interval_handle(struct timer *timer)
 
     if (prof->interval)
         prof->interval(dev);
-
-    if (dev->close)
-        prof_dev_close(dev);
 }
 
-struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
+struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map)
 {
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
@@ -1321,12 +1409,25 @@ struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
 
     dev = malloc(sizeof(*dev));
     if (!dev)
-        return NULL;
+        goto out_free;
 
     memset(dev, 0, sizeof(*dev));
     dev->prof = prof;
     dev->env = env;
     INIT_LIST_HEAD(&dev->dev_link);
+    dev->state = PROF_DEV_STATE_INACTIVE;
+    dev->print_title = true;
+    INIT_LIST_HEAD(&dev->forward.source_list);
+    INIT_LIST_HEAD(&dev->forward.link_to_target);
+
+    // workload output to stdout & stderr
+    // perf-prof output to env.output file
+    // TODO per prof_dev output
+    if (env->output) {
+        if (!freopen(env->output, "a", stdout))
+            goto out_free;
+        dup2(STDOUT_FILENO, STDERR_FILENO);
+    }
 
     if (env->order || prof->order) {
         order(dev);
@@ -1337,7 +1438,6 @@ struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
     if (env->mmap_pages)
         dev->pages = env->mmap_pages;
 
-    dev->auto_enable = true;
     prof_dev_winsize(dev);
 
 reinit:
@@ -1351,7 +1451,10 @@ reinit:
     dev->evlist = evlist;
     perf_evlist_poll__external(evlist, dev);
 
-    if (env->pids || env->tids) {
+    if (cpu_map || thread_map) {
+        cpus = cpu_map ? perf_cpu_map__get(cpu_map) : perf_cpu_map__dummy_new();
+        threads = thread_map ? perf_thread_map__get(thread_map) : perf_thread_map__new_dummy();
+    } else if (env->pids || env->tids) {
         // attach to processes
         threads = thread_map__new_str(env->pids, env->tids, 0, 0);
         cpus = env->inherit ? perf_cpu_map__new(NULL) : perf_cpu_map__dummy_new();
@@ -1434,34 +1537,25 @@ reinit:
             fprintf(stderr, "monitor(%s) mmap failed\n", prof->name);
             goto out_close;
         }
-        err = perf_evlist_poll__foreach_fd(evlist, __addfn);
-        if (err) {
-            fprintf(stderr, "monitor(%s) poll failed\n", prof->name);
-            goto out_delfn;
-        }
     }
 
-    if (dev->auto_enable) {
-        perf_evlist__enable(evlist);
-        if (prof->enabled)
-            prof->enabled(dev);
-    }
-
-    if (env->interval) {
+    if (dev->env->interval) {
         dev->max_read_size = perf_evlist__max_read_size(evlist);
         timer_init(&dev->timer, interval_handle);
-        if (dev->auto_enable)
-            timer_start(&dev->timer, env->interval * 1000000UL, false);
     }
 
-    if (dev->auto_enable)
-        workload_start(&env->workload);
+    if (dev->state == PROF_DEV_STATE_INACTIVE)
+        if (prof_dev_enable(dev) < 0)
+            goto out_disable;
 
     list_add(&dev->dev_link, &prof_dev_list);
 
     return dev;
 
-out_delfn:
+out_disable:
+    if (dev->env->interval)
+        timer_destroy(&dev->timer);
+
     if (dev->pages) {
         perf_evlist_poll__foreach_fd(evlist, __delfn);
         perf_evlist__munmap(evlist);
@@ -1485,24 +1579,35 @@ out_delete:
 
 out_free:
     free_env(env);
-    free(dev);
+    if (dev) free(dev);
 
     return NULL;
 }
 
-void prof_dev_enable(struct prof_dev *dev)
+struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
+{
+    return prof_dev_open_cpu_thread_map(prof, env, NULL, NULL);
+}
+
+int prof_dev_enable(struct prof_dev *dev)
 {
     profiler *prof;
     struct env *env;
     struct perf_evlist *evlist;
+    int err;
 
-    if (!dev || dev->auto_enable)
-        return;
+    if (!dev || dev->state == PROF_DEV_STATE_ACTIVE)
+        return 0;
 
     prof = dev->prof;
     env = dev->env;
     evlist = dev->evlist;
-    dev->auto_enable = true;
+
+    err = perf_evlist_poll__foreach_fd(evlist, __addfn);
+    if (err) {
+        fprintf(stderr, "monitor(%s) poll failed\n", prof->name);
+        return -1;
+    }
 
     perf_evlist__enable(evlist);
     if (prof->enabled)
@@ -1512,6 +1617,64 @@ void prof_dev_enable(struct prof_dev *dev)
         timer_start(&dev->timer, env->interval * 1000000UL, false);
 
     workload_start(&env->workload);
+
+    dev->state = PROF_DEV_STATE_ACTIVE;
+    running ++;
+
+    return 0;
+}
+
+int prof_dev_disable(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+
+    if (dev->state < PROF_DEV_STATE_ACTIVE)
+        return 0;
+
+    dev->state = PROF_DEV_STATE_INACTIVE;
+    running --;
+
+    /*
+     * Flush remaining perf events.
+     * Events are no longer forwarded to the target when the device is closing.
+     * The target device may have been closed in advance.
+     */
+    if (dev->pages && prof_dev_isowner(dev)) {
+        struct perf_mmap *map;
+        perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
+            perf_event_handle_mmap(dev, map);
+        }
+    }
+
+    // Disable subsequent interval_handle() calls.
+    if (dev->env->interval)
+        timer_cancel(&dev->timer);
+
+    perf_evlist__disable(evlist);
+
+    // Disable subsequent perf_event_handle() calls.
+    if (dev->pages)
+        perf_evlist_poll__foreach_fd(evlist, __delfn);
+
+    return 0;
+}
+
+int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
+{
+    if (perf_sample_forward_init(dev) == 0) {
+        if (using_order(target) && perf_sample_time_init(target) == 0 &&
+            target->time_ctx.time_pos != dev->forward.forwarded_time_pos) {
+            fprintf(stderr, "%s cannot forward to %s: time_pos is different.\n", dev->prof->name, target->prof->name);
+            return -1;
+        }
+        dev->forward.event_dev = malloc(PERF_SAMPLE_MAX_SIZE);
+        if (dev->forward.event_dev) {
+            dev->forward.target = target;
+            list_add_tail(&dev->forward.link_to_target, &target->forward.source_list);
+            return 0;
+        }
+    }
+    return -1;
 }
 
 void prof_dev_close(struct prof_dev *dev)
@@ -1521,19 +1684,10 @@ void prof_dev_close(struct prof_dev *dev)
 
     list_del(&dev->dev_link);
 
-    // Flush remaining perf events.
-    if (dev->pages) {
-        struct perf_mmap *map;
-        perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
-            perf_event_handle_mmap(dev, map);
-        }
-    }
+    prof_dev_disable(dev);
 
-    if (dev->env->interval) {
+    if (dev->env->interval)
         timer_destroy(&dev->timer);
-    }
-
-    perf_evlist__disable(evlist);
 
     /*
      * deinit before perf_evlist__munmap.
@@ -1546,10 +1700,8 @@ void prof_dev_close(struct prof_dev *dev)
     prof->deinit(dev);
     perf_event_convert_deinit(dev);
 
-    if (dev->pages) {
-        perf_evlist_poll__foreach_fd(evlist, __delfn);
+    if (dev->pages)
         perf_evlist__munmap(evlist);
-    }
 
     perf_evlist__close(evlist);
 
@@ -1558,24 +1710,28 @@ void prof_dev_close(struct prof_dev *dev)
     perf_cpu_map__put(dev->cpus);
     perf_thread_map__put(dev->threads);
 
-    if (dev->env && dev->env->cgroups)
+    if (dev->env->cgroups)
         cgroup_list__delete();
 
-    if (dev->env)
-        free_env(dev->env);
+    if (dev->forward.target) {
+        free(dev->forward.event_dev);
+        list_del(&dev->forward.link_to_target);
+    }
 
+    free_env(dev->env);
     free(dev);
-
-    if (list_empty(&prof_dev_list))
-        exiting = true;
 }
 
 static void prof_dev_list_close(void)
 {
-    struct prof_dev *dev, *next;
+    struct prof_dev *dev;
 
-    list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
+restart:
+    list_for_each_entry(dev, &prof_dev_list, dev_link) {
         prof_dev_close(dev);
+        // May also close other prof_dev.
+        goto restart;
+    }
 }
 
 static void print_marker_and_interval(int fd, unsigned int revents, void *ptr)
@@ -1587,7 +1743,8 @@ static void print_marker_and_interval(int fd, unsigned int revents, void *ptr)
         if (line) {
             struct prof_dev *dev, *next;
             list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
-                interval_handle(&dev->timer);
+                if (prof_dev_isowner(dev))
+                    interval_handle(&dev->timer);
             print_time(stdout);
             printf("%s", line);
         }
@@ -1606,6 +1763,9 @@ int main(int argc, char *argv[])
 {
     int err = -1;
     struct timer usage_self;
+    bool usage_self_start = false;
+    profiler *main_prof = NULL;
+    struct env *main_env = NULL;
 
     sigusr2_handler(0);
 
@@ -1619,17 +1779,11 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    err = parse_main_options(argc, argv);
-    if (err < 0)
-        return err;
-
-    // workload output to stdout & stderr
-    // perf-prof output to env.output file
-    if (env.output) {
-        if (!freopen(env.output, "a", stdout))
-            return -1;
-        dup2(STDOUT_FILENO, STDERR_FILENO);
-    }
+    main_prof = parse_main_options(argc, argv);
+    if (!main_prof) return err;
+    main_env = zalloc(sizeof(*main_env));
+    if (!main_env) return err;
+    *main_env = env;
 
     if (epoll_wait_signal(SIGCHLD, SIGINT, SIGTERM, SIGUSR1, SIGUSR2, SIGWINCH, 0) < 0)
         return -1;
@@ -1638,23 +1792,24 @@ int main(int argc, char *argv[])
     if (env.usage_self) {
         timer_init(&usage_self, usage_self_handle);
         timer_start(&usage_self, env.usage_self * 1000000UL, false);
+        usage_self_start = true;
     }
 
-    if (!prof_dev_open(monitor, &env))
+    if (!prof_dev_open(main_prof, main_env))
         return -1;
 
-    while (!exiting) {
+    while (running) {
         int fds = event_poll__poll(main_epoll, -1);
 
         // -ENOENT means there are no file descriptors in event_poll.
         if (fds == -ENOENT)
-            exiting = true;
+            running = 0;
     }
     err = 0;
 
     prof_dev_list_close();
 
-    if (env.usage_self)
+    if (usage_self_start)
         timer_destroy(&usage_self);
     if (!isatty(STDIN_FILENO))
         main_epoll_del(STDIN_FILENO);

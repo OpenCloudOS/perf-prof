@@ -44,6 +44,65 @@ static inline bool is_sampling_event(struct perf_event_attr *attr)
 	return attr->sample_period != 0;
 }
 
+int perf_sample_forward_init(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_evsel *evsel;
+    u64 mask = PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME |
+               PERF_SAMPLE_ADDR | PERF_SAMPLE_ID | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU;
+    u64 sample_type_mask = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU;
+    u64 sample_type = 0;
+    int pos = 0;
+
+    perf_evlist__for_each_evsel(evlist, evsel) {
+        struct perf_event_attr *attr = perf_evsel__attr(evsel);
+        if (is_sampling_event(attr)) {
+            if (sample_type == 0) {
+                sample_type = attr->sample_type & mask;
+            } else if (sample_type != (attr->sample_type & mask)) {
+                fprintf(stderr, "Could not init forward: sample_type mismatch.\n");
+                return -1;
+            }
+        }
+    }
+
+    if ((sample_type & sample_type_mask) != sample_type_mask) {
+        fprintf(stderr, "Could not init forward: sample_type mismatch.\n");
+        return -1;
+    }
+
+    dev->forward.id_pos = -1;
+
+    if (sample_type & PERF_SAMPLE_IDENTIFIER)
+        pos += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_IP)
+        pos += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_TID) {
+        dev->forward.tid_pos = pos;
+        pos += sizeof(u32) + sizeof(u32);
+    }
+    if (sample_type & PERF_SAMPLE_TIME) {
+        dev->forward.time_pos = pos;
+        pos += sizeof(u64);
+    }
+    if (sample_type & PERF_SAMPLE_ADDR)
+        pos += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_ID) {
+        dev->forward.id_pos = pos;
+        pos += sizeof(u64);
+    }
+    if (sample_type & PERF_SAMPLE_STREAM_ID)
+        pos += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_CPU) {
+        dev->forward.cpu_pos = pos;
+        pos += sizeof(u32) + sizeof(u32);
+    }
+
+    dev->forward.forwarded_time_pos = sizeof(u32) + sizeof(u32); // PERF_SAMPLE_TID
+
+    return 0;
+}
+
 int perf_sample_time_init(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
@@ -56,22 +115,22 @@ int perf_sample_time_init(struct prof_dev *dev)
             if (sample_type == 0) {
                 sample_type = attr->sample_type & SAMPLE_TYPE_MASK;
             } else if (sample_type != (attr->sample_type & SAMPLE_TYPE_MASK)) {
-                fprintf(stderr, "Could not init: sample_type mismatch.\n");
+                fprintf(stderr, "Could not init time_ctx: sample_type mismatch.\n");
                 return -1;
             }
         }
     }
 
     dev->time_ctx.sample_type = sample_type;
-    dev->time_ctx.time_offset = 0;
+    dev->time_ctx.time_pos = 0;
 
     if (sample_type & PERF_SAMPLE_TIME) {
         if (sample_type & PERF_SAMPLE_IDENTIFIER)
-            dev->time_ctx.time_offset += sizeof(u64);
+            dev->time_ctx.time_pos += sizeof(u64);
         if (sample_type & PERF_SAMPLE_IP)
-            dev->time_ctx.time_offset += sizeof(u64);
+            dev->time_ctx.time_pos += sizeof(u64);
         if (sample_type & PERF_SAMPLE_TID)
-            dev->time_ctx.time_offset += sizeof(u32) + sizeof(u32);
+            dev->time_ctx.time_pos += sizeof(u32) + sizeof(u32);
     }
     return 0;
 }
@@ -142,7 +201,7 @@ union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *eve
 
     data = (void *)event->sample.array;
 
-    time = (u64 *)(data + dev->time_ctx.time_offset);
+    time = (u64 *)(data + dev->time_ctx.time_pos);
     *time = perf_time_to_tsc(dev, *time);
 
     return event;

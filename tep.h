@@ -24,8 +24,11 @@ void monitor_tep__comm(struct prof_dev *dev, union perf_event *event, int instan
 
 struct tp {
     struct prof_dev *dev;
-    struct perf_evsel *evsel;
-    int id;
+    union {
+        struct perf_evsel *evsel;
+        struct prof_dev *source_dev;
+    };
+    int id; // id > 0: tp:sys; id < 0: profiler;
     char *sys;
     char *name;
     char *filter;
@@ -81,6 +84,7 @@ struct tp {
 
 struct tp_list {
     int nr_tp;
+    int nr_real_tp;
     int nr_need_stack;
     bool need_stream_id;
     int nr_top;
@@ -106,9 +110,43 @@ struct perf_record_tp {
     char str[];
 };
 
+struct perf_record_dev {
+    struct perf_event_header header;
+
+    // Same as multi_trace_type_header
+    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU
+    u32 pid, tid;
+    u64 time;
+    u64 id;
+    u32 cpu, instance;
+    struct prof_dev *dev;
+    union perf_event event;
+};
+
 enum tp_event_type {
     PERF_RECORD_TP = PERF_RECORD_HEADER_MAX + 1,
+    PERF_RECORD_DEV,
 };
+
+static inline bool tp_is_dev(struct tp *tp)
+{
+    return tp->id < 0;
+}
+
+#define for_each_tp(_list, _tp, i) \
+    for (i = 0, (_tp) = &(_list)->tp[i]; i < (_list)->nr_tp; \
+         i++, (_tp) = &(_list)->tp[i])
+
+#define for_each_real_tp(_list, _tp, i) \
+    for (i = 0, (_tp) = &(_list)->tp[i]; i < (_list)->nr_tp; \
+         i++, (_tp) = &(_list)->tp[i]) \
+         if (!tp_is_dev(_tp))
+
+#define for_each_dev_tp(_list, _tp, i) \
+    for (i = 0, (_tp) = &(_list)->tp[i]; i < (_list)->nr_tp; \
+         i++, (_tp) = &(_list)->tp[i]) \
+         if (tp_is_dev(_tp))
+
 
 struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str);
 void tp_list_free(struct tp_list *tp_list);

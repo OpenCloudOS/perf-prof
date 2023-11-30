@@ -28,7 +28,7 @@ struct monitor;
 struct prof_dev;
 
 void monitor_register(struct monitor *m);
-struct monitor * monitor_find(char *name);
+struct monitor * monitor_find(const char *name);
 struct monitor *monitor_next(struct monitor *m);
 int prof_dev_nr_ins(struct prof_dev *dev);
 int prof_dev_ins_cpu(struct prof_dev *dev, int ins);
@@ -109,6 +109,8 @@ struct env {
     char *key;
     char *impl;
     char *output;
+    int watermark;
+    bool watermark_set;
     bool inherit;
     bool interruptible;
     bool uninterruptible;
@@ -236,6 +238,12 @@ typedef struct monitor {
     void (*namespace)(struct prof_dev *dev, union perf_event *event, int instance);
 }profiler;
 
+enum prof_dev_state {
+	PROF_DEV_STATE_OFF       = -1,
+	PROF_DEV_STATE_INACTIVE  =  0,
+	PROF_DEV_STATE_ACTIVE    =  1,
+};
+
 /*
  * Profiler device
  * Contains sampling ringbuffer, environment, timer, profiler-specific memory, convert, order, etc.
@@ -249,16 +257,18 @@ struct prof_dev {
     struct timer timer;  // interval
     struct env *env;
     void *private;
+    enum prof_dev_state state; // It can be set off and active again by calling prof_dev_enable.
     int pages;
     int nr_pollfd;
-    bool auto_enable; // Can be disabled by init, Call prof_dev_enable to enable.
-    bool dup; //dup event
-    bool close; // Call prof_dev_close at the appropriate time.
+    bool dup; // dup event, order
+    // | title                        | detail                                                                       |
+    // | 2023-11-28 09:32:36.901715 G |           bash 197260 [000] 751890.944308: page-fault: addr 00007fb3c89d6170 |
+    bool print_title;
     int max_read_size;
     long sampled_events;
     struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         u64 sample_type;
-        int time_offset;
+        int time_pos;
     } time_ctx;
     struct perf_event_convert {
         // tsc convert
@@ -285,11 +295,25 @@ struct prof_dev {
         int row; // TIOCGWINSZ
         int col; // TIOCGWINSZ
     } tty;
+    struct perf_event_forward_to {
+        struct prof_dev *target;
+        struct list_head source_list;
+        struct list_head link_to_target;
+        struct perf_record_dev *event_dev;
+        short tid_pos, time_pos, id_pos, cpu_pos;
+        short forwarded_time_pos; // perf_record_dev.time
+    } forward;
 };
 
+struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map);
 struct prof_dev *prof_dev_open(profiler *prof, struct env *env);
-void prof_dev_enable(struct prof_dev *dev);
+int prof_dev_enable(struct prof_dev *dev);
+int prof_dev_disable(struct prof_dev *dev);
+int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
 void prof_dev_close(struct prof_dev *dev);
+static inline bool prof_dev_isowner(struct prof_dev *dev) {return !dev->forward.target;}
+struct env *parse_string_options(char *str);
 
 
 #define PROFILER_DESC(name, arg, ...) \
@@ -298,7 +322,7 @@ void prof_dev_close(struct prof_dev *dev);
     {PROGRAME, "-h", __VA_ARGS__, NULL}
 #define PROFILER_ARGV_OPTION \
     "OPTION:", \
-    "cpus", "pids", "tids", "cgroups", \
+    "cpus", "pids", "tids", "cgroups", "watermark", \
     "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset", \
     "usage-self", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
@@ -324,6 +348,7 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 
 //convert.c
 u64 rdtsc(void);
+int perf_sample_forward_init(struct prof_dev *dev);
 int perf_sample_time_init(struct prof_dev *dev);
 int perf_event_convert_init(struct prof_dev *dev);
 void perf_event_convert_deinit(struct prof_dev *dev);
