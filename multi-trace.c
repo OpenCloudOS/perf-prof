@@ -394,13 +394,13 @@ static int monitor_ctx_init(struct prof_dev *dev)
         goto failed;
 
     for (i = 0; i < ctx->nr_list; i++) {
+        struct tp *tp;
         ctx->tp_list[i] = tp_list_new(dev, env->events[i]);
         if (!ctx->tp_list[i]) {
             goto failed;
         }
         stacks += ctx->tp_list[i]->nr_need_stack;
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+        for_each_real_tp(ctx->tp_list[i], tp, j) {
             if (env->verbose)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
             if (tp->untraced && !tp->trigger)
@@ -552,9 +552,9 @@ static int __multi_trace_init(struct prof_dev *dev)
     reduce_wakeup_times(dev, &attr);
 
     for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
+        struct tp *tp;
+        for_each_real_tp(ctx->tp_list[i], tp, j) {
             struct perf_evsel *evsel;
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
 
             attr.config = tp->id;
             if (tp->stack)
@@ -571,6 +571,17 @@ static int __multi_trace_init(struct prof_dev *dev)
                 perf_evsel__keep_disable(evsel, true);
 
             tp->evsel = evsel;
+        }
+        for_each_dev_tp(ctx->tp_list[i], tp, j) {
+            struct prof_dev *source_dev = tp->source_dev;
+            if (source_dev &&
+                prof_dev_forward(source_dev, dev) == 0) {
+                // The target is responsible for whether to print title
+                source_dev->print_title = false;
+                if (!tp->untraced)
+                    fprintf(stderr, "%s can only be untraced.\n", source_dev->prof->name);
+                tp->untraced = true;
+             }
         }
     }
 
@@ -598,16 +609,15 @@ static int multi_trace_init(struct prof_dev *dev)
 
     // env->cycle: from the last one back to the first.
     for (k = 0; k < ctx->nr_list - !env->cycle; k++) {
-        for (i = 0; i < ctx->tp_list[k]->nr_tp; i++) {
-            struct tp *tp1 = &ctx->tp_list[k]->tp[i];
+        struct tp *tp1, *tp2;
+        for_each_real_tp(ctx->tp_list[k], tp1, i) {
             if (tp1->untraced)
                 continue;
             // for handle remaining
             if (!ctx->impl->object_new(ctx->class, tp1, NULL))
                 goto failed;
             n = (k+1) % ctx->nr_list;
-            for (j = 0; j < ctx->tp_list[n]->nr_tp; j++) {
-                struct tp *tp2 = &ctx->tp_list[n]->tp[j];
+            for_each_real_tp(ctx->tp_list[n], tp2, j) {
                 if (tp2->untraced)
                     continue;
                 if (!ctx->impl->object_new(ctx->class, tp1, tp2))
@@ -628,8 +638,8 @@ static int multi_trace_filter(struct prof_dev *dev)
     int i, j, err;
 
     for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
+        struct tp *tp;
+        for_each_real_tp(ctx->tp_list[i], tp, j) {
             if (tp->filter && tp->filter[0]) {
                 err = perf_evsel__apply_filter(tp->evsel, tp->filter);
                 if (err < 0)
@@ -733,8 +743,8 @@ static void multi_trace_interval(struct prof_dev *dev)
 
     // env->cycle: from the last one back to the first.
     for (k = 0; k < ctx->nr_list - !dev->env->cycle; k++) {
-        for (i = 0; i < ctx->tp_list[k]->nr_tp; i++) {
-            struct tp *tp1 = &ctx->tp_list[k]->tp[i];
+        struct tp *tp1, *tp2;
+        for_each_real_tp(ctx->tp_list[k], tp1, i) {
             if (tp1->untraced)
                 continue;
             // for print remaining
@@ -744,9 +754,7 @@ static void multi_trace_interval(struct prof_dev *dev)
             }
             ctx->class->print(two);
             n = (k+1) % ctx->nr_list;
-            for (j = 0; j < ctx->tp_list[n]->nr_tp; j++) {
-                struct tp *tp2 = &ctx->tp_list[n]->tp[j];
-
+            for_each_real_tp(ctx->tp_list[n], tp2, j) {
                 if (tp2->untraced)
                     continue;
                 two = ctx->impl->object_find(ctx->class, tp1, tp2);
@@ -832,14 +840,22 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
     void *raw;
     int size;
 
-    multi_trace_raw_size(event, &raw, &size, tp);
+    if (dev->print_title) {
+        if (title)
+            printf("%-27s", title);
+        else
+            print_time(stdout);
+        tp_print_marker(tp);
+    }
 
-    if (title)
-        printf("%-27s", title);
-    else
-        print_time(stdout);
-    tp_print_marker(tp);
+    if (event->header.type == PERF_RECORD_DEV) {
+        struct perf_record_dev *event_dev = (void *)event;
+        perf_event_process_record(dev, event, event_dev->instance, true, true);
+        return;
+    }
+
     tep__update_comm(NULL, data->h.tid_entry.tid);
+    multi_trace_raw_size(event, &raw, &size, tp);
     tep__print_event(data->h.time/1000, data->h.cpu_entry.cpu, raw, size);
 
     if (tp->stack) {
@@ -1095,11 +1111,12 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
     struct multi_trace_type_header *hdr = (void *)event->sample.array;
+    struct perf_record_dev *event_dev = NULL;
     struct tp *tp = NULL, *tp1 = NULL;
     struct timeline_node current;
     struct perf_evsel *evsel;
-    void *raw;
-    int size;
+    void *raw = NULL;
+    int size = 0;
     int i, j;
     bool need_find_prev, need_backup, need_remove_from_backup;
     u64 key;
@@ -1110,14 +1127,18 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
     if (hdr->time > ctx->recent_time)
         ctx->recent_time = hdr->time;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
+    if (event->header.type == PERF_RECORD_DEV) {
+        event_dev = (void *)event;
+        evsel = (void *)event_dev->dev;
+    } else {
+        evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
+    }
     if (!evsel)
         goto free_dup_event;
 
     for (i = 0; i < ctx->nr_list; i++) {
         tp1 = NULL;
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            tp = &ctx->tp_list[i]->tp[j];
+        for_each_tp(ctx->tp_list[i], tp, j) {
             if (tp->evsel == evsel)
                 goto found;
             if (!tp->untraced)
@@ -1142,14 +1163,16 @@ found:
         multi_trace_interval(dev);
     }
 
-    multi_trace_raw_size(event, &raw, &size, tp);
+    if (!event_dev)
+        multi_trace_raw_size(event, &raw, &size, tp);
 
     if (!ctx->nested) {
-        bool event_is_sched_wakeup_and_unnecessary;
-        sched_event(ctx->level, raw, size, hdr->cpu_entry.cpu);
-        event_is_sched_wakeup_and_unnecessary = sched_wakeup_unnecessary(ctx->level, raw, size);
-        if (event_is_sched_wakeup_and_unnecessary) ctx->sched_wakeup_unnecessary ++;
-
+        bool event_is_sched_wakeup_and_unnecessary = false;
+        if (!event_dev) {
+            sched_event(ctx->level, raw, size, hdr->cpu_entry.cpu);
+            event_is_sched_wakeup_and_unnecessary = sched_wakeup_unnecessary(ctx->level, raw, size);
+            if (event_is_sched_wakeup_and_unnecessary) ctx->sched_wakeup_unnecessary ++;
+        }
         need_find_prev = i != 0 || env->cycle;
         need_backup = (i != ctx->nr_list - 1 && !event_is_sched_wakeup_and_unnecessary) ||
                       (i == ctx->nr_list - 1 && env->cycle);
@@ -1238,9 +1261,9 @@ static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key
     }
 
     for (i = 0; i < hctx->nr_list; i++) {
+        struct tp *tp;
         printf("-e \"");
-        for (j = 0; j < hctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &hctx->tp_list[i]->tp[j];
+        for_each_real_tp(hctx->tp_list[i], tp, j) {
             printf("%s:%s/%s/", tp->sys, tp->name, tp->filter&&tp->filter[0]?tp->filter:".");
             if (!env->key || tp->key)
                 printf("key=%s/", tp->key?:".");
@@ -1385,7 +1408,10 @@ static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --impl pair",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us",
-    "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms");
+    "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms",
+    "    "PROGRAME" multi-trace -e 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/' \\",
+    "                          -e 'sched:sched_switch//key=next_pid/,profile/-F 200 --watermark 50 -m 16/untraced/' -k pid -m 128 \\",
+    "                          -i 1000 --order --order-mem 128M --than 20ms --detail=samecpu");
 static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
@@ -1567,6 +1593,7 @@ static int nested_trace_init(struct prof_dev *dev)
     for (k = 0; k < ctx->nr_list; k++) {
         struct tp *tp1 = NULL;
         struct tp *tp2 = NULL;
+        struct tp *tp;
 
         /*
          * f1 --------> f1_ret
@@ -1575,18 +1602,16 @@ static int nested_trace_init(struct prof_dev *dev)
          *
          * -e f1,f1_ret -e f2,f2_ret ..
         **/
-        if (ctx->tp_list[k]->nr_tp - ctx->tp_list[k]->nr_untraced != 2) {
+        if (ctx->tp_list[k]->nr_real_tp - ctx->tp_list[k]->nr_untraced != 2) {
             fprintf(stderr, "-e ");
-            for (i = 0; i < ctx->tp_list[k]->nr_tp; i++) {
-                struct tp *tp = &ctx->tp_list[k]->tp[i];
+            for_each_real_tp(ctx->tp_list[k], tp, i) {
                 fprintf(stderr, "%s%s:%s%s", i == 0 ? "" : ",", tp->sys, tp->name, tp->untraced ? "//untraced/" : "");
             }
             fprintf(stderr, " are unpaired\n");
             goto failed;
         }
 
-        for (i = 0; i < ctx->tp_list[k]->nr_tp; i++) {
-            struct tp *tp = &ctx->tp_list[k]->tp[i];
+        for_each_real_tp(ctx->tp_list[k], tp, i) {
             if (tp->untraced)
                 continue;
             if (!tp1)
@@ -1616,10 +1641,10 @@ static void nested_trace_interval(struct prof_dev *dev)
     for (k = 0; k < ctx->nr_list; k++) {
         struct tp *tp1 = NULL;
         struct tp *tp2 = NULL;
+        struct tp *tp;
         struct two_event *two;
 
-        for (i = 0; i < ctx->tp_list[k]->nr_tp; i++) {
-            struct tp *tp = &ctx->tp_list[k]->tp[i];
+        for_each_real_tp(ctx->tp_list[k], tp, i) {
             if (tp->untraced)
                 continue;
             if (!tp1)
@@ -1741,9 +1766,8 @@ static int rundelay_filter(struct prof_dev *dev)
     int match = 0;
 
     for (i = 0; i < ctx->nr_list; i++) {
-        for (j = 0; j < ctx->tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &ctx->tp_list[i]->tp[j];
-
+        struct tp *tp;
+        for_each_real_tp(ctx->tp_list[i], tp, j) {
             if (!tp->untraced && tp->key &&
                 (tp->id == sched_wakeup || tp->id == sched_wakeup_new || tp->id == sched_switch)) {
                 struct tp_filter *tp_filter = NULL;
@@ -1804,7 +1828,7 @@ static void rundelay_help(struct help_ctx *hctx)
 
     // Only make the simplest conditions.
     if (hctx->nr_list < 2 ||
-        hctx->tp_list[0]->nr_tp < 3)
+        hctx->tp_list[0]->nr_real_tp < 3)
         return ;
 
     env->impl = strdup(TWO_EVENT_DELAY_IMPL);

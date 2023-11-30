@@ -66,11 +66,11 @@ int sched_init(int nr_list, struct tp_list **tp_list)
     int wakeup_id, switch_id, cpus;
     int sched_switch_without_filter = 0;
     int level = 0;
+    struct tp *tp;
 
     wakeup_id = tep__event_id("sched", "sched_wakeup");
     for (i = 0; i < nr_list; i++) {
-        for (j = 0; j < tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &tp_list[i]->tp[j];
+        for_each_real_tp(tp_list[i], tp, j) {
             if (tp->id == wakeup_id)
                 goto to_check_switch;
         }
@@ -80,8 +80,7 @@ int sched_init(int nr_list, struct tp_list **tp_list)
 to_check_switch:
     switch_id = tep__event_id("sched", "sched_switch");
     for (i = 0; i < nr_list; i++) {
-        for (j = 0; j < tp_list[i]->nr_tp; j++) {
-            struct tp *tp = &tp_list[i]->tp[j];
+        for_each_real_tp(tp_list[i], tp, j) {
             // The sched_switch event cannot have any filters present.
             // Otherwise, it will affect the accuracy of sched_wakeup_unnecessary().
             if (tp->id == switch_id && !(tp->filter && tp->filter[0]))
