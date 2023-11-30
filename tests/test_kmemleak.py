@@ -13,7 +13,8 @@ def test_kmemleak_kmalloc(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
@@ -26,7 +27,8 @@ def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_kmemleak_mm_page_alloc(runtime, memleak_check):
@@ -58,7 +60,8 @@ def test_kmemleak_mm_page_alloc(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_kmemprof_percpu_alloc(runtime, memleak_check):
@@ -75,5 +78,6 @@ def test_kmemprof_percpu_alloc(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 

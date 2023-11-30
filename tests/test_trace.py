@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from PerfProf import PerfProf
+import pytest
 
 def test_sched_wakeup(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup -C 0
@@ -10,7 +11,8 @@ def test_sched_wakeup(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_sched_wakeup_tsc(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup -C 0
@@ -20,7 +22,8 @@ def test_sched_wakeup_tsc(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_sched_wakeup_tsc_offset(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup -C 0
@@ -30,7 +33,8 @@ def test_sched_wakeup_tsc_offset(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_flame_graph(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup -C 0 -g
@@ -40,7 +44,8 @@ def test_flame_graph(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_overwrite(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup,sched:sched_switch --overwrite
@@ -50,4 +55,5 @@ def test_overwrite(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)

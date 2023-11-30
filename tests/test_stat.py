@@ -10,7 +10,8 @@ def test_sched_switch(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_irq_off2(runtime, memleak_check):
     #perf-prof stat -e sched:sched_switch,sched:sched_wakeup -i 1000
@@ -20,4 +21,5 @@ def test_irq_off2(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)

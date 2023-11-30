@@ -11,7 +11,8 @@ def test_task_state_filter(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_task_state_ip_link_show(runtime, memleak_check):
     # perf-prof task-state -- ip link show
@@ -21,4 +22,7 @@ def test_task_state_ip_link_show(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
+
+

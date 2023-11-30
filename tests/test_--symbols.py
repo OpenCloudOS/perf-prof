@@ -13,5 +13,6 @@ def test___symbols(runtime, memleak_check):
     input += '0xef900\n'
     for std, line in usdt.run(runtime, input=input):
         print(line, end='', flush=True)
-        assert std == PerfProf.STDOUT
+        if std != PerfProf.STDOUT:
+            pytest.fail(line)
         assert line != '??\n'

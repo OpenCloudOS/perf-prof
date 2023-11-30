@@ -12,7 +12,8 @@ def test_sched_wakeup(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_block_rq_issue(runtime, memleak_check):
     #perf-prof top -e block:block_rq_issue//top-by=nr_sector/comm=comm/ --only-comm -m 32
@@ -22,7 +23,8 @@ def test_block_rq_issue(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_block_rq_issue_filter(runtime, memleak_check):
     #perf-prof top -e 'block:block_rq_issue/rwbs==W&&nr_sector<4/top-by=nr_sector/comm=comm/' --only-comm -i 1000
@@ -32,7 +34,8 @@ def test_block_rq_issue_filter(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_kvm_exit(runtime, memleak_check):
     exist, _ = PerfProf.tracepoint_exists('kvm:kvm_exit')
@@ -46,7 +49,8 @@ def test_kvm_exit(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_sched_stat_runtime(runtime, memleak_check):
     #perf-prof top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -m 64
@@ -56,7 +60,8 @@ def test_sched_stat_runtime(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_sched_process_exec(runtime, memleak_check):
     #perf-prof top -e sched:sched_process_exec//comm=filename/ --only-comm
@@ -66,7 +71,8 @@ def test_sched_process_exec(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_workqueue_execute_start(runtime, memleak_check):
     #perf-prof top -e 'workqueue:workqueue_execute_start//key=common_pid/alias=NUM/comm=ksymbol(function)/' --only-comm
@@ -76,7 +82,8 @@ def test_workqueue_execute_start(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_3event(runtime, memleak_check):
     #perf-prof top -e sched:sched_switch//key=prev_pid/comm=prev_comm/,sched:sched_wakeup//key=pid/comm=comm/,sched:sched_stat_runtime//top-by="runtime/1000"/alias=run(us)/ -m 64
@@ -86,4 +93,5 @@ def test_3event(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)

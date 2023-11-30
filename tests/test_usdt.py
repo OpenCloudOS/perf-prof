@@ -11,7 +11,8 @@ def test_usdt_list(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_usdt_add(runtime, memleak_check):
     usdt = PerfProf(['usdt', 'add', 'libpthread:pthread_create@/usr/lib64/libpthread.so.0'])
@@ -21,7 +22,8 @@ def test_usdt_add(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_usdt_trace_pthread_create(runtime, memleak_check):
     trace = PerfProf(['trace', '-e', 'libpthread:pthread_create,libc:setjmp', '-m', '8'])
@@ -30,7 +32,8 @@ def test_usdt_trace_pthread_create(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_usdt_del(runtime, memleak_check):
     usdt = PerfProf(['usdt', 'del', 'pthread_create@/usr/lib64/libpthread.so.0'])
@@ -40,4 +43,5 @@ def test_usdt_del(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)

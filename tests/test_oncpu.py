@@ -19,7 +19,8 @@ def oncpu(args, runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_oncpu_attach_to_allcpu(runtime, memleak_check):

@@ -13,7 +13,8 @@ def test_multi_trace_switch(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_multi_trace_hrtimer(runtime, memleak_check):
     # perf-prof multi-trace -e timer:hrtimer_expire_entry/function==0x$tick/ -e timer:hrtimer_expire_exit -i 1000
@@ -26,7 +27,8 @@ def test_multi_trace_hrtimer(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_multi_trace_workqueue(runtime, memleak_check):
     multi_trace = PerfProf(["multi-trace"])
@@ -39,7 +41,8 @@ def test_multi_trace_workqueue(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_multi_trace_softirq_timer(runtime, memleak_check):
     # perf-prof multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000
@@ -52,7 +55,8 @@ def test_multi_trace_softirq_timer(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_multi_trace_softirq_pair(runtime, memleak_check):
@@ -66,7 +70,8 @@ def test_multi_trace_softirq_pair(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_multi_trace_softirq_timer_detail(runtime, memleak_check):
@@ -80,7 +85,8 @@ def test_multi_trace_softirq_timer_detail(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 def test_multi_trace_softirq_timer_detail_only_than(runtime, memleak_check):
@@ -94,7 +100,8 @@ def test_multi_trace_softirq_timer_detail_only_than(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_multi_trace_softirq_timer_detail_tsc(runtime, memleak_check):
     multi_trace = PerfProf(["multi-trace",
@@ -106,7 +113,8 @@ def test_multi_trace_softirq_timer_detail_tsc(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_multi_trace_rundelay(runtime, memleak_check):
     # perf-prof multi-trace -e 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/' \
@@ -121,7 +129,8 @@ def test_multi_trace_rundelay(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 @pytest.fixture
 def sleep_loop_tid():
@@ -140,7 +149,8 @@ def test_multi_trace_tid_sleep_1ms(runtime, memleak_check, sleep_loop_tid):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 
 @pytest.fixture
@@ -160,6 +170,7 @@ def test_multi_trace_tid_sleep_100ms(runtime, memleak_check, sleep_loop_tid_100m
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 

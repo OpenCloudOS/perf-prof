@@ -12,7 +12,8 @@ def expr(args, runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_expr_sched_wakeup0(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', '&pid'], runtime, memleak_check)

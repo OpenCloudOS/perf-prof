@@ -9,7 +9,8 @@ def test_sched_switch(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_sched_switch_sched_wakeup(runtime, memleak_check):
     prof = PerfProf(["hrtimer", '-e', 'sched:sched_switch,sched:sched_wakeup', '-C', '0-1', '-F', '20', '-g', 'sched_switch==0 && sched_wakeup==0'])
@@ -18,4 +19,5 @@ def test_sched_switch_sched_wakeup(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)

@@ -10,7 +10,8 @@ def test_percpu_stat(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
 
 def test_percpu_stat_syscalls(runtime, memleak_check):
     #perf-prof percpu-stat --syscalls -i 2000
@@ -20,4 +21,5 @@ def test_percpu_stat_syscalls(runtime, memleak_check):
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
             print(line, end='', flush=True)
         if not memleak_check:
-            assert std == PerfProf.STDOUT
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)
