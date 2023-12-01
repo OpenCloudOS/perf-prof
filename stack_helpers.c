@@ -95,7 +95,7 @@ void function_resolver_unref(void)
 char *function_resolver(void *priv, unsigned long long *addrp, char **modp)
 {
     unsigned long addr = *(unsigned long *)addrp;
-    if (ctx.ksyms) {
+    if (ctx.ksyms && addr >= START_OF_KERNEL) {
         const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, addr);
         if (ksym) {
             *addrp = ksym->addr;
