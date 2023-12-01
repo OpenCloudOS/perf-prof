@@ -27,29 +27,47 @@
 #define PERF_REGS_MASK ((1ULL << PERF_REG_ARM64_MAX) - 1)
 #endif
 
+#define START_OF_KERNEL 0xffff000000000000UL
+
+struct page_faults_ctx {
+    struct callchain_ctx *cc;
+    bool print_ip;
+    bool ip_sym;
+};
 
 static int monitor_ctx_init(struct prof_dev *dev)
 {
+    struct page_faults_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+
     tep__ref();
     if (dev->env->callchain) {
-        dev->private = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        ctx->print_ip = 0;
         dev->pages *= 2;
+    } else {
+        ctx->cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+        callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
+        ctx->print_ip = 1;
     }
     return 0;
 }
 
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    if (dev->env->callchain) {
-        callchain_ctx_free(dev->private);
-    }
+    struct page_faults_ctx *ctx = dev->private;
+    callchain_ctx_free(ctx->cc);
     tep__unref();
+    free(ctx);
 }
 
 static int page_faults_init(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
     struct env *env = dev->env;
+    struct page_faults_ctx *ctx;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_SOFTWARE,
         .config        = PERF_COUNT_SW_PAGE_FAULTS,
@@ -61,6 +79,8 @@ static int page_faults_init(struct prof_dev *dev)
         .sample_regs_user = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_user  = env->exclude_user,
+        .exclude_kernel = env->exclude_kernel,
         .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
@@ -69,8 +89,12 @@ static int page_faults_init(struct prof_dev *dev)
 
     if (monitor_ctx_init(dev) < 0)
         return -1;
+    ctx = dev->private;
 
     reduce_wakeup_times(dev, &attr);
+
+    if (!attr.watermark)
+        ctx->ip_sym = 1;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -148,18 +172,32 @@ static void print_regs_user(struct sample_regs_user *regs_user, u64 unused)
 
 static void page_faults_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
+    struct page_faults_ctx *ctx = dev->private;
     struct sample_type_header *data = (void *)event->sample.array;
     struct sample_regs_user *regs_user;
-    bool callchain = dev->env->callchain;
+    struct {
+        __u64 nr;
+        __u64 ips[2];
+    } callchain;
 
     if (dev->print_title) print_time(stdout);
     tep__update_comm(NULL, data->tid_entry.tid);
-    printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016lx\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
-                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr);
+    printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016lx%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+           data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr, ctx->print_ip?" ip ":"\n");
 
-    if (callchain) {
+    if (ctx->print_ip) {
+        if (ctx->ip_sym || data->ip >= START_OF_KERNEL) {
+            callchain.nr = 2;
+            callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+            callchain.ips[1] = data->ip;
+            print_callchain(ctx->cc, (struct callchain *)&callchain, data->tid_entry.pid);
+        } else
+            printf("%016lx\n", data->ip);
+    }
+
+    if (dev->env->callchain) {
         regs_user = (struct sample_regs_user *)&data->callchain.ips[data->callchain.nr];
-        print_callchain_common_cbs(dev->private, &data->callchain, data->tid_entry.pid, NULL, (callchain_cbs)print_regs_user, regs_user);
+        print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid, NULL, (callchain_cbs)print_regs_user, regs_user);
     }
 }
 
@@ -171,7 +209,7 @@ static const char *page_faults_desc[] = PROFILER_DESC("page-faults",
     "    "PROGRAME" page-faults -C 0 -g");
 static const char *page_faults_argv[] = PROFILER_ARGV("page-faults",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_CALLCHAIN_FILTER,
+    PROFILER_ARGV_CALLCHAIN_FILTER, "exclude-user", "exclude-kernel",
     PROFILER_ARGV_PROFILER, "call-graph");
 static profiler page_faults = {
     .name = "page-faults",
