@@ -578,8 +578,10 @@ static int __multi_trace_init(struct prof_dev *dev)
                 prof_dev_forward(source_dev, dev) == 0) {
                 // The target is responsible for whether to print title
                 source_dev->print_title = false;
-                if (!tp->untraced)
+                if (!tp->untraced) {
                     fprintf(stderr, "%s can only be untraced.\n", source_dev->prof->name);
+                    ctx->tp_list[i]->nr_untraced ++;
+                }
                 tp->untraced = true;
              }
         }
@@ -1602,7 +1604,7 @@ static int nested_trace_init(struct prof_dev *dev)
          *
          * -e f1,f1_ret -e f2,f2_ret ..
         **/
-        if (ctx->tp_list[k]->nr_real_tp - ctx->tp_list[k]->nr_untraced != 2) {
+        if (ctx->tp_list[k]->nr_tp - ctx->tp_list[k]->nr_untraced != 2) {
             fprintf(stderr, "-e ");
             for_each_real_tp(ctx->tp_list[k], tp, i) {
                 fprintf(stderr, "%s%s:%s%s", i == 0 ? "" : ",", tp->sys, tp->name, tp->untraced ? "//untraced/" : "");
