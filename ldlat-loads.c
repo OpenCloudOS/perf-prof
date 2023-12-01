@@ -10,8 +10,6 @@
 #include <stack_helpers.h>
 #include <latency_helpers.h>
 
-#define START_OF_KERNEL 0xffff000000000000UL
-
 struct ldlat_ctx {
     struct latency_dist *lat_dist;
     struct callchain_ctx *ccx;

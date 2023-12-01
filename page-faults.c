@@ -27,8 +27,6 @@
 #define PERF_REGS_MASK ((1ULL << PERF_REG_ARM64_MAX) - 1)
 #endif
 
-#define START_OF_KERNEL 0xffff000000000000UL
-
 struct page_faults_ctx {
     struct callchain_ctx *cc;
     bool print_ip;

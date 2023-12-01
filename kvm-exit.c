@@ -111,7 +111,6 @@ struct sample_type_raw {
     } raw;
 };
 
-#define START_OF_KERNEL 0xffff000000000000UL
 static void monitor_ctx_exit(struct prof_dev *dev);
 static int monitor_ctx_init(struct prof_dev *dev)
 {

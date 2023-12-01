@@ -39,6 +39,8 @@ struct breakpoint_ctx {
     struct hw_breakpoint hwbp[HBP_NUM];
     struct callchain_ctx *cc;
     struct flame_graph *flame;
+    bool print_ip;
+    bool ip_sym;
 };
 
 static int monitor_ctx_init(struct prof_dev *dev)
@@ -53,12 +55,19 @@ static int monitor_ctx_init(struct prof_dev *dev)
     for (i = 0; i < HBP_NUM; i++)
         ctx->hwbp[i] = hwbp[i];
 
+    ctx->print_ip = 1;
     if (env->callchain) {
-        if (!env->flame_graph)
+        if (!env->flame_graph) {
             ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-        else
+            ctx->print_ip = 0;
+        } else
             ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
         dev->pages *= 2;
+    }
+
+    if (ctx->print_ip) {
+        ctx->cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+        callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
     }
 
     return 0;
@@ -67,14 +76,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct breakpoint_ctx *ctx = dev->private;
-    if (dev->env->callchain) {
-        if (!dev->env->flame_graph)
-            callchain_ctx_free(ctx->cc);
-        else {
-            flame_graph_output(ctx->flame);
-            flame_graph_close(ctx->flame);
-        }
-    }
+    callchain_ctx_free(ctx->cc);
+    flame_graph_output(ctx->flame);
+    flame_graph_close(ctx->flame);
     free(ctx);
 }
 
@@ -169,6 +173,8 @@ static int breakpoint_init(struct prof_dev *dev)
         .sample_regs_intr = PERF_REGS_MASK,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_user  = env->exclude_user,
+        .exclude_kernel = env->exclude_kernel,
         .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .wakeup_events = 1,
@@ -181,6 +187,9 @@ static int breakpoint_init(struct prof_dev *dev)
     ctx = dev->private;
 
     reduce_wakeup_times(dev, &attr);
+
+    if (!attr.watermark)
+        ctx->ip_sym = 1;
 
     for (i = 0; i < HBP_NUM; i++) {
         if (ctx->hwbp[i].address) {
@@ -267,6 +276,10 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
         }    cpu_entry;
         struct callchain callchain;
     } *data = (void *)event->sample.array;
+    struct {
+        __u64 nr;
+        __u64 ips[2];
+    } callchain;
     struct sample_regs_intr *regs_intr;
     int i;
 
@@ -276,9 +289,19 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
     }
 
     if (dev->print_title) print_time(stdout);
-    printf("    pid %6d tid %6d [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s ip 0x%llx\n", data->tid_entry.pid, data->tid_entry.tid,
+    printf("    pid %6d tid %6d [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s%s", data->tid_entry.pid, data->tid_entry.tid,
             data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
-            data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, data->ip);
+            data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, ctx->print_ip?" ip ":"\n");
+
+    if (ctx->print_ip) {
+        if (ctx->ip_sym || data->ip >= START_OF_KERNEL) {
+            callchain.nr = 2;
+            callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+            callchain.ips[1] = data->ip;
+            print_callchain(ctx->cc, (struct callchain *)&callchain, data->tid_entry.pid);
+        } else
+            printf("%016llx\n", data->ip);
+    }
 
     if (dev->env->callchain) {
         regs_intr = (struct sample_regs_intr *)&data->callchain.ips[data->callchain.nr];
@@ -304,7 +327,7 @@ static const char *breakpoint_desc[] = PROFILER_DESC("breakpoint",
     "    "PROGRAME" breakpoint 0x7ffd8c7dae28/8:w");
 static const char *breakpoint_argv[] = PROFILER_ARGV("breakpoint",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_CALLCHAIN_FILTER,
+    PROFILER_ARGV_CALLCHAIN_FILTER, "exclude-user", "exclude-kernel",
     PROFILER_ARGV_PROFILER, "call-graph", "flame-graph");
 static profiler breakpoint = {
     .name = "breakpoint",

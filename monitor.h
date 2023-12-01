@@ -23,6 +23,8 @@
 /* perf sample has 16 bits size limit */
 #define PERF_SAMPLE_MAX_SIZE (1 << 16)
 
+#define START_OF_KERNEL 0xffff000000000000UL
+
 
 struct monitor;
 struct prof_dev;
