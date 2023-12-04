@@ -57,3 +57,14 @@ def test_overwrite(runtime, memleak_check):
         if not memleak_check:
             if std != PerfProf.STDOUT:
                 pytest.fail(line)
+
+def test_trace_profiler(runtime, memleak_check):
+    #perf-prof trace -e 'task-state,page-faults/-N 10/,raw_syscalls:sys_enter,profile/-F 5000 -N 10/' --order -- cat /proc/self/maps
+    prof = PerfProf(['trace', '-e', 'task-state,page-faults/-N 10/,raw_syscalls:sys_enter,profile/-F 5000 -N 10/', '--order', '--', 'cat', '/proc/self/maps'])
+    for std, line in prof.run(runtime, memleak_check):
+        if not memleak_check or (
+            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
+            print(line, end='', flush=True)
+        if not memleak_check:
+            if std != PerfProf.STDOUT:
+                pytest.fail(line)

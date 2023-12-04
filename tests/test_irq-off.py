@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from PerfProf import PerfProf
+import pytest
 
 def test_irq_off1(runtime, memleak_check):
     #perf-prof irq-off --period 10ms --than 20ms -g

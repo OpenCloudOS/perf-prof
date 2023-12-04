@@ -3,9 +3,9 @@
 from PerfProf import PerfProf
 import pytest
 
-def test_percpu_stat(runtime, memleak_check):
-    #perf-prof percpu-stat -i 1000
-    prof = PerfProf(['percpu-stat', '-i', '1000'])
+def test_sched_switch(runtime, memleak_check):
+    #perf-prof hrcount -e sched:sched_switch -i 1000 --period 100ms
+    prof = PerfProf(["hrcount", '-e', 'sched:sched_switch', '--period', '100ms', '-i', '1000'])
     for std, line in prof.run(runtime, memleak_check):
         if not memleak_check or (
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
@@ -14,9 +14,9 @@ def test_percpu_stat(runtime, memleak_check):
             if std != PerfProf.STDOUT:
                 pytest.fail(line)
 
-def test_percpu_stat_syscalls(runtime, memleak_check):
-    #perf-prof percpu-stat --syscalls -i 2000
-    prof = PerfProf(['percpu-stat', '--syscalls', '-i', '2000'])
+def test_sched_switch_wakeup(runtime, memleak_check):
+    #perf-prof hrcount -e sched:sched_switch,sched:sched_wakeup -i 1000
+    prof = PerfProf(["hrcount", '-e', 'sched:sched_switch,sched:sched_wakeup', '-i', '1000'])
     for std, line in prof.run(runtime, memleak_check):
         if not memleak_check or (
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):

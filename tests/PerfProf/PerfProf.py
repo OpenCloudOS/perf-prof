@@ -9,6 +9,7 @@ perf-prof
 import os
 import re
 import time
+import stat
 import shutil
 import signal
 import threading
@@ -175,7 +176,7 @@ class PerfProf(object):
 
     @staticmethod
     def escape_to_shell_param(s):
-        token = ('"', '\\', '$', '>', '<', '!', '?', '~', '*', '@', '(', ')', '{', '}', '[', ']', '|', '&', ';')
+        token = ('"', '\\', '$', '>', '<', '!', '?', '~', '*', '@', '(', ')', '{', '}', '[', ']', '|', '&', ';', ' ')
         for t in token:
             if t in s:
                 s = "'" + s + "'"
@@ -238,6 +239,16 @@ class PerfProf(object):
             with open(path, 'w') as f:
                 f.write(value)
         return old
+
+    @staticmethod
+    def scan_block_devices(directory):
+        block_devices = []
+
+        for entry in os.scandir(directory):
+            if stat.S_ISBLK(entry.stat().st_mode) and not entry.name.startswith('nbd'):
+                block_devices.append(entry.name)
+
+        return block_devices
 
     @staticmethod
     def kallsyms_lookup_name(name):

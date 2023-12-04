@@ -3,9 +3,9 @@
 from PerfProf import PerfProf
 import pytest
 
-def test_percpu_stat(runtime, memleak_check):
-    #perf-prof percpu-stat -i 1000
-    prof = PerfProf(['percpu-stat', '-i', '1000'])
+def test_split_lock(runtime, memleak_check):
+    #perf-prof split-lock -i 1000 --test
+    prof = PerfProf(["split-lock", '-i', '1000', '--test'])
     for std, line in prof.run(runtime, memleak_check):
         if not memleak_check or (
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
@@ -14,9 +14,9 @@ def test_percpu_stat(runtime, memleak_check):
             if std != PerfProf.STDOUT:
                 pytest.fail(line)
 
-def test_percpu_stat_syscalls(runtime, memleak_check):
-    #perf-prof percpu-stat --syscalls -i 2000
-    prof = PerfProf(['percpu-stat', '--syscalls', '-i', '2000'])
+def test_split_lock_T(runtime, memleak_check):
+    #perf-prof split-lock -T 1000 --test
+    prof = PerfProf(["split-lock", '-T', '1000', '--test'])
     for std, line in prof.run(runtime, memleak_check):
         if not memleak_check or (
             std == PerfProf.STDERR and not PerfProf.lost_events(line)):
