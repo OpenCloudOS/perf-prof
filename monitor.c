@@ -660,6 +660,7 @@ struct env *parse_string_options(char *str)
     char *token;
     int argc = 1; // argv[0] = "perf-prof"
     char **argv = malloc((argc + 1)*sizeof(char*));
+    struct env *e = NULL;
 
     token = strtok(str, " ");
     while (token && argv) {
@@ -672,11 +673,11 @@ struct env *parse_string_options(char *str)
 
     memset(&env, 0, sizeof(struct env));
     if (parse_main_options(argc, argv)) {
-        struct env *e = malloc(sizeof(*e));
+        e = malloc(sizeof(*e));
         if (e) *e = env;
-        return e;
     }
-    return NULL;
+    free(argv);
+    return e;
 }
 
 static void sigusr2_handler(int sig)
@@ -1354,7 +1355,6 @@ static void interval_handle(struct timer *timer)
     struct perf_evlist *evlist = dev->evlist;
     struct perf_cpu_map *cpus = dev->cpus;
     struct perf_thread_map *threads = dev->threads;
-    int max_read_size = dev->max_read_size;
     profiler *prof = dev->prof;
 
     if (dev->pages) {
@@ -1376,15 +1376,7 @@ static void interval_handle(struct timer *timer)
         perf_cpu_map__for_each_cpu(cpu, ins, cpus) {
             for (tins = 0; tins < perf_thread_map__nr(threads); tins++) {
                 perf_evlist__for_each_evsel(evlist, evsel) {
-                    static struct perf_counts_values *count = NULL;
-                    static struct perf_counts_values static_count;
-                    if (!count) {
-                        if (max_read_size <= sizeof(static_count))
-                            count = &static_count;
-                        else
-                            count = malloc(max_read_size);
-                        memset(count, 0, max_read_size);
-                    }
+                    struct perf_counts_values *count = dev->values;
                     if (perf_evsel__read(evsel, ins, tins, count) == 0 &&
                         prof->read(dev, evsel, count, cpu != -1 ? ins : tins))
                         break;
@@ -1541,7 +1533,15 @@ reinit:
 
     if (dev->env->interval) {
         dev->max_read_size = perf_evlist__max_read_size(evlist);
-        timer_init(&dev->timer, interval_handle);
+        dev->values = zalloc(dev->max_read_size);
+        if (!dev->values)
+            goto out_close;
+
+        err = timer_init(&dev->timer, interval_handle);
+        if (err) {
+            fprintf(stderr, "monitor(%s) timer init failed\n", prof->name);
+            goto out_close;
+        }
     }
 
     if (dev->state == PROF_DEV_STATE_INACTIVE)
@@ -1686,8 +1686,11 @@ void prof_dev_close(struct prof_dev *dev)
 
     prof_dev_disable(dev);
 
-    if (dev->env->interval)
+    if (dev->env->interval) {
         timer_destroy(&dev->timer);
+        if (dev->values)
+            free(dev->values);
+    }
 
     /*
      * deinit before perf_evlist__munmap.

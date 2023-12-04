@@ -267,6 +267,7 @@ struct prof_dev {
     // | 2023-11-28 09:32:36.901715 G |           bash 197260 [000] 751890.944308: page-fault: addr 00007fb3c89d6170 |
     bool print_title;
     int max_read_size;
+    struct perf_counts_values *values;
     long sampled_events;
     struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         u64 sample_type;
