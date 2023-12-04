@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from PerfProf import PerfProf
+from conftest import result_check
 import pytest
 
 def test_kmemleak_kmalloc(runtime, memleak_check):
@@ -9,12 +10,7 @@ def test_kmemleak_kmalloc(runtime, memleak_check):
                 '--free', 'kmem:kfree//ptr=ptr/',
                 '-m', '256', '--order', '--order-mem', '64M', '-g'])
     for std, line in kmemleak.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT:
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 
 
 def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
@@ -23,12 +19,7 @@ def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
                 '--free', 'kmem:kmem_cache_free//ptr=ptr/',
                 '-m', '256', '--order', '--order-mem', '64M'])
     for std, line in kmemleak.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT:
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 
 
 def test_kmemleak_mm_page_alloc(runtime, memleak_check):
@@ -56,12 +47,7 @@ def test_kmemleak_mm_page_alloc(runtime, memleak_check):
                 '--free', 'kmem:mm_page_free//ptr={ptr}/key={ptr}/stack/'.format(ptr=free_ptr),
                 '-m', '256', '--order', '--order-mem', '64M'])
     for std, line in kmemleak.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT:
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 
 
 def test_kmemprof_percpu_alloc(runtime, memleak_check):
@@ -74,10 +60,4 @@ def test_kmemprof_percpu_alloc(runtime, memleak_check):
                 '--free', 'percpu:percpu_free_percpu//ptr=ptr/stack/',
                 '-m', '256', '--order', '--order-mem', '64M'])
     for std, line in kmemleak.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT:
-                pytest.fail(line)
-
+        result_check(std, line, runtime, memleak_check)

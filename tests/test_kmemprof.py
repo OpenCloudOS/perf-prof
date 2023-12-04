@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from PerfProf import PerfProf
+from conftest import result_check
 import pytest
 
 def test_kmemprof_kmalloc(runtime, memleak_check):
@@ -9,12 +10,7 @@ def test_kmemprof_kmalloc(runtime, memleak_check):
                 '-e', 'kmem:kfree//ptr=ptr/stack/',
                 '-m', '512', '--order', '-i', '1000', '-k', 'ptr'])
     for std, line in kmemprof.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT and not PerfProf.lost_events(line):
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 
 
 def test_kmemprof_kmem_cache_alloc(runtime, memleak_check):
@@ -23,12 +19,7 @@ def test_kmemprof_kmem_cache_alloc(runtime, memleak_check):
                 '-e', 'kmem:kmem_cache_free//ptr=ptr/stack/',
                 '-m', '512', '--order', '-i', '1000', '-k', 'ptr'])
     for std, line in kmemprof.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT and not PerfProf.lost_events(line):
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 
 
 def test_kmemprof_mm_page_alloc(runtime, memleak_check):
@@ -56,12 +47,7 @@ def test_kmemprof_mm_page_alloc(runtime, memleak_check):
                 '-e', 'kmem:mm_page_free//ptr={ptr}/key={ptr}/stack/'.format(ptr=free_ptr),
                 '-m', '512', '--order', '-i', '1000'])
     for std, line in kmemprof.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT and not PerfProf.lost_events(line):
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 
 
 def test_kmemprof_percpu_alloc(runtime, memleak_check):
@@ -74,10 +60,5 @@ def test_kmemprof_percpu_alloc(runtime, memleak_check):
                 '-e', 'percpu:percpu_free_percpu//ptr=ptr/stack/',
                 '-m', '512', '--order', '-i', '1000', '-k', 'ptr'])
     for std, line in kmemprof.run(runtime, memleak_check):
-        if not memleak_check or (
-            std == PerfProf.STDERR and not PerfProf.lost_events(line)):
-            print(line, end='', flush=True)
-        if not memleak_check:
-            if std != PerfProf.STDOUT and not PerfProf.lost_events(line):
-                pytest.fail(line)
+        result_check(std, line, runtime, memleak_check)
 

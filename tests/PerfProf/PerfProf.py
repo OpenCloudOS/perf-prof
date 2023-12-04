@@ -193,6 +193,18 @@ class PerfProf(object):
             return False
 
     @staticmethod
+    def memleak(line, bytes):
+        # Leak check _main_ detected leaks of 1745 bytes in 21 objects
+        if line.startswith('Leak check'):
+            record = line.split()
+            if len(record) >= 11 and record[2] == '_main_' and int(record[6]) <= bytes:
+                return False
+            else:
+                return True
+        else:
+            return False
+
+    @staticmethod
     def profilers():
         profiler_start = False
         profilers = []
