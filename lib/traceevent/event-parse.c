@@ -365,6 +365,10 @@ static int _tep_register_comm(struct tep_handle *tep,
  */
 int tep_register_comm(struct tep_handle *tep, const char *comm, int pid)
 {
+	if (!tep->cmdlines && cmdline_init(tep)) {
+		errno = ENOMEM;
+		return -1;
+	}
 	return _tep_register_comm(tep, comm, pid, false);
 }
 

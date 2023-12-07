@@ -35,19 +35,24 @@ static void write_and_save_comm(struct tep_format_field *field,
 				struct trace_seq *s, int pid)
 {
 	const char *comm;
-	int len;
+	//int len;
 
 	comm = (char *)(record->data + field->offset);
-	len = s->len;
+	//len = s->len;
 	trace_seq_printf(s, "%.*s",
 			 field->size, comm);
 
 	/* make sure the comm has a \0 at the end. */
-	trace_seq_terminate(s);
-	comm = &s->buffer[len];
+	//trace_seq_terminate(s);
+	//comm = &s->buffer[len];
+
+	/*
+	 * tep_register_comm() will add duplicate (pid, comm) to tep->cmdlist,
+	 * causing memory usage to increase rapidly.
+	 */
 
 	/* Help out the comm to ids. This will handle dups */
-	tep_register_comm(field->event->tep, comm, pid);
+	//tep_register_comm(field->event->tep, comm, pid);
 }
 
 static int sched_wakeup_handler(struct trace_seq *s,
