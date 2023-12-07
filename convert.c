@@ -123,6 +123,7 @@ int perf_sample_time_init(struct prof_dev *dev)
 
     dev->time_ctx.sample_type = sample_type;
     dev->time_ctx.time_pos = 0;
+    dev->time_ctx.last_evtime = ULLONG_MAX;
 
     if (sample_type & PERF_SAMPLE_TIME) {
         if (sample_type & PERF_SAMPLE_IDENTIFIER)
@@ -139,13 +140,16 @@ int perf_event_convert_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     u64 sample_type = 0;
+    int err;
+
+    err = perf_sample_time_init(dev);
 
     if (!env->tsc && !env->tsc_offset) {
         dev->convert.need_tsc_conv = false;
         return 0;
     }
 
-    if (perf_sample_time_init(dev) < 0)
+    if (err < 0)
         return -1;
 
     sample_type = dev->time_ctx.sample_type;

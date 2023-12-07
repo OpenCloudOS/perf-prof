@@ -12,6 +12,7 @@
 #include <parse-options.h>
 #include <tep.h>
 #include <timer.h>
+#include <limits.h>
 #include <signal.h>
 #include <localtime.h>
 #include <linux/list.h>
@@ -206,6 +207,9 @@ typedef struct monitor {
     void (*sigusr)(struct prof_dev *dev, int signum);
     void (*interval)(struct prof_dev *dev);
 
+    // Profiler minimum event time.
+    u64 (*minevtime)(struct prof_dev *dev);
+
     // return 0:continue; 1:break;
     int (*read)(struct prof_dev *dev, struct perf_evsel *evsel, struct perf_counts_values *count, int instance);
 
@@ -246,6 +250,11 @@ enum prof_dev_state {
 	PROF_DEV_STATE_ACTIVE    =  1,
 };
 
+enum prof_dev_type {
+    PROF_DEV_TYPE_NORMAL     = 0,
+    PROF_DEV_TYPE_SERVICE    = 1,
+};
+
 /*
  * Profiler device
  * Contains sampling ringbuffer, environment, timer, profiler-specific memory, convert, order, etc.
@@ -259,6 +268,7 @@ struct prof_dev {
     struct timer timer;  // interval
     struct env *env;
     void *private;
+    enum prof_dev_type type;
     enum prof_dev_state state; // It can be set off and active again by calling prof_dev_enable.
     int pages;
     int nr_pollfd;
@@ -272,6 +282,7 @@ struct prof_dev {
     struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         u64 sample_type;
         int time_pos;
+        u64 last_evtime;
     } time_ctx;
     struct perf_event_convert {
         // tsc convert
@@ -314,9 +325,12 @@ struct prof_dev *prof_dev_open(profiler *prof, struct env *env);
 int prof_dev_enable(struct prof_dev *dev);
 int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
+void prof_dev_flush(struct prof_dev *dev);
 void prof_dev_close(struct prof_dev *dev);
 static inline bool prof_dev_isowner(struct prof_dev *dev) {return !dev->forward.target;}
 struct env *parse_string_options(char *str);
+
+u64 prof_dev_list_minevtime(void);
 
 
 #define PROFILER_DESC(name, arg, ...) \
@@ -357,6 +371,13 @@ int perf_event_convert_init(struct prof_dev *dev);
 void perf_event_convert_deinit(struct prof_dev *dev);
 void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mmap *map);
 union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable);
+
+
+//comm.c
+int global_comm_ref(void);
+void global_comm_unref(void);
+char *global_comm_get(int pid);
+void global_comm_flush(int pid);
 
 
 //sched.c

@@ -1092,6 +1092,8 @@ static int workload_start(struct workload *workload)
         ret = write(workload->cork_fd, &bf, 1);
         if (ret < 0)
             perror("unable to write to pipe");
+        else
+            global_comm_flush(workload->pid); // flush pid's comm, "perf-exec" is temporary.
 
         close(workload->cork_fd);
         return ret;
@@ -1117,20 +1119,20 @@ void print_lost_fn(struct prof_dev *dev, union perf_event *event, int ins)
 {
     int oncpu;
 
-    if (env.exit_n) return;
+    if (dev->env->exit_n) return;
     oncpu = prof_dev_ins_oncpu(dev);
     print_time(stderr);
-    fprintf(stderr, "lost %llu events on %s #%d\n", event->lost.lost,
+    fprintf(stderr, "%s: lost %llu events on %s #%d\n", dev->prof->name, event->lost.lost,
                     oncpu ? "CPU" : "thread",
                     oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins));
 }
 
 static void print_fork_exit_fn(struct prof_dev *dev, union perf_event *event, int ins, int exit)
 {
-    if (env.verbose >= VERBOSE_ALL) {
+    if (dev->env->verbose >= VERBOSE_ALL) {
         int oncpu = prof_dev_ins_oncpu(dev);
         print_time(stderr);
-        fprintf(stderr, "%s ppid %u ptid %u pid %u tid %u on %s #%d\n",
+        fprintf(stderr, "%s: %s ppid %u ptid %u pid %u tid %u on %s #%d\n", dev->prof->name,
                         exit ? "exit" : "fork",
                         event->fork.ppid, event->fork.ptid,
                         event->fork.pid,  event->fork.tid,
@@ -1141,10 +1143,10 @@ static void print_fork_exit_fn(struct prof_dev *dev, union perf_event *event, in
 
 static void print_comm_fn(struct prof_dev *dev, union perf_event *event, int ins)
 {
-    if (env.verbose >= VERBOSE_ALL) {
+    if (dev->env->verbose >= VERBOSE_ALL) {
         int oncpu = prof_dev_ins_oncpu(dev);
         print_time(stderr);
-        fprintf(stderr, "comm pid %u tid %u %s on %s #%d\n",
+        fprintf(stderr, "%s: comm pid %u tid %u %s on %s #%d\n", dev->prof->name,
                         event->comm.pid,  event->comm.tid,
                         event->comm.comm,
                         oncpu ? "CPU" : "thread",
@@ -1154,10 +1156,10 @@ static void print_comm_fn(struct prof_dev *dev, union perf_event *event, int ins
 
 static void print_throttle_unthrottle_fn(struct prof_dev *dev, union perf_event *event, int ins, int unthrottle)
 {
-    if (env.verbose >= VERBOSE_NOTICE) {
+    if (dev->env->verbose >= VERBOSE_NOTICE) {
         int oncpu = prof_dev_ins_oncpu(dev);
         print_time(stderr);
-        fprintf(stderr, "%llu.%06llu: %s events on %s #%d\n",
+        fprintf(stderr, "%s: %llu.%06llu: %s events on %s #%d\n", dev->prof->name,
                         event->throttle.time / NSEC_PER_SEC, (event->throttle.time % NSEC_PER_SEC)/1000,
                         unthrottle ? "unthrottle" : "throttle",
                         oncpu ? "CPU" : "thread",
@@ -1167,20 +1169,20 @@ static void print_throttle_unthrottle_fn(struct prof_dev *dev, union perf_event 
 
 static void print_context_switch_fn(struct prof_dev *dev, union perf_event *event, int ins)
 {
-    if (env.verbose >= VERBOSE_ALL) {
+    if (dev->env->verbose >= VERBOSE_ALL) {
         int oncpu = prof_dev_ins_oncpu(dev);
         print_time(stderr);
-        fprintf(stderr, "switch on %s #%d\n", oncpu ? "CPU" : "thread",
+        fprintf(stderr, "%s: switch on %s #%d\n", oncpu ? "CPU" : "thread", dev->prof->name,
                         oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins));
     }
 }
 
 static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *event, int ins)
 {
-    if (env.verbose >= VERBOSE_ALL) {
+    if (dev->env->verbose >= VERBOSE_ALL) {
         int oncpu = prof_dev_ins_oncpu(dev);
         print_time(stderr);
-        fprintf(stderr, "switch next pid %u tid %u on %s #%d\n",
+        fprintf(stderr, "%s: switch next pid %u tid %u on %s #%d\n", dev->prof->name,
                         event->context_switch.next_prev_pid, event->context_switch.next_prev_tid,
                         oncpu ? "CPU" : "thread",
                         oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins));
@@ -1276,8 +1278,15 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     case PERF_RECORD_DEV:
     case PERF_RECORD_SAMPLE:
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n) {
-            if (prof->sample)
-                prof->sample(dev, unlikely(converted) ? event : perf_event_convert(dev, event, writable), instance);
+            if (prof->sample) {
+                if (likely(!converted))
+                    event = perf_event_convert(dev, event, writable);
+
+                if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME)
+                    dev->time_ctx.last_evtime = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
+
+                prof->sample(dev, event, instance);
+            }
         }
         if (unlikely(env->exit_n) && dev->sampled_events >= env->exit_n)
             prof_dev_disable(dev);
@@ -1357,20 +1366,22 @@ static void interval_handle(struct timer *timer)
     struct perf_thread_map *threads = dev->threads;
     profiler *prof = dev->prof;
 
+    // Do not use prof_dev_flush().
     if (dev->pages) {
         struct perf_mmap *map;
         perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
             perf_event_handle_mmap(dev, map);
         }
     }
-    // Recursively refresh the source prof_dev.
+
+    // Recursively execute the interval_handle() of the source prof_dev, including: flush, read, interval.
     if (!list_empty(&dev->forward.source_list)) {
         struct prof_dev *source, *next;
         list_for_each_entry_safe(source, next, &dev->forward.source_list, forward.link_to_target)
             interval_handle(&source->timer);
     }
 
-    if (prof->read) {
+    if (prof->read && dev->values) {
         struct perf_evsel *evsel;
         int cpu, ins, tins;
         perf_cpu_map__for_each_cpu(cpu, ins, cpus) {
@@ -1407,6 +1418,7 @@ struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
     dev->prof = prof;
     dev->env = env;
     INIT_LIST_HEAD(&dev->dev_link);
+    dev->type = PROF_DEV_TYPE_NORMAL;
     dev->state = PROF_DEV_STATE_INACTIVE;
     dev->print_title = true;
     INIT_LIST_HEAD(&dev->forward.source_list);
@@ -1619,7 +1631,8 @@ int prof_dev_enable(struct prof_dev *dev)
     workload_start(&env->workload);
 
     dev->state = PROF_DEV_STATE_ACTIVE;
-    running ++;
+    if (dev->type == PROF_DEV_TYPE_NORMAL)
+        running ++;
 
     return 0;
 }
@@ -1632,18 +1645,15 @@ int prof_dev_disable(struct prof_dev *dev)
         return 0;
 
     dev->state = PROF_DEV_STATE_INACTIVE;
-    running --;
+    if (dev->type == PROF_DEV_TYPE_NORMAL)
+        running --;
 
     /*
      * Flush remaining perf events.
-     * Events are no longer forwarded to the target when the device is closing.
-     * The target device may have been closed in advance.
      */
     if (dev->pages && prof_dev_isowner(dev)) {
-        struct perf_mmap *map;
-        perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
-            perf_event_handle_mmap(dev, map);
-        }
+        // The forwarding source will also be refreshed.
+        prof_dev_flush(dev);
     }
 
     // Disable subsequent interval_handle() calls.
@@ -1675,6 +1685,24 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
         }
     }
     return -1;
+}
+
+void prof_dev_flush(struct prof_dev *dev)
+{
+    if (dev->pages) {
+        struct perf_evlist *evlist = dev->evlist;
+        struct perf_mmap *map;
+        perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
+            perf_event_handle_mmap(dev, map);
+        }
+    }
+
+    // Recursively flush the source prof_dev.
+    if (!list_empty(&dev->forward.source_list)) {
+        struct prof_dev *source, *next;
+        list_for_each_entry_safe(source, next, &dev->forward.source_list, forward.link_to_target)
+            prof_dev_flush(source);
+    }
 }
 
 void prof_dev_close(struct prof_dev *dev)
@@ -1723,6 +1751,81 @@ void prof_dev_close(struct prof_dev *dev)
 
     free_env(dev->env);
     free(dev);
+}
+
+static u64 prof_dev_minevtime(struct prof_dev *dev)
+{
+    u64 minevtime = ULLONG_MAX;
+
+    /*
+     * The minimum event time is taken from the ringbuffer, order buffer, and profiler.
+     */
+
+    // profiler
+    if (dev->prof->minevtime)
+        minevtime = dev->prof->minevtime(dev);
+
+    // order buffer
+    if (using_order(dev))
+        minevtime = min(dev->order.oe.last_flush, minevtime); // maybe 0
+
+    if (minevtime != ULLONG_MAX)
+        return minevtime;
+
+    // ringbuffer
+    if (dev->pages && !dev->env->overwrite) {
+        struct perf_evlist *evlist = dev->evlist;
+        struct perf_mmap *map;
+
+        perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
+            union perf_event *event;
+            bool writable = false;
+            int idx = perf_mmap__idx(map);
+
+            if (perf_mmap__read_init(map) < 0)
+                continue;
+
+            perf_event_convert_read_tsc_conversion(dev, map);
+            while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
+                /* process event */
+                perf_event_process_record(dev, event, idx, writable, false);
+                perf_mmap__consume(map);
+                if (event->header.type == PERF_RECORD_SAMPLE) {
+                    u64 last_evtime;
+
+                    if (dev->forward.target) // last_evtime is stored on the target prof_dev.
+                        last_evtime = dev->forward.target->time_ctx.last_evtime;
+                    else
+                        last_evtime = dev->time_ctx.last_evtime;
+
+                    if (last_evtime < minevtime)
+                        minevtime = last_evtime;
+                    break;
+                }
+            }
+            if (!event)
+                perf_mmap__read_done(map);
+        }
+        return minevtime;
+    }
+
+    return ULLONG_MAX;
+}
+
+u64 prof_dev_list_minevtime(void)
+{
+    u64 minevtime = ULLONG_MAX;
+    u64 time;
+    struct prof_dev *dev, *next;
+
+    list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link) {
+        if (dev->type != PROF_DEV_TYPE_NORMAL)
+            continue;
+        time = prof_dev_minevtime(dev);
+        if (time < minevtime)
+            minevtime = time;
+    }
+    return minevtime;
 }
 
 static void prof_dev_list_close(void)

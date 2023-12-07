@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <linux/time64.h>
 #include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
@@ -14,6 +15,7 @@
 
 static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
+static int global_comm = 0;
 
 struct tep_handle *tep__ref(void)
 {
@@ -26,6 +28,8 @@ struct tep_handle *tep__ref(void)
     plugins = tep_load_plugins(tep);
     function_resolver_ref();
     tep_set_function_resolver(tep, function_resolver, NULL);
+    if (global_comm_ref() == 0)
+        global_comm = 1;
     return tep;
 }
 
@@ -35,6 +39,10 @@ void tep__unref(void)
         return;
 
     if (tep_get_ref(tep) == 1) {
+        if (global_comm) {
+            global_comm_unref();
+            global_comm = 0;
+        }
         tep_reset_function_resolver(tep);
         function_resolver_unref();
         tep_unload_plugins(plugins, tep);
@@ -96,6 +104,9 @@ void tep__update_comm(const char *comm, int pid)
 {
     char buff[16];
 
+    if (global_comm)
+        return;
+
     if (comm == NULL) {
         char path[64];
         int fd, len;
@@ -121,6 +132,12 @@ void tep__update_comm(const char *comm, int pid)
 const char *tep__pid_to_comm(int pid)
 {
     const char *comm;
+
+    if (global_comm) {
+        comm = global_comm_get(pid);
+        return comm ? comm : "<...>";
+    }
+
     tep__ref();
     comm = tep_data_comm_from_pid(tep, pid);
     tep__unref();
@@ -143,10 +160,19 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
     e = tep_find_event_by_record(tep, &record);
 
     trace_seq_init(&s);
-    tep_print_event(tep, &s, &record, "%16s %6u %s [%03d] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
-                TEP_PRINT_LATENCY, TEP_PRINT_CPU, TEP_PRINT_TIME);
-    if (e) trace_seq_printf(&s, "%s:", e->system);
-    tep_print_event(tep, &s, &record, "%s: %s\n", TEP_PRINT_NAME, TEP_PRINT_INFO);
+    if (global_comm) {
+        int pid = tep_data_pid(tep, &record);
+        char *comm = global_comm_get(pid);
+        trace_seq_printf(&s, "%16s %6u ", comm ? : "<...>", pid);
+        tep_print_event(tep, &s, &record, "%s", TEP_PRINT_LATENCY);
+        trace_seq_printf(&s, " [%03d] %llu.%06llu: %s:%s: ", cpu, ts/USEC_PER_SEC, ts%USEC_PER_SEC,
+                         e->system, e->name);
+    } else {
+        tep_print_event(tep, &s, &record, "%16s %6u %s [%03d] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
+                    TEP_PRINT_LATENCY, TEP_PRINT_CPU, TEP_PRINT_TIME);
+        trace_seq_printf(&s, "%s:%s: ", e->system, e->name);
+    }
+    tep_print_event(tep, &s, &record, "%s\n", TEP_PRINT_INFO);
     tep__unref();
     trace_seq_do_fprintf(&s, stdout);
     trace_seq_destroy(&s);
