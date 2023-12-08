@@ -316,11 +316,11 @@ static void comm_sample(struct prof_dev *dev, union perf_event *event, int insta
     struct comm_ctx *ctx = dev->private;
     // PERF_SAMPLE_TIME | PERF_SAMPLE_RAW
     struct sample_type_header {
-        u64   time;
+        __u64   time;
         struct {
-            u32   size;
+            __u32   size;
             union {
-                u8    data[0];
+                __u8    data[0];
                 unsigned short common_type;
                 struct trace_task_newtask task_newtask;
                 struct trace_task_rename task_rename;

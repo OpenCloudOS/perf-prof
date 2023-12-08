@@ -283,19 +283,19 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
     // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
     struct sample_type_data {
         struct {
-            u32    pid;
-            u32    tid;
+            __u32    pid;
+            __u32    tid;
         }    tid_entry;
-        u64  time;
+        __u64  time;
         struct {
-            u32    cpu;
-            u32    reserved;
+            __u32    cpu;
+            __u32    reserved;
         }    cpu_entry;
         struct {
-            u64 nr;
+            __u64 nr;
             struct {
-                u64 value;
-                u64 id;
+                __u64 value;
+                __u64 id;
             } ctnr[0];
         } groups;
     } *data = (void *)event->sample.array;
@@ -309,8 +309,8 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
 
     if (verbose) {
         if (dev->print_title) print_time(stdout);
-        printf("    pid %6d tid %6d [%03d] %lu.%06lu: %s: cpu-clock ", data->tid_entry.pid, data->tid_entry.tid,
-                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name);
+        printf("    pid %6d tid %6d [%03d] %llu.%06llu: %s: cpu-clock ", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name);
     }
 
     for (i = 0; i < data->groups.nr; i++) {
@@ -356,8 +356,8 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
     if (print == PRINT || verbose) {
         if (!verbose) {
             if (dev->print_title) print_time(stdout);
-            printf("    pid %6d tid %6d [%03d] %lu.%06lu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
-                data->cpu_entry.cpu, data->time/1000000000UL, (data->time%1000000000UL)/1000UL, dev->prof->name, cpu_clock);
+            printf("    pid %6d tid %6d [%03d] %llu.%06llu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
+                data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name, cpu_clock);
         }
         if (dev->env->callchain) {
             callchain = (struct callchain *)&data->groups.ctnr[data->groups.nr];

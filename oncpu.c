@@ -73,18 +73,18 @@ struct sched_switch {
 // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct sample_type_data {
     struct {
-        u32    pid;
-        u32    tid;
+        __u32    pid;
+        __u32    tid;
     }    tid_entry;
-    u64  time;
+    __u64  time;
     struct {
-        u32    cpu;
-        u32    reserved;
+        __u32    cpu;
+        __u32    reserved;
     }    cpu_entry;
-    u64       period;
+    __u64       period;
     //PERF_SAMPLE_RAW
     struct {
-        u32   size;
+        __u32   size;
         union {
             __u8    data[0];
             struct sched_stat_runtime runtime;

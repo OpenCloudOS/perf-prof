@@ -118,16 +118,16 @@ static void page_faults_exit(struct prof_dev *dev)
 // PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
 // PERF_SAMPLE_CALLCHAIN | PERF_SAMPLE_REGS_USER
 struct sample_type_header {
-    u64			ip;
+    __u64			ip;
     struct {
-        u32    pid;
-        u32    tid;
+        __u32    pid;
+        __u32    tid;
     }    tid_entry;
-    u64   time;
-    u64   addr;
+    __u64   time;
+    __u64   addr;
     struct {
-        u32    cpu;
-        u32    reserved;
+        __u32    cpu;
+        __u32    reserved;
     }    cpu_entry;
     struct callchain callchain;
 };
@@ -180,7 +180,7 @@ static void page_faults_sample(struct prof_dev *dev, union perf_event *event, in
 
     if (dev->print_title) print_time(stdout);
     tep__update_comm(NULL, data->tid_entry.tid);
-    printf("%16s %6u [%03d] %lu.%06lu: page-fault: addr %016lx%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+    printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016llx%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
            data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr, ctx->print_ip?" ip ":"\n");
 
     if (ctx->print_ip) {
@@ -190,7 +190,7 @@ static void page_faults_sample(struct prof_dev *dev, union perf_event *event, in
             callchain.ips[1] = data->ip;
             print_callchain(ctx->cc, (struct callchain *)&callchain, data->tid_entry.pid);
         } else
-            printf("%016lx\n", data->ip);
+            printf("%016llx\n", data->ip);
     }
 
     if (dev->env->callchain) {

@@ -96,20 +96,20 @@ static void ldlat_loads_exit(struct prof_dev *dev)
 // PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
 // PERF_SAMPLE_WEIGHT | PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_PHYS_ADDR
 struct sample_type_header {
-    u64         ip;
+    __u64         ip;
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
-    u64     time;
-    u64     addr;
+    __u64     time;
+    __u64     addr;
     struct {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
     union perf_sample_weight weight;
-    u64			data_src;
-    u64			phys_addr;
+    __u64			data_src;
+    __u64			phys_addr;
 };
 
 struct mem_info {
@@ -424,7 +424,7 @@ static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, in
         mem_info.data_src.val = data->data_src;
         perf_mem__lvl_scnprintf(buf, sizeof(buf), &mem_info);
 
-        printf("    pid %6u tid %6u [%03d] %lu.%06lu: %s: DATA ADDR %016lx PHYS %016lx latency %6llu cycles %s RIP ",
+        printf("    pid %6u tid %6u [%03d] %llu.%06llu: %s: DATA ADDR %016llx PHYS %016llx latency %6llu cycles %s RIP ",
                 data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
                 data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, dev->prof->name,
                 data->addr, data->phys_addr, data->weight.full, buf);
