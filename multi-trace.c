@@ -28,9 +28,12 @@ struct timeline_node {
         need_backup : 1,
         need_remove_from_backup : 1,
         maybe_unpaired : 1;
+    u32 ins;
     u64 seq;
-    struct list_head needed;
-    struct list_head pending;
+    union {
+        struct list_head needed;
+        struct list_head pending;
+    };
     union perf_event *event;
 };
 
@@ -64,6 +67,7 @@ struct multi_trace_ctx {
     struct two_event_class *class;
     struct rblist backup;
     struct rblist timeline;
+    struct list_head *perins_list;
     struct list_head needed_list; // need_timeline
     struct list_head pending_list; // need_timeline
     bool need_timeline;
@@ -139,12 +143,18 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             b->need_backup = e->need_backup;
             b->need_remove_from_backup = e->need_remove_from_backup;
             b->maybe_unpaired = 0;
+            b->ins = e->ins;
             b->seq = e->seq;
             b->event = new_event;
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
             INIT_LIST_HEAD(&b->needed);
-            INIT_LIST_HEAD(&b->pending);
+            /*
+             * The events for each instance are time-ordered. Therefore, it can be directly added
+             * to the end of the queue without reordering.
+            **/
+            list_add_tail(&b->needed, &ctx->perins_list[b->ins]);
+
             ctx->backup_stat.new ++;
             ctx->backup_stat.mem_bytes += event->header.size;
             return &b->key_node;
@@ -163,6 +173,7 @@ static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node 
         ctx->tl_stat.unneeded ++;
         ctx->tl_stat.unneeded_bytes += b->event->header.size;
     } else {
+        list_del(&b->needed);
         ctx->backup_stat.delete ++;
         ctx->backup_stat.mem_bytes -= b->event->header.size;
         free(b->event);
@@ -211,11 +222,11 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         b->need_backup = e->need_backup;
         b->need_remove_from_backup = e->need_remove_from_backup;
         b->maybe_unpaired = 0;
+        b->ins = e->ins;
         b->seq = e->seq;
         b->event = new_event;
         RB_CLEAR_NODE(&b->timeline_node);
         RB_CLEAR_NODE(&b->key_node);
-        INIT_LIST_HEAD(&b->needed);
         INIT_LIST_HEAD(&b->pending);
         if (!b->tp->untraced) {
             /*
@@ -476,6 +487,13 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->timeline.node_new = timeline_node_new;
     ctx->timeline.node_delete = timeline_node_delete;
 
+    ctx->perins_list = malloc(ctx->nr_ins * sizeof(struct list_head));
+    if (ctx->perins_list) {
+        for (i = 0; i < ctx->nr_ins; i++)
+            INIT_LIST_HEAD(&ctx->perins_list[i]);
+    } else
+        goto failed;
+
     INIT_LIST_HEAD(&ctx->needed_list);
     INIT_LIST_HEAD(&ctx->pending_list);
 
@@ -507,6 +525,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 
     rblist__exit(&ctx->backup);
     rblist__exit(&ctx->timeline);
+
+    free(ctx->perins_list);
 
     if (ctx->impl && ctx->class)
         ctx->impl->class_delete(ctx->class);
@@ -773,6 +793,43 @@ static void multi_trace_exit(struct prof_dev *dev)
 {
     multi_trace_interval(dev);
     monitor_ctx_exit(dev);
+}
+
+static u64 multi_trace_minevtime(struct prof_dev *dev)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+    u64 minevtime = ULLONG_MAX;
+
+    if (dev->env->greater_than || dev->env->lower_than) {
+        struct rb_node *rbn;
+        struct timeline_node *node = NULL, *tmp;
+
+        if (ctx->need_timeline) {
+            rbn = rb_first_cached(&ctx->timeline.entries);
+            node = rb_entry_safe(rbn, struct timeline_node, timeline_node);
+        } else {
+            int i;
+            for (i = 0; i < ctx->nr_ins; i++) {
+                tmp = list_first_entry_or_null(&ctx->perins_list[i], struct timeline_node, needed);
+                if (tmp && (!node || tmp->time < node->time))
+                    node = tmp;
+            }
+        }
+        if (node && node->time < minevtime)
+            minevtime = node->time;
+    }
+
+    if (dev->env->perins && ctx->comm) {
+        u64 mintime = 0;
+
+        if (dev->env->interval)
+            mintime = ctx->recent_time - dev->env->interval * NSEC_PER_MSEC;
+
+        if (mintime < minevtime)
+            minevtime = mintime;
+    }
+
+    return minevtime;
 }
 
 static void multi_trace_sigusr(struct prof_dev *dev, int signum)
@@ -1207,6 +1264,7 @@ found:
     current.need_find_prev = need_find_prev;
     current.need_backup = need_backup;
     current.need_remove_from_backup = need_remove_from_backup;
+    current.ins = instance;
     current.seq = ctx->event_handled++;
     current.event = event;
 
@@ -1430,6 +1488,7 @@ static profiler multi_trace = {
     .deinit = multi_trace_exit,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
+    .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
@@ -1482,6 +1541,7 @@ static profiler kmemprof = {
     .deinit = multi_trace_exit,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
+    .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
@@ -1532,6 +1592,7 @@ static profiler syscalls = {
     .deinit = multi_trace_exit,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
+    .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
@@ -1708,6 +1769,7 @@ static profiler nested_trace = {
     .deinit = nested_trace_exit,
     .sigusr = multi_trace_sigusr,
     .interval = nested_trace_interval,
+    .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
@@ -1869,6 +1931,7 @@ static profiler rundelay = {
     .deinit = rundelay_deinit,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
+    .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
     .sample = multi_trace_sample,
 };
