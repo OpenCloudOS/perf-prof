@@ -1783,15 +1783,7 @@ static int rundelay_init(struct prof_dev *dev)
         return -1;
     dev->private = ctx;
 
-    if (prof_dev_ins_oncpu(dev)) {
-        if (!dev->env->filter) {
-            fprintf(stderr, "The rundelay profiler cannot be attached to CPU.\n");
-            free(ctx);
-            return -1;
-        }
-        tep__ref();
-    } else {
-        int pid, idx;
+    if (!prof_dev_ins_oncpu(dev)) {
         /**
          * sched:sched_switch and sched:sched_wakeup are not suitable for binding to threads
         **/
@@ -1799,24 +1791,10 @@ static int rundelay_init(struct prof_dev *dev)
         perf_cpu_map__put(dev->cpus);
         dev->cpus = perf_cpu_map__new(NULL);
         dev->threads = perf_thread_map__new_dummy();
-
-        tep__ref();
-        perf_thread_map__for_each_thread(pid, idx, ctx->thread_map)
-            tep__update_comm(NULL, pid);
-        ctx->comm = 1;
     }
+    ctx->comm = 1;
 
-    if (multi_trace_init(dev) < 0) {
-        tep__unref();
-        return -1;
-    }
-    return 0;
-}
-
-static void rundelay_deinit(struct prof_dev *dev)
-{
-    multi_trace_exit(dev);
-    tep__unref();
+    return multi_trace_init(dev);
 }
 
 static int rundelay_filter(struct prof_dev *dev)
@@ -1850,7 +1828,8 @@ static int rundelay_filter(struct prof_dev *dev)
                         if (tp_filter) {
                             snprintf(buff, sizeof(buff), "prev_state==0 && (%s)", tp_filter->filter);
                             filter = buff;
-                        }
+                        } else
+                            tp_update_filter(tp, "prev_state==0&&prev_pid>0");
                     }
                     if (i == 1 && strcmp(tp->key, "next_pid") == 0) {
                         match ++;
@@ -1861,11 +1840,11 @@ static int rundelay_filter(struct prof_dev *dev)
                 if (tp_filter) {
                     if (!filter)
                         filter = tp_filter->filter;
-                    if (env->verbose >= VERBOSE_NOTICE)
-                        printf("%s:%s filter \"%s\"\n", tp->sys, tp->name, filter);
                     tp_update_filter(tp, filter);
                     tp_filter_free(tp_filter);
                 }
+                if (env->verbose >= VERBOSE_NOTICE)
+                    printf("%s:%s filter \"%s\"\n", tp->sys, tp->name, tp->filter ? : "");
             }
 
             if (tp->filter && tp->filter[0]) {
@@ -1911,9 +1890,11 @@ static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
     "",
     "EXAMPLES",
     "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid --order -p 1234 --than 4ms",
+    "                       -e sched:sched_switch//key=next_pid/ -k pid --order -p 1 -i 1000 --than 4ms",
     "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid --order --filter java --than 4ms");
+    "                       -e sched:sched_switch//key=next_pid/ -k pid --order --filter java -i 1000 --than 4ms",
+    "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
+    "                       -e sched:sched_switch//key=next_pid/ -k pid --order -i 1000");
 static const char *rundelay_argv[] = PROFILER_ARGV("nested-trace",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
@@ -1928,7 +1909,7 @@ static profiler rundelay = {
     .init = rundelay_init,
     .filter = rundelay_filter,
     .enabled = multi_trace_enabled,
-    .deinit = rundelay_deinit,
+    .deinit = multi_trace_exit,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
