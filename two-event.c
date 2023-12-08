@@ -233,6 +233,7 @@ struct delay_class {
     int max_len1;
     int max_len2;
     struct latency_dist *lat_dist;
+    bool global_comm;
 };
 
 static struct two_event *delay_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
@@ -445,7 +446,7 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     if (opts->perins) {
         printf("%-*lu ", opts->keylen, node->instance);
         // if (comm) node->instance means pid.
-        if (opts->comm)
+        if (opts->comm && delay_class->global_comm)
             printf("%-*s ", TASK_COMM_LEN, tep__pid_to_comm((int)node->instance));
     }
     printf("%*s", delay_class->max_len1, two->tp1->alias ?: two->tp1->name);
@@ -484,7 +485,7 @@ static int delay_print_header(struct two_event *two)
 
         if (opts->perins) {
             printf("%-*s ", opts->keylen, opts->keyname);
-            if (opts->comm)
+            if (opts->comm && delay_class->global_comm)
                 printf("%-*s ", TASK_COMM_LEN, "comm");
         }
 
@@ -504,7 +505,7 @@ static int delay_print_header(struct two_event *two)
         if (opts->perins) {
             for (i=0; i<opts->keylen; i++) printf("-");
             printf(" ");
-            if (opts->comm) {
+            if (opts->comm && delay_class->global_comm) {
                 for (i=0; i<TASK_COMM_LEN; i++) printf("-");
                 printf(" ");
             }
@@ -551,6 +552,7 @@ static struct two_event_class *delay_class_new(struct two_event_impl *impl, stru
         delay_class->max_len1 = 5; // 5 is strlen("start")
         delay_class->max_len2 = 3; // 5 is strlen("end")
         delay_class->lat_dist = latency_dist_new_quantile(options->perins, true, 0);
+        delay_class->global_comm = global_comm_ref() == 0;
     }
     return class;
 }
@@ -561,6 +563,7 @@ static void delay_class_delete(struct two_event_class *class)
     if (class) {
         delay_class = container_of(class, struct delay_class, base);
         latency_dist_free(delay_class->lat_dist);
+        if (delay_class->global_comm) global_comm_unref();
         two_event_class_delete(class);
     }
 }
@@ -684,7 +687,13 @@ static void syscalls_print_node(void *opaque, struct latency_node *node)
     char buf[64];
 
     if (opts->perins) {
-        printf("[%6lu] ", node->instance);
+        printf("%-6lu ", node->instance);
+        /*
+         * syscalls_two(): latency_dist_input(,sys_enter->common_pid,)
+         * The default instance is pid, there is no need to judge opts->comm.
+        **/
+        if (delay_class->global_comm)
+            printf("%-*s ", TASK_COMM_LEN, tep__pid_to_comm((int)node->instance));
     }
     if (node->key < sizeof(syscalls_table)/sizeof(syscalls_table[0])
         && syscalls_table[node->key]) {
@@ -721,8 +730,11 @@ static int syscalls_print_header(struct two_event *two)
         print_time(stdout);
         printf("\n");
 
-        if (opts->perins)
-            printf("[THREAD] ");
+        if (opts->perins) {
+            printf("thread ");
+            if (delay_class->global_comm)
+                printf("%-*s ", TASK_COMM_LEN, "comm");
+        }
 
         printf("%-20s", "syscalls");
         if (!opts->env->tsc)
@@ -735,8 +747,13 @@ static int syscalls_print_header(struct two_event *two)
         else
             printf("\n");
 
-        if (opts->perins)
-            printf("-------- ");
+        if (opts->perins) {
+            printf("------ ");
+            if (delay_class->global_comm) {
+                for (i=0; i<TASK_COMM_LEN; i++) printf("-");
+                printf(" ");
+            }
+        }
         for (i=0; i<20; i++) printf("-");
         printf(" %8s %16s %12s %12s %12s %6s",
                         "--------", "----------------", "------------", "------------", "------------", "------");
@@ -767,6 +784,7 @@ static struct two_event_class *syscalls_class_new(struct two_event_impl *impl, s
 
         delay_class = container_of(class, struct delay_class, base);
         delay_class->lat_dist = latency_dist_new(options->perins, true, sizeof(u64));
+        delay_class->global_comm = global_comm_ref() == 0;
     }
     return class;
 }

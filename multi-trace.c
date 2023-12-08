@@ -1551,6 +1551,12 @@ PROFILER_REGISTER(kmemprof);
 static int syscalls_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
+    struct multi_trace_ctx *ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
+        return -1;
+    dev->private = ctx;
+    ctx->comm = 1; // for multi_trace_minevtime(), not used in syscalls_print_header().
+
     if (env->impl)
         free(env->impl);
     env->impl = strdup(TWO_EVENT_SYSCALLS_IMPL);
@@ -1574,7 +1580,7 @@ static const char *syscalls_desc[] = PROFILER_DESC("syscalls",
     "SYNOPSIS",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
     "EXAMPLES",
-    "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -p 1561",
+    "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -p 1 --perins",
     "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -k common_pid --order -C 0");
 static const char *syscalls_argv[] = PROFILER_ARGV("syscalls",
     PROFILER_ARGV_OPTION,
