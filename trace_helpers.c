@@ -17,6 +17,7 @@
 #include <time.h>
 #include <linux/refcount.h>
 #include <linux/rblist.h>
+#include <linux/time64.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <limits.h>

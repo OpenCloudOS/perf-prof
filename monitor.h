@@ -18,6 +18,7 @@
 #include <linux/list.h>
 #include <linux/epoll.h>
 #include <linux/zalloc.h>
+#include <linux/time64.h>
 #include <linux/refcount.h>
 #include <linux/ordered-events.h>
 

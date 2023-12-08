@@ -4,7 +4,6 @@
 
 #include <stdbool.h>
 
-#define NSEC_PER_SEC		1000000000ULL
 
 struct ksym {
 	const char *name;
