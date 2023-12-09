@@ -1769,11 +1769,11 @@ static u64 prof_dev_minevtime(struct prof_dev *dev)
     if (using_order(dev))
         minevtime = min(dev->order.oe.last_flush, minevtime); // maybe 0
 
-    if (minevtime != ULLONG_MAX)
-        return minevtime;
-
     // ringbuffer
-    if (dev->pages && !dev->env->overwrite) {
+    // The minevtime of profiler and order must be smaller than that of ringbuffer.
+    // Therefore, ringbuffer is judged only when minevtime == ULLONG_MAX.
+    if (minevtime == ULLONG_MAX &&
+        dev->pages && !dev->env->overwrite) {
         struct perf_evlist *evlist = dev->evlist;
         struct perf_mmap *map;
 
@@ -1806,10 +1806,13 @@ static u64 prof_dev_minevtime(struct prof_dev *dev)
             if (!event)
                 perf_mmap__read_done(map);
         }
-        return minevtime;
     }
 
-    return ULLONG_MAX;
+    // ULLONG_MAX and 0 are special values, not tsc, and cannot be converted to ns.
+    if (minevtime == ULLONG_MAX || minevtime == 0)
+        return minevtime;
+    else
+        return perf_time_to_ns(dev, minevtime);
 }
 
 u64 prof_dev_list_minevtime(void)

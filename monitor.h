@@ -208,7 +208,7 @@ typedef struct monitor {
     void (*sigusr)(struct prof_dev *dev, int signum);
     void (*interval)(struct prof_dev *dev);
 
-    // Profiler minimum event time.
+    // Profiler minimum event time. tsc or ns.
     u64 (*minevtime)(struct prof_dev *dev);
 
     // return 0:continue; 1:break;
@@ -366,6 +366,7 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 
 //convert.c
 u64 rdtsc(void);
+u64 perf_time_to_ns(struct prof_dev *dev, u64 time);
 int perf_sample_forward_init(struct prof_dev *dev);
 int perf_sample_time_init(struct prof_dev *dev);
 int perf_event_convert_init(struct prof_dev *dev);

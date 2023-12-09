@@ -26,6 +26,39 @@ u64 rdtsc(void)
 #endif
 }
 
+static inline u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+{
+	u32 ah, al;
+	u64 ret;
+
+	al = a;
+	ah = a >> 32;
+
+	ret = ((u64)al * mul) >> shift;
+	if (ah)
+		ret += ((u64)ah * mul) << (32 - shift);
+
+	return ret;
+}
+
+static inline u64 perf_tsc_to_ns(struct prof_dev *dev, u64 tsc)
+{
+    struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
+    u64 ns;
+
+    tsc -= dev->env->tsc_offset;
+    ns = mul_u64_u32_shr(tsc, tc->time_mult, tc->time_shift);
+    return ns + tc->time_zero;
+}
+
+u64 perf_time_to_ns(struct prof_dev *dev, u64 time)
+{
+    if (likely(!dev->convert.need_tsc_conv))
+        return time;
+    else
+        return perf_tsc_to_ns(dev, time);
+}
+
 static inline u64 perf_time_to_tsc(struct prof_dev *dev, u64 ns)
 {
     struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
