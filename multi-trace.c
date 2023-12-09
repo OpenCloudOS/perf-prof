@@ -822,7 +822,7 @@ static u64 multi_trace_minevtime(struct prof_dev *dev)
     if (dev->env->perins && ctx->comm) {
         u64 mintime = 0;
 
-        if (dev->env->interval)
+        if (dev->env->interval && ctx->recent_time > dev->env->interval * NSEC_PER_MSEC)
             mintime = ctx->recent_time - dev->env->interval * NSEC_PER_MSEC;
 
         if (mintime < minevtime)
@@ -1901,7 +1901,7 @@ static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
     "                       -e sched:sched_switch//key=next_pid/ -k pid --order --filter java -i 1000 --than 4ms",
     "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
     "                       -e sched:sched_switch//key=next_pid/ -k pid --order -i 1000");
-static const char *rundelay_argv[] = PROFILER_ARGV("nested-trace",
+static const char *rundelay_argv[] = PROFILER_ARGV("rundelay",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "event", "key", "than", "detail", "perins", "heatmap", "filter");
