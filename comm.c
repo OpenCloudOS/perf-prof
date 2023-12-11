@@ -212,6 +212,7 @@ static void comm_update(struct prof_dev *dev, u64 time, bool exit, int pid, char
         if (node->update_time < time) {
             if (unlikely(!RB_EMPTY_NODE(&node->exit_node))) {
                 rblist__remove_node(&ctx->exited, &node->exit_node);
+                RB_CLEAR_NODE(&node->exit_node);
             }
             node->update_time = time;
             node->flush = false;
