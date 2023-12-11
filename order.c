@@ -77,6 +77,8 @@ static void order_sample(struct prof_dev *dev, union perf_event *event, int inst
     }
     ordered_events__queue(&dev->order.oe, event, time, instance);
     print_nr_unordered_events(dev, true);
+    if (dev->order.flush_in_time)
+        ordered_events__flush_time(&dev->order.oe, time);
 }
 
 static int order_init(struct prof_dev *dev)
@@ -129,6 +131,12 @@ void order(struct prof_dev *dev)
 bool using_order(struct prof_dev *dev)
 {
     return dev->prof == &dev->order.order;
+}
+
+void ordered_events(struct prof_dev *dev)
+{
+    if (using_order(dev))
+        dev->order.flush_in_time = true;
 }
 
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)

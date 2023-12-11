@@ -1681,6 +1681,8 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
         if (dev->forward.event_dev) {
             dev->forward.target = target;
             list_add_tail(&dev->forward.link_to_target, &target->forward.source_list);
+            if (using_order(target))
+                ordered_events(dev);
             return 0;
         }
     }

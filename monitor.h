@@ -296,6 +296,7 @@ struct prof_dev {
         profiler *base;
         profiler order;
         struct ordered_events oe;
+        bool flush_in_time;
         u32 nr_unordered_events;
         u64 max_timestamp;
         struct lost_record {
@@ -356,6 +357,7 @@ u64 prof_dev_list_minevtime(void);
 // order.c
 void order(struct prof_dev *dev);
 bool using_order(struct prof_dev *dev);
+void ordered_events(struct prof_dev *dev);
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
 
 //help.c
