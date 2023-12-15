@@ -5,17 +5,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/utsname.h>
 
 #include "event-parse.h"
 #include "trace-seq.h"
 
+#ifndef KERNEL_VERSION
+#define KERNEL_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
+#endif
+
+static const char *states = "SDTtZXxKWP";
+int n_state;
+
 static void write_state(struct trace_seq *s, int val)
 {
-	const char states[] = "SDTtZXxKWP";
 	int found = 0;
 	int i;
 
-	for (i = 0; i < (sizeof(states) - 1); i++) {
+	for (i = 0; i < n_state; i++) {
 		if (!(val & (1 << i)))
 			continue;
 
@@ -127,6 +134,21 @@ static int sched_switch_handler(struct trace_seq *s,
 
 int TEP_PLUGIN_LOADER(struct tep_handle *tep)
 {
+	/* Linux 4.14
+	 * 8ef9925 sched/debug: Add explicit TASK_PARKED printing
+	 * 06eb618 sched/debug: Add explicit TASK_IDLE printing
+	 * efb40f5 sched/tracing: Fix trace_sched_switch task-state printing
+	 */
+	struct utsname kernel_info;
+	int major, minor, patch;
+
+	if (uname(&kernel_info) == 0 &&
+		sscanf(kernel_info.release, "%d.%d.%d", &major, &minor, &patch) == 3) {
+		if (KERNEL_VERSION(major, minor, patch) >= KERNEL_VERSION(4, 14, 0))
+			states = "SDTtXZPI";
+	}
+	n_state = strlen(states);
+
 	tep_register_event_handler(tep, -1, "sched", "sched_switch",
 				   sched_switch_handler, NULL);
 
