@@ -49,6 +49,7 @@ struct task_state_ctx {
     struct perf_evsel *sched_wakeup_new;
     struct rblist task_states;
     struct latency_dist *lat_dist;
+    struct comm_notify notify;
     union {
         int mode;
         struct {
@@ -231,8 +232,28 @@ static void monitor_ctx_exit(struct prof_dev *dev)
         }
     }
     latency_dist_free(ctx->lat_dist);
+    if ((ctx->mode == 1 && dev->env->filter) || ctx->mode == 3)
+        global_comm_unregister_notify(&ctx->notify);
     tep__unref();
     free(ctx);
+}
+
+static int task_state_notify(struct comm_notify *notify, int pid, int state, u64 free_time)
+{
+    if (state == NOTIFY_COMM_DELETE) {
+        struct task_state_ctx *ctx = container_of(notify, struct task_state_ctx, notify);
+        struct task_state_node *task, tmp;
+        struct rb_node *rbn;
+
+        tmp.pid = pid;
+        rbn = rblist__find(&ctx->task_states, &tmp);
+        if (rbn) {
+            task = rb_entry(rbn, struct task_state_node, rbnode);
+            if (task->time < free_time)
+                rblist__remove_node(&ctx->task_states, rbn);
+        }
+    }
+    return 0;
 }
 
 static int task_state_init(struct prof_dev *dev)
@@ -287,6 +308,28 @@ static int task_state_init(struct prof_dev *dev)
 
     ctx->SD = !!(env->interruptible || env->uninterruptible);
     ctx->filter = !!(ctx->thread_map || env->filter);
+
+    /*
+     * Mode 1 filtering comm will be affected by task_rename.
+     *   --filter "sh"
+     *     sched_switch: next_comm=sh next_pid=1045
+     *     task_rename: pid=1045 oldcomm=sh newcomm=awk
+     *   pid=1045 will remain on the ctx->task_states list until the pid is reused.
+     *
+     * Mode 3 is affected by task_switch.
+     *   -S --filter "sh"
+     *     311612.197341 sched:sched_switch: prev_pid=91319 prev_comm=sh prev_state=S
+     *     311612.197354 sched:sched_switch: next_pid=91319 next_comm=sh
+     *   pid=91319 sleeps, but there is no sched_wakeup and starts running directly.
+     *   After this, pid=91319 will remain on the ctx->task_states list until the pid is reused.
+     *
+     * These two modes track the process free and delete the corresponding task_state_node from
+     * the ctx->task_states list. This doesn't completely solve the problem, just alleviates it.
+     */
+    if ((ctx->mode == 1 && env->filter) || ctx->mode == 3) {
+        ctx->notify.notify = task_state_notify;
+        global_comm_register_notify(&ctx->notify);
+    }
 
     // sched:sched_switch//
     // sched:sched_switch/prev_pid==xx/
@@ -698,6 +741,7 @@ parse_next:
                     }
                 }
             }
+
             if (ctx->mode == 2 || ctx->mode == 3) {
                 rblist__remove_node(&ctx->task_states, rbn);
                 goto free_event;
