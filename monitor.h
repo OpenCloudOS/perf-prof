@@ -382,6 +382,13 @@ int global_comm_ref(void);
 void global_comm_unref(void);
 char *global_comm_get(int pid);
 void global_comm_flush(int pid);
+#define NOTIFY_COMM_DELETE 1
+struct comm_notify {
+    struct list_head link;
+    int (*notify)(struct comm_notify *notify, int pid, int state, u64 free_time);
+};
+void global_comm_register_notify(struct comm_notify *node);
+void global_comm_unregister_notify(struct comm_notify *node);
 
 
 //sched.c

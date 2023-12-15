@@ -32,6 +32,7 @@ struct comm_ctx {
     int sched_process_free;
 };
 static struct comm_ctx *global_comm_ctx = NULL;
+static struct list_head global_comm_notify_list = LIST_HEAD_INIT(global_comm_notify_list);
 
 struct trace_task_newtask {
     unsigned short common_type;//       offset:0;       size:2; signed:0;
@@ -113,6 +114,15 @@ static struct rb_node *pid_comm_exit_new(struct rblist *rlist, const void *new_e
 }
 static void pid_comm_exit_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
+    struct pid_comm_node *b = container_of(rb_node, struct pid_comm_node, exit_node);
+
+    // notify
+    if (!list_empty(&global_comm_notify_list)) {
+        struct comm_notify *node;
+        list_for_each_entry(node, &global_comm_notify_list, link) {
+            node->notify(node, b->pid, NOTIFY_COMM_DELETE, b->update_time);
+        }
+    }
 }
 
 static void comm_deinit(struct prof_dev *dev);
@@ -409,5 +419,16 @@ void global_comm_flush(int pid)
     node = rb_entry_safe(rbn, struct pid_comm_node, rbnode);
     if (node)
         node->flush = true;
+}
+
+void global_comm_register_notify(struct comm_notify *node)
+{
+    INIT_LIST_HEAD(&node->link);
+    list_add(&node->link, &global_comm_notify_list);
+}
+
+void global_comm_unregister_notify(struct comm_notify *node)
+{
+    list_del_init(&node->link);
 }
 
