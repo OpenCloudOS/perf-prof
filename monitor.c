@@ -14,6 +14,7 @@
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
+#include <sys/utsname.h>
 #include <sys/resource.h>
 #include <sys/signalfd.h>
 #include <sys/wait.h>
@@ -952,6 +953,18 @@ int in_guest(void)
 #else
     return 0;
 #endif
+}
+
+int kernel_release(void)
+{
+    struct utsname kernel_info;
+    int major, minor, patch;
+
+    if (uname(&kernel_info) == 0 &&
+        sscanf(kernel_info.release, "%d.%d.%d", &major, &minor, &patch) == 3) {
+        return KERNEL_VERSION(major, minor, patch);
+    }
+    return -1;
 }
 
 int callchain_flags(struct prof_dev *dev, int dflt_flags)

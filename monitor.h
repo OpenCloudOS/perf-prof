@@ -48,6 +48,12 @@ int get_present_cpus(void);
 void print_time(FILE *fp);
 int get_tsc_khz(void);
 
+#ifndef KERNEL_VERSION
+#define KERNEL_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
+#endif
+int kernel_release(void);
+
+
 #define X86_VENDOR_INTEL    0
 #define X86_VENDOR_AMD      1
 #define X86_VENDOR_HYGON    2

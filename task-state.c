@@ -33,8 +33,35 @@
 #define TASK_TRACED		(TASK_WAKEKILL | __TASK_TRACED)
 
 
+#if 0 // LINUX 4.14
+/* Used in tsk->state: */
+#define TASK_RUNNING			0x0000
+#define TASK_INTERRUPTIBLE		0x0001
+#define TASK_UNINTERRUPTIBLE		0x0002
+#define __TASK_STOPPED			0x0004
+#define __TASK_TRACED			0x0008
+/* Used in tsk->exit_state: */
+#define EXIT_DEAD			0x0010
+#define EXIT_ZOMBIE			0x0020
+#define EXIT_TRACE			(EXIT_ZOMBIE | EXIT_DEAD)
+/* Used in tsk->state again: */
+#define TASK_PARKED			0x0040
+#define TASK_DEAD			0x0080
+
+/* get_task_state(): */
+#define TASK_REPORT			(TASK_RUNNING | TASK_INTERRUPTIBLE | \
+					 TASK_UNINTERRUPTIBLE | __TASK_STOPPED | \
+					 __TASK_TRACED | EXIT_DEAD | EXIT_ZOMBIE | \
+					 TASK_PARKED)
+
+#define TASK_REPORT_IDLE	(TASK_REPORT + 1)
+#define TASK_REPORT_MAX		(TASK_REPORT_IDLE << 1)
+#endif
+
 #define TASK_REPORT (TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE | __TASK_STOPPED | __TASK_TRACED)
 #define RUNDELAY   (TASK_STATE_MAX << 1)
+
+#define TASK_REPORT_MAX  0x100 // kernel 4.14 and later.
 
 struct task_state_ctx {
     struct callchain_ctx *cc;
@@ -50,6 +77,7 @@ struct task_state_ctx {
     struct rblist task_states;
     struct latency_dist *lat_dist;
     struct comm_notify notify;
+    int state_dead, report_max; // Compatible with different kernel release.
     union {
         int mode;
         struct {
@@ -292,6 +320,14 @@ static int task_state_init(struct prof_dev *dev)
         perf_cpu_map__put(dev->cpus);
         dev->cpus = perf_cpu_map__new(NULL);
         dev->threads = perf_thread_map__new_dummy();
+    }
+
+    if (kernel_release() >= KERNEL_VERSION(4, 14, 0)) {
+        ctx->state_dead = EXIT_ZOMBIE|EXIT_DEAD;
+        ctx->report_max = TASK_REPORT_MAX;
+    } else {
+        ctx->state_dead = EXIT_ZOMBIE|EXIT_DEAD|TASK_DEAD;
+        ctx->report_max = TASK_STATE_MAX;
     }
 
     if (env->greater_than && using_order(dev))
@@ -661,10 +697,10 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
                 // to INTERRUPTIBLE/UNINTERRUPTIBLE/STOPPED/TRACED
                 // to S/D/T/t
                 task->pid = sw->prev_pid;
-                task->state = sw->prev_state == TASK_STATE_MAX ? TASK_RUNNING : sw->prev_state;
+                task->state = sw->prev_state == ctx->report_max ? TASK_RUNNING : sw->prev_state;
                 task->time = data->time;
 
-                if (sw->prev_state & (EXIT_ZOMBIE|EXIT_DEAD|TASK_DEAD))
+                if (sw->prev_state & ctx->state_dead)
                     rblist__remove_node(&ctx->task_states, rbn);
                 else if (dev->dup) {
                     if (task->event) {
