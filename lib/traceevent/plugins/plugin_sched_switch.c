@@ -34,7 +34,7 @@ static void write_state(struct trace_seq *s, int val)
 	}
 
 	if (!found)
-		trace_seq_putc(s, 'R');
+		trace_seq_puts(s, val ? "R+" : "R");
 }
 
 static void write_and_save_comm(struct tep_format_field *field,
