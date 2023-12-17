@@ -95,6 +95,14 @@ static void global_syms_unref(bool kernel, bool user)
     }
 }
 
+void global_syms_stat(FILE *fp)
+{
+    if (ctx.syms_cache) {
+        obj__stat(fp);
+        syms_cache__stat(ctx.syms_cache, fp);
+    }
+}
+
 void function_resolver_ref(void)
 {
     global_syms_ref(true, false);

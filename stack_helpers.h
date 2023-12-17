@@ -1,6 +1,8 @@
 #ifndef __STACK_HELPERS_H
 #define __STACK_HELPERS_H
 
+void global_syms_stat(FILE *fp);
+
 void function_resolver_ref(void);
 void function_resolver_unref(void);
 char *function_resolver(void *priv, unsigned long long *addrp, char **modp);

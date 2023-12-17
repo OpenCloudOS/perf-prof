@@ -22,6 +22,7 @@
 #include <bpf/libbpf.h>
 #include <limits.h>
 #include <lzma.h>
+#include <monitor.h>
 #include "trace_helpers.h"
 #include "uprobe_helpers.h"
 
@@ -1226,6 +1227,32 @@ void syms_cache__free_syms(struct syms_cache *syms_cache, int tgid)
     rbn = rblist__find(&syms_cache->cache, &tgid);
     if (rbn) {
         rblist__remove_node(&syms_cache->cache, rbn);
+    }
+}
+
+void syms_cache__stat(struct syms_cache *syms_cache, FILE *fp)
+{
+    struct rb_node *node;
+    struct syms_cache_node *cache;
+
+    if (!syms_cache)
+        return;
+
+    if (rblist__nr_entries(&syms_cache->cache) == 0)
+        return;
+
+    fprintf(fp, "SYMS %d\n", rblist__nr_entries(&syms_cache->cache));
+    for (node = rb_first_cached(&syms_cache->cache.entries); node;
+        node = rb_next(node)) {
+        struct dso *dso;
+        int i;
+
+        cache = rb_entry(node, struct syms_cache_node, rbnode);
+        fprintf(fp, "    PID %d %s\n", cache->tgid, global_comm_get(cache->tgid) ? : "");
+        for (i = 0; i < cache->syms->dso_sz; i++) {
+            dso = &cache->syms->dsos[i];
+            fprintf(fp, "        %s\n", dso__name(dso));
+        }
     }
 }
 

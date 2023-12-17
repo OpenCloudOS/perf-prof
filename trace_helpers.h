@@ -46,6 +46,7 @@ struct syms_cache *syms_cache__new(void);
 struct syms *syms_cache__get_syms(struct syms_cache *syms_cache, int tgid);
 void syms_cache__free(struct syms_cache *syms_cache);
 void syms_cache__free_syms(struct syms_cache *syms_cache, int tgid);
+void syms_cache__stat(struct syms_cache *syms_cache, FILE *fp);
 
 struct partition {
 	char *name;
