@@ -20,6 +20,7 @@ static struct global_syms {
     struct syms_cache *syms_cache;
     refcount_t ksyms_ref;
     refcount_t syms_ref;
+    struct comm_notify notify;
 } ctx;
 
 /*
@@ -47,6 +48,15 @@ struct callchain_ctx {
     FILE *fout;
 };
 
+static int task_exit_free_syms(struct comm_notify *notify, int pid, int state, u64 free_time)
+{
+    struct global_syms *ctx = container_of(notify, struct global_syms, notify);
+    if (ctx->syms_cache) {
+        syms_cache__free_syms(ctx->syms_cache, pid);
+    }
+    return 0;
+}
+
 static int global_syms_ref(bool kernel, bool user)
 {
     if (kernel) {
@@ -64,6 +74,8 @@ static int global_syms_ref(bool kernel, bool user)
             if (!ctx.syms_cache)
                 return -1;
             refcount_set(&ctx.syms_ref, 1);
+            ctx.notify.notify = task_exit_free_syms;
+            global_comm_register_notify(&ctx.notify);
         } else
             refcount_inc(&ctx.syms_ref);
     }
@@ -77,6 +89,7 @@ static void global_syms_unref(bool kernel, bool user)
         ctx.ksyms = NULL;
     }
     if (user && ctx.syms_cache && refcount_dec_and_test(&ctx.syms_ref)) {
+        global_comm_unregister_notify(&ctx.notify);
         syms_cache__free(ctx.syms_cache);
         ctx.syms_cache = NULL;
     }
@@ -461,14 +474,6 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
     }
 }
 
-
-void task_exit_free_syms(union perf_event *event)
-{
-    if (ctx.syms_cache &&
-        event->fork.pid == event->fork.tid) {
-        syms_cache__free_syms(ctx.syms_cache, event->fork.pid);
-    }
-}
 
 struct key_value {
     /* void *value;

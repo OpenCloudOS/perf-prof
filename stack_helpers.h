@@ -26,7 +26,6 @@ typedef void (*callchain_cbs)(void *opaque, u64 perf_context);
 void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *callchain, u32 pid,
             callchain_cbs kernel_cb, callchain_cbs user_cb, void *opaque);
 void print_callchain_common(struct callchain_ctx *cc, struct callchain *callchain, u32 pid);
-void task_exit_free_syms(union perf_event *event);
 
 
 typedef struct callchain struct_key;
