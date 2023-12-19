@@ -181,6 +181,7 @@ struct sample_type_raw {
         __u8    data[0];
     } raw;
 };
+static bool task_state_samepid(struct prof_dev *dev, union perf_event *event, int pid, int tid);
 
 static int task_state_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -332,6 +333,12 @@ static int task_state_init(struct prof_dev *dev)
 
     if (env->greater_than && using_order(dev))
         dev->dup = true;
+
+    /*
+     * When task-state is used as a forwarding device, the forwarded events need to be returned
+     * to task-state to determine whether they match the corresponding pid/tid.
+     */
+    dev->forward.samepid = task_state_samepid;
 
     /* |    mode       |
      * |      filter   |  event
@@ -625,6 +632,48 @@ static void task_state_print_event(struct prof_dev *dev, union perf_event *event
     __print_callchain(dev, event);
 }
 
+static bool task_state_samepid(struct prof_dev *dev, union perf_event *event, int pid, int tid)
+{
+    struct task_state_ctx *ctx = dev->private;
+    // in linux/perf_event.h
+    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
+    struct sample_type_header *data = (void *)event->sample.array;
+    struct perf_evsel *evsel;
+    union sched_event *sched_event;
+    struct sched_switch *sw = NULL;
+    void *raw;
+    int size;
+
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    if (!evsel)
+        return false;
+
+    __raw_size(dev, event, &raw, &size);
+    sched_event = raw;
+
+    if (evsel == ctx->sched_switch) {
+        sw = &sched_event->sched_switch;
+        if (sw->prev_pid == pid || sw->prev_pid == tid)
+            return true;
+        if (data->tid_entry.pid == pid)
+            return true;
+
+        if (ctx->mode == 0)
+            goto parse_next;
+    } else if (evsel == ctx->sched_switch_next) {
+        sw = &sched_event->sched_switch;
+parse_next:
+        if (sw->next_pid == pid || sw->next_pid == tid)
+            return true;
+    } else if (evsel == ctx->sched_wakeup || evsel == ctx->sched_wakeup_new) {
+        struct sched_wakeup *wakeup = &sched_event->sched_wakeup;
+        if (wakeup->pid == pid || wakeup->pid == tid)
+            return true;
+    }
+
+    return false;
+}
+
 static void task_state_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct env *env = dev->env;
@@ -649,6 +698,12 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
     if (!evsel)
         goto free_event;
+
+    if (unlikely(!prof_dev_isowner(dev))) {
+        // When task-state is used as a forwarding device, it only prints out the event.
+        task_state_print_event(dev, event);
+        goto free_event;
+    }
 
     if (env->verbose >= VERBOSE_EVENT)
         task_state_print_event(dev, event);
