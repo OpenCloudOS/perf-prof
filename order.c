@@ -22,15 +22,17 @@ static int ordered_events__deliver(struct ordered_events *oe,
 
 static void print_nr_unordered_events(struct prof_dev *dev, bool sample)
 {
+    unsigned int nr_events = dev->order.oe.nr_events;
     u32 nr_unordered_events = dev->order.oe.nr_unordered_events;
     u64 max_timestamp = dev->order.oe.max_timestamp;
 
-    if (nr_unordered_events != dev->order.nr_unordered_events &&
+    if (nr_events > 0 && nr_unordered_events != dev->order.nr_unordered_events &&
         (!sample || max_timestamp != dev->order.max_timestamp)) {
         dev->order.nr_unordered_events = nr_unordered_events;
         dev->order.max_timestamp = max_timestamp;
         print_time(stderr);
-        fprintf(stderr, "Out of order %u, use a larger --order-mem parameter.\n", nr_unordered_events);
+        fprintf(stderr, "%s: Out of order %u, use a larger --order-mem parameter.\n",
+                dev->prof->name, nr_unordered_events);
     }
 }
 
@@ -76,9 +78,27 @@ static void order_sample(struct prof_dev *dev, union perf_event *event, int inst
         dev->order.lost_records[instance].lost.lost = 0;
     }
     ordered_events__queue(&dev->order.oe, event, time, instance);
-    print_nr_unordered_events(dev, true);
+
     if (dev->order.flush_in_time)
         ordered_events__flush_time(&dev->order.oe, time);
+
+    /*
+     * Use this command:
+     *   perf-prof multi-trace -e XX:YYY -e XX:ZZZ,task-state//untraced/ -p 1234 --order \
+     *             --than 10ms --detail=sametid
+     *
+     * multi-trace uses task-state as an event source, and the events it generates will be
+     * forwarded to mult-trace. And task-state will enable order by default, its
+     * order.flush_in_time = true.
+     *
+     * The task-state events of pid 1234 will be cached inside multi-trace. When printing
+     * events that exceed 10ms from XX:YYY -> XX:ZZZ, the task-state events within these
+     * 10ms are in order. The order_sample() of task-state will be flushed in time.
+     *
+     * The task-state events of the next 10ms and the previous 10ms may not be ordered.
+     * Here, an "Out of order" warning will be printed.
+     */
+    print_nr_unordered_events(dev, true);
 }
 
 static int order_init(struct prof_dev *dev)
