@@ -959,6 +959,21 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         curr->key == info->key)
         return true;
 
+    if ((env->samepid || env->sametid) && match)
+    if (iter->event->header.type == PERF_RECORD_DEV) {
+        struct perf_record_dev *event_dev = (void *)iter->event;
+        struct prof_dev *source_dev = event_dev->dev;
+        // Use the samepid() of the source device to determine whether the event matches the given pid/tid.
+        if (unlikely(source_dev->forward.samepid)) {
+            if (source_dev->forward.samepid(source_dev, &event_dev->event,
+                env->samepid ? e1->tid_entry.pid : -1, env->sametid ? e1->tid_entry.tid : -1))
+                return true;
+            if (source_dev->forward.samepid(source_dev, &event_dev->event,
+                env->samepid ? e2->tid_entry.pid : -1, env->sametid ? e2->tid_entry.tid : -1))
+                return true;
+        }
+    }
+
     return false;
 }
 
