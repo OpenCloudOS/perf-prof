@@ -384,7 +384,7 @@ struct option main_options[] = {
                                                                 "    syscalls: syscall delay\n"
                                                                 "    call: analyze function calls, only for nested-trace.\n"
                                                                 "    call-delay: call + delay, only for nested-trace."),
-    OPT_BOOL_NONEG  ('S',   "interruptible", &env.interruptible,                "TASK_INTERRUPTIBLE"),
+    OPT_BOOLEAN_SET ('S',   "interruptible", &env.interruptible, &env.interruptible_set, "TASK_INTERRUPTIBLE, no- prefix to exclude"),
     OPT_BOOL_NONEG  ('D', "uninterruptible", &env.uninterruptible,              "TASK_UNINTERRUPTIBLE"),
     OPT_PARSE_NONEG ( LONG_OPT_than, "than", &env.greater_than,          "ns",  "Greater than specified time, Unit: s/ms/us/*ns/percent"),
     OPT_PARSE_NONEG ( LONG_OPT_only_than, "only-than", &env.greater_than,"ns",  "Only print those that are greater than the specified time."),

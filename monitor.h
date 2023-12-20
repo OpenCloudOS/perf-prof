@@ -122,7 +122,7 @@ struct env {
     int watermark;
     bool watermark_set;
     bool inherit;
-    bool interruptible;
+    bool interruptible, interruptible_set;
     bool uninterruptible;
     bool only_print_greater_than;
     unsigned long greater_than; // unit: ns, percent

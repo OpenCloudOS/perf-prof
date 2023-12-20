@@ -78,6 +78,7 @@ struct task_state_ctx {
     struct latency_dist *lat_dist;
     struct comm_notify notify;
     int state_dead, report_max; // Compatible with different kernel release.
+    int task_report;
     union {
         int mode;
         struct {
@@ -330,6 +331,10 @@ static int task_state_init(struct prof_dev *dev)
         ctx->state_dead = EXIT_ZOMBIE|EXIT_DEAD|TASK_DEAD;
         ctx->report_max = TASK_STATE_MAX;
     }
+
+    ctx->task_report = TASK_REPORT;
+    if (env->interruptible_set && !env->interruptible)
+        ctx->task_report &= ~TASK_INTERRUPTIBLE;
 
     if (env->greater_than && using_order(dev))
         dev->dup = true;
@@ -695,15 +700,15 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
     if (data->time > ctx->recent_time)
         ctx->recent_time = data->time;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    if (!evsel)
-        goto free_event;
-
     if (unlikely(!prof_dev_isowner(dev))) {
         // When task-state is used as a forwarding device, it only prints out the event.
         task_state_print_event(dev, event);
         goto free_event;
     }
+
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    if (!evsel)
+        goto free_event;
 
     if (env->verbose >= VERBOSE_EVENT)
         task_state_print_event(dev, event);
@@ -819,7 +824,7 @@ parse_next:
         if (task) {
             if (task->pid != -1 && data->time > task->time) {
                 // S/D/T/t
-                int state = task->state & TASK_REPORT;
+                int state = task->state & ctx->task_report;
                 if (state) {
                     u64 delta = data->time - task->time;
                     latency_dist_input(ctx->lat_dist, task->pid, state, delta, env->greater_than);
@@ -882,8 +887,9 @@ static const char *task_state_desc[] = PROFILER_DESC("task-state",
     "[OPTION...] [-S] [-D] [--than ns] [--filter comm] [--perins] [-g [--flame-graph file]]",
     "Trace task state, wakeup, switch, INTERRUPTIBLE, UNINTERRUPTIBLE.", "",
     "TRACEPOINT",
-    "    sched:sched_switch, sched:sched_wakeup", "",
+    "    sched:sched_switch, sched:sched_wakeup, sched:sched_wakeup_new", "",
     "EXAMPLES",
+    "    "PROGRAME" task-state -i 1000 --no-interruptible",
     "    "PROGRAME" task-state -p 2347 -SD --than 20ms -g",
     "    "PROGRAME" task-state --filter 'java,python*' -S --than 100ms -g",
     "    "PROGRAME" task-state -- ip link show eth0");
