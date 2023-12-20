@@ -6,6 +6,8 @@
 #include <net.h>
 #include <vcpu_info.h>
 
+void pr_stat(const char *fmt, ...);
+
 struct tep_handle *tep__ref(void);
 void tep__unref(void);
 int tep__event_id(const char *sys, const char *name);

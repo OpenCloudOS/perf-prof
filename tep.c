@@ -17,6 +17,16 @@ static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
 static int global_comm = 0;
 
+void pr_stat(const char *fmt, ...)
+{
+    /* Disable libtraceevent printing.
+     *
+     * registering plugin:
+     * overriding event
+     * removing override handler for event
+     */
+}
+
 struct tep_handle *tep__ref(void)
 {
     if (tep != NULL) {
@@ -414,8 +424,10 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         sep = strchr(s, ':');
         if (!sep) { // profiler/option/
             prof = monitor_find(sys);
-            if (!prof)
+            if (!prof) {
+                fprintf(stderr, "profiler %s not found\n", sys);
                 goto err_out;
+            }
             if (filter && filter[0])
                 filter[-1] = ' ';
 
@@ -442,8 +454,10 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 
             name = sep + 1;
             id = tep__event_id(sys, name);
-            if (id < 0)
+            if (id < 0) {
+                fprintf(stderr, "%s:%s not found\n", sys, name);
                 goto err_out;
+            }
             event = tep_find_event_by_name(tep, sys, name);
             if (!event)
                 goto err_out;
