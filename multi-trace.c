@@ -968,7 +968,8 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             if (source_dev->forward.samepid(source_dev, &event_dev->event,
                 env->samepid ? e1->tid_entry.pid : -1, env->sametid ? e1->tid_entry.tid : -1))
                 return true;
-            if (source_dev->forward.samepid(source_dev, &event_dev->event,
+            if (e2 &&
+                source_dev->forward.samepid(source_dev, &event_dev->event,
                 env->samepid ? e2->tid_entry.pid : -1, env->sametid ? e2->tid_entry.tid : -1))
                 return true;
         }
