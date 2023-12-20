@@ -1203,7 +1203,7 @@ static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *
 }
 
 static union perf_event *
-perf_event_forward(struct prof_dev *dev, union perf_event *event, int instance, bool writable, bool converted)
+perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance, bool writable, bool converted)
 {
     struct perf_record_dev *event_dev = (void *)dev->forward.event_dev;
     void *data;
@@ -1224,8 +1224,11 @@ perf_event_forward(struct prof_dev *dev, union perf_event *event, int instance, 
     if (dev->forward.id_pos >= 0)
         event_dev->id = *(u64 *)(data + dev->forward.id_pos);
     event_dev->cpu = *(u32 *)(data + dev->forward.cpu_pos);
-    event_dev->instance = instance;
+    event_dev->instance = *instance;
     event_dev->dev = dev;
+
+    if (dev->forward.ins_reset)
+        *instance = 0;
 
     return (union perf_event *)event_dev;
 }
@@ -1237,15 +1240,19 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
 
     if (dev->forward.target) {
         // Forward upward.
-        if (event->header.type == PERF_RECORD_SAMPLE)
-            event = perf_event_forward(dev, event, instance, writable, converted);
-        dev = dev->forward.target;
-        converted = true;
+        if (event->header.type == PERF_RECORD_SAMPLE) {
+            event = perf_event_forward(dev, event, &instance, writable, converted);
+            converted = true;
+        }
+        // Only PERF_RECORD_SAMPLE events are forwarded.
+        if (event->header.type == PERF_RECORD_DEV)
+            dev = dev->forward.target;
     } else if (event->header.type == PERF_RECORD_DEV) {
         // Return down.
         struct perf_record_dev *event_dev = (void *)event;
         event = &event_dev->event;
         dev = event_dev->dev;
+        instance = event_dev->instance;
         converted = true;
     }
     prof = dev->prof;
@@ -1696,6 +1703,22 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
             list_add_tail(&dev->forward.link_to_target, &target->forward.source_list);
             if (using_order(target))
                 ordered_events(dev);
+            /*
+             * Like this command:
+             *   perf-prof multi-trace -e XX:YYY -e XX:ZZZ,task-state//untraced/ -p 1234 --order \
+             *             --than 10ms --detail=sametid
+             *
+             * multi-trace is attached to pid 1234, task-state is also attached to pid 1234, but
+             * internally it switches to the cpu.
+             *
+             * In this scenario, forwarding will reset the instance. Task-state events are forwarded
+             * to multi-trace, but the instance seen is 0.
+             */
+            if (prof_dev_ins_oncpu(dev) != prof_dev_ins_oncpu(target) ||
+                prof_dev_nr_ins(dev) != prof_dev_nr_ins(target)) {
+                dev->forward.ins_reset = true;
+                printf("%s events are forwarded to %s, reset instance.\n", dev->prof->name, target->prof->name);
+            }
             return 0;
         }
     }
