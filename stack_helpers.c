@@ -436,7 +436,8 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = true;
             user = false;
-            (*context_kernel_num) ++;
+            if (i + 1 < callchain->nr)
+                (*context_kernel_num) ++;
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
             kernel = false;
@@ -444,7 +445,8 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
             if (ctx.syms_cache && cc->user) {
                 syms = syms_cache__get_syms(ctx.syms_cache, pid);
             }
-            (*context_user_num) ++;
+            if (i + 1 < callchain->nr)
+                (*context_user_num) ++;
             continue;
         }
         if (kernel && cc->print2string_kernel) {
