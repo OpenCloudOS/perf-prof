@@ -196,36 +196,44 @@ void callchain_ctx_free(struct callchain_ctx *cc)
 
 static void __print_callchain_kernel(struct callchain_ctx *cc, u64 ip, bool *printed)
 {
-    const struct ksym *ksym = cc->print2string_kernel ? NULL : ksyms__map_addr(ctx.ksyms, ip);
+    int len = 0;
     if (*printed)
-        fprintf(cc->fout, "%c", cc->seperate);
+        len += fprintf(cc->fout, "%c", cc->seperate);
     if (cc->print2string_kernel)
-        fprintf(cc->fout, "%s", (char *)ip);
+        len += fprintf(cc->fout, "%s", (char *)ip);
     else {
+        const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
+        len = 0;
         if (cc->addr)
-            fprintf(cc->fout, "    %016lx", ip);
-        if (cc->symbol)
-            fprintf(cc->fout, "%s%s", cc->addr ? " " : "", ksym ? ksym->name : "Unknown");
-        if (cc->offset)
-            fprintf(cc->fout, "+0x%lx", ksym ? ip - ksym->addr : 0L);
+            len += fprintf(cc->fout, "    %016lx", ip);
+        if (cc->symbol) {
+            if (ksym || cc->addr) {
+                len += fprintf(cc->fout, "%s%s", len ? " " : "", ksym ? ksym->name : "Unknown");
+                if (cc->offset)
+                    len += fprintf(cc->fout, "+0x%lx", ksym ? ip - ksym->addr : 0L);
+            } else // Symbol not found, print ip.
+                len += fprintf(cc->fout, "%016lx", ip);
+        }
         if (cc->dso)
-            fprintf(cc->fout, "%s([kernel.kallsyms])", (cc->offset || cc->symbol || cc->addr) ? " " : "");
+            len += fprintf(cc->fout, "%s([kernel.kallsyms])", len ? " " : "");
     }
-    if (cc->addr || cc->symbol || cc->offset || cc->dso)
+    if (len)
         *printed = true;
 }
 
 static void __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, u64 ip, bool *printed)
 {
-    struct dso *dso;
+    struct dso *dso = NULL;
+    const struct sym *sym = NULL;
     const char *symbol = "Unknown";
     u64 offset = 0L;
     const char *dso_name = "Unknown";
+    int len = 0;
 
-    if (!cc->print2string_user) {
+    if (!cc->print2string_user && syms) {
         dso = syms__find_dso(syms, ip, &offset);
         if (dso) {
-            const struct sym *sym = dso__find_sym(dso, offset);
+            sym = dso__find_sym(dso, offset);
             if (sym) {
                 symbol = sym->name;
                 offset = offset - sym->start;
@@ -234,20 +242,25 @@ static void __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, 
         }
     }
     if (*printed)
-        fprintf(cc->fout, "%c", cc->seperate);
+        len += fprintf(cc->fout, "%c", cc->seperate);
     if (cc->print2string_user)
-        fprintf(cc->fout, "%s", (char *)ip);
+        len += fprintf(cc->fout, "%s", (char *)ip);
     else {
+        len = 0;
         if (cc->addr)
-            fprintf(cc->fout, "    %016lx", ip);
-        if (cc->symbol)
-            fprintf(cc->fout, "%s%s", cc->addr ? " " : "", symbol);
-        if (cc->offset)
-            fprintf(cc->fout, "+0x%lx", offset);
+            len += fprintf(cc->fout, "    %016lx", ip);
+        if (cc->symbol) {
+            if (sym || cc->addr) {
+                len += fprintf(cc->fout, "%s%s", len ? " " : "", symbol);
+                if (cc->offset)
+                    len += fprintf(cc->fout, "+0x%lx", offset);
+            } else // Symbol not found, print ip.
+                len += fprintf(cc->fout, "%016lx", ip);
+        }
         if (cc->dso)
-            fprintf(cc->fout, "%s(%s)", (cc->offset || cc->symbol || cc->addr) ? " " : "", dso_name);
+            len += fprintf(cc->fout, "%s(%s)", len ? " " : "", dso_name);
     }
-    if (cc->addr || cc->symbol || cc->offset || cc->dso)
+    if (len)
         *printed = true;
 }
 
@@ -260,16 +273,14 @@ static bool __print_callchain(struct callchain_ctx *cc, struct callchain *callch
     for (i = 0; i < callchain->nr; i++) {
         u64 ip = callchain->ips[i];
         if (ip == PERF_CONTEXT_KERNEL) {
-            kernel = cc->kernel;
+            kernel = true;
             user = false;
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
             kernel = false;
-            user = cc->print2string_user;
-            if (ctx.syms_cache && cc->user && !user) {
+            user = true;
+            if (ctx.syms_cache && cc->user && !cc->print2string_user)
                 syms = syms_cache__get_syms(ctx.syms_cache, pid);
-                user = syms ? true : false;
-            }
             continue;
         }
         if (kernel) {
@@ -303,7 +314,7 @@ static bool __print_callchain_reverse(struct callchain_ctx *cc, struct callchain
             break;
         }
     }
-    if (cc->user && ustart) {
+    if (ustart) {
         for (; uend >= ustart; uend--) {
             u64 ip = callchain->ips[uend];
             // There may be more than 1 PERF_CONTEXT_* tag.
@@ -313,7 +324,7 @@ static bool __print_callchain_reverse(struct callchain_ctx *cc, struct callchain
             __print_callchain_user(cc, syms, ip, &printed);
         }
     }
-    if (cc->kernel && kstart) {
+    if (kstart) {
         for (; kend >= kstart; kend--) {
             u64 ip = callchain->ips[kend];
             // There may be more than 1 PERF_CONTEXT_* tag.
@@ -356,7 +367,7 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
     for (i = 0; i < callchain->nr; i++) {
         __u64 ip = callchain->ips[i];
         if (ip == PERF_CONTEXT_KERNEL) {
-            kernel = cc->kernel;
+            kernel = true;
             user = false;
             if (kernel_cb)
                 kernel_cb(opaque, PERF_CONTEXT_KERNEL);
@@ -365,11 +376,9 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
             kernel = false;
-            user = false;
-            if (ctx.syms_cache) {
+            user = true;
+            if (ctx.syms_cache && cc->user) {
                 syms = syms_cache__get_syms(ctx.syms_cache, pid);
-                if (syms)
-                    user = cc->user;
             }
             if (user_cb)
                 user_cb(opaque, PERF_CONTEXT_USER);
@@ -378,19 +387,20 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
             continue;
         }
         if (kernel) {
-            const struct ksym *ksym = ksyms__map_addr(ctx.ksyms, ip);
+            const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
             fprintf(cc->fout, "    %016llx %s+0x%llx ([kernel.kallsyms])\n", ip, ksym ? ksym->name : "Unknown",
                                 ksym ? ip - ksym->addr : 0L);
         } else if (user) {
-            struct dso *dso;
+            struct dso *dso = NULL;
             uint64_t offset;
-            dso = syms__find_dso(syms, ip, &offset);
+            if (syms)
+                dso = syms__find_dso(syms, ip, &offset);
             if (dso) {
                 const struct sym *sym = dso__find_sym(dso, offset);
                 fprintf(cc->fout, "    %016llx %s+0x%lx (%s)\n", ip, sym ? sym->name : "Unknown",
                                 sym ? offset - sym->start : 0L, dso__name(dso)?:"Unknown");
             } else
-                fprintf(cc->fout, "    %016llx %s (%s)\n", ip, "Unknown", "Unknown");
+                fprintf(cc->fout, "    %016llx Unknown\n", ip);
         } else
             fprintf(cc->fout, "    %016llx\n", ip);
     }
@@ -431,8 +441,8 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
         } else if (ip == PERF_CONTEXT_USER) {
             kernel = false;
             user = true;
-            if (ctx.syms_cache) {
-                syms = cc->user ? syms_cache__get_syms(ctx.syms_cache, pid) : NULL;
+            if (ctx.syms_cache && cc->user) {
+                syms = syms_cache__get_syms(ctx.syms_cache, pid);
             }
             (*context_user_num) ++;
             continue;
@@ -442,12 +452,13 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
             len = 0;
             if (cc->addr)
                 len += snprintf(buff+len, sizeof(buff)-len, "    %016lx", ip);
-            if (cc->symbol)
-                len += snprintf(buff+len, sizeof(buff)-len, "%s%s", cc->addr ? " " : "", ksym ? ksym->name : "Unknown");
-            if (cc->offset)
-                len += snprintf(buff+len, sizeof(buff)-len, "+0x%lx", ksym ? ip - ksym->addr : 0L);
+            if (cc->symbol) {
+                len += snprintf(buff+len, sizeof(buff)-len, "%s%s", len ? " " : "", ksym ? ksym->name : "Unknown");
+                if (cc->offset)
+                    len += snprintf(buff+len, sizeof(buff)-len, "+0x%lx", ksym ? ip - ksym->addr : 0L);
+            }
             if (cc->dso)
-                len += snprintf(buff+len, sizeof(buff)-len, "%s([kernel.kallsyms])", (cc->offset || cc->symbol || cc->addr) ? " " : "");
+                len += snprintf(buff+len, sizeof(buff)-len, "%s([kernel.kallsyms])", len ? " " : "");
             // Convert to unique string.
             callchain->ips[i] = (__u64)(void *)unique_string(buff);
         } else if (user && cc->print2string_user) {
@@ -470,12 +481,13 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
             len = 0;
             if (cc->addr)
                 len += snprintf(buff+len, sizeof(buff)-len, "    %016lx", ip);
-            if (cc->symbol)
-                len += snprintf(buff+len, sizeof(buff)-len, "%s%s", cc->addr ? " " : "", symbol);
-            if (cc->offset)
-                len += snprintf(buff+len, sizeof(buff)-len, "+0x%lx", offset);
+            if (cc->symbol) {
+                len += snprintf(buff+len, sizeof(buff)-len, "%s%s", len ? " " : "", symbol);
+                if (cc->offset)
+                    len += snprintf(buff+len, sizeof(buff)-len, "+0x%lx", offset);
+            }
             if (cc->dso)
-                len += snprintf(buff+len, sizeof(buff)-len, "%s(%s)", (cc->offset || cc->symbol || cc->addr) ? " " : "", dso_name);
+                len += snprintf(buff+len, sizeof(buff)-len, "%s(%s)", len ? " " : "", dso_name);
             // Convert to unique string.
             callchain->ips[i] = (__u64)(void *)unique_string(buff);
         }
