@@ -765,13 +765,20 @@ struct flame_graph {
     struct callchain_ctx *cc;
     struct key_value_paires *kv_pairs;
     char *filename;
+    bool special;
 };
+
+static inline bool special_file(mode_t mode)
+{
+    return S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode);
+}
 
 struct flame_graph *flame_graph_new(int flags, FILE *fout)
 {
     struct flame_graph *fg = malloc(sizeof(*fg));
     struct callchain_ctx *cc = callchain_ctx_new(flags, fout);
     struct key_value_paires *kv_pairs = keyvalue_pairs_new(0);
+    struct stat buf;
 
     if (!fg || !cc || !kv_pairs) {
         free(fg);
@@ -780,15 +787,29 @@ struct flame_graph *flame_graph_new(int flags, FILE *fout)
         return NULL;
     }
 
-    cc->addr   = 0;
-    cc->symbol = 1;
-    cc->offset = 0;
-    cc->dso    = 0;
-    cc->reverse = 1;
+    if (fstat(fileno(fout), &buf) == 0 &&
+        special_file(buf.st_mode)) {
+        fg->special = true;
+
+        cc->addr   = 0;
+        cc->symbol = 1;
+        cc->offset = 1;
+        cc->dso    = 0;
+        cc->reverse = 0;
+        cc->seperate = '\n';
+        cc->end = '\n';
+    } else {
+        cc->addr   = 0;
+        cc->symbol = 1;
+        cc->offset = 0;
+        cc->dso    = 0;
+        cc->reverse = 1;
+        cc->seperate = ';';
+        cc->end = ' ';
+    }
+
     cc->print2string_kernel = 1;
     cc->print2string_user = 1;
-    cc->seperate = ';';
-    cc->end = ' ';
 
     fg->cc = cc;
     fg->kv_pairs = kv_pairs;
@@ -905,9 +926,17 @@ struct flame_graph *flame_graph_open(int flags, const char *path)
     char filename[PATH_MAX];
     FILE *fp;
     struct flame_graph *fg;
+    struct stat buf;
+    bool special = false;
 
     if (!path)
         return NULL;
+
+    if (stat(path, &buf) == 0 &&
+        special_file(buf.st_mode)) {
+        special = true;
+        goto _open;
+    }
 
     snprintf(filename, sizeof(filename), "%s.folded", path);
     if (access(filename, F_OK) == 0) {
@@ -915,7 +944,9 @@ struct flame_graph *flame_graph_open(int flags, const char *path)
         snprintf(filename_old, sizeof(filename_old), "%s.folded.old", path);
         rename(filename, filename_old);
     }
-    fp = fopen(filename, "w+");
+
+_open:
+    fp = fopen(special ? path : filename, "w+");
     if (!fp)
         return NULL;
 
@@ -932,7 +963,7 @@ void flame_graph_close(struct flame_graph *fg)
     if (!fg)
         return ;
 
-    if (!keyvalue_pairs_empty(fg->kv_pairs)) {
+    if (!fg->special && !keyvalue_pairs_empty(fg->kv_pairs)) {
         printf("To generate the flame graph, running THIS shell command:\n");
         printf("\n  flamegraph.pl %s.folded > %s.svg\n\n", fg->filename, fg->filename);
     }
