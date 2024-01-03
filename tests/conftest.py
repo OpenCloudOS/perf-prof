@@ -24,6 +24,8 @@ def result_check(std, line, runtime, memleak_check):
         print(line, end='', flush=True)
         if std != PerfProf.STDOUT:
             pytest.fail(line)
+        elif '<...>' in line:
+            pytest.fail(line)
     else:
         if std == PerfProf.STDERR and not PerfProf.lost_events(line):
             print(line, end='', flush=True)

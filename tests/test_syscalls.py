@@ -8,3 +8,9 @@ def test_syscalls(runtime, memleak_check):
     prof = PerfProf(["syscalls", '-e', 'raw_syscalls:sys_enter', '-e', 'raw_syscalls:sys_exit', '-k', 'common_pid', '-i', '1000', '--order', '-m', '128', '-C', '1'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_syscalls_perins(runtime, memleak_check):
+    #perf-prof syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -k common_pid -i 1000 --order -m 128 -C 1 --perins
+    prof = PerfProf(["syscalls", '-e', 'raw_syscalls:sys_enter', '-e', 'raw_syscalls:sys_exit', '-k', 'common_pid', '-i', '1000', '--order', '-m', '128', '-C', '1', '--perins'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

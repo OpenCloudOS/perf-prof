@@ -27,6 +27,12 @@ def test_flame_graph(runtime, memleak_check):
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_flame_graph(runtime, memleak_check):
+    #perf-prof trace -e sched:sched_wakeup -C 0 -g
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup', '-C', '0', '-m', '64', '-g', '--flame-graph', '/dev/stdout'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
 def test_overwrite(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup,sched:sched_switch --overwrite
     prof = PerfProf(['trace', '-e', 'sched:sched_wakeup,sched:sched_switch', '-m', '1', '--overwrite'])
