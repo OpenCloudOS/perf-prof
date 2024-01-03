@@ -142,7 +142,6 @@ struct monitor monitor_signal = {
     .init = signal_init,
     .filter = signal_filter,
     .deinit = signal_exit,
-    .comm   = monitor_tep__comm,
     .sample = signal_sample,
 };
 PROFILER_REGISTER(monitor_signal)

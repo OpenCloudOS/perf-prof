@@ -783,7 +783,6 @@ struct monitor kmemleak = {
     .filter = kmemleak_filter,
     .deinit = kmemleak_exit,
     .sigusr = kmemleak_sigusr,
-    .comm   = monitor_tep__comm,
     .sample = kmemleak_sample,
 };
 MONITOR_REGISTER(kmemleak)

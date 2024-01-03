@@ -355,7 +355,6 @@ static int top_init(struct prof_dev *dev)
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
                          PERF_SAMPLE_RAW,
         .read_format   = 0,
-        .comm          = 1,
         .pinned        = 1,
         .disabled      = 1,
         .watermark     = 1,
@@ -384,8 +383,6 @@ static int top_init(struct prof_dev *dev)
             perf_evsel__keep_disable(evsel, true);
 
         tp->evsel = evsel;
-
-        attr.comm = 0;
     }
 
     return 0;
@@ -765,7 +762,6 @@ static profiler top = {
     .deinit = top_exit,
     .sigusr = top_sigusr,
     .interval = top_interval,
-    .comm   = monitor_tep__comm,
     .sample = top_sample,
 };
 PROFILER_REGISTER(top)

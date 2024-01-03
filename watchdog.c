@@ -115,7 +115,7 @@ static void monitor_ctx_exit(struct prof_dev *dev)
     free(ctx);
 }
 
-static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *sys, const char *name, int comm)
+static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *sys, const char *name)
 {
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -127,7 +127,6 @@ static struct perf_evsel *perf_tp_event(struct perf_evlist *evlist, const char *
         .pinned        = 1,
         .disabled      = 1,
         .wakeup_events = 1,
-        .comm          = comm,
         //.use_clockid   = 1,
         //.clockid       = CLOCK_MONOTONIC,
     };
@@ -157,7 +156,7 @@ static int watchdog_stage_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    evsel = perf_tp_event(dev->evlist, "timer", "hrtimer_expire_entry", 0);
+    evsel = perf_tp_event(dev->evlist, "timer", "hrtimer_expire_entry");
     if (!evsel)
         goto failed;
     ctx->perf_evsel_hrtimer_expire_entry = evsel;
@@ -222,22 +221,22 @@ static int watchdog_init(struct prof_dev *dev)
         attr.config = PERF_COUNT_SW_CPU_CLOCK;
     }
 
-    evsel = perf_tp_event(evlist, "timer", "hrtimer_expire_entry", 1);
+    evsel = perf_tp_event(evlist, "timer", "hrtimer_expire_entry");
     if (!evsel)
         goto failed;
     ctx->hrtimer_expire_entry = perf_evsel__attr(evsel)->config;
 
-    evsel = perf_tp_event(evlist, "timer", "hrtimer_start", 0);
+    evsel = perf_tp_event(evlist, "timer", "hrtimer_start");
     if (!evsel)
         goto failed;
     ctx->hrtimer_start = perf_evsel__attr(evsel)->config;
 
-    evsel = perf_tp_event(evlist, "timer", "hrtimer_cancel", 0);
+    evsel = perf_tp_event(evlist, "timer", "hrtimer_cancel");
     if (!evsel)
         goto failed;
     ctx->hrtimer_cancel = perf_evsel__attr(evsel)->config;
 
-    evsel = perf_tp_event(evlist, "sched", "sched_switch", 0);
+    evsel = perf_tp_event(evlist, "sched", "sched_switch");
     if (!evsel)
         goto failed;
     ctx->sched_switch = perf_evsel__attr(evsel)->config;
@@ -619,7 +618,6 @@ struct monitor watchdog = {
     .init = watchdog_init,
     .filter = watchdog_filter,
     .deinit = watchdog_exit,
-    .comm   = monitor_tep__comm,
     .sample = watchdog_sample,
     .throttle = watchdog_throttle,
     .unthrottle = watchdog_throttle,

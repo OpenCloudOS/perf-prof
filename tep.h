@@ -22,7 +22,6 @@ typedef struct global_var_declare event_fields;
 event_fields *tep__event_fields(int id);
 
 struct prof_dev;
-void monitor_tep__comm(struct prof_dev *dev, union perf_event *event, int instance);
 
 struct tp {
     struct prof_dev *dev;

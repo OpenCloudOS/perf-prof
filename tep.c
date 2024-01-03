@@ -323,11 +323,6 @@ _return:
     return ef;
 }
 
-void monitor_tep__comm(struct prof_dev *dev, union perf_event *event, int instance)
-{
-    tep__update_comm(event->comm.comm, event->comm.tid);
-}
-
 static char *next_sep(char *s, int c)
 {
     while (*s) {
