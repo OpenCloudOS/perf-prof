@@ -363,7 +363,7 @@ static void watchdog_stage_sample(struct prof_dev *dev, union perf_event *event,
     struct sample_type_raw *data = (void *)event->sample.array;
 
     tep__update_comm(NULL, data->h.tid_entry.tid);
-    tep__print_event(data->h.time/1000, data->h.cpu_entry.cpu, data->raw.data, data->raw.size);
+    tep__print_event(data->h.time, data->h.cpu_entry.cpu, data->raw.data, data->raw.size);
 
     if (ctx->watchdog[data->h.cpu_entry.cpu].watchdog_hrtimer == NULL) {
         struct tep_record record;
@@ -549,7 +549,7 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
             dev->env->verbose >= VERBOSE_EVENT) {
             struct sample_type_raw *raw = (void *)event->sample.array;;
             tep__update_comm(NULL, data->tid_entry.tid);
-            tep__print_event(data->time/1000, data->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+            tep__print_event(data->time, data->cpu_entry.cpu, raw->raw.data, raw->raw.size);
             fflush(stdout);
             fsync(fileno(stdout));
         }

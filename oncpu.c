@@ -494,7 +494,7 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
     char *comm;
 
     if (env->verbose >= VERBOSE_EVENT)
-        tep__print_event(data->time/1000, data->cpu_entry.cpu, data->raw.data, data->raw.size);
+        tep__print_event(data->time, data->cpu_entry.cpu, data->raw.data, data->raw.size);
 
     if (ctx->tid_to_cpumap) {
         // sched:sched_stat_runtime

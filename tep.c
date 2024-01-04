@@ -160,6 +160,8 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
     struct trace_seq s;
     struct tep_event *e;
 
+    ts = (ts + 500) / 1000; // us
+
     memset(&record, 0, sizeof(record));
     record.ts = ts;
     record.cpu = cpu;

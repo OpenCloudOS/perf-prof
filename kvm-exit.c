@@ -314,7 +314,7 @@ static void __print_raw(struct sample_type_raw *raw, const char *str)
     print_time(stdout);
     if (str)
         printf("%s", str);
-    tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+    tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 }
 
 static void __process_fast(struct prof_dev *dev, struct sample_type_raw *rkvm_exit, struct sample_type_raw *rkvm_entry, int instance)
@@ -363,7 +363,7 @@ static void kvm_exit_sample(struct prof_dev *dev, union perf_event *event, int i
 
     if (dev->env->verbose >= VERBOSE_EVENT) {
         print_time(stdout);
-        tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+        tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
     }
 
     if (common_type == ctx->kvm_exit) {

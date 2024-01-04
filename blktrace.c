@@ -498,7 +498,7 @@ static void blktrace_sample(struct prof_dev *dev, union perf_event *event, int i
         if (dev->print_title) print_time(stdout);
         if (print)
             printf("%s", print);
-        tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
+        tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
     }
 }
 

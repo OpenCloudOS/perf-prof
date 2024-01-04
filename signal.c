@@ -117,7 +117,7 @@ static void signal_sample(struct prof_dev *dev, union perf_event *event, int ins
 
     tep__update_comm(NULL, data->tid_entry.tid);
     if (dev->print_title) print_time(stdout);
-    tep__print_event(data->time/1000, data->cpu_entry.cpu, raw->data, raw->size);
+    tep__print_event(data->time, data->cpu_entry.cpu, raw->data, raw->size);
     if (dev->env->callchain)
         print_callchain_common(dev->private, &data->callchain, data->tid_entry.pid);
 }

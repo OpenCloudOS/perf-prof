@@ -791,7 +791,7 @@ static void expr_sample(struct prof_dev *dev, union perf_event *event, int insta
 
     print_time(stdout);
     tp_print_marker(&info->tp_list->tp[0]);
-    tep__print_event(raw->time/1000, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
+    tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
     expr_load_data(info->prog, raw->raw.data, raw->raw.size);
     result = expr_run(info->prog);

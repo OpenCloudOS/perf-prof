@@ -567,7 +567,7 @@ static void report_kmemleak(struct prof_dev *dev)
         }
         if (!kv_pairs || dev->env->verbose) {
             __raw_size(event, alloc->callchain, &raw, &size);
-            tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
+            tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
             __print_callchain(dev, event, alloc->callchain);
         }
 
@@ -655,7 +655,7 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
 
     if (dev->env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
-        tep__print_event(data->time/1000, data->cpu_entry.cpu, raw, size);
+        tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
         __print_callchain(dev, event, callchain);
     }
 
