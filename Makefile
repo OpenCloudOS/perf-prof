@@ -39,7 +39,7 @@ EXTRA_CFLAGS := -O3 -g
 
 # Append required CFLAGS
 override CFLAGS += $(EXTRA_WARNINGS) $(EXTRA_CFLAGS)
-override CFLAGS += -Werror -Wall
+override CFLAGS += -Werror -Wall -Wno-shadow
 override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
 ifdef CONFIG_LIBBPF
