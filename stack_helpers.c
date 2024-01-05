@@ -50,9 +50,9 @@ struct callchain_ctx {
 
 static int task_exit_free_syms(struct comm_notify *notify, int pid, int state, u64 free_time)
 {
-    struct global_syms *ctx = container_of(notify, struct global_syms, notify);
-    if (ctx->syms_cache) {
-        syms_cache__free_syms(ctx->syms_cache, pid);
+    struct global_syms *g = container_of(notify, struct global_syms, notify);
+    if (g->syms_cache) {
+        syms_cache__free_syms(g->syms_cache, pid);
     }
     return 0;
 }
