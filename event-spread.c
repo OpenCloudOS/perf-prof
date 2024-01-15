@@ -329,21 +329,26 @@ static int tcp_new_client(struct tcp_socket_ops *ops)
     struct event_block *block = NULL;
     struct tp *tp = NULL;
     struct perf_record_tp record;
+    int ret = -1;
 
     if (!ops->server_ops)
-        return 0;
+        goto err;
 
     block = container_of(ops->server_ops, struct event_block, u.tcp.ops);
     tp = block->eb_list->tp;
     if (perf_record_tp_init(tp, &record) < 0)
-        return 0;
+        goto err;
 
     if (tcp_send(ops->client, &record, sizeof(record), MSG_MORE) == 0 &&
         tcp_send(ops->client, tp->sys, strlen(tp->sys)+1, MSG_MORE) == 0 &&
         tcp_send(ops->client, tp->name, strlen(tp->name)+1, 0) == 0)
-        return 0;
+        ret = 0;
     else
-        return -1;
+        goto err;
+
+    prof_dev_flush(tp->dev);
+err:
+    return ret;
 }
 
 static void handle_cdev_sigio(int fd, unsigned int revents, void *ptr)
@@ -432,11 +437,13 @@ static int cdev_write_header(struct event_block *block)
     struct perf_record_tp record;
 
     if (perf_record_tp_init(tp, &record) < 0)
-        return 0;
+        return -1;
 
     block_broadcast(block, &record, sizeof(record), 0);
     block_broadcast(block, tp->sys, strlen(tp->sys)+1, 0);
     block_broadcast(block, tp->name, strlen(tp->name)+1, 0);
+
+    prof_dev_flush(tp->dev);
     return 0;
 }
 
@@ -538,7 +545,7 @@ static int file_write_header(struct event_block *block)
     size_t pos = 0;
 
     if (perf_record_tp_init(tp, &record) < 0)
-        return 0;
+        return -1;
 
     pos += fwrite(&record, 1, sizeof(record), file);
     pos += fwrite(tp->sys, 1, strlen(tp->sys)+1, file);
