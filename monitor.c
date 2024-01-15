@@ -1451,6 +1451,9 @@ struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
         if (!freopen(env->output, "a", stdout))
             goto out_free;
         dup2(STDOUT_FILENO, STDERR_FILENO);
+        setlinebuf(stdin);
+        setlinebuf(stdout);
+        setlinebuf(stderr);
     }
 
     if (env->order || prof->order) {
@@ -1916,9 +1919,6 @@ int main(int argc, char *argv[])
 
     sigusr2_handler(0);
 
-    setlinebuf(stdin);
-    setlinebuf(stdout);
-    setlinebuf(stderr);
     libperf_init(libperf_print);
 
     main_epoll = event_poll__alloc(64);
