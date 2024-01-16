@@ -625,7 +625,7 @@ static profiler *parse_main_options(int argc, char *argv[])
     }
 
     if (env.symbols) {
-        syms__convert(stdin, stdout);
+        syms__convert(stdin, stdout, env.symbols);
         exit(0);
     }
 

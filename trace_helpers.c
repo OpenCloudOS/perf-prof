@@ -347,6 +347,8 @@ static struct rb_node *object_node_new(struct rblist *rlist, const void *new_ent
         type = get_elf_type(name);
         if (type == ET_EXEC) {
             obj->type = EXEC;
+            if (get_elf_text_scn_info(name, &obj->sh_addr, &obj->sh_offset) < 0)
+                return NULL;
         } else if (type == ET_DYN) {
             obj->type = DYN;
             if (get_elf_text_scn_info(name, &obj->sh_addr, &obj->sh_offset) < 0)
@@ -949,7 +951,23 @@ static int obj__load_sym_table(struct object *obj)
     return -1;
 }
 
-static const struct sym *obj__find_sym(struct object *obj, uint64_t offset)
+static const struct sym *obj__find_name(struct object *obj, const char *name)
+{
+    int i;
+
+    if (!obj)
+        return NULL;
+    if (!obj->syms && obj__load_sym_table(obj))
+        return NULL;
+
+    for (i = 0; i < obj->syms_sz; i++) {
+        if (strcmp(obj->syms[i].name, name) == 0)
+            return &obj->syms[i];
+    }
+    return NULL;
+}
+
+static const struct sym *obj__find_offset(struct object *obj, uint64_t offset)
 {
     unsigned long sym_addr;
     int start, end, mid;
@@ -982,7 +1000,7 @@ static const struct sym *obj__find_sym(struct object *obj, uint64_t offset)
 
 const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 {
-    return obj__find_sym(dso->obj, offset);
+    return obj__find_offset(dso->obj, offset);
 }
 
 const char *dso__name(struct dso *dso)
@@ -1097,13 +1115,18 @@ const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr)
  *  and cpu-profile files (this loosely matches that of /proc/self/maps
  *  on linux), followed by a list of hex addresses to map, one per line.
  **/
-void syms__convert(FILE *fin, FILE *fout)
+void syms__convert(FILE *fin, FILE *fout, char *binpath)
 {
+    struct object *obj;
     struct syms *syms;
     char line[PATH_MAX];
     char *s;
     int ret;
     unsigned long addr;
+
+    obj = obj__get(binpath);
+    if (!obj)
+        return;
 
     syms = __syms__load_file(fin, line, PATH_MAX, 0);
     if (!syms)
@@ -1122,8 +1145,20 @@ void syms__convert(FILE *fin, FILE *fout)
                     goto next_line;
                 }
             }
+            fprintf(fout, "??\n");
+        } else {
+            const struct sym *sym;
+            int n = strlen(line);
+            if (line[n-1] == '\n')
+                line[n-1] = '\0';
+
+            sym = obj__find_name(obj, line);
+            if (sym) {
+                // byte offset from the beginning of the file.
+                fprintf(fout, "0x%lx\n", sym->start - (obj->sh_addr - obj->sh_offset));
+                goto next_line;
+            }
         }
-        fprintf(fout, "??\n");
 
 next_line:
         s = fgets(line, PATH_MAX, fin);
@@ -1131,6 +1166,7 @@ next_line:
             break;
     }
     syms__free(syms);
+    obj__put(obj);
 }
 
 struct syms_cache_node {
