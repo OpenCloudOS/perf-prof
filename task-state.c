@@ -700,7 +700,7 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
     if (data->time > ctx->recent_time)
         ctx->recent_time = data->time;
 
-    if (unlikely(!prof_dev_isowner(dev))) {
+    if (unlikely(!prof_dev_is_final(dev))) {
         // When task-state is used as a forwarding device, it only prints out the event.
         task_state_print_event(dev, event);
         goto free_event;

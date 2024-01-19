@@ -778,7 +778,7 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
                 int pid = waitpid(fdsi.ssi_pid, &status, WNOHANG);
                 if (pid > 0) {
                     list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
-                        if (prof_dev_isowner(dev) && dev->env->workload.pid == pid) {
+                        if (prof_dev_is_final(dev) && dev->env->workload.pid == pid) {
                             dev->env->workload.pid = 0;
                             // Automatically close prof_dev after the workload exits.
                             prof_dev_close(dev);
@@ -1687,7 +1687,7 @@ int prof_dev_disable(struct prof_dev *dev)
     /*
      * Flush remaining perf events.
      */
-    if (dev->pages && prof_dev_isowner(dev)) {
+    if (dev->pages && prof_dev_is_final(dev)) {
         // The forwarding source will also be refreshed.
         prof_dev_flush(dev);
     }
@@ -1906,7 +1906,7 @@ static void print_marker_and_interval(int fd, unsigned int revents, void *ptr)
         if (line) {
             struct prof_dev *dev, *next;
             list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
-                if (prof_dev_isowner(dev))
+                if (prof_dev_is_final(dev))
                     interval_handle(&dev->timer);
             print_time(stdout);
             printf("%s", line);

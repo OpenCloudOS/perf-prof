@@ -363,7 +363,11 @@ int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
 void prof_dev_flush(struct prof_dev *dev);
 void prof_dev_close(struct prof_dev *dev);
-static inline bool prof_dev_isowner(struct prof_dev *dev) {return !dev->forward.target;}
+/*
+ * The final prof_dev refers to the device that finally handles the event and will no
+ * longer forward the event.
+ */
+static inline bool prof_dev_is_final(struct prof_dev *dev) {return !dev->forward.target;}
 struct env *parse_string_options(char *str);
 
 u64 prof_dev_list_minevtime(void);
