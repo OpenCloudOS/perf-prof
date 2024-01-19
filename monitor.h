@@ -317,11 +317,23 @@ struct prof_dev {
         int row; // TIOCGWINSZ
         int col; // TIOCGWINSZ
     } tty;
+    struct prof_dev_links {
+        /*
+         * profiler[/option/ATTR/ATTR/.../] opens the device as a child prof_dev.
+         * Will be linked to the parent device.
+         * The child prof_dev is in the PROF_DEV_STATE_OFF state by default. It
+         * will enter the PROF_DEV_STATE_ACTIVE state after the parent prof_dev
+         * is enabled.
+         */
+        struct prof_dev *parent;
+        struct list_head child_list;
+        struct list_head link_to_parent;
+    } links;
     struct perf_event_forward_to {
         struct prof_dev *target;
         struct list_head source_list;
         struct list_head link_to_target;
-        struct perf_record_dev *event_dev;
+        struct perf_record_dev *event_dev; // PERF_SAMPLE_MAX_SIZE
         short tid_pos, time_pos, id_pos, cpu_pos;
         short forwarded_time_pos; // perf_record_dev.time
         bool ins_reset;
@@ -331,8 +343,20 @@ struct prof_dev {
     } forward;
 };
 
+#define for_each_child_dev(dev, parent) \
+    if (!list_empty(&parent->links.child_list)) \
+        list_for_each_entry(dev, &parent->links.child_list, links.link_to_parent)
+
+#define for_each_child_dev_safe(dev, next, parent) \
+    if (!list_empty(&parent->links.child_list)) \
+        list_for_each_entry_safe(dev, next, &parent->links.child_list, links.link_to_parent)
+
+#define for_each_source_dev_safe(dev, next, target) \
+    if (!list_empty(&target->forward.source_list)) \
+        list_for_each_entry_safe(dev, next, &target->forward.source_list, forward.link_to_target)
+
 struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
-                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map);
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent);
 struct prof_dev *prof_dev_open(profiler *prof, struct env *env);
 int prof_dev_enable(struct prof_dev *dev);
 int prof_dev_disable(struct prof_dev *dev);

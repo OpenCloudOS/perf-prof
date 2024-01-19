@@ -443,7 +443,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             env->tsc_offset = dev->env->tsc_offset;
             // Using (dev->cpus, dev->threads).
             // Make sure instance is consistent between source_dev and dev.
-            tp->source_dev = prof_dev_open_cpu_thread_map(prof, env, dev->cpus, dev->threads);
+            tp->source_dev = prof_dev_open_cpu_thread_map(prof, env, dev->cpus, dev->threads, dev);
             name = sys;
             sys = NULL;
         } else { // sys:name/filter/

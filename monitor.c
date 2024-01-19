@@ -1385,6 +1385,7 @@ static void interval_handle(struct timer *timer)
     struct perf_cpu_map *cpus = dev->cpus;
     struct perf_thread_map *threads = dev->threads;
     profiler *prof = dev->prof;
+    struct prof_dev *source, *next;
 
     // Do not use prof_dev_flush().
     if (dev->pages) {
@@ -1395,11 +1396,8 @@ static void interval_handle(struct timer *timer)
     }
 
     // Recursively execute the interval_handle() of the source prof_dev, including: flush, read, interval.
-    if (!list_empty(&dev->forward.source_list)) {
-        struct prof_dev *source, *next;
-        list_for_each_entry_safe(source, next, &dev->forward.source_list, forward.link_to_target)
-            interval_handle(&source->timer);
-    }
+    for_each_source_dev_safe(source, next, dev)
+        interval_handle(&source->timer);
 
     if (prof->read && dev->values) {
         struct perf_evsel *evsel;
@@ -1421,7 +1419,7 @@ static void interval_handle(struct timer *timer)
 }
 
 struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
-                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map)
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent)
 {
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online;
@@ -1439,8 +1437,10 @@ struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
     dev->env = env;
     INIT_LIST_HEAD(&dev->dev_link);
     dev->type = PROF_DEV_TYPE_NORMAL;
-    dev->state = PROF_DEV_STATE_INACTIVE;
+    dev->state = parent ? PROF_DEV_STATE_OFF : PROF_DEV_STATE_INACTIVE;
     dev->print_title = true;
+    INIT_LIST_HEAD(&dev->links.child_list);
+    INIT_LIST_HEAD(&dev->links.link_to_parent);
     INIT_LIST_HEAD(&dev->forward.source_list);
     INIT_LIST_HEAD(&dev->forward.link_to_target);
 
@@ -1583,6 +1583,10 @@ reinit:
         if (prof_dev_enable(dev) < 0)
             goto out_disable;
 
+    if (parent) {
+        dev->links.parent = parent;
+        list_add_tail(&dev->links.link_to_parent, &parent->links.child_list);
+    }
     list_add(&dev->dev_link, &prof_dev_list);
 
     return dev;
@@ -1621,7 +1625,7 @@ out_free:
 
 struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
 {
-    return prof_dev_open_cpu_thread_map(prof, env, NULL, NULL);
+    return prof_dev_open_cpu_thread_map(prof, env, NULL, NULL, NULL);
 }
 
 int prof_dev_enable(struct prof_dev *dev)
@@ -1629,6 +1633,7 @@ int prof_dev_enable(struct prof_dev *dev)
     profiler *prof;
     struct env *env;
     struct perf_evlist *evlist;
+    struct prof_dev *child;
     int err;
 
     if (!dev || dev->state == PROF_DEV_STATE_ACTIVE)
@@ -1651,6 +1656,10 @@ int prof_dev_enable(struct prof_dev *dev)
     if (env->interval)
         timer_start(&dev->timer, env->interval * 1000000UL, false);
 
+    // Enable child dev before workload_start().
+    for_each_child_dev(child, dev)
+        prof_dev_enable(child);
+
     workload_start(&env->workload);
 
     dev->state = PROF_DEV_STATE_ACTIVE;
@@ -1663,6 +1672,10 @@ int prof_dev_enable(struct prof_dev *dev)
 int prof_dev_disable(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
+    struct prof_dev *child;
+
+    for_each_child_dev(child, dev)
+        prof_dev_disable(child);
 
     if (dev->state < PROF_DEV_STATE_ACTIVE)
         return 0;
@@ -1730,6 +1743,8 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
 
 void prof_dev_flush(struct prof_dev *dev)
 {
+    struct prof_dev *source, *next;
+
     if (dev->pages) {
         struct perf_evlist *evlist = dev->evlist;
         struct perf_mmap *map;
@@ -1739,11 +1754,8 @@ void prof_dev_flush(struct prof_dev *dev)
     }
 
     // Recursively flush the source prof_dev.
-    if (!list_empty(&dev->forward.source_list)) {
-        struct prof_dev *source, *next;
-        list_for_each_entry_safe(source, next, &dev->forward.source_list, forward.link_to_target)
-            prof_dev_flush(source);
-    }
+    for_each_source_dev_safe(source, next, dev)
+        prof_dev_flush(source);
 }
 
 void prof_dev_close(struct prof_dev *dev)
@@ -1785,6 +1797,7 @@ void prof_dev_close(struct prof_dev *dev)
     if (dev->env->cgroups)
         cgroup_list__delete();
 
+    list_del(&dev->links.link_to_parent);
     if (dev->forward.target) {
         free(dev->forward.event_dev);
         list_del(&dev->forward.link_to_target);
