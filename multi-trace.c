@@ -606,7 +606,20 @@ static int __multi_trace_init(struct prof_dev *dev)
                     ctx->tp_list[i]->nr_untraced ++;
                 }
                 tp->untraced = true;
-             }
+
+                /*
+                 * source_dev uses an independent ringbuffer, and order must be enabled
+                 * when forwarding to multi-trace.
+                 *
+                 *   perf-prof multi-trace -e kvm:kvm_exit -e 'kvm:kvm_entry,task-state/-m 256/untraced/' \
+                 *   -t 210673 -m 128 -i 1000 --than 80us --detail=sametid
+                 */
+                if (ctx->need_timeline &&
+                    !using_order(dev)) {
+                    fprintf(stderr, "Enable --detail and %s//, also need to enable --order.\n", source_dev->prof->name);
+                    goto failed;
+                }
+            }
         }
     }
 
