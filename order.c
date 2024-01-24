@@ -56,13 +56,12 @@ static void order_interval(struct prof_dev *dev)
         base->interval(dev);
 }
 
-static void order_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_time)
+static void order_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
 {
     profiler *base = dev->order.base;
     if (base->lost) {
         dev->order.lost_records[ins].lost = event->lost;
         dev->order.lost_records[ins].ins = ins;
-        dev->order.lost_records[ins].lost_time = lost_time;
     }
 }
 
@@ -72,10 +71,14 @@ static void order_sample(struct prof_dev *dev, union perf_event *event, int inst
     void *data = (void *)event->sample.array;
     u64 time = *(u64 *)(data + dev->time_ctx.time_pos);
 
-    if (base->lost && unlikely(dev->order.lost_records[instance].lost.lost)) {
-        base->lost(dev, (union perf_event *)&dev->order.lost_records[instance].lost, instance,
-                        dev->order.lost_records[instance].lost_time ? : time);
-        dev->order.lost_records[instance].lost.lost = 0;
+    if (base->lost) {
+        struct lost_record *lost_rec = &dev->order.lost_records[instance];
+        if (unlikely(lost_rec->lost.lost)) {
+            base->lost(dev, (union perf_event *)&lost_rec->lost, instance,
+                            lost_rec->lost_start_time, time);
+            lost_rec->lost.lost = 0;
+        }
+        lost_rec->lost_start_time = time;
     }
     ordered_events__queue(&dev->order.oe, event, time, instance);
 

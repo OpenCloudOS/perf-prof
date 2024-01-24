@@ -1261,7 +1261,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     switch (event->header.type) {
     case PERF_RECORD_LOST:
         if (prof->lost)
-            prof->lost(dev, event, instance, 0);
+            prof->lost(dev, event, instance, 0, 0);
         else
             print_lost_fn(dev, event, instance);
         break;

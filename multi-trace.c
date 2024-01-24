@@ -906,7 +906,7 @@ static void multi_trace_sigusr(struct prof_dev *dev, int signum)
     printf("  sched:sched_wakeup unnecessary %lu\n", ctx->sched_wakeup_unnecessary);
 }
 
-static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_time)
+static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_time)
 {
     struct multi_trace_ctx *ctx = dev->private;
 

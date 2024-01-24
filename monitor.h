@@ -223,7 +223,7 @@ typedef struct monitor {
     /* PERF_RECORD_* */
 
     //PERF_RECORD_LOST          = 2,
-    void (*lost)(struct prof_dev *dev, union perf_event *event, int instance, u64 lost_time);
+    void (*lost)(struct prof_dev *dev, union perf_event *event, int instance, u64 lost_start, u64 lost_end);
 
     //PERF_RECORD_COMM          = 3,
     void (*comm)(struct prof_dev *dev, union perf_event *event, int instance);
@@ -308,7 +308,7 @@ struct prof_dev {
         struct lost_record {
             struct perf_record_lost lost;
             int ins;
-            u64 lost_time;
+            u64 lost_start_time;
         } *lost_records;
     } order;
     struct tty_ctx {
