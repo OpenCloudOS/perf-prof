@@ -60,6 +60,19 @@ struct __backup_stat {
     u64 mem_bytes;
 };
 
+enum lost_affect {
+    LOST_AFFECT_ALL_EVENT,
+    LOST_AFFECT_INS_EVENT,
+};
+
+struct lost_node {
+    struct list_head lost_link;
+    int ins;
+    bool reclaim;
+    u64 start_time;
+    u64 end_time;
+};
+
 struct multi_trace_ctx {
     struct prof_dev *dev;
     int nr_ins;
@@ -77,13 +90,17 @@ struct multi_trace_ctx {
     bool impl_based_on_call;
     u64 enabled_time;
     u64 recent_time; // The most recent time for all known events.
-    u64 recent_lost_time;
     u64 event_handled;
     u64 sched_wakeup_unnecessary;
     struct callchain_ctx *cc;
     struct perf_thread_map *thread_map; // profiler rundelay
     bool comm; // profiler rundelay
     int level; // level = sched_init()
+
+    /* lost */
+    enum lost_affect lost_affect;
+    struct list_head timeline_lost_list; // LOST_AFFECT_ALL_EVENT. struct lost_node
+    struct list_head *perins_lost_list;  // LOST_AFFECT_INS_EVENT. struct lost_node
 
     /* stat */
     struct timeline_stat tl_stat;
@@ -272,31 +289,15 @@ static void timeline_node_delete(struct rblist *rblist, struct rb_node *rb_node)
     free(b);
 }
 
-static void timeline_free_unneeded(struct prof_dev *dev, bool lost)
+static void timeline_free_unneeded(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
     struct rb_node *next = rb_first_cached(&ctx->timeline.entries);
     struct timeline_node *tl;
-    u64 unneeded_lost = 0UL;
     u64 unneeded_before = 0UL;
     u64 unneeded = 0, backup = 0;
 
-    /*
-     * When there are events lost, events cannot be paired.
-     * Therefore, actively release some old events.
-    **/
-    if (lost || ctx->recent_lost_time) {
-        u64 interval = env->interval ? : 3000;
-
-        // Any event before `ctx->recent_lost_time' may be unpaired. In the next interval, if event2
-        // is not received, the event is considered lost and removed from the timeline forcibly.
-        unneeded_lost = ctx->recent_time - interval * 1000000UL;
-        if (unneeded_lost >= ctx->recent_lost_time) {
-            unneeded_lost = 0UL;
-            ctx->recent_lost_time = 0UL;
-        }
-    }
     if (env->before_event1) {
         struct timeline_node *needed_first;
         if (!list_empty(&ctx->needed_list))
@@ -310,22 +311,20 @@ static void timeline_free_unneeded(struct prof_dev *dev, bool lost)
         if (needed_first && needed_first->time > env->before_event1)
             unneeded_before = needed_first->time - env->before_event1;
     }
-    if (unneeded_lost > unneeded_before)
-        unneeded_before = unneeded_lost;
 
     while (next) {
         tl = rb_entry(next, struct timeline_node, timeline_node);
 
-        // if lost: before `ctx->recent_lost_time` on the timeline
-        // elif before_event1: before `needed_first->time - before_event1` on the timeline
+        // if before_event1: before `needed_first->time - before_event1` on the timeline
         // else: unneeded
         if ((unneeded_before == 0UL && tl->unneeded) ||
             tl->time < unneeded_before) {
             /*
-             * When there are events lost, the event is backed up but not consumed.
-             * Remove from ctx->backup.
+             * When there are events lost, the backed-up event is deleted in time,
+             * see multi_trace_event_lost().
+             * Do a safety check here.
             **/
-            if (tl->unneeded == 0) {
+            if (unlikely(tl->unneeded == 0)) {
                 if (RB_EMPTY_NODE(&tl->key_node)) {
                     fprintf(stderr, "BUG: rb key_node is empty\n");
                 } else
@@ -340,7 +339,8 @@ static void timeline_free_unneeded(struct prof_dev *dev, bool lost)
 
         next = rb_first_cached(&ctx->timeline.entries);
     }
-    if (lost || backup) {
+
+    if (unlikely(backup)) {
         print_time(stderr);
         fprintf(stderr, "free unneeded %lu, backup %lu\n", unneeded, backup);
     }
@@ -387,6 +387,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
     int min_nr_events = 2;
 
     ctx->dev = dev;
+    INIT_LIST_HEAD(&ctx->needed_list);
+    INIT_LIST_HEAD(&ctx->pending_list);
+    INIT_LIST_HEAD(&ctx->timeline_lost_list);
+
+    tep = tep__ref();
 
     if (ctx->nested)
         min_nr_events = 1;
@@ -399,7 +404,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (env->nr_events < min_nr_events)
         goto failed;
 
-    tep = tep__ref();
 
     ctx->nr_ins = prof_dev_nr_ins(dev);
     ctx->nr_list = env->nr_events;
@@ -497,8 +501,19 @@ static int monitor_ctx_init(struct prof_dev *dev)
     } else
         goto failed;
 
-    INIT_LIST_HEAD(&ctx->needed_list);
-    INIT_LIST_HEAD(&ctx->pending_list);
+    if (keyname) {
+        ctx->lost_affect = LOST_AFFECT_ALL_EVENT;
+    } else {
+        // use instance as key, cpu or pid.
+        ctx->lost_affect = LOST_AFFECT_INS_EVENT;
+
+        ctx->perins_lost_list = malloc(ctx->nr_ins * sizeof(struct list_head));
+        if (ctx->perins_lost_list) {
+            for (i = 0; i < ctx->nr_ins; i++)
+                INIT_LIST_HEAD(&ctx->perins_lost_list[i]);
+        } else
+            goto failed;
+    }
 
     ctx->need_timeline = env->detail;
 
@@ -520,14 +535,23 @@ failed:
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct multi_trace_ctx *ctx = dev->private;
+    struct lost_node *lost, *next;
+    int i;
 
-    if (ctx->pending_list.next)
-        while (multi_trace_first_pending(dev, NULL)) ;
+    while (multi_trace_first_pending(dev, NULL)) ;
 
     perf_thread_map__put(ctx->thread_map);
 
     rblist__exit(&ctx->backup);
     rblist__exit(&ctx->timeline);
+
+    if (ctx->perins_lost_list) {
+        for (i = 0; i < ctx->nr_ins; i++)
+            list_for_each_entry_safe(lost, next, &ctx->perins_lost_list[i], lost_link)
+                free(lost);
+    } else
+        list_for_each_entry_safe(lost, next, &ctx->timeline_lost_list, lost_link)
+            free(lost);
 
     free(ctx->perins_list);
 
@@ -906,17 +930,65 @@ static void multi_trace_sigusr(struct prof_dev *dev, int signum)
     printf("  sched:sched_wakeup unnecessary %lu\n", ctx->sched_wakeup_unnecessary);
 }
 
-static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_time)
+static inline void lost_reclaim(struct prof_dev *dev, int ins)
 {
     struct multi_trace_ctx *ctx = dev->private;
 
-    lost_time = lost_time ? : ctx->recent_time;
-    if (ctx->recent_lost_time < lost_time)
-        ctx->recent_lost_time = lost_time;
+    if (ctx->lost_affect == LOST_AFFECT_INS_EVENT) {
+        int oncpu = prof_dev_ins_oncpu(dev);
+        u64 key = oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins);
+        struct rb_node *node, *next;
+        struct timeline_node backup = {
+            .key = key,
+        };
+
+        // Remove all events with the same key.
+        node = rb_find_first(&backup, &ctx->backup.entries.rb_root, perf_event_backup_node_find);
+        while (node) {
+            next = rb_next_match(&backup, node, perf_event_backup_node_find);
+            rblist__remove_node(&ctx->backup, node);
+            node = next;
+        }
+    } else
+        rblist__exit(&ctx->backup);
+}
+
+static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+    struct lost_node *pos;
+    struct lost_node *lost;
 
     print_lost_fn(dev, event, ins);
-    if (ctx->need_timeline)
-        timeline_free_unneeded(dev, true);
+
+    // Without order, events are processed in the order within the ringbuffer.
+    // When lost, all previous events have been processed and only need to reclaim.
+    if (!using_order(dev)) {
+        lost_reclaim(dev, ins);
+        if (ctx->need_timeline)
+            timeline_free_unneeded(dev);
+        return;
+    }
+
+    // When order is enabled, event loss will be sensed in advance, but it
+    // needs to be processed later.
+    lost = malloc(sizeof(*lost));
+    if (lost) {
+        lost->ins = ins;
+        lost->reclaim = false;
+        lost->start_time = lost_start;
+        lost->end_time = lost_end;
+
+        if (ctx->lost_affect == LOST_AFFECT_INS_EVENT) {
+            list_add_tail(&lost->lost_link, &ctx->perins_lost_list[ins]);
+        } else {
+            list_for_each_entry(pos, &ctx->timeline_lost_list, lost_link) {
+                if (pos->start_time > lost_start)
+                    break;
+            }
+            list_add_tail(&lost->lost_link, &pos->lost_link);
+        }
+    }
 }
 
 void multi_trace_raw_size(union perf_event *event, void **praw, int *psize, struct tp *tp)
@@ -1226,6 +1298,77 @@ static struct timeline_node *multi_trace_first_pending(struct prof_dev *dev, str
     return NULL;
 }
 
+static void multi_trace_event_lost(struct prof_dev *dev, struct timeline_node *tl_event)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+    struct tp *tp = tl_event->tp;
+    struct lost_node *lost, *next;
+    struct list_head *head;
+
+    if (tp->untraced)
+        return;
+
+    if (ctx->lost_affect == LOST_AFFECT_INS_EVENT)
+        head = &ctx->perins_lost_list[tl_event->ins];
+    else
+        head = &ctx->timeline_lost_list;
+
+    if (list_empty(head))
+        return;
+
+    list_for_each_entry_safe(lost, next, head, lost_link) {
+        // Events before lost->start_time are processed normally.
+        if (tl_event->time < lost->start_time)
+            return;
+
+        /*          lost
+         * - - - -|= = = =|- - - -
+         *        `start_time, the last unlost event.
+         * Events at start_time position only _find_prev, not _backup.
+         * Subsequent events have been lost, and the backup will be reclaimed immediately.
+         */
+        if (tl_event->time == lost->start_time) {
+            tl_event->need_backup = false;
+            return;
+        }
+
+        /*          lost
+         * - - - -|= = = =|- - - -
+         *         `Events in the lost range.
+         * Within the lost range, all backup events are unsafe. Immediately reclaim events
+         * in ctx->backup to avoid blocking the timeline for a long time.
+         *
+         * two(A, B), A in ctx->backup, B may be lost and another event B may occur.
+         * two(A, B) is unsafe. Immediately delete A from ctx->backup to avoid unsafe
+         * two(A, B).
+         *
+         * For example:
+         *          lost
+         * - - -A-|=B= =A=|-B- - -
+         *      '___________' unsafe two(A, B).
+         */
+        if (!lost->reclaim) {
+            lost_reclaim(dev, tl_event->ins);
+            lost->reclaim = true;
+        }
+
+        // Within the lost range, new events are also unsafe, neither _find_prev nor _backup.
+        if (tl_event->time < lost->end_time) {
+            tl_event->need_find_prev = false;
+            tl_event->need_backup = false;
+            return;
+        } else {
+            /*          lost
+             * - - - -|= = = =|- - - -
+             *                `end_time, the first event after lost.
+             * Re-process subsequent events normally.
+             */
+            list_del(&lost->lost_link);
+            free(lost);
+        }
+    }
+}
+
 static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct env *env = dev->env;
@@ -1342,6 +1485,8 @@ found:
     current.seq = ctx->event_handled++;
     current.event = event;
 
+    multi_trace_event_lost(dev, &current);
+
     // insert events to Timeline, include untraced events.
     if (ctx->need_timeline) {
         bool need_free = current.unneeded;
@@ -1370,7 +1515,7 @@ found:
         }
 
         if (need_free)
-            timeline_free_unneeded(dev, false);
+            timeline_free_unneeded(dev);
     } else {
         bool dummy = false;
 
