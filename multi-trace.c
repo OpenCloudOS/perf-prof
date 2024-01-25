@@ -75,6 +75,7 @@ struct lost_node {
 
 struct multi_trace_ctx {
     struct prof_dev *dev;
+    int oncpu;
     int nr_ins;
     int nr_list;
     struct tp_list **tp_list;
@@ -370,8 +371,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     struct multi_trace_ctx *ctx = dev->private;
     int i, j, stacks = 0;
     struct tep_handle *tep;
+    int oncpu = prof_dev_ins_oncpu(dev);
     struct two_event_options options = {
-        .keyname = prof_dev_ins_oncpu(dev) ? "CPU" : "THREAD",
+        .keyname = oncpu ? "CPU" : "THREAD",
         .perins = env->perins,
         .comm = ctx->comm,
         .only_print_greater_than = env->only_print_greater_than,
@@ -387,6 +389,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     int min_nr_events = 2;
 
     ctx->dev = dev;
+    ctx->oncpu = oncpu;
     INIT_LIST_HEAD(&ctx->needed_list);
     INIT_LIST_HEAD(&ctx->pending_list);
     INIT_LIST_HEAD(&ctx->timeline_lost_list);
@@ -935,8 +938,7 @@ static inline void lost_reclaim(struct prof_dev *dev, int ins)
     struct multi_trace_ctx *ctx = dev->private;
 
     if (ctx->lost_affect == LOST_AFFECT_INS_EVENT) {
-        int oncpu = prof_dev_ins_oncpu(dev);
-        u64 key = oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins);
+        u64 key = ctx->oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins);
         struct rb_node *node, *next;
         struct timeline_node backup = {
             .key = key,
@@ -1298,7 +1300,7 @@ static struct timeline_node *multi_trace_first_pending(struct prof_dev *dev, str
     return NULL;
 }
 
-static void multi_trace_event_lost(struct prof_dev *dev, struct timeline_node *tl_event)
+static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_node *tl_event)
 {
     struct multi_trace_ctx *ctx = dev->private;
     struct tp *tp = tl_event->tp;
@@ -1466,12 +1468,12 @@ found:
         need_backup = false;
 
     // get key, include untraced events.
-    key = prof_dev_ins_oncpu(dev) ? prof_dev_ins_cpu(dev, instance) : prof_dev_ins_thread(dev, instance);
     // !untraced: tp->key || env->key
     //  untraced: tp->key
     if (tp->key_prog) {
         key = tp_get_key(tp, raw, size);
-    }
+    } else
+        key = ctx->oncpu ? prof_dev_ins_cpu(dev, instance) : prof_dev_ins_thread(dev, instance);
 
     current.time = hdr->time;
     current.key = key;
