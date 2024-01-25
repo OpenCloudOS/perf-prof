@@ -1535,13 +1535,13 @@ static void call_delay_iterator(struct caller_iterator *iter, struct two_event *
     if (flen < 13) flen = 13;
     printf("%-*s %s", flen-len, two->tp1->alias ?: two->tp1->name, caller->recursive ? "R" : " ");
 
-    p50 = tdigest_quantile(node->td, 0.50);
-    p95 = tdigest_quantile(node->td, 0.95);
-    p99 = tdigest_quantile(node->td, 0.99);
-    if (node)
+    if (node) {
+        p50 = tdigest_quantile(node->td, 0.50);
+        p95 = tdigest_quantile(node->td, 0.95);
+        p99 = tdigest_quantile(node->td, 0.99);
         printf(" %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n",
             node->n, node->sum/1000.0, node->min/1000.0, p50/1000.0, p95/1000.0, p99/1000.0, node->max/1000.0);
-    else
+    } else
         printf("\n");
 }
 
