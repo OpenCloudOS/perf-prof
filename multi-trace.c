@@ -89,7 +89,6 @@ struct multi_trace_ctx {
     bool need_timeline;
     bool nested;
     bool impl_based_on_call;
-    u64 enabled_time;
     u64 recent_time; // The most recent time for all known events.
     u64 event_handled;
     u64 sched_wakeup_unnecessary;
@@ -715,37 +714,8 @@ static int multi_trace_filter(struct prof_dev *dev)
     return 0;
 }
 
-static unsigned long drop_mmap_events(struct prof_dev *dev, struct perf_mmap *map)
-{
-    struct multi_trace_ctx *ctx = dev->private;
-    union perf_event *event;
-    bool writable = false;
-    unsigned long dropped = 0;
-    struct multi_trace_type_header *hdr;
-
-    if (perf_mmap__read_init(map) < 0)
-        return 0;
-
-    perf_event_convert_read_tsc_conversion(dev, map);
-    while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
-        event = perf_event_convert(dev, event, writable);
-        hdr = (void *)event->sample.array;
-        if (hdr->time > ctx->enabled_time)
-            ctx->enabled_time = hdr->time;
-        dropped ++;
-        perf_mmap__consume(map);
-    }
-
-    perf_mmap__read_done(map);
-    return dropped;
-}
-
 static void multi_trace_enabled(struct prof_dev *dev)
 {
-    struct multi_trace_ctx *ctx = dev->private;
-    struct perf_evlist *evlist = dev->evlist;
-    struct perf_mmap *map;
-    unsigned long dropped = 0;
     /*
      * Start sampling after the events is fully enabled.
      *
@@ -755,32 +725,10 @@ static void multi_trace_enabled(struct prof_dev *dev)
      * is only sampled on CPU0, and the sched_switch event is not sampled on CPU95.
      * It is possible that sched_wakeup will block the timeline to free unneeded events.
     **/
-    perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
-        dropped += drop_mmap_events(dev, map);
-    }
-    if (dev->env->verbose)
-        printf("Drop %lu events before starting sampling.\n", dropped);
+
     /*
-     * According to the causal relationship A->B, A happens first and B happens later. However, when
-     * dropping events internally in drop_mmap_events(), it may cause B to be dropped and A to be retained.
-     * This will block the timeline to free unneeded events.
-     *
-     * `enabled_time' is used to record the maximum timestamp of dropped events. All timestamps greater
-     * than this are processed normally, and those less than this are marked as unneeded.
-    **/
-    if (ctx->enabled_time == 0) {
-        int i;
-        int nr_real_tp = 0, nr_pull = 0;
-        for (i = 0; i < ctx->nr_list; i++) {
-            nr_real_tp += ctx->tp_list[i]->nr_real_tp;
-            nr_pull += ctx->tp_list[i]->nr_pull_from;
-        }
-        if (nr_real_tp == nr_pull)
-            ctx->enabled_time = ENABLED_MAX;
-        else
-            ctx->enabled_time = ENABLED_TP_MAX;
-    } else if (dev->env->verbose)
-        printf("Enabled after %lu.%06lu\n", ctx->enabled_time/NSEC_PER_SEC, (ctx->enabled_time%NSEC_PER_SEC)/1000);
+     * See prof_dev_atomic_enable().
+     */
 }
 
 static void multi_trace_handle_remaining(struct prof_dev *dev)
@@ -1420,15 +1368,6 @@ free_dup_event:
 
 found:
 
-    if (unlikely(ctx->enabled_time >= ENABLED_TP_MAX)) {
-        if (ctx->enabled_time == ENABLED_TP_MAX && tp_kernel(tp))
-            ctx->enabled_time = hdr->time;
-        if (ctx->enabled_time == ENABLED_MAX)
-            ctx->enabled_time = hdr->time;
-        if (dev->env->verbose && ctx->enabled_time < ENABLED_TP_MAX)
-            printf("Enabled after %lu.%06lu\n", ctx->enabled_time/NSEC_PER_SEC, (ctx->enabled_time%NSEC_PER_SEC)/1000);
-    }
-
     tp_broadcast_event(tp, event);
     if (env->verbose >= VERBOSE_EVENT || tp->trigger) {
         multi_trace_print_title(event, tp, tp->trigger ? "trigger" : NULL);
@@ -1462,10 +1401,6 @@ found:
         need_backup = tp1 == NULL;
         need_remove_from_backup = tp1 != NULL;
     }
-
-    // Mark as unneeded. See the comments in multi_trace_enabled().
-    if (need_backup && hdr->time < ctx->enabled_time)
-        need_backup = false;
 
     // get key, include untraced events.
     // !untraced: tp->key || env->key
