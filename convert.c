@@ -59,7 +59,7 @@ u64 perf_time_to_ns(struct prof_dev *dev, u64 time)
         return perf_tsc_to_ns(dev, time);
 }
 
-static inline u64 perf_time_to_tsc(struct prof_dev *dev, u64 ns)
+static inline u64 __perf_time_to_tsc(struct prof_dev *dev, u64 ns)
 {
     struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
     u64 t, quot, rem;
@@ -70,6 +70,14 @@ static inline u64 perf_time_to_tsc(struct prof_dev *dev, u64 ns)
     return (quot << tc->time_shift) +
            (rem << tc->time_shift) / tc->time_mult +
            dev->env->tsc_offset;
+}
+
+u64 perf_time_to_tsc(struct prof_dev *dev, u64 time)
+{
+    if (likely(!dev->convert.need_tsc_conv))
+        return time;
+    else
+        return __perf_time_to_tsc(dev, time);
 }
 
 static inline bool is_sampling_event(struct perf_event_attr *attr)
@@ -239,7 +247,7 @@ union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *eve
     data = (void *)event->sample.array;
 
     time = (u64 *)(data + dev->time_ctx.time_pos);
-    *time = perf_time_to_tsc(dev, *time);
+    *time = __perf_time_to_tsc(dev, *time);
 
     return event;
 }

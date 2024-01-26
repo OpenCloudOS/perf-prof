@@ -289,7 +289,8 @@ struct prof_dev {
     struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         u64 sample_type;
         int time_pos;
-        u64 last_evtime;
+        u64 last_evtime; // ns, tsc
+        u64 enabled_after; // ns, tsc
     } time_ctx;
     struct perf_event_convert {
         // tsc convert
@@ -407,6 +408,7 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 //convert.c
 u64 rdtsc(void);
 u64 perf_time_to_ns(struct prof_dev *dev, u64 time);
+u64 perf_time_to_tsc(struct prof_dev *dev, u64 time);
 int perf_sample_forward_init(struct prof_dev *dev);
 int perf_sample_time_init(struct prof_dev *dev);
 int perf_event_convert_init(struct prof_dev *dev);

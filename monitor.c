@@ -1202,7 +1202,7 @@ static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *
     }
 }
 
-static union perf_event *
+static inline union perf_event *
 perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance, bool writable, bool converted)
 {
     struct perf_record_dev *event_dev = (void *)dev->forward.event_dev;
@@ -1241,8 +1241,16 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     if (dev->forward.target) {
         // Forward upward.
         if (event->header.type == PERF_RECORD_SAMPLE) {
+            struct perf_record_dev *event_dev;
+
             event = perf_event_forward(dev, event, &instance, writable, converted);
             converted = true;
+
+            // The source device forwards events after its `enabled_after' to the target device.
+            event_dev = (void *)event;
+            if (unlikely(event_dev->time < dev->time_ctx.enabled_after)) {
+                return 0;
+            }
         }
         // Only PERF_RECORD_SAMPLE events are forwarded.
         if (event->header.type == PERF_RECORD_DEV)
@@ -1302,8 +1310,13 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
                 if (likely(!converted))
                     event = perf_event_convert(dev, event, writable);
 
-                if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME)
+                if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME) {
                     dev->time_ctx.last_evtime = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
+                    if (unlikely(dev->time_ctx.last_evtime < dev->time_ctx.enabled_after)) {
+                        dev->sampled_events = 0;
+                        break;
+                    }
+                }
 
                 prof->sample(dev, event, instance);
             }
@@ -1628,12 +1641,65 @@ struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
     return prof_dev_open_cpu_thread_map(prof, env, NULL, NULL, NULL);
 }
 
+static int prof_dev_atomic_enable(struct prof_dev *dev, u64 enable_cost)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_mmap *map;
+    union perf_event *event;
+    bool writable = false;
+    u64 enabled_after_ns;
+
+    if (prof_dev_nr_ins(dev) <= 1)
+        return 0;
+
+    if (dev->env->overwrite)
+        return -1;
+
+    if (!(dev->time_ctx.sample_type & PERF_SAMPLE_TIME))
+        return -1;
+
+    perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
+        if (perf_mmap__read_init(map) < 0)
+            continue;
+
+        while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
+            perf_mmap__consume(map);
+            enabled_after_ns = enable_cost + *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
+            goto enabled_after;
+        }
+        if (!event)
+            perf_mmap__read_done(map);
+    }
+    return 0;
+
+enabled_after:
+    /*
+     * Start sampling after the events is fully enabled.
+     *
+     * -e sched:sched_wakeup -e sched:sched_switch -C 0-95
+     * A sched_wakeup occurs on CPU0, possibly sched_switch occurs on CPU95. When enabling, CPU0 is
+     * enabled first, and CPU95 is enabled last. It is possible that the sched_wakeup event is only
+     * sampled on CPU0, and the sched_switch event is not sampled on CPU95.
+     *
+     * Events after `enabled_after_ns' are safe and there is no enablement loss.
+    **/
+    perf_event_convert_read_tsc_conversion(dev, map);
+    dev->time_ctx.enabled_after = perf_time_to_tsc(dev, enabled_after_ns);
+    if (dev->env->verbose) {
+        printf("%s: enabled after %lu.%06lu\n", dev->prof->name, dev->time_ctx.enabled_after/NSEC_PER_SEC,
+                    (dev->time_ctx.enabled_after%NSEC_PER_SEC)/1000);
+    }
+    return 0;
+}
+
 int prof_dev_enable(struct prof_dev *dev)
 {
     profiler *prof;
     struct env *env;
     struct perf_evlist *evlist;
     struct prof_dev *child;
+    struct timespec before_enable, after_enable;
+    u64 enable_cost;
     int err;
 
     if (!dev || dev->state == PROF_DEV_STATE_ACTIVE)
@@ -1649,7 +1715,14 @@ int prof_dev_enable(struct prof_dev *dev)
         return -1;
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &before_enable);
     perf_evlist__enable(evlist);
+    clock_gettime(CLOCK_MONOTONIC, &after_enable);
+
+    enable_cost = (after_enable.tv_sec - before_enable.tv_sec) * NSEC_PER_SEC +
+                  (after_enable.tv_nsec - before_enable.tv_nsec);
+    prof_dev_atomic_enable(dev, enable_cost);
+
     if (prof->enabled)
         prof->enabled(dev);
 
