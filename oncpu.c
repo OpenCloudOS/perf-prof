@@ -28,7 +28,7 @@ struct runtime {
     };
     u64 runtime;
     u64 nr_run;
-    u64 nr_max;
+    u64 max;
     char comm[16];
 };
 
@@ -138,7 +138,7 @@ static struct rb_node *runtime_node_new(struct rblist *rlist, const void *new_en
         run->another = e->another;
         run->runtime = 0;
         run->nr_run = 0;
-        run->nr_max = 0;
+        run->max = 0;
         memset(run->comm, 0, 16);
         return &run->rbn;
     }
@@ -356,6 +356,25 @@ static void oncpu_exit(struct prof_dev *dev)
     free(ctx);
 }
 
+static void oncpu_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
+{
+    struct oncpu_ctx *ctx = dev->private;
+
+    print_lost_fn(dev, event, ins);
+
+    if (using_order(dev)) {
+        fprintf(stderr, "%s: the correctness when lost cannot be guaranteed.\n", dev->prof->name);
+        return;
+    }
+
+    if (ctx->tid_to_cpumap) {
+        // sched:sched_stat_runtime
+    } else {
+        // sched:sched_switch
+        ctx->last_time[ins] = 0;
+    }
+}
+
 static struct runtime *find_first_sib(struct oncpu_ctx *ctx, int instance)
 {
     struct rb_node *rbn;
@@ -421,7 +440,7 @@ static void print_tidmap(struct prof_dev *dev, struct runtime *first)
 
     for_each_runtime(first, run, rbn, instance)
         if (dev->env->detail)
-            printf("%s:%d(%.1fms/%lu/%.1fms) ", run->comm, run->tid, run->runtime/1000000.0, run->nr_run, run->nr_max/1000000.0);
+            printf("%s:%d(%.1fms/%lu/%.1fms) ", run->comm, run->tid, run->runtime/1000000.0, run->nr_run, run->max/1000000.0);
         else
             printf("%s:%d(%.1fms) ", run->comm, run->tid, run->runtime/1000000.0);
 
@@ -563,8 +582,8 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
         run = rb_entry(rbn, struct runtime, rbn);
         run->runtime += runtime;
         run->nr_run += 1;
-        if (runtime > run->nr_max)
-            run->nr_max = runtime;
+        if (runtime > run->max)
+            run->max = runtime;
         if (run->comm[0] == 0) {
             memcpy(run->comm, comm, 16);
         }
@@ -591,6 +610,7 @@ static profiler oncpu = {
     .filter = oncpu_filter,
     .deinit = oncpu_exit,
     .interval = oncpu_interval,
+    .lost = oncpu_lost,
     .sample = oncpu_sample,
 };
 PROFILER_REGISTER(oncpu)
