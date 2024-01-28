@@ -280,6 +280,20 @@ static void kvm_exit_deinit(struct prof_dev *dev)
     monitor_ctx_exit(dev);
 }
 
+static void kvm_exit_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
+{
+    struct kvmexit_ctx *ctx = dev->private;
+
+    print_lost_fn(dev, event, ins);
+
+    if (using_order(dev)) {
+        fprintf(stderr, "%s: the correctness when lost cannot be guaranteed.\n", dev->prof->name);
+        return;
+    }
+
+    ctx->perins_kvm_exit_valid[ins] = 0;
+}
+
 static inline int __exit_reason(struct kvmexit_ctx *ctx, struct sample_type_raw *raw, unsigned int *exit_reason,
                                      u32 *isa, unsigned long *guest_rip)
 {
@@ -410,6 +424,7 @@ struct monitor kvm_exit = {
     .filter = kvm_exit_filter,
     .deinit = kvm_exit_deinit,
     .interval = kvm_exit_interval,
+    .lost = kvm_exit_lost,
     .sample = kvm_exit_sample,
 };
 MONITOR_REGISTER(kvm_exit)
