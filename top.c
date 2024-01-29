@@ -529,10 +529,8 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
         if (tp->comm_prog)
             info.pcomm = tp_get_comm(tp, data, size);
         else {
-            if (!tep_is_pid_registered(tep__ref(), raw->tid_entry.tid))
-                tep__update_comm(NULL, raw->tid_entry.tid);
+            tep__update_comm(NULL, raw->tid_entry.tid);
             info.pcomm = (void *)tep__pid_to_comm(raw->tid_entry.tid);
-            tep__unref();
         }
     } else
         info.pcomm = NULL;

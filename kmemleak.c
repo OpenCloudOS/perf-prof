@@ -758,9 +758,7 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
         return;
 
     if (ctx->user) {
-        if (!tep_is_pid_registered(tep__ref(), data->tid_entry.tid))
-            tep__update_comm(NULL, data->tid_entry.tid);
-        tep__unref();
+        tep__update_comm(NULL, data->tid_entry.tid);
     }
 
     if (is_alloc) {
