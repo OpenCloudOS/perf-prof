@@ -43,6 +43,14 @@ struct block_iostat {
     __u64 than;
 };
 
+struct block_lost_node {
+    struct list_head lost_link;
+    int ins;
+    bool reclaim;
+    u64 start_time;
+    u64 end_time;
+};
+
 struct blktrace_ctx {
     struct block_iostat stats[BLOCK_MAX];
     dev_t  dev;
@@ -51,6 +59,7 @@ struct blktrace_ctx {
     sector_t end_sector;
     int max_name_len;
     struct rblist rq_tracks;
+    struct list_head lost_list;
 };
 
 struct trace_block_getrq {
@@ -223,6 +232,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx)
         return -1;
     dev->private = ctx;
+    INIT_LIST_HEAD(&ctx->lost_list);
 
     ctx->dev = new_decode_dev((u32)st.st_rdev);
     major = get_dev_major((u32)st.st_rdev);
@@ -275,6 +285,10 @@ failed:
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct blktrace_ctx *ctx = dev->private;
+    struct block_lost_node *lost, *next;
+
+    list_for_each_entry_safe(lost, next, &ctx->lost_list, lost_link)
+        free(lost);
     rblist__exit(&ctx->rq_tracks);
     tep__unref();
     free(ctx);
@@ -414,6 +428,68 @@ static void blktrace_exit(struct prof_dev *dev)
     monitor_ctx_exit(dev);
 }
 
+static void blktrace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
+{
+    struct blktrace_ctx *ctx = dev->private;
+    struct block_lost_node *pos;
+    struct block_lost_node *lost;
+
+    print_lost_fn(dev, event, ins);
+
+    // Order is enabled by default.
+    // When order is enabled, event loss will be sensed in advance, but it
+    // needs to be processed later.
+    lost = malloc(sizeof(*lost));
+    if (lost) {
+        lost->ins = ins;
+        lost->reclaim = false;
+        lost->start_time = lost_start;
+        lost->end_time = lost_end;
+
+        list_for_each_entry(pos, &ctx->lost_list, lost_link) {
+            if (pos->start_time > lost_start)
+                break;
+        }
+        list_add_tail(&lost->lost_link, &pos->lost_link);
+    }
+}
+
+static inline int blktrace_event_lost(struct prof_dev *dev, union perf_event *event)
+{
+    struct blktrace_ctx *ctx = dev->private;
+    struct sample_type_raw *data = (void *)event->sample.array;
+    struct block_lost_node *lost, *next;
+
+    if (likely(list_empty(&ctx->lost_list)))
+        return 0;
+
+    list_for_each_entry_safe(lost, next, &ctx->lost_list, lost_link) {
+        // Events before lost->start_time are processed normally.
+        if (data->time <= lost->start_time)
+            return 0;
+
+        /*
+         * Not sure which events are lost, we can only delete all request tracks
+         * in `ctx->rq_tracks'. Restart collection after lost.
+         */
+        if (!lost->reclaim) {
+            rblist__exit(&ctx->rq_tracks);
+            lost->reclaim = true;
+        }
+
+        // Within the lost range, new events are also unsafe.
+        if (data->time < lost->end_time) {
+            return -1;
+        } else {
+            // Re-process subsequent events normally.
+            list_del(&lost->lost_link);
+            free(lost);
+        }
+    }
+    return 0;
+}
+
+
 #define IF(i, trace) \
 if (common_type == ctx->stats[i].type) { \
     r.tp = i; \
@@ -436,6 +512,9 @@ static void blktrace_sample(struct prof_dev *dev, union perf_event *event, int i
     u64 delta;
     const char *print = NULL;
     int verbose = dev->env->verbose;
+
+    if (blktrace_event_lost(dev, event) < 0)
+        goto verbose_print;
 
     r.time = data->time;
     IF(BLOCK_GETRQ, getrq)
@@ -492,6 +571,7 @@ static void blktrace_sample(struct prof_dev *dev, union perf_event *event, int i
     else if (r.tp != BLOCK_RQ_COMPLETE)
         rblist__add_node(&ctx->rq_tracks, &r);
 
+verbose_print:
     if (verbose &&
         (print || verbose >= VERBOSE_EVENT)) {
         tep__update_comm(NULL, data->tid_entry.tid);
@@ -525,6 +605,7 @@ static profiler blktrace = {
     .filter = blktrace_filter,
     .deinit = blktrace_exit,
     .interval = blktrace_interval,
+    .lost = blktrace_lost,
     .sample = blktrace_sample,
 };
 PROFILER_REGISTER(blktrace)
