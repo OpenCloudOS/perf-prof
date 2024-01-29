@@ -31,6 +31,7 @@ struct kmemleak_ctx {
     struct rblist alloc;
     struct rblist gc_free;
     struct kmemleak_stat stat;
+    struct list_head lost_list;
     bool report_leaked_bytes;
     bool user;
 };
@@ -52,6 +53,16 @@ struct perf_event_entry {
     int      callchain:1;
     union perf_event *event;
 };
+
+struct kmemleak_lost_node {
+    struct list_head lost_link;
+    int ins;
+    bool reclaim;
+    u64 start_time;
+    u64 end_time;
+    u64 lost;
+};
+
 
 // in linux/perf_event.h
 // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
@@ -202,6 +213,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
         free(ctx);
         return -1;
     }
+    INIT_LIST_HEAD(&ctx->lost_list);
 
     tep__ref();
     ctx->user = !prof_dev_ins_oncpu(dev);
@@ -225,6 +237,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct kmemleak_ctx *ctx = dev->private;
+    struct kmemleak_lost_node *lost, *next;
+
+    list_for_each_entry_safe(lost, next, &ctx->lost_list, lost_link)
+        free(lost);
 
     rblist__exit(&ctx->alloc);
     rblist__exit(&ctx->gc_free);
@@ -365,6 +381,60 @@ static void kmemleak_exit(struct prof_dev *dev)
     report_kmemleak(dev);
     monitor_ctx_exit(dev);
 }
+
+static inline void lost_reclaim(struct prof_dev *dev)
+{
+    struct kmemleak_ctx *ctx = dev->private;
+
+    if (!list_empty(&ctx->lost_list)) {
+        struct kmemleak_lost_node *lost = list_first_entry(&ctx->lost_list, struct kmemleak_lost_node, lost_link);
+        int oncpu = prof_dev_ins_oncpu(dev);
+
+        print_time(stderr);
+        fprintf(stderr, "%s: lost %lu events on %s #%d\n", dev->prof->name, lost->lost,
+                        oncpu ? "CPU" : "thread",
+                        oncpu ? prof_dev_ins_cpu(dev, lost->ins) : prof_dev_ins_thread(dev, lost->ins));
+    }
+
+    if (!rblist__empty(&ctx->alloc)) {
+        print_time(stdout);
+        printf("Report memory leaks in advance due to lost\n");
+
+        report_kmemleak(dev);
+    } else
+        rblist__exit(&ctx->gc_free);
+}
+
+static void kmemleak_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
+{
+    struct kmemleak_ctx *ctx = dev->private;
+    struct kmemleak_lost_node *pos;
+    struct kmemleak_lost_node *lost;
+
+    if (!using_order(dev)) {
+        print_lost_fn(dev, event, ins);
+        lost_reclaim(dev);
+        return;
+    }
+
+    // When order is enabled, event loss will be sensed in advance, but it
+    // needs to be processed later.
+    lost = malloc(sizeof(*lost));
+    if (lost) {
+        lost->ins = ins;
+        lost->reclaim = false;
+        lost->start_time = lost_start;
+        lost->end_time = lost_end;
+        lost->lost = event->lost.lost;
+
+        list_for_each_entry(pos, &ctx->lost_list, lost_link) {
+            if (pos->start_time > lost_start)
+                break;
+        }
+        list_add_tail(&lost->lost_link, &pos->lost_link);
+    }
+}
+
 
 struct sample_type_callchain {
     struct sample_type_header h;
@@ -609,6 +679,37 @@ static bool config_is_free(struct kmemleak_ctx *ctx, __u64 config, struct tp **p
     return false;
 }
 
+static inline int kmemleak_event_lost(struct prof_dev *dev, union perf_event *event)
+{
+    struct kmemleak_ctx *ctx = dev->private;
+    struct sample_type_header *data = (void *)event->sample.array;
+    struct kmemleak_lost_node *lost, *next;
+
+    if (likely(list_empty(&ctx->lost_list)))
+        return 0;
+
+    list_for_each_entry_safe(lost, next, &ctx->lost_list, lost_link) {
+        // Events before lost->start_time are processed normally.
+        if (data->time <= lost->start_time)
+            return 0;
+
+        if (!lost->reclaim) {
+            lost_reclaim(dev);
+            lost->reclaim = true;
+        }
+
+        // Within the lost range, new events are also unsafe.
+        if (data->time < lost->end_time) {
+            return -1;
+        } else {
+            // Re-process subsequent events normally.
+            list_del(&lost->lost_link);
+            free(lost);
+        }
+    }
+    return 0;
+}
+
 static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct kmemleak_ctx *ctx = dev->private;
@@ -647,16 +748,19 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
     callchain = (is_alloc && dev->env->callchain) || tp->stack;
     __raw_size(event, callchain, &raw, &size);
 
-    if (ctx->user) {
-        if (!tep_is_pid_registered(tep__ref(), data->tid_entry.tid))
-            tep__update_comm(NULL, data->tid_entry.tid);
-        tep__unref();
-    }
-
     if (dev->env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
         tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
         __print_callchain(dev, event, callchain);
+    }
+
+    if (kmemleak_event_lost(dev, event) < 0)
+        return;
+
+    if (ctx->user) {
+        if (!tep_is_pid_registered(tep__ref(), data->tid_entry.tid))
+            tep__update_comm(NULL, data->tid_entry.tid);
+        tep__unref();
     }
 
     if (is_alloc) {
@@ -783,6 +887,7 @@ struct monitor kmemleak = {
     .filter = kmemleak_filter,
     .deinit = kmemleak_exit,
     .sigusr = kmemleak_sigusr,
+    .lost = kmemleak_lost,
     .sample = kmemleak_sample,
 };
 MONITOR_REGISTER(kmemleak)
