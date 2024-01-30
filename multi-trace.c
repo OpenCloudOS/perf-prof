@@ -551,6 +551,7 @@ static void monitor_ctx_exit(struct prof_dev *dev)
         for (i = 0; i < ctx->nr_ins; i++)
             list_for_each_entry_safe(lost, next, &ctx->perins_lost_list[i], lost_link)
                 free(lost);
+        free(ctx->perins_lost_list);
     } else
         list_for_each_entry_safe(lost, next, &ctx->timeline_lost_list, lost_link)
             free(lost);
