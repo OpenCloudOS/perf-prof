@@ -44,6 +44,7 @@ LIBPERF_0.0.1 {
 		perf_evsel__apply_filter;
 		perf_evsel__apply_filter_cpu;
 		perf_evsel__set_bpf;
+		perf_evsel__set_own_cpus;
 		perf_evsel__cpus;
 		perf_evsel__threads;
 		perf_evsel__attr;

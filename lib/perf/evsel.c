@@ -452,6 +452,11 @@ int perf_evsel__set_bpf(struct perf_evsel *evsel, unsigned int prog_fd)
 	return err;
 }
 
+void perf_evsel__set_own_cpus(struct perf_evsel *evsel, struct perf_cpu_map *own_cpus)
+{
+	perf_cpu_map__put(evsel->own_cpus);
+	evsel->own_cpus = perf_cpu_map__get(own_cpus);
+}
 
 struct perf_cpu_map *perf_evsel__cpus(struct perf_evsel *evsel)
 {
