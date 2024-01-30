@@ -649,6 +649,7 @@ static void report_kmemleak(struct prof_dev *dev)
         keyvalue_pairs_sorted_foreach(kv_pairs, __leak_cmp, __print_leak, ctx);
         keyvalue_pairs_free(kv_pairs);
     }
+    ctx->alloc.node_delete = perf_event_backup_node_delete;
 }
 
 static bool config_is_alloc(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
