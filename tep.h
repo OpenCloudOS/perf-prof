@@ -81,6 +81,9 @@ struct tp {
     // A public expression that can be executed by any profiler.
     struct expr_prog *exec_prog;
     const char *exec;
+
+    // cpus
+    struct perf_cpu_map *cpus;
 };
 
 struct tp_list {

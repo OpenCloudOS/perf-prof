@@ -354,6 +354,7 @@ struct option main_options[] = {
                                                                 "      max-stack=int : sample_max_stack\n"
                                                                 "      alias=str: event alias\n"
                                                                 "      exec=EXPR: a public expression executed by any profiler\n"
+                                                                "      cpus=cpu[-cpu]: attach to a different cpu list.\n"
                                                                 "      top-by=EXPR: add to top, sort by this field\n"
                                                                 "      top-add=EXPR: add to top\n"
                                                                 "      comm=EXPR: top, show COMM\n"

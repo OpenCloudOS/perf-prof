@@ -555,13 +555,20 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                     tp->vcpu = vcpu_info_new(value);
                     if (tp->vcpu)
                         tp->vm = value;
-                } else  if (strcmp(attr, "exec") == 0){
+                } else  if (strcmp(attr, "exec") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
                     if (!prog) { free(fields); goto err_out; }
 
                     tp->exec_prog = prog;
                     tp->exec = value;
+                } else  if (strcmp(attr, "cpus") == 0) {
+                    tp->cpus = perf_cpu_map__new(value);
+                    tp->cpus = perf_cpu_map__and(tp->cpus, dev->cpus);
+                    if (perf_cpu_map__nr(tp->cpus) == 0) {
+                        perf_cpu_map__put(tp->cpus);
+                        tp->cpus = NULL;
+                    }
                 }
             }
         }
@@ -660,6 +667,11 @@ void tp_list_free(struct tp_list *tp_list)
             vcpu_info_free(tp->vcpu);
         if (tp->exec_prog)
             expr_destroy(tp->exec_prog);
+        if (tp->cpus) {
+            if (!tp_is_dev(tp) && tp->evsel)
+                perf_evsel__set_own_cpus(tp->evsel, NULL);
+            perf_cpu_map__put(tp->cpus);
+        }
     }
     free(tp_list);
 }
