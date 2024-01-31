@@ -20,7 +20,7 @@ static ssize_t ion(bool is_read, int fd, void *buf, size_t n)
 		if (ret < 0 && errno == EINTR)
 			continue;
 		if (ret <= 0)
-			return ret;
+			return buf - buf_start > 0 ? buf - buf_start : ret;
 
 		left -= ret;
 		buf  += ret;
