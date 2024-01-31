@@ -97,6 +97,18 @@ static int get_group_fd(struct perf_evsel *evsel, int cpu, int thread, int *grou
 	if (!leader->fd)
 		return -ENOTCONN;
 
+	/*
+	 * perf_evsel__set_own_cpus will cause the evsel->cpus to be different
+	 * from the leader's.
+	 * Convert to index in leader->cpus.
+	 */
+	if (evsel->cpus != leader->cpus) {
+		int map_cpu = perf_cpu_map__cpu(evsel->cpus, cpu);
+		cpu = perf_cpu_map__idx(leader->cpus, map_cpu);
+		if (cpu < 0)
+			return -EBADF;
+	}
+
 	fd = FD(leader, cpu, thread);
 	if (fd == NULL || *fd == -1)
 		return -EBADF;
