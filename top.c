@@ -371,18 +371,11 @@ static int top_init(struct prof_dev *dev)
     reduce_wakeup_times(dev, &attr);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
-
-        attr.config = tp->id;
-
-        evsel = perf_evsel__new(&attr);
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel)
             goto failed;
 
         perf_evlist__add(evlist, evsel);
-        if (!tp_kernel(tp))
-            perf_evsel__keep_disable(evsel, true);
-
-        tp->evsel = evsel;
     }
 
     return 0;

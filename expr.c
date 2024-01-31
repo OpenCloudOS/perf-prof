@@ -718,15 +718,11 @@ static int expr_init(struct prof_dev *dev)
     expr_dump(info->prog);
 
     for_each_real_tp(info->tp_list, tp, i) {
-        attr.config = tp->id;
-        evsel = perf_evsel__new(&attr);
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel) {
             goto failed;
         }
         perf_evlist__add(evlist, evsel);
-        if (!tp_kernel(tp))
-            perf_evsel__keep_disable(evsel, true);
-        tp->evsel = evsel;
     }
 
     // Only test a small number of events.

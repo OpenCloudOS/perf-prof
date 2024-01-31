@@ -606,21 +606,16 @@ static int __multi_trace_init(struct prof_dev *dev)
         for_each_real_tp(ctx->tp_list[i], tp, j) {
             struct perf_evsel *evsel;
 
-            attr.config = tp->id;
             if (tp->stack)
                 attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
             else
                 attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
-            attr.sample_max_stack = tp->max_stack;
-            evsel = perf_evsel__new(&attr);
+
+            evsel = tp_evsel_new(tp, &attr);
             if (!evsel) {
                 goto failed;
             }
             perf_evlist__add(evlist, evsel);
-            if (!tp_kernel(tp))
-                perf_evsel__keep_disable(evsel, true);
-
-            tp->evsel = evsel;
         }
         for_each_dev_tp(ctx->tp_list[i], tp, j) {
             struct prof_dev *source_dev = tp->source_dev;

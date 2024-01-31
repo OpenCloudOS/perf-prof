@@ -119,24 +119,18 @@ static int trace_init(struct prof_dev *dev)
         reduce_wakeup_times(dev, &attr);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
-        attr.config = tp->id;
         if (!env->callchain) {
             if (tp->stack)
                 attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
             else
                 attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
         }
-        attr.sample_max_stack = tp->max_stack;
 
-        evsel = perf_evsel__new(&attr);
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel) {
             goto failed;
         }
         perf_evlist__add(evlist, evsel);
-        if (!tp_kernel(tp))
-            perf_evsel__keep_disable(evsel, true);
-
-        tp->evsel = evsel;
     }
     for_each_dev_tp(ctx->tp_list, tp, i) {
         struct prof_dev *source_dev = tp->source_dev;

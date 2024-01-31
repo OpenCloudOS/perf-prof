@@ -284,22 +284,18 @@ static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callc
             return -1;
         }
 
-        attr.config = tp->id;
         if (!callchain) {
             if (tp->stack)
                 attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
             else
                 attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
         }
-        attr.sample_max_stack = tp->max_stack;
 
-        evsel = perf_evsel__new(&attr);
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel) {
             return -1;
         }
         perf_evlist__add(evlist, evsel);
-
-        tp->evsel = evsel;
     }
     return 0;
 }

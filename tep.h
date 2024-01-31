@@ -171,6 +171,8 @@ unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
 unsigned long tp_get_key(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
 
+struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
+
 
 #endif
 

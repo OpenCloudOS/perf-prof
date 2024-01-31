@@ -57,14 +57,11 @@ static int event_lost_init(struct prof_dev *dev)
         if (!tp->private)
             goto failed;
 
-        attr.config = tp->id;
-        evsel = perf_evsel__new(&attr);
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel) {
             goto failed;
         }
         perf_evlist__add(dev->evlist, evsel);
-
-        tp->evsel = evsel;
     }
 
     return 0;
@@ -145,7 +142,9 @@ static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int
 
 found:
     counters = tp->private;
-    if (hdr->counter - counters[instance] != hdr->period) {
+    // prof_dev_atomic_enable() will discard some events, and counters will no longer be used to detect
+    // lost for the first time.
+    if (counters[instance] && hdr->counter - counters[instance] != hdr->period) {
         fprintf(stderr, "%s:%s lost %lu events\n", tp->sys, tp->name, hdr->counter - counters[instance] - 1);
     }
     counters[instance] = hdr->counter;

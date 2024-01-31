@@ -174,20 +174,17 @@ static int num_dist_init(struct prof_dev *dev)
     for_each_real_tp(ctx->tp_list, tp, i) {
         struct perf_evsel *evsel;
 
-        attr.config = tp->id;
         if (!env->callchain) {
             if (tp->stack)
                 attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
             else
                 attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
         }
-        attr.sample_max_stack = tp->max_stack;
-        evsel = perf_evsel__new(&attr);
+
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel)
             goto failed;
         perf_evlist__add(evlist, evsel);
-
-        tp->evsel = evsel;
     }
     return 0;
 

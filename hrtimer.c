@@ -207,14 +207,11 @@ static int hrtimer_init(struct prof_dev *dev)
             goto failed;
         i = 0;
         for_each_real_tp(ctx->tp_list, tp, j) {
-            tp_attr.config = tp->id;
-            evsel = perf_evsel__new(&tp_attr);
+            evsel = tp_evsel_new(tp, &tp_attr);
             if (!evsel) {
                 goto failed;
             }
             perf_evlist__add(evlist, evsel);
-
-            tp->evsel = evsel;
 
             declare[i].name = tp->alias ? : tp->name;
             declare[i].offset = i * sizeof(u64);
@@ -306,6 +303,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
     u64 i, j = 0, k, print = BREAK;
     int verbose = env->verbose;
     int header_end = 0;
+    struct tp *tp;
 
     if (verbose) {
         if (dev->print_title) print_time(stdout);
@@ -315,7 +313,6 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
 
     for (i = 0; i < data->groups.nr; i++) {
         struct perf_evsel *evsel;
-        struct tp *tp;
         evsel = perf_evlist__id_to_evsel(dev->evlist, data->groups.ctnr[i].id, NULL);
         if (!evsel)
             continue;
@@ -351,13 +348,17 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
         }
     }
 
-    print = ctx->analyzer(ctx, instance, n, ctx->ins_counters);
+    if (data->groups.nr == n + 1)
+        print = ctx->analyzer(ctx, instance, n, ctx->ins_counters);
 
     if (print == PRINT || verbose) {
         if (!verbose) {
             if (dev->print_title) print_time(stdout);
             printf("    pid %6d tid %6d [%03d] %llu.%06llu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name, cpu_clock);
+            for_each_real_tp(ctx->tp_list, tp, i) {
+                printf("    %s %lu\n", tp->alias ? : tp->name, ctx->ins_counters[i]);
+            }
         }
         if (dev->env->callchain) {
             callchain = (struct callchain *)&data->groups.ctnr[data->groups.nr];

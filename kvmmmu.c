@@ -652,14 +652,11 @@ static int kvm_mmu_init(struct prof_dev *dev)
             goto failed;
         }
 
-        attr.config = tp->id;
-        evsel = perf_evsel__new(&attr);
+        evsel = tp_evsel_new(tp, &attr);
         if (!evsel) {
             goto failed;
         }
         perf_evlist__add(evlist, evsel);
-
-        tp->evsel = evsel;
     }
     return 0;
 

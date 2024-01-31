@@ -739,3 +739,28 @@ unsigned long tp_get_mem_size(struct tp *tp, void *data, int size)
     return mem_size == -1 ? 1 : (unsigned long)mem_size;
 }
 
+struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
+{
+    struct perf_evsel *evsel;
+
+    if (tp_is_dev(tp))
+        return NULL;
+
+    attr->config = tp->id;
+    attr->sample_max_stack = tp->max_stack;
+
+    evsel = perf_evsel__new(attr);
+    if (!evsel) {
+        return NULL;
+    }
+
+    tp->evsel = evsel;
+
+    if (!tp_kernel(tp))
+        perf_evsel__keep_disable(evsel, true);
+    if (tp->cpus)
+        perf_evsel__set_own_cpus(evsel, tp->cpus);
+
+    return evsel;
+}
+

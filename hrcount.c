@@ -215,14 +215,11 @@ static int hrcount_init(struct prof_dev *dev)
     perf_evlist__add(evlist, evsel);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
-        tp_attr.config = tp->id;
-        evsel = perf_evsel__new(&tp_attr);
+        evsel = tp_evsel_new(tp, &tp_attr);
         if (!evsel) {
             goto failed;
         }
         perf_evlist__add(evlist, evsel);
-
-        tp->evsel = evsel;
     }
 
     perf_evlist__set_leader(evlist);
