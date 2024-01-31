@@ -1420,6 +1420,13 @@ static void interval_handle(struct timer *timer)
             for (tins = 0; tins < perf_thread_map__nr(threads); tins++) {
                 perf_evlist__for_each_evsel(evlist, evsel) {
                     struct perf_counts_values *count = dev->values;
+                    struct perf_cpu_map *evsel_cpus = perf_evsel__cpus(evsel);
+
+                    if (unlikely(evsel_cpus != cpus) &&
+                        perf_cpu_map__idx(evsel_cpus, cpu) < 0) {
+                        continue;
+                    }
+
                     if (perf_evsel__read(evsel, ins, tins, count) == 0 &&
                         prof->read(dev, evsel, count, cpu != -1 ? ins : tins))
                         break;
