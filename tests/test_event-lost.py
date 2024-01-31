@@ -8,3 +8,9 @@ def test_sched_wakeup(runtime, memleak_check):
     prof = PerfProf(["event-lost", '-e', 'sched:sched_wakeup', '-m', '64'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_sched_wakeup_cpus(runtime, memleak_check):
+    #perf-prof event-lost -e sched:sched_wakeup//cpus=0/ -m 64
+    prof = PerfProf(["event-lost", '-e', 'sched:sched_wakeup//cpus=0/', '-m', '64'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

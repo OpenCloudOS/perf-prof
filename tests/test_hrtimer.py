@@ -12,3 +12,10 @@ def test_sched_switch_sched_wakeup(runtime, memleak_check):
     prof = PerfProf(["hrtimer", '-e', 'sched:sched_switch,sched:sched_wakeup', '-C', '0-1', '-F', '20', '-g', 'sched_switch==0 && sched_wakeup==0'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+
+def test_sched_switch_ge2000(runtime, memleak_check):
+    #perf-prof hrtimer -e sched:sched_switch//cpus=0-24/ --period 100ms 'sched_switch>=2000'
+    prof = PerfProf(["hrtimer", '-e', 'sched:sched_switch//cpus=0-24/', '--period', '100ms', 'sched_switch>=2000'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

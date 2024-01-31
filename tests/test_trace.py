@@ -44,3 +44,15 @@ def test_trace_profiler(runtime, memleak_check):
     prof = PerfProf(['trace', '-e', 'task-state,page-faults/-N 10/,raw_syscalls:sys_enter,profile/-F 5000 -N 10/', '--order', '--', 'cat', '/proc/self/maps'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_trace_attr_cpus0(runtime, memleak_check):
+    #perf-prof trace -e sched:sched_wakeup/target_cpu==0/,sched:sched_migrate_task/dest_cpu==0/,sched:sched_switch//cpus=0/ -m 128 --order -i 1000 -N 100000
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup/target_cpu==0/,sched:sched_migrate_task/dest_cpu==0/,sched:sched_switch//cpus=0/', '-m', '128', '--order', '-i', '1000', '-N', '100000'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_trace_attr_cpus1(runtime, memleak_check):
+    #perf-prof trace -e sched:sched_wakeup/target_cpu==1/,sched:sched_migrate_task/dest_cpu==1/,sched:sched_switch//cpus=1/ -m 128 --order -i 1000 -N 100000
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup/target_cpu==1/,sched:sched_migrate_task/dest_cpu==1/,sched:sched_switch//cpus=1/', '-m', '128', '--order', '-i', '1000', '-N', '100000'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
