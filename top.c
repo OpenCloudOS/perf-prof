@@ -472,8 +472,8 @@ struct sample_type_raw {
         union {
             __u8    data[0];
             unsigned short common_type;
-        } __packed;
-    } raw;
+        };
+    } __packed raw;
 };
 
 static void top_sample(struct prof_dev *dev, union perf_event *event, int instance)

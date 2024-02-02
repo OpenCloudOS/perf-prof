@@ -48,8 +48,8 @@ struct sample_type_raw {
         union {
             __u8    data[0];
             unsigned short common_type;
-        } __packed;
-    } raw;
+        };
+    } __packed raw;
 };
 
 static void monitor_ctx_exit(struct prof_dev *dev);

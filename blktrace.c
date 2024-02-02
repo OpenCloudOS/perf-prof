@@ -141,8 +141,8 @@ struct sample_type_raw {
             struct trace_block_rq_insert rq_insert;
             struct trace_block_rq_issue rq_issue;
             struct trace_block_rq_complete rq_complete;
-        } __packed;
-    } raw;
+        };
+    } __packed raw;
 };
 
 #define MINORBITS   20

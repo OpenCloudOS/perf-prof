@@ -89,8 +89,8 @@ struct sample_type_data {
             __u8    data[0];
             struct sched_stat_runtime runtime;
             struct sched_switch sched_switch;
-        } __packed;
-    } raw;
+        };
+    } __packed raw;
 };
 
 struct runtime_entry {

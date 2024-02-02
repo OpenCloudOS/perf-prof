@@ -145,8 +145,8 @@ struct sample_type_raw {
             struct mark_mmio_spte mark_mmio_spte;
             struct kvm_mmu_get_page kvm_mmu_get_page;
             struct kvm_mmu_prepare_zap_page kvm_mmu_prepare_zap_page;
-        } __packed;
-    } raw;
+        };
+    } __packed raw;
 };
 
 static int kvm_mmu_page_node_cmp(struct rb_node *rbn, const void *entry)

@@ -336,8 +336,8 @@ static void comm_sample(struct prof_dev *dev, union perf_event *event, int insta
                 struct trace_task_newtask task_newtask;
                 struct trace_task_rename task_rename;
                 struct trace_sched_process_free process_free;
-            } __packed;
-        } raw;
+            };
+        } __packed raw;
     } *data = (void *)event->sample.array;
     unsigned short common_type = data->raw.common_type;
 

@@ -107,8 +107,8 @@ struct sample_type_raw {
             unsigned short common_type;
             union trace_kvm_exit kvm_exit;
             struct trace_kvm_entry kvm_entry;
-        } __packed;
-    } raw;
+        };
+    } __packed raw;
 };
 
 static void monitor_ctx_exit(struct prof_dev *dev);
