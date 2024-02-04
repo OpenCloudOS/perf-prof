@@ -11,6 +11,7 @@
 #include <tep.h>
 #include <trace_helpers.h>
 #include <stack_helpers.h>
+#include <tp_struct.h>
 
 
 struct sched_migrate_stat {
@@ -52,19 +53,6 @@ struct sample_type_raw {
         __u32   size;
         __u8    data[0];
     } raw;
-};
-
-struct sched_migrate_task {
-    unsigned short common_type;//	offset:0;	size:2;	signed:0;
-	unsigned char common_flags;//	offset:2;	size:1;	signed:0;
-	unsigned char common_preempt_count;//	offset:3;	size:1;	signed:0;
-	int common_pid;//	offset:4;	size:4;	signed:1;
-
-	char comm[16];//	offset:8;	size:16;	signed:1;
-	pid_t pid;//	offset:24;	size:4;	signed:1;
-	int prio;//	offset:28;	size:4;	signed:1;
-	int orig_cpu;//	offset:32;	size:4;	signed:1;
-	int dest_cpu;//	offset:36;	size:4;	signed:1;
 };
 
 static int read_cpumap(struct perf_cpu_map **cpumaps, int cpu, int level)

@@ -10,6 +10,7 @@
 #include <api/fs/fs.h>
 #include <monitor.h>
 #include <tep.h>
+#include <tp_struct.h>
 
 #define min(x, y) ({                \
     typeof(x) _min1 = (x);          \
@@ -40,33 +41,6 @@ struct oncpu_ctx {
     struct rblist runtimes;
     int *percpu_thread_siblings;
     int *perins_vmf_sib;
-};
-
-struct sched_stat_runtime {
-    unsigned short common_type; //       offset:0;       size:2; signed:0;
-    unsigned char common_flags; //       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count; //       offset:3;       size:1; signed:0;
-    int common_pid; //   offset:4;       size:4; signed:1;
-
-    char comm[16];  //   offset:8;       size:16;        signed:1;
-    pid_t pid;      //   offset:24;      size:4; signed:1;
-    u64 runtime;    //   offset:32;      size:8; signed:0;
-    u64 vruntime;   //   offset:40;      size:8; signed:0;
-};
-
-struct sched_switch {
-    unsigned short common_type; //       offset:0;       size:2; signed:0;
-    unsigned char common_flags; //       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count; //       offset:3;       size:1; signed:0;
-    int common_pid; //   offset:4;       size:4; signed:1;
-
-    char prev_comm[16]; //       offset:8;       size:16;        signed:1;
-    pid_t prev_pid; //   offset:24;      size:4; signed:1;
-    int prev_prio; //    offset:28;      size:4; signed:1;
-    long prev_state; //  offset:32;      size:8; signed:1;
-    char next_comm[16]; //       offset:40;      size:16;        signed:1;
-    pid_t next_pid; //   offset:56;      size:4; signed:1;
-    int next_prio; //   offset:60;      size:4; signed:1;
 };
 
 // in linux/perf_event.h

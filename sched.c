@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <monitor.h>
+#include <tp_struct.h>
 
 static int sched_wakeup_new;
 static int sched_wakeup_id;
@@ -11,52 +12,10 @@ static struct running_oncpu {
     char comm[16];
 } *percpu_running;
 
-struct sched_wakeup {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    char comm[16];//    offset:8;       size:16;        signed:1;
-    pid_t pid;//        offset:24;      size:4; signed:1;
-    int prio;// offset:28;      size:4; signed:1;
-    int success;//      offset:32;      size:4; signed:1;
-    int target_cpu;//   offset:36;      size:4; signed:1;
-};
-/*
- * upstream
- * 58b9987 sched/tracing: Remove the redundant 'success' in the sched tracepoint
-**/
-struct sched_wakeup_new {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    char comm[16];//    offset:8;       size:16;        signed:1;
-    pid_t pid;//        offset:24;      size:4; signed:1;
-    int prio;// offset:28;      size:4; signed:1;
-    int target_cpu;//      offset:32;      size:4; signed:1;
-};
-
-struct sched_switch {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    char prev_comm[16];//       offset:8;       size:16;        signed:1;
-    pid_t prev_pid;//   offset:24;      size:4; signed:1;
-    int prev_prio;//    offset:28;      size:4; signed:1;
-    long prev_state;//  offset:32;      size:8; signed:1;
-    char next_comm[16];//       offset:40;      size:16;        signed:1;
-    pid_t next_pid;//   offset:56;      size:4; signed:1;
-    int next_prio;//    offset:60;      size:4; signed:1;
-};
 union sched_event {
     unsigned short common_type;//       offset:0;       size:2; signed:0;
     struct sched_wakeup sched_wakeup;
-    struct sched_wakeup_new sched_wakeup_new;
+    struct sched_wakeup_no_success sched_wakeup_new;
     struct sched_switch sched_switch;
 };
 

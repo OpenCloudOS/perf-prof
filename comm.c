@@ -11,6 +11,7 @@
 #include <linux/time64.h>
 
 #include <monitor.h>
+#include <tp_struct.h>
 
 #define TASK_COMM_LEN 16
 
@@ -34,38 +35,6 @@ struct comm_ctx {
 static struct comm_ctx *global_comm_ctx = NULL;
 static struct list_head global_comm_notify_list = LIST_HEAD_INIT(global_comm_notify_list);
 
-struct trace_task_newtask {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    pid_t pid;//        offset:8;       size:4; signed:1;
-    char comm[16];//    offset:12;      size:16;        signed:1;
-    unsigned long clone_flags;//        offset:32;      size:8; signed:0;
-    short oom_score_adj;//      offset:40;      size:2; signed:1;
-};
-struct trace_task_rename {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    pid_t pid;//        offset:8;       size:4; signed:1;
-    char oldcomm[16];// offset:12;      size:16;        signed:1;
-    char newcomm[16];// offset:28;      size:16;        signed:1;
-    short oom_score_adj;//      offset:44;      size:2; signed:1;
-};
-struct trace_sched_process_free {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    char comm[16];//    offset:8;       size:16;        signed:1;
-    pid_t pid;//        offset:24;      size:4; signed:1;
-    int prio;// offset:28;      size:4; signed:1;
-};
 
 static int pid_comm_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -333,9 +302,9 @@ static void comm_sample(struct prof_dev *dev, union perf_event *event, int insta
             union {
                 __u8    data[0];
                 unsigned short common_type;
-                struct trace_task_newtask task_newtask;
-                struct trace_task_rename task_rename;
-                struct trace_sched_process_free process_free;
+                struct task_newtask task_newtask;
+                struct task_rename task_rename;
+                struct sched_process_free process_free;
             };
         } __packed raw;
     } *data = (void *)event->sample.array;
