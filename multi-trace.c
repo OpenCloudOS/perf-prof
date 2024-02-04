@@ -990,10 +990,13 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     struct prof_dev *dev = info->tp1->dev;
     struct env *env = dev->env;
     struct timeline_node *curr = iter->curr;
-    struct multi_trace_type_header *e  = (void *)iter->event->sample.array;
+    union perf_event *event = iter->event;
+    struct multi_trace_type_header *e  = (void *)event->sample.array;
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     struct multi_trace_type_header *e2 = event2 ? (void *)event2->sample.array : NULL;
     bool match;
+    void *raw = NULL;
+    int size = 0;
 
     if (!(env->samecpu || env->samepid || env->sametid || env->samekey))
         return true;
@@ -1002,29 +1005,53 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     //!tp_kernel: Rely on vm attr to convert the fields of the Guest events.
     match = tp_kernel(curr->tp) ? 1 : !!(curr->tp->vcpu);
 
-    if (env->samecpu && match)
-    if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
-        (e2 && e->cpu_entry.cpu == e2->cpu_entry.cpu))
-        return true;
+    if (!match)
+        return false;
 
-    if (env->samepid && match)
-    if (e->tid_entry.pid == e1->tid_entry.pid ||
-        (e2 && e->tid_entry.pid == e2->tid_entry.pid))
-        return true;
+    if (event->header.type != PERF_RECORD_DEV)
+        multi_trace_raw_size(event, &raw, &size, curr->tp);
 
-    if (env->sametid && match)
-    if (e->tid_entry.tid == e1->tid_entry.tid ||
-        (e2 && e->tid_entry.tid == e2->tid_entry.tid))
-        return true;
+    if (env->samecpu) {
+        if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
+            (e2 && e->cpu_entry.cpu == e2->cpu_entry.cpu))
+            return true;
 
-    if (env->samekey && match)
+        if (tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu) ||
+            (e2 && e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
+                tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
+            return true;
+    }
+
+    if (env->samepid) {
+        if (e->tid_entry.pid == e1->tid_entry.pid ||
+            (e2 && e->tid_entry.pid == e2->tid_entry.pid))
+            return true;
+
+        if (tp_samepid(curr->tp, raw, size, e1->tid_entry.pid) ||
+            (e2 && e1->tid_entry.pid != e2->tid_entry.pid &&
+                tp_samepid(curr->tp, raw, size, e2->tid_entry.pid)))
+            return true;
+    }
+
+    if (env->sametid) {
+        if (e->tid_entry.tid == e1->tid_entry.tid ||
+            (e2 && e->tid_entry.tid == e2->tid_entry.tid))
+            return true;
+
+        if (tp_samepid(curr->tp, raw, size, e1->tid_entry.tid) ||
+            (e2 && e1->tid_entry.tid != e2->tid_entry.tid &&
+                tp_samepid(curr->tp, raw, size, e2->tid_entry.tid)))
+            return true;
+    }
+
+    if (env->samekey)
     if ((!!curr->tp->key) == (!!info->tp1->key) &&
         curr->key == info->key)
         return true;
 
-    if ((env->samepid || env->sametid) && match)
-    if (iter->event->header.type == PERF_RECORD_DEV) {
-        struct perf_record_dev *event_dev = (void *)iter->event;
+    if (env->samepid || env->sametid)
+    if (event->header.type == PERF_RECORD_DEV) {
+        struct perf_record_dev *event_dev = (void *)event;
         struct prof_dev *source_dev = event_dev->dev;
         // Use the samepid() of the source device to determine whether the event matches the given pid/tid.
         if (unlikely(source_dev->forward.samepid)) {
