@@ -10,6 +10,8 @@
 #include <monitor.h>
 #include <tep.h>
 #include <stack_helpers.h>
+#include <tp_struct.h>
+
 
 #define PLUGINS_DIR "/usr/lib64/perf-prof-traceevent/plugins"
 
@@ -582,6 +584,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         tp->max_stack = max_stack;
         tp->alias = alias;
         tp->kernel = !tp->receive;
+        tp->matcher = tp_matcher_find(sys, name);
         if (tp->nr_top == 0) {
             tp->nr_top = 1;
             tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
@@ -763,4 +766,92 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
 
     return evsel;
 }
+
+static LIST_HEAD(tp_matcher_list);
+
+void tp_matcher_register(struct tp_matcher *matcher)
+{
+    INIT_LIST_HEAD(&matcher->link);
+    list_add_tail(&matcher->link, &tp_matcher_list);
+}
+
+struct tp_matcher *tp_matcher_find(char *sys, char *name)
+{
+    struct tp_matcher *matcher;
+
+    if (!sys || !name)
+        return NULL;
+
+    list_for_each_entry(matcher, &tp_matcher_list, link) {
+        if (strcmp(matcher->sys, sys) == 0 &&
+            strcmp(matcher->name, name) == 0)
+            return matcher;
+    }
+    return NULL;
+}
+
+static bool __sched_wakeup_samecpu(void *raw, int size, int cpu)
+{
+    if (size == TP_RAW_SIZE(struct sched_wakeup)) {
+        return ((struct sched_wakeup *)raw)->target_cpu == cpu;
+    } else if (size == TP_RAW_SIZE(struct sched_wakeup_no_success)) {
+        return ((struct sched_wakeup_no_success *)raw)->target_cpu == cpu;
+    } else
+        return false;
+}
+
+static bool __sched_wakeup_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_wakeup *)raw)->pid;
+}
+
+static bool __sched_switch_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_switch *)raw)->prev_pid ||
+           pid == ((struct sched_switch *)raw)->next_pid;
+}
+
+static bool __sched_migrate_task_samecpu(void *raw, int size, int cpu)
+{
+    return cpu == ((struct sched_migrate_task *)raw)->orig_cpu ||
+           cpu == ((struct sched_migrate_task *)raw)->dest_cpu;
+}
+
+static bool __sched_migrate_task_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_migrate_task *)raw)->pid;
+}
+
+static bool __sched_stat_runtime_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_stat_runtime *)raw)->pid;
+}
+
+static bool __sched_process_free_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_process_free *)raw)->pid;
+}
+
+static bool __sched_process_fork_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_process_fork *)raw)->parent_pid ||
+           pid == ((struct sched_process_fork *)raw)->child_pid;
+}
+
+static bool __sched_process_exec_samepid(void *raw, int size, int pid)
+{
+    return pid == ((struct sched_process_exec *)raw)->pid;
+}
+
+
+TP_MATCHER_REGISTER("sched", "sched_wakeup", __sched_wakeup_samecpu, __sched_wakeup_samepid);
+TP_MATCHER_REGISTER("sched", "sched_waking", __sched_wakeup_samecpu, __sched_wakeup_samepid);
+TP_MATCHER_REGISTER("sched", "sched_wakeup_new", __sched_wakeup_samecpu, __sched_wakeup_samepid);
+TP_MATCHER_REGISTER("sched", "sched_switch", NULL, __sched_switch_samepid);
+TP_MATCHER_REGISTER("sched", "sched_migrate_task", __sched_migrate_task_samecpu, __sched_migrate_task_samepid);
+TP_MATCHER_REGISTER("sched", "sched_stat_runtime", NULL, __sched_stat_runtime_samepid);
+TP_MATCHER_REGISTER("sched", "sched_process_free", NULL, __sched_process_free_samepid);
+TP_MATCHER_REGISTER("sched", "sched_process_exit", NULL, __sched_process_free_samepid);
+TP_MATCHER_REGISTER("sched", "sched_process_fork", NULL, __sched_process_fork_samepid);
+TP_MATCHER_REGISTER("sched", "sched_process_exec", NULL, __sched_process_exec_samepid);
 

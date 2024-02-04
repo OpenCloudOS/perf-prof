@@ -22,6 +22,7 @@ typedef struct global_var_declare event_fields;
 event_fields *tep__event_fields(int id);
 
 struct prof_dev;
+struct tp_matcher;
 
 struct tp {
     struct prof_dev *dev;
@@ -37,6 +38,7 @@ struct tp {
     int max_stack;
     char *alias;
     void *private;
+    struct tp_matcher *matcher;
 
     // top profiler
     struct {
@@ -172,6 +174,50 @@ unsigned long tp_get_key(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
+
+/*
+ * Each tp is used to determine whether it is related to the specified cpu/pid.
+ * @raw, @size specifies the tracepoint structure and size. Specify PERF_SAMPLE_RAW
+ * to sample the tracepoint structure.
+ *
+ * Only tp itself knows whether there are fields in its structure that are the
+ * same as the specified cpu/pid.
+ */
+struct tp_matcher {
+    struct list_head link;
+    const char *sys;
+    const char *name;
+    bool (*samecpu)(void *raw, int size, int cpu);
+    bool (*samepid)(void *raw, int size, int pid);
+};
+
+#define TP_MATCHER_REGISTER(SYS, NAME, SAMECPU, SAMEPID) \
+__attribute__((constructor)) \
+static void __PASTE(tp_matcher_register_, __LINE__) (void) \
+{ \
+    static struct tp_matcher tp_matcher = { \
+        .sys = SYS, \
+        .name = NAME, \
+        .samecpu = SAMECPU, \
+        .samepid = SAMEPID, \
+    }; \
+    tp_matcher_register(&tp_matcher); \
+}
+
+void tp_matcher_register(struct tp_matcher *matcher);
+struct tp_matcher *tp_matcher_find(char *sys, char *name);
+
+static inline bool tp_samecpu(struct tp *tp, void *raw, int size, int cpu)
+{
+    return tp->matcher && tp->matcher->samecpu ?
+            tp->matcher->samecpu(raw, size, cpu) : false;
+}
+
+static inline bool tp_samepid(struct tp *tp, void *raw, int size, int pid)
+{
+    return tp->matcher && tp->matcher->samepid ?
+        tp->matcher->samepid(raw, size, pid) : false;
+}
 
 
 #endif
