@@ -727,45 +727,53 @@ static void multi_trace_enabled(struct prof_dev *dev)
      */
 }
 
-static void multi_trace_handle_remaining(struct prof_dev *dev)
+static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node *left)
 {
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
+    struct two_event *two;
+
+    two = ctx->impl->object_find(ctx->class, left->tp, NULL);
+    if (two) {
+        struct event_info info;
+        struct event_iter iter;
+        info.tp1 = left->tp;
+        info.tp2 = NULL;
+        info.key = left->key;
+        info.recent_time = ctx->recent_time;
+        if (ctx->need_timeline) {
+            if (env->before_event1) {
+                struct timeline_node backup = {
+                    .time = left->time - env->before_event1,
+                    .key = left->key,
+                    .seq = 0,
+                };
+                iter.start = rb_entry_safe(rblist__find_first(&ctx->timeline, &backup),
+                                            struct timeline_node, timeline_node);
+            } else
+                iter.start = left;
+            iter.event1 = left;
+            iter.event2 = NULL;
+            iter.curr = iter.start;
+        }
+        if (info.recent_time - left->time > env->greater_than)
+            left->maybe_unpaired = 1;
+
+        return ctx->class->remaining(two, left->event, &info, ctx->need_timeline ? &iter : NULL);
+    }
+    return REMAINING_CONTINUE;
+}
+
+static void multi_trace_handle_remaining(struct prof_dev *dev)
+{
+    struct multi_trace_ctx *ctx = dev->private;
     struct rb_node *next = rb_first_cached(&ctx->backup.entries);
     struct timeline_node *left;
-    struct two_event *two;
 
     while (next) {
         left = rb_entry(next, struct timeline_node, key_node);
-        two = ctx->impl->object_find(ctx->class, left->tp, NULL);
-        if (two) {
-            struct event_info info;
-            struct event_iter iter;
-            info.tp1 = left->tp;
-            info.tp2 = NULL;
-            info.key = left->key;
-            info.recent_time = ctx->recent_time;
-            if (ctx->need_timeline) {
-                if (env->before_event1) {
-                    struct timeline_node backup = {
-                        .time = left->time - env->before_event1,
-                        .key = left->key,
-                        .seq = 0,
-                    };
-                    iter.start = rb_entry_safe(rblist__find_first(&ctx->timeline, &backup),
-                                                struct timeline_node, timeline_node);
-                } else
-                    iter.start = left;
-                iter.event1 = left;
-                iter.event2 = NULL;
-                iter.curr = iter.start;
-            }
-            if (info.recent_time - left->time > env->greater_than)
-                left->maybe_unpaired = 1;
-
-            if (ctx->class->remaining(two, left->event, &info, ctx->need_timeline ? &iter : NULL) == REMAINING_BREAK)
-                break;
-        }
+        if (multi_trace_call_remaining(dev, left) == REMAINING_BREAK)
+            break;
         next = rb_next(next);
     }
 }
@@ -776,8 +784,6 @@ static void multi_trace_interval(struct prof_dev *dev)
     int i, j, k, n;
     int header = 0;
     struct two_event *two;
-
-    multi_trace_handle_remaining(dev);
 
     // env->cycle: from the last one back to the first.
     for (k = 0; k < ctx->nr_list - !dev->env->cycle; k++) {
@@ -887,16 +893,23 @@ static inline void lost_reclaim(struct prof_dev *dev, int ins)
         struct timeline_node backup = {
             .key = key,
         };
+        int remaining = REMAINING_CONTINUE;
 
         // Remove all events with the same key.
         node = rb_find_first(&backup, &ctx->backup.entries.rb_root, perf_event_backup_node_find);
         while (node) {
             next = rb_next_match(&backup, node, perf_event_backup_node_find);
+            if (remaining == REMAINING_CONTINUE) {
+                struct timeline_node *left = rb_entry(node, struct timeline_node, key_node);
+                remaining = multi_trace_call_remaining(dev, left);
+            }
             rblist__remove_node(&ctx->backup, node);
             node = next;
         }
-    } else
+    } else {
+        multi_trace_handle_remaining(dev);
         rblist__exit(&ctx->backup);
+    }
 }
 
 static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
@@ -1321,7 +1334,11 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
          *      '___________' unsafe two(A, B).
          */
         if (!lost->reclaim) {
+            u64 recent_time = ctx->recent_time;
+            // Ensure that the output of multi_trace_call_remaining() is also correct.
+            ctx->recent_time = lost->start_time;
             lost_reclaim(dev, tl_event->ins);
+            ctx->recent_time = recent_time;
             lost->reclaim = true;
         }
 
@@ -1885,8 +1902,6 @@ static void nested_trace_interval(struct prof_dev *dev)
     struct multi_trace_ctx *ctx = dev->private;
     int i, k;
     int header = 0;
-
-    multi_trace_handle_remaining(dev);
 
     for (k = 0; k < ctx->nr_list; k++) {
         struct tp *tp1 = NULL;

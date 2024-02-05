@@ -425,7 +425,7 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
                         first = false;
                     }
                 }
-                printf("| >= %12.3f %s, event2 is in the future.\n", delta/1000.0, unit);
+                printf("| >= %12.3f %s, event2 may be lost.\n", delta/1000.0, unit);
             }
         }
     }
