@@ -922,15 +922,16 @@ static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int 
 
     // Without order, events are processed in the order within the ringbuffer.
     // When lost, all previous events have been processed and only need to reclaim.
-    if (!using_order(dev)) {
+    if (!using_order(dev) && !dev->env->after_event2) {
         lost_reclaim(dev, ins);
         if (ctx->need_timeline)
             timeline_free_unneeded(dev);
         return;
     }
 
-    // When order is enabled, event loss will be sensed in advance, but it
-    // needs to be processed later.
+    // When order is enabled, event loss will be sensed in advance, but it needs to
+    // be processed later. Similarly, with --detail=+1ms, event loss will also be
+    // seen in advance and processed later.
     lost = malloc(sizeof(*lost));
     if (lost) {
         lost->ins = ins;
@@ -1287,12 +1288,8 @@ static struct timeline_node *multi_trace_first_pending(struct prof_dev *dev, str
 static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_node *tl_event)
 {
     struct multi_trace_ctx *ctx = dev->private;
-    struct tp *tp = tl_event->tp;
     struct lost_node *lost, *next;
     struct list_head *head;
-
-    if (tp->untraced)
-        return;
 
     if (ctx->lost_affect == LOST_AFFECT_INS_EVENT)
         head = &ctx->perins_lost_list[tl_event->ins];
@@ -1315,6 +1312,7 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
          */
         if (tl_event->time == lost->start_time) {
             tl_event->need_backup = false;
+            tl_event->unneeded = true;
             return;
         }
 
@@ -1337,6 +1335,7 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
             u64 recent_time = ctx->recent_time;
             // Ensure that the output of multi_trace_call_remaining() is also correct.
             ctx->recent_time = lost->start_time;
+            // delete A
             lost_reclaim(dev, tl_event->ins);
             ctx->recent_time = recent_time;
             lost->reclaim = true;
@@ -1346,6 +1345,7 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
         if (tl_event->time < lost->end_time) {
             tl_event->need_find_prev = false;
             tl_event->need_backup = false;
+            tl_event->unneeded = true;
             return;
         } else {
             /*          lost
@@ -1462,8 +1462,6 @@ found:
     current.seq = ctx->event_handled++;
     current.event = event;
 
-    multi_trace_event_lost(dev, &current);
-
     // insert events to Timeline, include untraced events.
     if (ctx->need_timeline) {
         bool need_free = current.unneeded;
@@ -1486,6 +1484,14 @@ found:
             if (!first)
                 break;
 
+            /*
+             * --detail=samecpu,+1ms
+             * With this option, there will also be events in the pending_list, which are
+             * sampled before lost->start_time. Lost must be checked when processing these
+             * events, not when inserting pending_list.
+             */
+            multi_trace_event_lost(dev, first);
+
             // Only handles !untraced events.
             multi_trace_tryto_call_two(dev, first, &need_free);
             multi_trace_tryto_backup(dev, first, &need_free);
@@ -1498,6 +1504,8 @@ found:
 
         if (tp->untraced)
             goto free_dup_event;
+
+        multi_trace_event_lost(dev, &current);
 
         // Only handles !untraced events.
         multi_trace_tryto_call_two(dev, &current, &dummy);
