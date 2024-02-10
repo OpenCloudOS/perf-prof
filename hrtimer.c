@@ -330,6 +330,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
             continue;
         }
 
+        if (ctx->tp_list)
         for_each_real_tp(ctx->tp_list, tp, k) {
             if (tp->evsel == evsel) {
                 counter = data->groups.ctnr[i].value - jcounter[j];
@@ -356,6 +357,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
             if (dev->print_title) print_time(stdout);
             printf("    pid %6d tid %6d [%03d] %llu.%06llu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name, cpu_clock);
+            if (ctx->tp_list)
             for_each_real_tp(ctx->tp_list, tp, i) {
                 printf("    %s %lu\n", tp->alias ? : tp->name, ctx->ins_counters[i]);
             }
