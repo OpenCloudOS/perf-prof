@@ -805,6 +805,20 @@ static bool __sched_wakeup_samepid(void *raw, int size, int pid)
     return pid == ((struct sched_wakeup *)raw)->pid;
 }
 
+static bool __sched_wakeup_target_cpu(void *raw, int size, int pid, int *cpu)
+{
+    if (pid == ((struct sched_wakeup *)raw)->pid) {
+        if (size == TP_RAW_SIZE(struct sched_wakeup)) {
+            *cpu = ((struct sched_wakeup *)raw)->target_cpu;
+            return true;
+        } else if (size == TP_RAW_SIZE(struct sched_wakeup_no_success)) {
+            *cpu = ((struct sched_wakeup_no_success *)raw)->target_cpu;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool __sched_switch_samepid(void *raw, int size, int pid)
 {
     return pid == ((struct sched_switch *)raw)->prev_pid ||
@@ -820,6 +834,15 @@ static bool __sched_migrate_task_samecpu(void *raw, int size, int cpu)
 static bool __sched_migrate_task_samepid(void *raw, int size, int pid)
 {
     return pid == ((struct sched_migrate_task *)raw)->pid;
+}
+
+static bool __sched_migrate_task_target_cpu(void *raw, int size, int pid, int *cpu)
+{
+    if (pid == ((struct sched_migrate_task *)raw)->pid) {
+        *cpu = ((struct sched_migrate_task *)raw)->dest_cpu;
+        return true;
+    }
+    return false;
 }
 
 static bool __sched_stat_runtime_samepid(void *raw, int size, int pid)
@@ -844,11 +867,11 @@ static bool __sched_process_exec_samepid(void *raw, int size, int pid)
 }
 
 
-TP_MATCHER_REGISTER("sched", "sched_wakeup", __sched_wakeup_samecpu, __sched_wakeup_samepid);
-TP_MATCHER_REGISTER("sched", "sched_waking", __sched_wakeup_samecpu, __sched_wakeup_samepid);
-TP_MATCHER_REGISTER("sched", "sched_wakeup_new", __sched_wakeup_samecpu, __sched_wakeup_samepid);
+TP_MATCHER_REGISTER5("sched", "sched_wakeup", __sched_wakeup_samecpu, __sched_wakeup_samepid, __sched_wakeup_target_cpu);
+TP_MATCHER_REGISTER5("sched", "sched_waking", __sched_wakeup_samecpu, __sched_wakeup_samepid, __sched_wakeup_target_cpu);
+TP_MATCHER_REGISTER5("sched", "sched_wakeup_new", __sched_wakeup_samecpu, __sched_wakeup_samepid, __sched_wakeup_target_cpu);
 TP_MATCHER_REGISTER("sched", "sched_switch", NULL, __sched_switch_samepid);
-TP_MATCHER_REGISTER("sched", "sched_migrate_task", __sched_migrate_task_samecpu, __sched_migrate_task_samepid);
+TP_MATCHER_REGISTER5("sched", "sched_migrate_task", __sched_migrate_task_samecpu, __sched_migrate_task_samepid, __sched_migrate_task_target_cpu);
 TP_MATCHER_REGISTER("sched", "sched_stat_runtime", NULL, __sched_stat_runtime_samepid);
 TP_MATCHER_REGISTER("sched", "sched_process_free", NULL, __sched_process_free_samepid);
 TP_MATCHER_REGISTER("sched", "sched_process_exit", NULL, __sched_process_free_samepid);
