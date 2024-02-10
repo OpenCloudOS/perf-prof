@@ -30,6 +30,7 @@ struct event_info {
     struct tp *tp2;
     u64 key;
     u64 recent_time; // The most recent time for all known events.
+    int recent_cpu; // cpu tracking, for rundelay.
 };
 
 // -|- - - -|- - - -|- - - -

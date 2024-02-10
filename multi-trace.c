@@ -1002,6 +1002,7 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
 bool event_need_to_print(union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
 {
     struct prof_dev *dev = info->tp1->dev;
+    struct multi_trace_ctx *ctx = dev->private;
     struct env *env = dev->env;
     struct timeline_node *curr = iter->curr;
     union perf_event *event = iter->event;
@@ -1026,36 +1027,55 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         multi_trace_raw_size(event, &raw, &size, curr->tp);
 
     if (env->samecpu) {
-        if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
-            (e2 && e->cpu_entry.cpu == e2->cpu_entry.cpu))
-            return true;
+        if (ctx->comm) { // rundelay, syscalls. The key is pid.
+            tp_target_cpu(curr->tp, raw, size, (int)info->key, &info->recent_cpu);
+            if (e->cpu_entry.cpu == info->recent_cpu ||
+                tp_samecpu(curr->tp, raw, size, info->recent_cpu))
+                return true;
+        } else {
+            if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
+                (e2 && e->cpu_entry.cpu == e2->cpu_entry.cpu))
+                return true;
 
-        if (tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu) ||
-            (e2 && e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
-                tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
-            return true;
+            if (tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu) ||
+                (e2 && e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
+                    tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
+                return true;
+        }
     }
 
     if (env->samepid) {
-        if (e->tid_entry.pid == e1->tid_entry.pid ||
-            (e2 && e->tid_entry.pid == e2->tid_entry.pid))
-            return true;
+        if (ctx->comm) { // rundelay, syscalls. The key is pid.
+            if (e->tid_entry.pid == (int)info->key ||
+                tp_samepid(curr->tp, raw, size, (int)info->key))
+                return true;
+        } else {
+            if (e->tid_entry.pid == e1->tid_entry.pid ||
+                (e2 && e->tid_entry.pid == e2->tid_entry.pid))
+                return true;
 
-        if (tp_samepid(curr->tp, raw, size, e1->tid_entry.pid) ||
-            (e2 && e1->tid_entry.pid != e2->tid_entry.pid &&
-                tp_samepid(curr->tp, raw, size, e2->tid_entry.pid)))
-            return true;
+            if (tp_samepid(curr->tp, raw, size, e1->tid_entry.pid) ||
+                (e2 && e1->tid_entry.pid != e2->tid_entry.pid &&
+                    tp_samepid(curr->tp, raw, size, e2->tid_entry.pid)))
+                return true;
+        }
     }
 
     if (env->sametid) {
-        if (e->tid_entry.tid == e1->tid_entry.tid ||
-            (e2 && e->tid_entry.tid == e2->tid_entry.tid))
-            return true;
+        if (ctx->comm) { // rundelay, syscalls. The key is pid.
+            if (e->tid_entry.tid == (int)info->key ||
+                tp_samepid(curr->tp, raw, size, (int)info->key))
+                return true;
+        } else {
+            if (e->tid_entry.tid == e1->tid_entry.tid ||
+                (e2 && e->tid_entry.tid == e2->tid_entry.tid))
+                return true;
 
-        if (tp_samepid(curr->tp, raw, size, e1->tid_entry.tid) ||
-            (e2 && e1->tid_entry.tid != e2->tid_entry.tid &&
-                tp_samepid(curr->tp, raw, size, e2->tid_entry.tid)))
-            return true;
+            if (tp_samepid(curr->tp, raw, size, e1->tid_entry.tid) ||
+                (e2 && e1->tid_entry.tid != e2->tid_entry.tid &&
+                    tp_samepid(curr->tp, raw, size, e2->tid_entry.tid)))
+                return true;
+        }
     }
 
     if (env->samekey)

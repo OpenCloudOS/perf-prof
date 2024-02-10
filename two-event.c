@@ -283,6 +283,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     u64 key = info->key;
     u64 delta = 0;
     const char *unit;
+    void *raw;
+    int size;
 
     if (two) {
         delay = container_of(two, struct delay, base);
@@ -312,6 +314,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     e = (void *)iter->event->sample.array;
                     neg = e->time - e1->time;
 
+                    info->recent_cpu = e1->cpu_entry.cpu;
                     do {
                         if (event_need_to_print(event1, event2, info, iter)) {
                             if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
@@ -325,6 +328,14 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                 // print event1
                 multi_trace_print(event1, two->tp1);
+                if (iter) {
+                    // cpu tracking for event1
+                    info->recent_cpu = e1->cpu_entry.cpu;
+                    if (opts->comm) { // rundelay, syscalls. The key is pid.
+                        multi_trace_raw_size(event1, &raw, &size, two->tp1);
+                        tp_target_cpu(two->tp1, raw, size, (int)key, &info->recent_cpu);
+                    }
+                }
 
                 // print event1 to event2
                 if (iter) {
@@ -346,6 +357,14 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                 // print event2
                 multi_trace_print(event2, two->tp2);
+                if (iter) {
+                    // cpu tracking for event2
+                    info->recent_cpu = e2->cpu_entry.cpu;
+                    if (opts->comm) { // rundelay, syscalls. The key is pid.
+                        multi_trace_raw_size(event2, &raw, &size, two->tp2);
+                        tp_target_cpu(two->tp2, raw, size, (int)key, &info->recent_cpu);
+                    }
+                }
 
                 // print events after event2
                 if (iter) {
