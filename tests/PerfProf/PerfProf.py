@@ -155,7 +155,9 @@ class PerfProf(object):
             try:
                 self.perfprof.send_signal(signal.SIGUSR2)
                 self.perfprof.send_signal(signal.SIGINT)
-                self.perfprof.wait(10)
+                retcode = self.perfprof.wait(10)
+                if retcode is not None and retcode < 0:
+                    raise subprocess.CalledProcessError(retcode, PERF_PROF_PATH)
             except ProcessLookupError:
                 pass
             except subprocess.TimeoutExpired:
@@ -185,9 +187,9 @@ class PerfProf(object):
 
     @staticmethod
     def lost_events(line):
-        # 2022-11-23 21:25:54.792888 lost 6 events on CPU #24
+        # 2022-11-23 21:25:54.792888 trace: lost 6 events on CPU #24
         record = line.split()
-        if len(record) >= 5 and record[2] == 'lost' and record[4] == 'events':
+        if len(record) >= 5 and record[3] == 'lost' and record[5] == 'events':
             return True
         else:
             return False
