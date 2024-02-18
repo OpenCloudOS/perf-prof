@@ -71,6 +71,7 @@ struct lost_node {
     bool reclaim;
     u64 start_time;
     u64 end_time;
+    u64 lost;
 };
 
 struct multi_trace_ctx {
@@ -912,17 +913,40 @@ static inline void lost_reclaim(struct prof_dev *dev, int ins)
     }
 }
 
+static void multi_trace_print_lost(struct prof_dev *dev, union perf_event *event, int ins)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+    struct lost_node *lost;
+
+    if (event)
+        return print_lost_fn(dev, event, ins);
+
+    if (ctx->lost_affect == LOST_AFFECT_INS_EVENT)
+        lost = list_first_entry(&ctx->perins_lost_list[ins], struct lost_node, lost_link);
+    else
+        lost = list_first_entry(&ctx->timeline_lost_list, struct lost_node, lost_link);
+
+    print_time(stderr);
+    fprintf(stderr, "%s: lost %lu events on %s #%d", dev->prof->name, lost->lost,
+                    ctx->oncpu ? "CPU" : "thread",
+                    ctx->oncpu ? prof_dev_ins_cpu(dev, lost->ins) : prof_dev_ins_thread(dev, lost->ins));
+    if (dev->env->greater_than || dev->env->lower_than)
+        fprintf(stderr, " (%lu.%06lu, %lu.%06lu)\n", lost->start_time/NSEC_PER_SEC, (lost->start_time%NSEC_PER_SEC)/1000,
+                            lost->end_time/NSEC_PER_SEC, (lost->end_time%NSEC_PER_SEC)/1000);
+    else
+        fprintf(stderr, "\n");
+}
+
 static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
 {
     struct multi_trace_ctx *ctx = dev->private;
     struct lost_node *pos;
     struct lost_node *lost;
 
-    print_lost_fn(dev, event, ins);
-
     // Without order, events are processed in the order within the ringbuffer.
     // When lost, all previous events have been processed and only need to reclaim.
     if (!using_order(dev) && !dev->env->after_event2) {
+        multi_trace_print_lost(dev, event, ins);
         lost_reclaim(dev, ins);
         if (ctx->need_timeline)
             timeline_free_unneeded(dev);
@@ -938,6 +962,7 @@ static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int 
         lost->reclaim = false;
         lost->start_time = lost_start;
         lost->end_time = lost_end;
+        lost->lost = event->lost.lost;
 
         if (ctx->lost_affect == LOST_AFFECT_INS_EVENT) {
             list_add_tail(&lost->lost_link, &ctx->perins_lost_list[ins]);
@@ -1355,6 +1380,7 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
             u64 recent_time = ctx->recent_time;
             // Ensure that the output of multi_trace_call_remaining() is also correct.
             ctx->recent_time = lost->start_time;
+            multi_trace_print_lost(dev, NULL, tl_event->ins);
             // delete A
             lost_reclaim(dev, tl_event->ins);
             ctx->recent_time = recent_time;
