@@ -1356,8 +1356,12 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
          * Subsequent events have been lost, and the backup will be reclaimed immediately.
          */
         if (tl_event->time == lost->start_time) {
-            tl_event->need_backup = false;
-            tl_event->unneeded = true;
+            if (tl_event->need_backup) {
+                tl_event->need_backup = false;
+                tl_event->unneeded = true;
+                ctx->tl_stat.unneeded ++;
+                ctx->tl_stat.unneeded_bytes += tl_event->event->header.size;
+            }
             return;
         }
 
@@ -1390,8 +1394,14 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
         // Within the lost range, new events are also unsafe, neither _find_prev nor _backup.
         if (tl_event->time < lost->end_time) {
             tl_event->need_find_prev = false;
-            tl_event->need_backup = false;
-            tl_event->unneeded = true;
+            if (tl_event->need_backup) {
+                tl_event->need_backup = false;
+                // Events obtained from ctx->pending_list are not counted as `unneeded' only
+                // when their `need_backup' is true. See multi_trace_first_pending().
+                tl_event->unneeded = true;
+                ctx->tl_stat.unneeded ++;
+                ctx->tl_stat.unneeded_bytes += tl_event->event->header.size;
+            }
             return;
         } else {
             /*          lost
