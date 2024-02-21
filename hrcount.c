@@ -206,7 +206,10 @@ static int hrcount_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    attr.sample_period = ctx->period;
+    // Only hrcount can sample events.
+    if (strcmp(dev->prof->name, "hrcount") == 0)
+        attr.sample_period = ctx->period;
+
     attr.wakeup_events = ctx->hist_size; // Wake up every N events
     ctx->leader = evsel = perf_evsel__new(&attr);
     if (!evsel) {
