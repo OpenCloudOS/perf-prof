@@ -310,6 +310,41 @@ static void direct_print(void *opaque, struct count_node *node)
     node->sum = 0;
 }
 
+
+/*
+ * perf-prof stat -e 'sched:sched_wakeup//cpus="0,2"/,sched:sched_switch//cpus=1/' \
+ *                --period 200ms -i 1000 -C 0-2 --perins
+ * Events are attached to different cpus. When printing the count percpu, events
+ * not attached to this cpu need to be skipped.
+ *
+ * [CPU] |sched_wakeup       |sched_switch  |
+ * [000] |342 585 875 820 297|              |
+ * [001] |                   |56 44 46 65 54|
+ * [002] |0   0   0   0   0  |              |
+ */
+static inline void packed_skip(void *opaque, u64 id)
+{
+    struct {
+        u64 ins;
+        u64 id;
+        int line_len;
+        struct prof_dev *dev;
+    } *iter = opaque;
+    struct prof_dev *dev = iter->dev;
+    struct hrcount_ctx *ctx = dev->private;
+
+    if (iter->ins != ~0UL && iter->id < id) {
+        for (; iter->id < id; iter->id++) {
+            struct tp *tp = &ctx->tp_list->tp[iter->id];
+            if (!tp_is_dev(tp)) {
+                printf("%s%-*s", ctx->pipe_char ? "|" : "", ctx->pertp_max_len[iter->id], "");
+            }
+        }
+        if (id == ctx->tp_list->nr_tp)
+            printf("%s\n", ctx->pipe_char ? "|" : "");
+    }
+}
+
 /*
  * [INS] |tp  |tp  |
  * [002] |1 2 |2 3 |
@@ -335,11 +370,14 @@ static void packed_print(void *opaque, struct count_node *node)
     max_len = ((ctx->pertp_max_len[node->id] + 1) / ctx->hist_size) - 1 /* ' ' */;
 
     if (dev->env->perins && iter->ins != node->ins) {
+        packed_skip(opaque, ctx->tp_list->nr_tp);
         iter->ins = node->ins;
         iter->id = 0;
         iter->line_len = printf(ctx->ins_oncpu ? "[%03d] " : "[%6d] ",
             ctx->ins_oncpu ? prof_dev_ins_cpu(dev, node->ins) : prof_dev_ins_thread(dev, node->ins));
     }
+
+    packed_skip(opaque, node->id);
 
     h = (ctx->rounds % ctx->slots) * ctx->hist_size;
     if (ctx->pipe_char)
@@ -356,7 +394,7 @@ static void packed_print(void *opaque, struct count_node *node)
     iter->line_len += printf("%*s", ctx->pertp_max_len[node->id] - len, "");
     iter->id ++;
 
-    if (iter->id == ctx->tp_list->nr_real_tp) {
+    if (iter->id == ctx->tp_list->nr_tp) {
         if (ctx->pipe_char)
             iter->line_len += printf("|");
         printf("\n");
@@ -409,6 +447,7 @@ static void __hrcount_interval(struct prof_dev *dev)
         iter.line_len = 0;
         iter.dev = dev;
         count_dist_print(ctx->count_dist, packed_print, &iter);
+        packed_skip(&iter, ctx->tp_list->nr_tp);
     } else
         count_dist_print(ctx->count_dist, direct_print, dev);
 
