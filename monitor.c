@@ -1314,7 +1314,8 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
                 if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME) {
                     dev->time_ctx.last_evtime = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
                     if (unlikely(dev->time_ctx.last_evtime < dev->time_ctx.enabled_after)) {
-                        dev->sampled_events = 0;
+                        if (dev->sampled_events > 0)
+                            dev->sampled_events --;
                         break;
                     }
                 }
