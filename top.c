@@ -337,9 +337,9 @@ static int top_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
                          PERF_SAMPLE_RAW,
-        .read_format   = 0,
+        .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
         .watermark     = 1,
@@ -440,13 +440,14 @@ static void top_sigusr(struct prof_dev *dev, int signum)
 }
 
 // in linux/perf_event.h
-// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_FORMAT_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
 struct sample_type_raw {
     struct {
         __u32    pid;
         __u32    tid;
     }    tid_entry;
     __u64   time;
+    __u64   id;
     struct {
         __u32    cpu;
         __u32    reserved;
@@ -454,18 +455,15 @@ struct sample_type_raw {
     __u64       period;
     struct {
         __u32   size;
-        union {
-            __u8    data[0];
-            unsigned short common_type;
-        };
-    } __packed raw;
+        __u8    data[0];
+    } raw;
 };
 
 static void top_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct top_ctx *ctx = dev->private;
     struct sample_type_raw *raw = (void *)event->sample.array;
-    unsigned short common_type = raw->raw.common_type;
+    struct perf_evsel *evsel = NULL;
     void *data = raw->raw.data;
     int size = raw->raw.size;
     struct tp *tp = NULL;
@@ -476,15 +474,16 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
     struct rb_node *rbn;
     struct top_info *p;
 
+    evsel = perf_evlist__id_to_evsel(dev->evlist, raw->id, NULL);
     for_each_real_tp(ctx->tp_list, tmp, i) {
-        if (common_type == tmp->id) {
+        if (evsel == tmp->evsel) {
             tp = tmp;
             break;
         } else
             field += tmp->nr_top;
     }
 
-    if (tp == NULL)
+    if (unlikely(tp == NULL))
         return;
 
     if (dev->env->verbose >= VERBOSE_EVENT) {
