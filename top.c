@@ -251,21 +251,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
             tp->key_prog = tp_new_prog(tp, env->key);
             tp->key = env->key;
         }
-        // default key=pid comm=comm
-        // If key is specified, the comm field is ignored. Because the meaning of key may not be pid.
-        if (!env->key && !tp->key) {
-            struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
-            if (tep_find_any_field(event, "pid")) {
-                tp->key_prog = tp_new_prog(tp, (char *)"pid");
-                tp->key = "pid";
-                // The pid has been found, and then comm.
-                if (!tp->comm_prog && tep_find_any_field(event, "comm")) {
-                    tp->comm_prog = tp_new_prog(tp, (char *)"comm");
-                    tp->comm = "comm";
-                    ctx->tp_list->nr_comm += 1;
-                }
-            }
-        }
 
         if (tp->key && !key_name) {
             key_name = strdup(tp->key);
@@ -762,10 +747,10 @@ static const char *top_desc[] = PROFILER_DESC("top",
     "[OPTION...] -e EVENT[...] [-i INT] [-k key] [--only-comm]",
     "Display key-value counters in top mode.", "",
     "SYNOPSIS",
-    "    Get the key from the event 'key' ATTR. Default, key=pid. Get the value from",
-    "    the event's 'top-by' or 'top-add' ATTR. Key is the counter and value is the",
-    "    value of the counter. Therefore, from multiple events, multiple counters are",
-    "    constructed with different keys. The same key, the value is accumulated.",
+    "    Get the key from the event 'key' ATTR. Default, key=common_pid. Get the value",
+    "    from the event's 'top-by' or 'top-add' ATTR. Key is the counter and value is",
+    "    the value of the counter. Therefore, from multiple events, multiple counters",
+    "    are constructed with different keys. The same key, the value is accumulated.",
     "    Finally, display these counters in top mode.",
     "",
     "    If the -e parameter specifies multiple events, the key ATTR of these events",
@@ -779,19 +764,11 @@ static const char *top_desc[] = PROFILER_DESC("top",
     "EXAMPLES",
     "    "PROGRAME" top -e kvm:kvm_exit//key=exit_reason/ -i 1000",
     "    "PROGRAME" top -e irq:irq_handler_entry//key=irq/ -C 0",
-    "    "PROGRAME" top -e 'sched:sched_stat_runtime//top-by=\"runtime/1000\"/alias=run(us)/' -C 0 -i 1000",
-    "    "PROGRAME" top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -C 0 -i 1000",
-    "    "PROGRAME" top -e 'sched:sched_process_exec//comm=\"(char *)&common_type+filename_offset\"/' --only-comm",
+    "    "PROGRAME" top -e 'sched:sched_stat_runtime//key=pid/comm=comm/top-by=\"runtime/1000\"/alias=run(us)/' -C 0 -i 1000",
+    "    "PROGRAME" top -e sched:sched_stat_runtime//key=pid/comm=comm/top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -C 0 -i 1000",
+    "    "PROGRAME" top -e 'sched:sched_process_exec//key=pid/comm=\"(char *)&common_type+filename_offset\"/' --only-comm",
     "    "PROGRAME" top -e 'workqueue:workqueue_execute_start//key=common_pid/alias=NUM/comm=ksymbol(function)/' --only-comm",
-    "    "PROGRAME" top -e 'skb:kfree_skb//key=protocol/comm=ksymbol(location)/' -m 32",
-    "",
-    "NOTE",
-    "    Default, key=pid, comm=comm.",
-    "",
-    "        -e sched:sched_stat_runtime//top-by=runtime/",
-    "        -e sched:sched_stat_runtime//top-by=runtime/key=pid/comm=comm/",
-    "",
-    "    Are the same.");
+    "    "PROGRAME" top -e 'skb:kfree_skb//key=protocol/comm=ksymbol(location)/' -m 32");
 static const char *top_argv[] = PROFILER_ARGV("top",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "key", "only-comm");
