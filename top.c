@@ -169,7 +169,7 @@ static void altwin_end(void)
 {
     tcsetattr(0, TCSANOW, &save);
     /*
-     * ESC[?25h	    make cursor visible
+     * ESC[?25h     make cursor visible
      * ESC[?1049l   disables the alternative buffer
     **/
     printf("\033[?25h\033[?1049l\n");
@@ -510,23 +510,77 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
 
     tp_broadcast_event(tp, event);
 
-    if (!ctx->only_comm) {
-        if (tp->key_prog)
-            info.key = tp_get_key(tp, data, size);
-        else
-            info.key = raw->tid_entry.tid;
-    } else
-        info.key = 0;
+    /*   ATTR      |
+     * key   comm  |  show_comm   can only_comm ?
+     * 0     0     |  1           yes
+     * 0     1     |  1           yes
+     * 1     0     |  0           no
+     * 1     1     |  1           yes
+     * `     `As long as any one of multiple events has comm, the value is 1.
+     * `As long as any one of multiple events has key, the value is 1.
+     *
+     * for any event.
+     *   ATTR      |
+     * key   comm  |  PID/KEY              COMM
+     * 0     0     |  raw->tid_entry.tid   pid->comm
+     * 0     1     |  raw->tid_entry.tid   comm ATTR
+     * 1     0     |  key ATTR             key->comm (key has PID meaning)
+     * 1     1     |  key ATTR             comm ATTR
+     *
+     *
+     *   event1      event2    |              |
+     * key   comm  key   comm  |  key   comm  |  show_comm  PID/KEY                 E1  E2  COMM
+     * 0     0     0     0     |  0     0     |  1          tid_entry.tid                   pid->comm
+     *             0     1     |  0     1     |  1          tid_entry.tid                   pid->comm/commATTR
+     *             1     0     |  1     0     |  0          tid_entry.tid/key ATTR
+     *             1     1     |  1     1     |  1          tid_entry.tid/key ATTR          pid->comm/commATTR
+     * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     *   event1      event2    |              |
+     * key   comm  key   comm  |  key   comm  |  show_comm  PID/KEY                 E1  E2  COMM
+     *             0     0     |  0     1     |  1          tid_entry.tid                   pid->comm/commATTR
+     * 0     1     0     1     |  0     1     |  1          tid_entry.tid                   commATTR/commATTR
+     *             1     0     |  1     1     |  1          tid_entry.tid/key ATTR          pid->comm/commATTR
+     *             1     1     |  1     1     |  1          tid_entry.tid/key ATTR          commATTR/commATTR
+     * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     *   event1      event2    |              |
+     * key   comm  key   comm  |  key   comm  |  show_comm  PID/KEY                 E1  E2  COMM
+     *             0     0     |  1     0     |  0          tid_entry.tid/key ATTR
+     *             0     1     |  1     1     |  1          tid_entry.tid/key ATTR          pid->comm/commATTR
+     * 1     0     1     0     |  1     0     |  0          key ATTR/key ATTR
+     *             1     1     |  1     1     |  1          key ATTR/key ATTR               pid->comm/commATTR
+     * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     *   event1      event2    |              |
+     * key   comm  key   comm  |  key   comm  |  show_comm  PID/KEY                 E1  E2  COMM
+     *             0     0     |  1     1     |  1          tid_entry.tid/key ATTR          pid->comm/commATTR
+     *             0     1     |  1     1     |  1          tid_entry.tid/key ATTR          commATTR/commATTR
+     *             1     0     |  1     1     |  1          key ATTR/key ATTR               pid->comm/commATTR
+     * 1     1     1     1     |  1     1     |  1          key ATTR/key ATTR               commATTR/commATTR
+     * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+     *
+     * possible combinations   Requires
+     * tid_entry.tid/key ATTR  key has the PID meaning
+     * key ATTR/key ATTR       key has the same meaning
+     * pid->comm/commATTR      commATTR has the meaning of process name.
+     * commATTR/commATTR       commATTR has the same meaning.
+     */
+    if (tp->key_prog)
+        info.key = tp_get_key(tp, data, size);
+    else
+        info.key = raw->tid_entry.tid;
 
     if (ctx->show_comm) {
         if (tp->comm_prog)
             info.pcomm = tp_get_comm(tp, data, size);
         else {
-            tep__update_comm(NULL, raw->tid_entry.tid);
-            info.pcomm = (void *)tep__pid_to_comm(raw->tid_entry.tid);
+            // !comm_prog: info.key has PID meaning.
+            tep__update_comm(NULL, (int)info.key);
+            info.pcomm = (void *)tep__pid_to_comm((int)info.key);
         }
     } else
         info.pcomm = NULL;
+
+    if (ctx->only_comm)
+        info.key = 0;
 
     rbn = rblist__findnew(&ctx->top_list, &info);
     if (!rbn)
