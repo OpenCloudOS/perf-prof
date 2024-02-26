@@ -462,6 +462,12 @@ static int monitor_ctx_init(struct prof_dev *dev)
             fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
                             "--order parameter to order events.\n");
         }
+    } else {
+        // use instance as key, cpu or pid.
+        if (!ctx->oncpu) {
+            ctx->comm = 1;
+            options.comm = 1;
+        }
     }
 
     ctx->level = sched_init(ctx->nr_list, ctx->tp_list);
@@ -1463,13 +1469,13 @@ free_dup_event:
     return;
 
 found:
+    if (unlikely(tp->trigger)) {
+        multi_trace_interval(dev);
+    }
 
     tp_broadcast_event(tp, event);
-    if (env->verbose >= VERBOSE_EVENT || tp->trigger) {
-        multi_trace_print_title(event, tp, tp->trigger ? "trigger" : NULL);
-    }
-    if (tp->trigger) {
-        multi_trace_interval(dev);
+    if (unlikely(env->verbose >= VERBOSE_EVENT || tp->trigger)) {
+        multi_trace_print_title(event, tp, NULL);
     }
 
     if (!event_dev)
