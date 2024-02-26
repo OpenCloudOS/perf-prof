@@ -632,7 +632,7 @@ static void task_state_print_event(struct prof_dev *dev, union perf_event *event
     int size;
 
     __raw_size(dev, event, &raw, &size);
-    if (dev->print_title) print_time(stdout);
+    if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
     tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
     __print_callchain(dev, event);
 }

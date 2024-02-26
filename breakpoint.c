@@ -288,7 +288,7 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
             break;
     }
 
-    if (dev->print_title) print_time(stdout);
+    if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
     printf("    pid %6d tid %6d [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s%s", data->tid_entry.pid, data->tid_entry.tid,
             data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
             data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, ctx->print_ip?" ip ":"\n");

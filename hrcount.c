@@ -522,7 +522,7 @@ static void hrcount_sample(struct prof_dev *dev, union perf_event *event, int in
     ctx->perins_pos[instance] ++;
 
     if (verbose) {
-        if (dev->print_title) print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
         printf(" %6d/%-6d [%03d]  %llu.%06llu: %s: cpu-clock: %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name, cpu_clock);
     }

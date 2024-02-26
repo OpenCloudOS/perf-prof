@@ -178,7 +178,7 @@ static void page_faults_sample(struct prof_dev *dev, union perf_event *event, in
         __u64 ips[2];
     } callchain;
 
-    if (dev->print_title) print_time(stdout);
+    if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
     tep__update_comm(NULL, data->tid_entry.tid);
     printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016llx%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
            data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr, ctx->print_ip?" ip ":"\n");

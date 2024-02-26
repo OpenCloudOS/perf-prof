@@ -1005,7 +1005,7 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
         if (title)
             printf("%-27s", title);
         else
-            print_time(stdout);
+            prof_dev_print_time(dev, data->h.time, stdout);
         tp_print_marker(tp);
     }
 

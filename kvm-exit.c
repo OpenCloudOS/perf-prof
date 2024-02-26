@@ -323,9 +323,9 @@ static inline int __exit_reason(struct kvmexit_ctx *ctx, struct sample_type_raw 
     return 0;
 }
 
-static void __print_raw(struct sample_type_raw *raw, const char *str)
+static void __print_raw(struct prof_dev *dev, struct sample_type_raw *raw, const char *str)
 {
-    print_time(stdout);
+    if (dev->print_title) prof_dev_print_time(dev, raw->time, stdout);
     if (str)
         printf("%s", str);
     tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
@@ -359,8 +359,8 @@ static void __process_fast(struct prof_dev *dev, struct sample_type_raw *rkvm_ex
     if (env->greater_than &&
         exit_reason != hlt &&
         delta > env->greater_than) {
-        __print_raw(rkvm_exit, NULL);
-        __print_raw(rkvm_entry, NULL);
+        __print_raw(dev, rkvm_exit, NULL);
+        __print_raw(dev, rkvm_entry, NULL);
     }
 }
 
@@ -376,7 +376,7 @@ static void kvm_exit_sample(struct prof_dev *dev, union perf_event *event, int i
     unsigned long guest_rip;
 
     if (dev->env->verbose >= VERBOSE_EVENT) {
-        print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, raw->time, stdout);
         tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
     }
 
@@ -395,8 +395,8 @@ static void kvm_exit_sample(struct prof_dev *dev, union perf_event *event, int i
             } else {
                 if (raw->tid_entry.tid != raw_kvm_exit->tid_entry.tid) {
                     if (dev->env->verbose >= VERBOSE_NOTICE) {
-                        __print_raw(raw_kvm_exit, "WARN");
-                        __print_raw(raw, "WARN");
+                        __print_raw(dev, raw_kvm_exit, "WARN");
+                        __print_raw(dev, raw, "WARN");
                     }
                 }
             }

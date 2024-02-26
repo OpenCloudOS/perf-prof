@@ -306,7 +306,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
     struct tp *tp;
 
     if (verbose) {
-        if (dev->print_title) print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
         printf("    pid %6d tid %6d [%03d] %llu.%06llu: %s: cpu-clock ", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name);
     }
@@ -354,7 +354,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
 
     if (print == PRINT || verbose) {
         if (!verbose) {
-            if (dev->print_title) print_time(stdout);
+            if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
             printf("    pid %6d tid %6d [%03d] %llu.%06llu: %s: cpu-clock %lu ns\n", data->tid_entry.pid, data->tid_entry.tid,
                 data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000, dev->prof->name, cpu_clock);
             if (ctx->tp_list)
@@ -483,7 +483,7 @@ static int irq_off_read(struct prof_dev *dev, struct perf_evsel *ev, struct perf
 
     if (print == PRINT || verbose) {
         print_time(stdout);
-        printf(" %13s [%03d]  cpu-clock: %lu ns\n", "read", prof_dev_ins_cpu(dev, instance), cpu_clock);
+        printf(" %13s [%03d] %s: cpu-clock: %lu ns\n", "read", prof_dev_ins_cpu(dev, instance), dev->prof->name, cpu_clock);
     }
     return 0;
 }

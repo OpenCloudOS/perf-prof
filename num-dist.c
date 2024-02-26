@@ -322,7 +322,7 @@ static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int i
 
     if ((env->greater_than && delta > env->greater_than) ||
         env->verbose >= VERBOSE_EVENT) {
-        if (dev->print_title) print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, hdr->time, stdout);
         tep__update_comm(NULL, hdr->tid_entry.tid);
         tep__print_event(hdr->time, hdr->cpu_entry.cpu, raw, size);
         __print_callchain(ctx, event, tp);

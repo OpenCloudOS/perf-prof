@@ -285,7 +285,7 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     __raw_size(event, &raw, &size, callchain);
     tep__update_comm(NULL, data->tid_entry.tid);
     if (dev->print_title) {
-        print_time(stdout);
+        prof_dev_print_time(dev, data->time, stdout);
         tp_print_marker(tp);
     }
     tep__print_event(data->time, data->cpu_entry.cpu, raw, size);

@@ -778,7 +778,7 @@ static void kvm_mmu_sample(struct prof_dev *dev, union perf_event *event, int in
     }
 
     if ((verbose >= VERBOSE_NOTICE && ret < 0) || verbose >= VERBOSE_EVENT) {
-        print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, raw->time, stdout);
         tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
     }
 }

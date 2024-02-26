@@ -487,8 +487,10 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
         return;
 
     if (dev->env->verbose >= VERBOSE_EVENT) {
-        print_time(stdout);
-        tp_print_marker(tp);
+        if (dev->print_title) {
+            prof_dev_print_time(dev, raw->time, stdout);
+            tp_print_marker(tp);
+        }
         tep__print_event(raw->time, raw->cpu_entry.cpu, data, size);
     }
 

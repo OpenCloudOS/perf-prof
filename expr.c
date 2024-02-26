@@ -785,7 +785,7 @@ static void expr_sample(struct prof_dev *dev, union perf_event *event, int insta
     } *raw = (void *)event->sample.array;
     long result;
 
-    print_time(stdout);
+    prof_dev_print_time(dev, raw->time, stdout);
     tp_print_marker(&info->tp_list->tp[0]);
     tep__print_event(raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
@@ -819,7 +819,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "SYNTAX",
     "    Supports 4 integer types: char, short, int, long. and pointer types.",
     "    Most operators are supported. See Operators.",
-    "    Supports 2 built-in functions. See Built-in Functions.",
+    "    Supports 4 built-in functions. See Built-in Functions.",
     "",
     "  Operators",
     "    Precedence  Operator    Description",

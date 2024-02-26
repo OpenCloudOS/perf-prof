@@ -498,12 +498,8 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
     __u64 config;
 
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    if (!evsel) {
-        print_time(stderr);
-        fprintf(stderr, "%16s %6u [%03d] %llu.%06llu: ID %llu TO EVSEL FAILED!\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
-                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->id);
+    if (unlikely(!evsel))
         return ;
-    }
 
     type = perf_evsel__attr(evsel)->type;
     config = perf_evsel__attr(evsel)->config;
@@ -519,7 +515,7 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
         if (ctx->watchdog[cpu].print_stack ||
             ctx->watchdog[cpu].print_sched ||
             dev->env->verbose >= VERBOSE_EVENT) {
-            if (dev->print_title) print_time(stdout);
+            if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
             printf("%16s %6u [%03d] %llu.%06llu: watchdog: cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                     data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000);
             __print_callchain(dev, event);
@@ -583,7 +579,7 @@ static void watchdog_throttle(struct prof_dev *dev, union perf_event *event, int
 
     type = perf_evsel__attr(evsel)->type;
     if (type == ctx->profile_type) {
-        print_time(stdout);
+        prof_dev_print_time(dev, time, stdout);
         printf("==> [%03d] %llu.%06llu: %s\n", cpu, time / NSEC_PER_SEC, (time % NSEC_PER_SEC)/1000, str);
     } else if (type == PERF_TYPE_TRACEPOINT) {
         /* This won't happen */

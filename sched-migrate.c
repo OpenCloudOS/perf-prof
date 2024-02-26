@@ -292,7 +292,7 @@ static void sched_migrate_sample(struct prof_dev *dev, union perf_event *event, 
 
     if (print || dev->env->verbose >= VERBOSE_EVENT) {
         tep__update_comm(NULL, data->tid_entry.tid);
-        if (dev->print_title) print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
         tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
         __print_callchain(dev, event);
     }

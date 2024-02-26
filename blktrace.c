@@ -575,7 +575,7 @@ verbose_print:
     if (verbose &&
         (print || verbose >= VERBOSE_EVENT)) {
         tep__update_comm(NULL, data->tid_entry.tid);
-        if (dev->print_title) print_time(stdout);
+        if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
         if (print)
             printf("%s", print);
         tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
