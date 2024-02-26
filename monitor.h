@@ -291,6 +291,9 @@ struct prof_dev {
         int time_pos;
         u64 last_evtime; // ns, tsc
         u64 enabled_after; // ns, tsc
+        // Wall clock conversion of events.
+        u64 base_evtime; // base event time (i.e., local-clock, tsc)
+        struct timespec base_timespec; // base real (i.e., wall-clock) time
     } time_ctx;
     struct perf_event_convert {
         // tsc convert
@@ -364,6 +367,8 @@ int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
 void prof_dev_flush(struct prof_dev *dev);
 void prof_dev_close(struct prof_dev *dev);
+void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp);
+
 /*
  * The final prof_dev refers to the device that finally handles the event and will no
  * longer forward the event.
@@ -415,6 +420,7 @@ int perf_event_convert_init(struct prof_dev *dev);
 void perf_event_convert_deinit(struct prof_dev *dev);
 void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mmap *map);
 union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable);
+int perf_timespec_init(struct prof_dev *dev);
 
 
 //comm.c

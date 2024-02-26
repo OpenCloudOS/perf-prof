@@ -2,8 +2,13 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <syscall.h>
+
 #include <monitor.h>
 #include <tep.h>
+#include <linux/thread_map.h>
+
 
 /*
  *  { u64           id;   } && PERF_SAMPLE_IDENTIFIER
@@ -252,3 +257,124 @@ union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *eve
     return event;
 }
 
+
+static int evtime_init(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_event_attr attr = {
+        .type          = PERF_TYPE_TRACEPOINT,
+        .config        = 0,
+        .size          = sizeof(struct perf_event_attr),
+        .sample_period = 1,
+        .sample_type   = PERF_SAMPLE_TIME,
+        .pinned        = 1,
+        .disabled      = 1,
+        .watermark     = 0,
+        .wakeup_events = 1,
+    };
+    struct perf_evsel *evsel;
+    int id = tep__event_id("syscalls", "sys_enter_getpid");
+
+    if (id < 0) goto failed;
+
+    dev->private = NULL;
+    dev->type = PROF_DEV_TYPE_SERVICE;
+
+    attr.config = id;
+    evsel = perf_evsel__new(&attr);
+    if (!evsel)  goto failed;
+    perf_evlist__add(evlist, evsel);
+
+    return 0;
+failed:
+    return -1;
+}
+
+static void evtime_deinit(struct prof_dev *dev)
+{
+}
+
+static void evtime_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct prof_dev *pdev = dev->private;
+    // PERF_SAMPLE_TIME
+    struct sample_type_header {
+        __u64   time;
+    } *data = (void *)event->sample.array;
+
+    pdev->time_ctx.base_evtime = data->time;
+}
+
+static profiler evtime = {
+    .name = "event-basetime",
+    .pages = 1,
+    .init = evtime_init,
+    .deinit = evtime_deinit,
+    .sample = evtime_sample,
+};
+
+int perf_timespec_init(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_mmap *map;
+    struct perf_thread_map *tidmap;
+    struct env *e = NULL;
+    struct prof_dev *evt;
+
+    if (!dev->pages || dev->prof == &evtime)
+        return 0;
+
+    if (!(dev->time_ctx.sample_type & PERF_SAMPLE_TIME))
+        return 0;
+
+    perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
+        int err = 0;
+        perf_event_convert_read_tsc_conversion(dev, map);
+        if (dev->convert.need_tsc_conv ||
+            (err = perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv)) == 0) {
+            clock_gettime(CLOCK_REALTIME, &dev->time_ctx.base_timespec);
+            dev->time_ctx.base_evtime = rdtsc();
+            if (dev->time_ctx.base_evtime > 0) {
+                dev->time_ctx.base_evtime += dev->env->tsc_offset;
+                if (!dev->convert.need_tsc_conv)
+                    dev->time_ctx.base_evtime = perf_tsc_to_ns(dev, dev->time_ctx.base_evtime);
+                return 0;
+            }
+        }
+        if (err == -EOPNOTSUPP)
+            break;
+    }
+
+    tidmap = thread_map__new_by_tid(getpid());
+    if (!tidmap) goto NULL_tidmap;
+
+    e = zalloc(sizeof(*e)); // free in prof_dev_close()
+    if (!e) goto NULL_e;
+    e->tsc = dev->env->tsc;
+    e->tsc_offset = dev->env->tsc_offset;
+
+    evt = prof_dev_open_cpu_thread_map(&evtime, e, NULL, tidmap, NULL);
+    if (!evt) goto NULL_evrt;
+
+    e = NULL;
+    evt->private = dev;
+
+    // trigger getpid syscall
+    clock_gettime(CLOCK_REALTIME, &dev->time_ctx.base_timespec);
+    syscall(SYS_getpid); // syscall does not necessarily occur with getpid().
+
+    prof_dev_flush(evt);
+    prof_dev_close(evt);
+
+    if (dev->time_ctx.base_evtime == 0) {
+        dev->time_ctx.base_timespec.tv_sec = 0;
+        dev->time_ctx.base_timespec.tv_nsec = 0;
+    }
+
+NULL_evrt:
+    if (e) free(e);
+NULL_e:
+    perf_thread_map__put(tidmap);
+NULL_tidmap:
+    return dev->time_ctx.base_evtime > 0 ? 0 : -1;
+}

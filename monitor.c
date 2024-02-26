@@ -1718,6 +1718,8 @@ int prof_dev_enable(struct prof_dev *dev)
     env = dev->env;
     evlist = dev->evlist;
 
+    perf_timespec_init(dev);
+
     err = perf_evlist_poll__foreach_fd(evlist, __addfn);
     if (err) {
         fprintf(stderr, "monitor(%s) poll failed\n", prof->name);
@@ -1887,6 +1889,30 @@ void prof_dev_close(struct prof_dev *dev)
 
     free_env(dev->env);
     free(dev);
+}
+
+void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
+{
+    s64 off_ns;
+    char timebuff[64];
+    struct timeval tv;
+    struct tm *result;
+
+    if (likely(dev->time_ctx.base_evtime > 0 && evtime > 0)) {
+        if (likely(!dev->convert.need_tsc_conv))
+            off_ns = evtime - dev->time_ctx.base_evtime;
+        else
+            off_ns = perf_time_to_ns(dev, evtime) - perf_time_to_ns(dev, dev->time_ctx.base_evtime);
+        off_ns += dev->time_ctx.base_timespec.tv_nsec;
+
+        tv.tv_sec = dev->time_ctx.base_timespec.tv_sec + off_ns / NSEC_PER_SEC;
+        tv.tv_usec = (off_ns % NSEC_PER_SEC) / 1000;
+    } else
+        gettimeofday(&tv, NULL);
+
+    result = localtime(&tv.tv_sec);
+    strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", result);
+    fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
 }
 
 static u64 prof_dev_minevtime(struct prof_dev *dev)
