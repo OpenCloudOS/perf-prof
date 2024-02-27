@@ -1981,6 +1981,8 @@ static int nested_trace_init(struct prof_dev *dev)
     dev->private = ctx;
 
     ctx->nested = 1;
+    if (!dev->env->impl)
+        dev->env->impl = strdup(TWO_EVENT_CALL_DELAY_IMPL);
     if (__multi_trace_init(dev) < 0)
         return -1;
 
