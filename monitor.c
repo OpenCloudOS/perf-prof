@@ -348,7 +348,7 @@ struct option main_options[] = {
                                                                 "  EVENT,EVENT,...\n"
                                                                 "  EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
                                                                 "         profiler[/option/ATTR/ATTR/.../]\n"
-                                                                "  filter: ftrace filter\n"
+                                                                "  filter: trace events filter\n"
                                                                 "  ATTR:\n"
                                                                 "      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
                                                                 "      max-stack=int : sample_max_stack\n"
@@ -365,10 +365,10 @@ struct option main_options[] = {
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
                                                                 "      trigger: multi-trace, use events to trigger interval output\n"
                                                                 "      vm=uuid: get the mapping from Guest vcpu to Host tid\n"
-                                                                "      push=[IP]:PORT: push events to the local broadcast server IP:PORT\n"
+                                                                "      push=[IP:]PORT: push events to the local broadcast server IP:PORT\n"
                                                                 "      push=chardev: push events to chardev, e.g., /dev/virtio-ports/*\n"
                                                                 "      push=file: push events to file\n"
-                                                                "      pull=[IP]:PORT: pull events from server IP:PORT\n"
+                                                                "      pull=[IP:]PORT: pull events from server IP:PORT\n"
                                                                 "      pull=chardev: pull events from chardev\n"
                                                                 "      pull=file: pull events from file\n"
                                                                 "  EXPR:\n"
@@ -1172,7 +1172,7 @@ static void print_throttle_unthrottle_fn(struct prof_dev *dev, union perf_event 
 {
     if (dev->env->verbose >= VERBOSE_NOTICE) {
         int oncpu = prof_dev_ins_oncpu(dev);
-        print_time(stderr);
+        prof_dev_print_time(dev, event->throttle.time, stderr);
         fprintf(stderr, "%s: %llu.%06llu: %s events on %s #%d\n", dev->prof->name,
                         event->throttle.time / NSEC_PER_SEC, (event->throttle.time % NSEC_PER_SEC)/1000,
                         unthrottle ? "unthrottle" : "throttle",
