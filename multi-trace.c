@@ -13,6 +13,7 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 #include <two-event.h>
+#include <tp_struct.h>
 
 #define ENABLED_MAX ULLONG_MAX
 #define ENABLED_TP_MAX (ULLONG_MAX-1)
@@ -102,6 +103,10 @@ struct multi_trace_ctx {
     enum lost_affect lost_affect;
     struct list_head timeline_lost_list; // LOST_AFFECT_ALL_EVENT. struct lost_node
     struct list_head *perins_lost_list;  // LOST_AFFECT_INS_EVENT. struct lost_node
+
+    /* syscalls: exit, exit_group */
+    struct perf_evsel *extra_evsel;
+    void (*extra_sample)(struct prof_dev *dev, union perf_event *event, int instance);
 
     /* stat */
     struct timeline_stat tl_stat;
@@ -529,7 +534,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (untraced && !env->detail) {
         fprintf(stderr, "WARN: --detail parameter is not enabled. No need to add untrace events.\n");
     }
-    if (!env->greater_than && env->detail) {
+    if ((!env->greater_than && !env->lower_than) && env->detail) {
         fprintf(stderr, "WARN: --than parameter is not enabled. No need to enable the "
                         "--detail parameter.\n");
     }
@@ -734,7 +739,7 @@ static void multi_trace_enabled(struct prof_dev *dev)
      */
 }
 
-static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node *left)
+static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node *left, remaining_reason rr)
 {
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
@@ -748,6 +753,7 @@ static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node
         info.tp2 = NULL;
         info.key = left->key;
         info.recent_time = ctx->recent_time;
+        info.rr = rr;
         if (ctx->need_timeline) {
             if (env->before_event1) {
                 struct timeline_node backup = {
@@ -771,7 +777,7 @@ static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node
     return REMAINING_CONTINUE;
 }
 
-static void multi_trace_handle_remaining(struct prof_dev *dev)
+static void multi_trace_handle_lost(struct prof_dev *dev)
 {
     struct multi_trace_ctx *ctx = dev->private;
     struct rb_node *next = rb_first_cached(&ctx->backup.entries);
@@ -779,7 +785,7 @@ static void multi_trace_handle_remaining(struct prof_dev *dev)
 
     while (next) {
         left = rb_entry(next, struct timeline_node, key_node);
-        if (multi_trace_call_remaining(dev, left) == REMAINING_BREAK)
+        if (multi_trace_call_remaining(dev, left, REMAINING_LOST) == REMAINING_BREAK)
             break;
         next = rb_next(next);
     }
@@ -890,31 +896,37 @@ static void multi_trace_sigusr(struct prof_dev *dev, int signum)
     printf("  sched:sched_wakeup unnecessary %lu\n", ctx->sched_wakeup_unnecessary);
 }
 
+static inline void reclaim(struct prof_dev *dev, u64 key, remaining_reason rr)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+    struct rb_node *node, *next;
+    struct timeline_node backup = {
+        .key = key,
+    };
+    int remaining = REMAINING_CONTINUE;
+
+    // Remove all events with the same key.
+    node = rb_find_first(&backup, &ctx->backup.entries.rb_root, perf_event_backup_node_find);
+    while (node) {
+        next = rb_next_match(&backup, node, perf_event_backup_node_find);
+        if (remaining == REMAINING_CONTINUE) {
+            struct timeline_node *left = rb_entry(node, struct timeline_node, key_node);
+            remaining = multi_trace_call_remaining(dev, left, rr);
+        }
+        rblist__remove_node(&ctx->backup, node);
+        node = next;
+    }
+}
+
 static inline void lost_reclaim(struct prof_dev *dev, int ins)
 {
     struct multi_trace_ctx *ctx = dev->private;
 
     if (ctx->lost_affect == LOST_AFFECT_INS_EVENT) {
         u64 key = ctx->oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins);
-        struct rb_node *node, *next;
-        struct timeline_node backup = {
-            .key = key,
-        };
-        int remaining = REMAINING_CONTINUE;
-
-        // Remove all events with the same key.
-        node = rb_find_first(&backup, &ctx->backup.entries.rb_root, perf_event_backup_node_find);
-        while (node) {
-            next = rb_next_match(&backup, node, perf_event_backup_node_find);
-            if (remaining == REMAINING_CONTINUE) {
-                struct timeline_node *left = rb_entry(node, struct timeline_node, key_node);
-                remaining = multi_trace_call_remaining(dev, left);
-            }
-            rblist__remove_node(&ctx->backup, node);
-            node = next;
-        }
+        reclaim(dev, key, REMAINING_LOST);
     } else {
-        multi_trace_handle_remaining(dev);
+        multi_trace_handle_lost(dev);
         rblist__exit(&ctx->backup);
     }
 }
@@ -1461,6 +1473,10 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
         }
     }
 
+    if (evsel == ctx->extra_evsel) {
+        ctx->extra_sample(dev, event, instance);
+    }
+
 free_dup_event:
     if (dev->dup) {
         free(event);
@@ -1815,8 +1831,29 @@ static profiler kmemprof = {
 PROFILER_REGISTER(kmemprof);
 
 
+static void syscalls_extra_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct multi_trace_type_raw *raw = (void *)event->sample.array;
+    struct sched_process_free *proc_free = (void *)raw->raw.data;
+
+    reclaim(dev, proc_free->pid, REMAINING_SYSCALLS);
+}
+
 static int syscalls_init(struct prof_dev *dev)
 {
+    struct perf_event_attr attr = {
+        .type          = PERF_TYPE_TRACEPOINT,
+        .config        = 0,
+        .size          = sizeof(struct perf_event_attr),
+        .sample_period = 1,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
+        .read_format   = PERF_FORMAT_ID,
+        .pinned        = 1,
+        .disabled      = 1,
+        .watermark     = 1,
+    };
+    int sched_process_free;
+
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = zalloc(sizeof(*ctx));
     if (!ctx)
@@ -1827,7 +1864,29 @@ static int syscalls_init(struct prof_dev *dev)
     if (env->impl)
         free(env->impl);
     env->impl = strdup(TWO_EVENT_SYSCALLS_IMPL);
-    return multi_trace_init(dev);
+
+    if (multi_trace_init(dev) < 0)
+        return -1;
+
+    reduce_wakeup_times(dev, &attr);
+
+    sched_process_free = tep__event_id("sched", "sched_process_free");
+    if (sched_process_free < 0)
+        goto failed;
+
+    attr.config = sched_process_free;
+    ctx->extra_evsel = perf_evsel__new(&attr);
+    if (!ctx->extra_evsel)
+        goto failed;
+    perf_evlist__add(dev->evlist, ctx->extra_evsel);
+
+    ctx->extra_sample = syscalls_extra_sample;
+
+    return 0;
+
+failed:
+    monitor_ctx_exit(dev);
+    return -1;
 }
 
 static void syscalls_help(struct help_ctx *hctx)

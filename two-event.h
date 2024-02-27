@@ -11,6 +11,12 @@ typedef enum {
     REMAINING_BREAK,
 } remaining_return;
 
+typedef enum {
+    NOT_REMAINING,
+    REMAINING_LOST,
+    REMAINING_SYSCALLS, // exit, exit_group
+} remaining_reason;
+
 struct two_event_options {
     const char *keyname;
     int keylen;
@@ -31,6 +37,7 @@ struct event_info {
     u64 key;
     u64 recent_time; // The most recent time for all known events.
     int recent_cpu; // cpu tracking, for rundelay.
+    remaining_reason rr;
 };
 
 // -|- - - -|- - - -|- - - -

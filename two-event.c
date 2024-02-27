@@ -698,6 +698,49 @@ static void syscalls_two(struct two_event *two, union perf_event *event1, union 
     }
 }
 
+static remaining_return syscalls_remaining(struct two_event *two, union perf_event *event1, struct event_info *info, struct event_iter *iter)
+{
+    struct delay *delay = NULL;
+    struct delay_class *delay_class = NULL;
+    struct two_event_options *opts;
+    struct multi_trace_type_header *e1 = (void *)event1->sample.array;
+    struct sys_enter *sys_enter;
+    int enter_size;
+    u64 delta = 0;
+
+    if (info->rr == REMAINING_LOST)
+        return REMAINING_BREAK;
+
+    if (two) {
+        delay = container_of(two, struct delay, base);
+        delay_class = container_of(two->class, struct delay_class, base);
+        opts = &two->class->opts;
+
+        // info->recent_time is free_time, see syscalls_extra_sample().
+        if (info->recent_time > e1->time) {
+            delta = info->recent_time - e1->time;
+
+            multi_trace_raw_size(event1, (void **)&sys_enter, &enter_size, two->tp1);
+
+            /* node = */latency_dist_input(delay_class->lat_dist, sys_enter->common_pid, sys_enter->id, delta, opts->greater_than);
+            // node->extra[0] += 0; //error
+
+            if (delay->heatmap)
+                heatmap_write(delay->heatmap, info->recent_time, delta);
+
+            if (opts->greater_than && delta > opts->greater_than) {
+                multi_trace_print(event1, two->tp1);
+                prof_dev_print_time(two->tp1->dev, info->recent_time, stdout);
+                tp_print_marker(two->tp1);
+                printf("%16s %6u .... [%03d] %lu.%06lu: sched:sched_process_free: comm=%s pid=%d\n", tep__pid_to_comm(0), 0,
+                        e1->cpu_entry.cpu, info->recent_time/NSEC_PER_SEC, (info->recent_time%NSEC_PER_SEC)/1000,
+                        tep__pid_to_comm(e1->tid_entry.tid), e1->tid_entry.tid);
+            }
+        }
+    }
+    return REMAINING_CONTINUE;
+}
+
 static void syscalls_print_node(void *opaque, struct latency_node *node)
 {
     struct delay_class *delay_class = opaque;
@@ -798,6 +841,7 @@ static struct two_event_class *syscalls_class_new(struct two_event_impl *impl, s
 
     if (class) {
         class->two = syscalls_two;
+        class->remaining = syscalls_remaining;
         class->print_header = syscalls_print_header;
         class->print = delay_print;
 
