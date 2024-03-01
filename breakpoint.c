@@ -70,12 +70,14 @@ static int monitor_ctx_init(struct prof_dev *dev)
         callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
     }
 
+    tep__ref();
     return 0;
 }
 
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct breakpoint_ctx *ctx = dev->private;
+    tep__unref();
     callchain_ctx_free(ctx->cc);
     flame_graph_output(ctx->flame);
     flame_graph_close(ctx->flame);
@@ -289,7 +291,8 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
     }
 
     if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
-    printf("    pid %6d tid %6d [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s%s", data->tid_entry.pid, data->tid_entry.tid,
+    tep__update_comm(NULL, data->tid_entry.tid);
+    printf("%16s %6u [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
             data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
             data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, ctx->print_ip?" ip ":"\n");
 
