@@ -799,6 +799,8 @@ struct flame_graph *flame_graph_new(int flags, FILE *fout)
         cc->seperate = '\n';
         cc->end = '\n';
     } else {
+        fg->special = false;
+
         cc->addr   = 0;
         cc->symbol = 1;
         cc->offset = 0;
