@@ -184,7 +184,8 @@ static int tlbstat_read(struct prof_dev *dev, struct perf_evsel *evsel, struct p
     if (c > cache[instance].counter) { \
         cache[instance].incremental = c - cache[instance].counter; \
         cache[instance].counter = c; \
-    }
+    } else \
+        cache[instance].incremental = 0;
 
     if (evsel != ctx->leader)
         return 0;
