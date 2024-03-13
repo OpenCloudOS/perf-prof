@@ -408,6 +408,8 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         profiler *prof = NULL;
         struct env *env = NULL;
 
+        tp->dev = dev;
+
         s = tp->name;
         slash = next_sep(s, '/');
         if (slash) {
@@ -575,7 +577,6 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             }
         }
 
-        tp->dev = dev;
         tp->id = id;
         tp->sys = sys;
         tp->name = name;

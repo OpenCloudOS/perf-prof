@@ -51,6 +51,7 @@ struct cdev_block { // chardev
 struct event_block {
     struct list_head link;
     struct event_block_list *eb_list;
+    const char *block_def;
     enum block_type type;
     union {
         struct tcp_block {
@@ -81,6 +82,7 @@ struct event_block_list {
     struct tp *tp;
     bool broadcast;
     bool freeing;
+    bool ins_oncpu;
 };
 
 static inline void block_free(struct event_block *block);
@@ -122,9 +124,12 @@ static int block_event_convert(struct event_block *block, union perf_event *even
     void *data;
     u64 sample_type;
     int cpuidx = 0;
+    int threadidx = 0;
     int pos = 0;
     int common_type_pos = 0;
-    int vcpu = -1;
+    int cpu = -1;
+    int tid = -1;
+    bool oncpu = block->eb_list->ins_oncpu;
 
     if (unlikely(!tp->evsel))
         return -1;
@@ -185,27 +190,47 @@ static int block_event_convert(struct event_block *block, union perf_event *even
     }
 
     if (block->cpu_pos != -1) {
-        vcpu = *(u32 *)(data + block->cpu_pos);
-        cpuidx = perf_cpu_map__idx(perf_evsel__cpus(tp->evsel), vcpu);
-        if (cpuidx < 0)
-            cpuidx = 0;
+        cpu = *(u32 *)(data + block->cpu_pos);
 
-        // Guest vcpu => Host tid
-        if (tp->vcpu && block->pid_pos != -1) {
-            // u32           pid, tid;
-            *(u32 *)(data + block->pid_pos) = tp->vcpu->thread_id[vcpu];
-            *(u32 *)(data + block->pid_pos + sizeof(u32)) = tp->vcpu->thread_id[vcpu];
+        if (!tp->vcpu) {
+            if (oncpu)
+                cpuidx = perf_cpu_map__idx(tp->dev->cpus, cpu);
+        } else {
+            if (oncpu)
+                cpuidx = perf_cpu_map__idx(tp->dev->cpus, tp->vcpu->vcpu[cpu].host_cpu);
+            else
+                threadidx = perf_thread_map__idx(tp->dev->threads, tp->vcpu->vcpu[cpu].thread_id);
+
+            // Guest vcpu => Host cpu
+            *(u32 *)(data + block->cpu_pos) = tp->vcpu->vcpu[cpu].host_cpu;
+
+            // Guest vcpu => Host tid
+            if (block->pid_pos != -1) {
+                // u32           pid, tid;
+                *(u32 *)(data + block->pid_pos) = tp->vcpu->vcpu[cpu].thread_id;
+                *(u32 *)(data + block->pid_pos + sizeof(u32)) = tp->vcpu->vcpu[cpu].thread_id;
+            }
+        }
+    }
+
+    if (block->pid_pos != -1) {
+        tid = *(u32 *)(data + block->pid_pos + sizeof(u32));
+        if (!tp->vcpu) {
+            if (!oncpu)
+                threadidx = perf_thread_map__idx(tp->dev->threads, tid);
         }
     }
 
     if (sample_type & PERF_SAMPLE_ID) {
         //u64           id;
-        *(u64 *)(data + block->id_pos) = perf_evsel__get_id(tp->evsel, cpuidx, 0);
+        *(u64 *)(data + block->id_pos) = perf_evsel__get_id(tp->evsel, cpuidx < 0 ? 0 : cpuidx,
+                                         threadidx < 0 ? 0 : threadidx);
     }
 
     if (sample_type & PERF_SAMPLE_STREAM_ID) {
         //u64           stream_id;
-        *(u64 *)(data + block->stream_id_pos) = perf_evsel__get_id(tp->evsel, cpuidx, 0);
+        *(u64 *)(data + block->stream_id_pos) = perf_evsel__get_id(tp->evsel, cpuidx < 0 ? 0 : cpuidx,
+                                                threadidx < 0 ? 0 : threadidx);
     }
 
     if (tp->id != block->remote_id) {
@@ -224,11 +249,21 @@ static int block_event_convert(struct event_block *block, union perf_event *even
             //unsigned char common_preempt_count;
             //int common_pid;
             *(unsigned short *)(data + common_type_pos) = tp->id;
-            if (tp->vcpu && vcpu >= 0)
-                *(int *)(data + common_type_pos + sizeof(u16) + sizeof(u8) + sizeof(u8)) = tp->vcpu->thread_id[vcpu];
+            if (tp->vcpu && cpu >= 0)
+                *(int *)(data + common_type_pos + sizeof(u16) + sizeof(u8) + sizeof(u8)) = tp->vcpu->vcpu[cpu].thread_id;
         }
     }
-    return cpuidx;
+
+    if (oncpu ? cpuidx < 0 : threadidx < 0) {
+        static int once = 0;
+        if (once == 0) {
+            once = 1;
+            printf("The partial events pulled by %s:%s//pull=\"%s\"/ cannot be switched to instances of '%s'.\n",
+                    tp->sys, tp->name, block->block_def, tp->dev->prof->name);
+        }
+    }
+
+    return oncpu ? cpuidx : threadidx;
 }
 
 static int block_process_event(struct event_block *block, union perf_event *event)
@@ -600,6 +635,7 @@ static int block_new(struct event_block_list *eb_list, char *value)
 
     block->eb_list = eb_list;
     list_add_tail(&block->link, &eb_list->block_list);
+    block->block_def = value;
 
     block->pid_pos = -1;
     block->cpu_pos = -1;
@@ -800,6 +836,7 @@ static int block_list_new(struct tp *tp, char *s, bool broadcast)
         eb_list->tp = tp;
         eb_list->broadcast = broadcast;
         eb_list->freeing = 0;
+        eb_list->ins_oncpu = prof_dev_ins_oncpu(tp->dev);
 
         if (broadcast) tp->broadcast = eb_list;
         else tp->receive = eb_list;
