@@ -660,7 +660,8 @@ static bool task_state_samepid(struct prof_dev *dev, union perf_event *event, in
         sw = &sched_event->sched_switch;
         if (sw->prev_pid == pid || sw->prev_pid == tid)
             return true;
-        if (data->tid_entry.pid == pid)
+        // data->tid_entry.pid may be -1
+        if (pid != -1 && data->tid_entry.pid == pid)
             return true;
 
         if (ctx->mode == 0)
