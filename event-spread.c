@@ -553,12 +553,7 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
     retry:
         cnt = CIRC_CNT_TO_END(cdev->head, cdev->tail, BUF_LEN);
         if (cnt == 0) {
-            // write lost event
-            if (cdev->lost_event.lost > 0) {
-                block_broadcast(block, &cdev->lost_event, sizeof(struct perf_record_lost), 0);
-                cdev->lost_event.lost = 0;
-            } else
-                main_epoll_add(fd, EPOLLHUP, block, handle_cdev_event);
+            main_epoll_add(fd, EPOLLHUP, block, handle_cdev_event);
             return ;
         }
         wr = write(cdev->fd, cdev->buf + (cdev->tail & (BUF_LEN-1)), cnt);
@@ -568,6 +563,10 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
             return ;
         }
         cdev->tail = (cdev->tail + wr) & (BUF_LEN-1);
+        if (cdev->lost_event.lost > 0 && wr >= sizeof(struct perf_record_lost)) {
+            block_broadcast(block, &cdev->lost_event, sizeof(struct perf_record_lost), 0);
+            cdev->lost_event.lost = 0;
+        }
         goto retry;
     }
 }

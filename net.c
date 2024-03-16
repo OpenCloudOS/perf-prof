@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <linux/list.h>
 #include <linux/refcount.h>
+#include <linux/circ_buf.h>
 #include <monitor.h>
 #include <net.h>
 
@@ -59,22 +60,22 @@ struct tcp_server_socket {
 
 static inline int buf_cnt(struct tcp_client_socket *cli)
 {
-    return (cli->write + BUF_LEN - cli->send) % BUF_LEN;
+    return CIRC_CNT(cli->write, cli->send, BUF_LEN);
 }
 
 static inline int buf_idle(struct tcp_client_socket *cli)
 {
-    return (cli->send - 1 + BUF_LEN - cli->write) % BUF_LEN;
+    return CIRC_SPACE(cli->write, cli->send, BUF_LEN);
 }
 
 static inline int buf_is_empty(struct tcp_client_socket *cli)
 {
-    return cli->write == cli->send;
+    return buf_cnt(cli) == 0;
 }
 
 static inline int buf_is_full(struct tcp_client_socket *cli)
 {
-    return cli->send == (cli->write + 1) % BUF_LEN;
+    return buf_idle(cli) == 0;
 }
 
 static inline int buf_write(struct tcp_client_socket *cli, const void *buf, size_t len)
