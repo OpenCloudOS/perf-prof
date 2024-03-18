@@ -35,6 +35,7 @@ struct perf_evlist {
 	struct perf_cpu_map	*cpus;
 	struct perf_cpu_map	*all_cpus;
 	struct perf_thread_map	*threads;
+	int			 rl_file;
 	int			 nr_mmaps;
 	size_t			 mmap_len;
 	struct perf_evlist_poll epoll;
