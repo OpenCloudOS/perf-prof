@@ -354,9 +354,9 @@ int perf_timespec_init(struct prof_dev *dev)
     e->tsc_offset = dev->env->tsc_offset;
 
     evt = prof_dev_open_cpu_thread_map(&evtime, e, NULL, tidmap, NULL);
-    if (!evt) goto NULL_evrt;
-
     e = NULL;
+    if (!evt) goto NULL_e;
+
     evt->private = dev;
 
     // trigger getpid syscall
@@ -371,8 +371,6 @@ int perf_timespec_init(struct prof_dev *dev)
         dev->time_ctx.base_timespec.tv_nsec = 0;
     }
 
-NULL_evrt:
-    if (e) free(e);
 NULL_e:
     perf_thread_map__put(tidmap);
 NULL_tidmap:
