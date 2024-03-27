@@ -270,8 +270,11 @@ static void llcstat_interval(struct prof_dev *dev)
                 ctx->l3_cache_references[ins].incremental, ctx->l3_cache_misses[ins].incremental,
                 hit, run);
         if (ctx->cpuinfo.vendor == X86_VENDOR_AMD) {
-            printf("%12lu\n", ctx->l3_cache_miss_latency[ins].incremental * 16 /
-                                ctx->l3_misses_by_request_type[ins].incremental);
+            uint64_t latency = 0;
+            if (ctx->l3_misses_by_request_type[ins].incremental > 0)
+                latency = ctx->l3_cache_miss_latency[ins].incremental * 16 /
+                          ctx->l3_misses_by_request_type[ins].incremental;
+            printf("%12lu\n", latency);
         } else
             printf("<not supported>\n");
     }
