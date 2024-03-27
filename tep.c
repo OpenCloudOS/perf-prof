@@ -442,12 +442,16 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             }
 
             env = parse_string_options(s);
+            if (!env)
+                goto err_out;
             // --tsc remains the same.
             env->tsc = dev->env->tsc;
             env->tsc_offset = dev->env->tsc_offset;
             // Using (dev->cpus, dev->threads).
             // Make sure instance is consistent between source_dev and dev.
             tp->source_dev = prof_dev_open_cpu_thread_map(prof, env, dev->cpus, dev->threads, dev);
+            if (!tp->source_dev)
+                goto err_out;
             name = sys;
             sys = NULL;
         } else { // sys:name/filter/

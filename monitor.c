@@ -1041,6 +1041,10 @@ static int workload_prepare(struct workload *workload, char *argv[])
          */
         prctl(PR_SET_PDEATHSIG, SIGKILL);
 
+        // Disable HEAPCHECK.
+        // See: https://gperftools.github.io/gperftools/heap_checker.html
+        unsetenv("HEAPCHECK");
+
         /*
          * Tell the parent we're ready to go
          */
@@ -1559,7 +1563,7 @@ reinit:
 
     err = perf_evlist__open(evlist);
     if (err) {
-        if (err == -ESRCH && !env->cgroups) {
+        if (err == -ESRCH && !env->cgroups && dev->threads != thread_map) {
             int idx, thread;
             perf_thread_map__for_each_thread(thread, idx, dev->threads) {
                 if (thread >= 0) {
