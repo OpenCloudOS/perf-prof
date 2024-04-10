@@ -1448,7 +1448,7 @@ struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
                  struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent)
 {
     struct perf_evlist *evlist = NULL;
-    struct perf_cpu_map *cpus = NULL, *online;
+    struct perf_cpu_map *cpus = NULL, *online = NULL;
     struct perf_thread_map *threads = NULL;
     struct prof_dev *dev;
     int reinit = 0;
@@ -1546,9 +1546,10 @@ reinit:
             goto out_delete;
         }
         perf_cpu_map__put(online);
+        online = NULL;
     }
-    dev->cpus = cpus;
-    dev->threads = threads;
+    dev->cpus = cpus; cpus = NULL;
+    dev->threads = threads; threads = NULL;
 
     if(prof->init(dev) < 0) {
         fprintf(stderr, "monitor(%s) init failed\n", prof->name);
@@ -1633,8 +1634,13 @@ out_deinit:
 out_delete:
     perf_evlist__set_maps(evlist, NULL, NULL);
     perf_evlist__delete(evlist);
+    perf_cpu_map__put(cpus);
+    perf_cpu_map__put(online);
+    perf_thread_map__put(threads);
     perf_cpu_map__put(dev->cpus);
     perf_thread_map__put(dev->threads);
+    dev->cpus = NULL;
+    dev->threads = NULL;
 
     if (env->cgroups)
         cgroup_list__delete();
