@@ -193,6 +193,7 @@ struct help_ctx {
     struct env *env;
 };
 
+enum profdev_flush;
 
 typedef struct monitor {
     struct monitor *next;
@@ -211,6 +212,8 @@ typedef struct monitor {
     int (*filter)(struct prof_dev *dev);
     void (*enabled)(struct prof_dev *dev);
     void (*deinit)(struct prof_dev *dev);
+    void (*flush)(struct prof_dev *dev, enum profdev_flush how);
+    void (*hangup)(struct prof_dev *dev);
     void (*sigusr)(struct prof_dev *dev, int signum);
     void (*interval)(struct prof_dev *dev);
 
@@ -252,14 +255,21 @@ typedef struct monitor {
 }profiler;
 
 enum prof_dev_state {
-	PROF_DEV_STATE_OFF       = -1,
-	PROF_DEV_STATE_INACTIVE  =  0,
-	PROF_DEV_STATE_ACTIVE    =  1,
+    PROF_DEV_STATE_EXIT      = -2,
+    PROF_DEV_STATE_OFF       = -1,
+    PROF_DEV_STATE_INACTIVE  =  0,
+    PROF_DEV_STATE_ACTIVE    =  1,
 };
 
 enum prof_dev_type {
     PROF_DEV_TYPE_NORMAL     = 0,
     PROF_DEV_TYPE_SERVICE    = 1,
+};
+
+enum profdev_flush {
+    PROF_DEV_FLUSH_NORMAL,
+    PROF_DEV_FLUSH_FINAL,
+    PROF_DEV_FLUSH_ROUND,
 };
 
 /*
@@ -275,11 +285,13 @@ struct prof_dev {
     struct timer timer;  // interval
     struct env *env;
     void *private;
+    s64 refcount;
     enum prof_dev_type type;
     enum prof_dev_state state; // It can be set off and active again by calling prof_dev_enable.
     int pages;
     int nr_pollfd;
     bool dup; // dup event, order
+    bool clone; // prof_dev is cloned
     // | title                        | detail                                                                       |
     // | 2023-11-28 09:32:36.901715 G |           bash 197260 [000] 751890.944308: page-fault: addr 00007fb3c89d6170 |
     bool print_title;
@@ -347,25 +359,46 @@ struct prof_dev {
     } forward;
 };
 
-#define for_each_child_dev(dev, parent) \
-    if (!list_empty(&parent->links.child_list)) \
-        list_for_each_entry(dev, &parent->links.child_list, links.link_to_parent)
+struct prof_dev *prof_dev_get(struct prof_dev *dev);
+bool prof_dev_put(struct prof_dev *dev);
+
+
+/**
+ * for_each_dev_get - continue prof_dev iteration safe against multiple removals
+ * @dev:    the prof_dev* to use as a loop cursor.
+ * @tmp:    another prof_dev* to use as temporary storage
+ * @head:   the head for your list.
+ * @member: the name of the list_head within the struct.
+ *
+ * Iterate over list of prof_dev, continuing after current point, get its reference count,
+ * and multiple prof_devs before and after it can be safely removed.
+ *
+ * To break the loop, call prof_dev_put(dev).
+ */
+#define for_each_dev_get(dev, tmp, head, member) \
+    for (tmp = list_first_entry(head, typeof(*dev), member), dev = NULL; \
+         &tmp->member != (head) && (dev = prof_dev_get(tmp)); \
+         tmp = list_next_entry(tmp, member), prof_dev_put(dev), dev = NULL)
+
+#define for_each_child_dev_get(dev, tmp, parent) \
+    for_each_dev_get(dev, tmp, &parent->links.child_list, links.link_to_parent)
 
 #define for_each_child_dev_safe(dev, next, parent) \
     if (!list_empty(&parent->links.child_list)) \
         list_for_each_entry_safe(dev, next, &parent->links.child_list, links.link_to_parent)
 
-#define for_each_source_dev_safe(dev, next, target) \
-    if (!list_empty(&target->forward.source_list)) \
-        list_for_each_entry_safe(dev, next, &target->forward.source_list, forward.link_to_target)
+#define for_each_source_dev_get(dev, tmp, target) \
+    for_each_dev_get(dev, tmp, &target->forward.source_list, forward.link_to_target)
 
 struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
                  struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent);
 struct prof_dev *prof_dev_open(profiler *prof, struct env *env);
+struct prof_dev *prof_dev_clone(struct prof_dev *parent,
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map);
 int prof_dev_enable(struct prof_dev *dev);
 int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
-void prof_dev_flush(struct prof_dev *dev);
+void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how);
 void prof_dev_close(struct prof_dev *dev);
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp);
 
@@ -374,6 +407,38 @@ void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp);
  * longer forward the event.
  */
 static inline bool prof_dev_is_final(struct prof_dev *dev) {return !dev->forward.target;}
+static inline struct prof_dev *prof_dev_is_cloned(struct prof_dev *dev)
+{
+    return dev->clone ? dev->links.parent : NULL;
+}
+static inline bool prof_dev_at_top(struct prof_dev *dev)
+{
+    return !dev->links.parent || (!dev->clone && !dev->forward.target);
+}
+static inline struct prof_dev *prof_dev_top_cloned(struct prof_dev *dev)
+{
+    while (dev->clone)
+        dev = dev->links.parent;
+    return dev;
+}
+
+static inline union perf_event *perf_event_get(union perf_event *event)
+{
+    if (event->header.type == PERF_RECORD_DEV) {
+        struct perf_record_dev *event_dev = (void *)event;
+        prof_dev_get(event_dev->dev);
+    }
+    return event;
+}
+
+static inline void perf_event_put(union perf_event *event)
+{
+    if (event->header.type == PERF_RECORD_DEV) {
+        struct perf_record_dev *event_dev = (void *)event;
+        prof_dev_put(event_dev->dev);
+    }
+}
+
 struct env *parse_string_options(char *str);
 
 u64 prof_dev_list_minevtime(void);

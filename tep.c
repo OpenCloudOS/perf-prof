@@ -649,8 +649,9 @@ void tp_list_free(struct tp_list *tp_list)
         return ;
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
-        if (tp_is_dev(tp) && tp->source_dev)
-            prof_dev_close(tp->source_dev);
+        // Closed within prof_dev_close().
+        //if (tp_is_dev(tp) && tp->source_dev)
+        //    prof_dev_close(tp->source_dev);
         if (tp->filter)
             free(tp->filter);
         for (j = 0; j < tp->nr_top; j++) {

@@ -381,7 +381,7 @@ static int tcp_new_client(struct tcp_socket_ops *ops)
     else
         goto err;
 
-    prof_dev_flush(tp->dev);
+    prof_dev_flush(tp->dev, PROF_DEV_FLUSH_NORMAL);
 err:
     return ret;
 }
@@ -478,7 +478,7 @@ static int cdev_write_header(struct event_block *block)
     block_broadcast(block, tp->sys, strlen(tp->sys)+1, 0);
     block_broadcast(block, tp->name, strlen(tp->name)+1, 0);
 
-    prof_dev_flush(tp->dev);
+    prof_dev_flush(tp->dev, PROF_DEV_FLUSH_NORMAL);
     return 0;
 }
 

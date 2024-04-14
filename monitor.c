@@ -457,6 +457,52 @@ static void free_env(struct env *e)
         memset(e, 0, sizeof(*e));
 }
 
+static struct env *clone_env(struct env *p)
+{
+    struct env *e = malloc(sizeof(*e));
+
+    if (!e) return NULL;
+
+    *e = *p;
+    e->workload.cork_fd = 0;
+    e->workload.pid = 0;
+    e->help_monitor = NULL;
+
+    if (e->nr_events) {
+        int i;
+        e->events = calloc(e->nr_events, sizeof(*e->events));
+        e->nr_events = 0;
+        if (!e->events) goto failed;
+        for (i = 0 ; i < e->nr_events; i++) {
+            e->events[i] = strdup(p->events[i]);
+            if (!e->events[i]) goto failed;
+            e->nr_events ++;
+        }
+        e->event = e->events[0];
+    }
+    #define CLONE(f) if (e->f) {e->f = strdup(e->f); if (!e->f) goto failed;}
+    CLONE (cpumask);
+    CLONE (pids);
+    CLONE (tids);
+    CLONE (cgroups);
+    CLONE (output);
+    CLONE (key);
+    CLONE (filter);
+    CLONE (impl);
+    CLONE (tp_alloc);
+    CLONE (tp_free);
+    CLONE (flame_graph);
+    CLONE (heatmap);
+    CLONE (symbols);
+    CLONE (device);
+
+    return e;
+
+failed:
+    free_env(e);
+    return NULL;
+}
+
 void help(void)
 {
     int argc = 2;
@@ -790,7 +836,7 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
             break;
         case SIGINT:
         case SIGTERM:
-            running = 0;
+            running = -1;
             break;
         case SIGUSR1: {
                 list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
@@ -1374,14 +1420,23 @@ static void perf_event_handle(int fd, unsigned int revents, void *ptr)
 {
     struct prof_dev *dev = perf_evlist_poll__get_external(NULL, ptr);
 
+    prof_dev_get(dev);
     perf_event_handle_mmap(dev, ptr);
     if (revents & EPOLLHUP) {
         main_epoll_del(fd);
         dev->nr_pollfd --;
         // dev->nr_pollfd == 0, All attached processes exit.
-        if (dev->nr_pollfd == 0)
+        if (dev->nr_pollfd == 0) {
+            /*
+             * Cannot use prof_dev_close().
+             * In hangup(), you can decide whether to call prof_dev_close().
+             */
             prof_dev_disable(dev);
+            if (dev->prof->hangup)
+                dev->prof->hangup(dev);
+        }
     }
+    prof_dev_put(dev);
 }
 
 static int __addfn(int fd, unsigned events, struct perf_mmap *mmap)
@@ -1404,7 +1459,9 @@ static void interval_handle(struct timer *timer)
     struct perf_cpu_map *cpus = dev->cpus;
     struct perf_thread_map *threads = dev->threads;
     profiler *prof = dev->prof;
-    struct prof_dev *source, *next;
+    struct prof_dev *source, *tmp;
+
+    prof_dev_get(dev);
 
     // Do not use prof_dev_flush().
     if (dev->pages) {
@@ -1415,7 +1472,38 @@ static void interval_handle(struct timer *timer)
     }
 
     // Recursively execute the interval_handle() of the source prof_dev, including: flush, read, interval.
-    for_each_source_dev_safe(source, next, dev)
+    /*
+     * Cannot use list_for_each_entry_safe(source, next, &dev->forward.source_list, forward.link_to_target)
+     * Next is possible to be free.
+     *
+     *   multi-trace -e x:xx -e y:yy,task-state/untraced/ --order -i 1000 -N 50 -- multi_thread_app
+     *
+     * Task-state events are forwarded to multi-trace and cached in order. If a thread of
+     * multi_thread_app exits, task-state will close its prof_dev, but its events are still
+     * cached in the order of multi-trace, so prof_dev has not been freed until it is flushed.
+     *
+     *     000000000041bdb6 prof_dev_free+0x0       # free prof_dev
+     *     000000000043869b perf_event_put+0x2f
+     *     000000000043ce87 multi_trace_sample+0x295
+     *     0000000000436229 ordered_events__deliver+0x58
+     *     0000000000413606 do_flush+0x88
+     *     00000000004138a8 __ordered_events__flush+0x1a4
+     *     00000000004138fb ordered_events__flush+0x25
+     *     0000000000436386 order_flush+0x6a        # flush order of multi-trace
+     *     000000000041bda8 prof_dev_flush+0x16e
+     *     000000000041ba96 prof_dev_disable+0x222  # -N 50, disable multi-trace
+     *     000000000041a068 perf_event_process_record+0x45f # task-state forward to multi-trace
+     *     000000000041a21f perf_event_handle_mmap+0x68
+     *     000000000041a43b interval_handle+0xae    # task-state
+     *     000000000041a517 interval_handle+0x18a   # multi-trace
+     *     000000000041f821 timer_expire+0x66
+     *     0000000000414fea event_poll__poll+0xd0
+     *     000000000041cb3d main+0x19d
+     *
+     * Each iteration obtains the reference to the `source' to ensure that it is not freed,
+     * so the next prof_dev can be obtained safely.
+     */
+    for_each_source_dev_get(source, tmp, dev)
         interval_handle(&source->timer);
 
     if (prof->read && dev->values) {
@@ -1442,15 +1530,19 @@ static void interval_handle(struct timer *timer)
 
     if (prof->interval)
         prof->interval(dev);
+
+    prof_dev_put(dev);
 }
 
-struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
-                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent)
+static
+struct prof_dev *prof_dev_open_internal(profiler *prof, struct env *env,
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map,
+                 struct prof_dev *parent, bool clone)
 {
     struct perf_evlist *evlist = NULL;
     struct perf_cpu_map *cpus = NULL, *online = NULL;
     struct perf_thread_map *threads = NULL;
-    struct prof_dev *dev;
+    struct prof_dev *dev, *child, *tmp;
     int reinit = 0;
     int err = 0;
 
@@ -1462,13 +1554,21 @@ struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
     dev->prof = prof;
     dev->env = env;
     INIT_LIST_HEAD(&dev->dev_link);
+    dev->refcount = 1;
     dev->type = PROF_DEV_TYPE_NORMAL;
-    dev->state = parent ? PROF_DEV_STATE_OFF : PROF_DEV_STATE_INACTIVE;
+    dev->state = parent && !clone && parent->state <= PROF_DEV_STATE_INACTIVE ?
+                 PROF_DEV_STATE_OFF : PROF_DEV_STATE_INACTIVE;
     dev->print_title = true;
     INIT_LIST_HEAD(&dev->links.child_list);
     INIT_LIST_HEAD(&dev->links.link_to_parent);
     INIT_LIST_HEAD(&dev->forward.source_list);
     INIT_LIST_HEAD(&dev->forward.link_to_target);
+
+    if (parent) {
+        dev->clone = clone;
+        dev->links.parent = parent;
+        list_add_tail(&dev->links.link_to_parent, &parent->links.child_list);
+    }
 
     // workload output to stdout & stderr
     // perf-prof output to env.output file
@@ -1491,6 +1591,7 @@ struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
     if (env->mmap_pages)
         dev->pages = env->mmap_pages;
 
+    prof_dev_get(dev);
     prof_dev_winsize(dev);
 
 reinit:
@@ -1606,19 +1707,30 @@ reinit:
         }
     }
 
+    if (dev->type == PROF_DEV_TYPE_NORMAL) {
+        /*
+         * In prof_dev_list_close(), make sure to close the parent device first. In this way,
+         * the reference to the child can be flushed in prof_dev_disable(), if the child is
+         * forwarded to the parent, and the event is cached in the parent's order buffer.
+         */
+        if (!list_empty(&dev->links.child_list))
+            list_add(&dev->dev_link, &prof_dev_list);
+        else
+            list_add_tail(&dev->dev_link, &prof_dev_list);
+    }
+
     if (dev->state == PROF_DEV_STATE_INACTIVE)
         if (prof_dev_enable(dev) < 0)
             goto out_disable;
 
-    if (parent) {
-        dev->links.parent = parent;
-        list_add_tail(&dev->links.link_to_parent, &parent->links.child_list);
-    }
-    list_add(&dev->dev_link, &prof_dev_list);
-
-    return dev;
+    if (dev->clone)
+        return dev;
+    else
+        return prof_dev_put(dev) ? NULL : dev;
 
 out_disable:
+    list_del(&dev->dev_link);
+
     if (dev->env->interval)
         timer_destroy(&dev->timer);
 
@@ -1627,8 +1739,14 @@ out_disable:
         perf_evlist__munmap(evlist);
     }
 out_close:
+    if (dev->values)
+        free(dev->values);
     perf_evlist__close(evlist);
 out_deinit:
+    // prof->init() may open child devices.
+    for_each_child_dev_get(child, tmp, dev)
+        prof_dev_close(child);
+
     perf_event_convert_deinit(dev);
     prof->deinit(dev);
 out_delete:
@@ -1649,15 +1767,80 @@ out_delete:
         goto reinit;
 
 out_free:
+    if (dev)
+        list_del(&dev->links.link_to_parent);
+
     free_env(env);
     if (dev) free(dev);
 
     return NULL;
 }
 
+struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent)
+{
+    return prof_dev_open_internal(prof, env, cpu_map, thread_map, parent, false);
+}
+
 struct prof_dev *prof_dev_open(profiler *prof, struct env *env)
 {
-    return prof_dev_open_cpu_thread_map(prof, env, NULL, NULL, NULL);
+    return prof_dev_open_internal(prof, env, NULL, NULL, NULL, false);
+}
+
+/**
+ * prof_dev_clone - clone to get a new prof_dev
+ * @parent: parent prof_dev
+ * @cpu_map: new prof_dev attach to this cpu_map
+ * @thread_map: new prof_dev attach to this thread_map
+ *
+ * The new prof_dev will use the profiler and environment of the parent. And
+ * attach to the new cpu_map and thread_map. Others such as: timer, order,
+ * convert, can all be rebuilt using env. Profiler-specific memory, it is up
+ * to the profiler to decide how to share it with the new prof_dev. And,
+ * forwarded to the same target as the parent device.
+ *
+ * Similar to clone syscall, the cloned prof_dev is independent of the parent.
+ * The disable() and close() of the parent dev will not affect the cloned dev.
+ */
+struct prof_dev *prof_dev_clone(struct prof_dev *parent,
+                 struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map)
+{
+    profiler *prof;
+    struct env *e;
+    struct prof_dev *dev = NULL;
+
+    if (!prof_dev_get(parent)) {
+        fprintf(stderr, "WARN: The parent dev is closing.\n");
+        return NULL;
+    }
+
+    if (parent->state == PROF_DEV_STATE_EXIT)
+        goto put;
+
+    if (using_order(parent))
+        prof = parent->order.base;
+    else
+        prof = parent->prof;
+
+    e = clone_env(parent->env); // free in prof_dev_close()
+    if (!e) goto put;
+
+    dev = prof_dev_open_internal(prof, e, cpu_map, thread_map, parent, true);
+    if (dev) {
+        if (parent->forward.target &&
+            prof_dev_forward(dev, parent->forward.target) < 0) {
+            prof_dev_close(dev);
+            dev = NULL;
+        } else {
+            dev->print_title = parent->print_title;
+            if (prof_dev_put(dev))
+                dev = NULL;
+        }
+    }
+
+put:
+    prof_dev_put(parent);
+    return dev;
 }
 
 static int prof_dev_atomic_enable(struct prof_dev *dev, u64 enable_cost)
@@ -1716,7 +1899,7 @@ int prof_dev_enable(struct prof_dev *dev)
     profiler *prof;
     struct env *env;
     struct perf_evlist *evlist;
-    struct prof_dev *child;
+    struct prof_dev *child, *tmp;
     struct timespec before_enable, after_enable;
     u64 enable_cost;
     int err;
@@ -1736,6 +1919,16 @@ int prof_dev_enable(struct prof_dev *dev)
         return -1;
     }
 
+    prof_dev_get(dev);
+
+    dev->state = PROF_DEV_STATE_ACTIVE;
+    if (dev->type == PROF_DEV_TYPE_NORMAL)
+        if (running >= 0) running ++;
+
+    // Enable child dev before workload_start().
+    for_each_child_dev_get(child, tmp, dev)
+        prof_dev_enable(child);
+
     clock_gettime(CLOCK_MONOTONIC, &before_enable);
     perf_evlist__enable(evlist);
     clock_gettime(CLOCK_MONOTONIC, &after_enable);
@@ -1744,21 +1937,17 @@ int prof_dev_enable(struct prof_dev *dev)
                   (after_enable.tv_nsec - before_enable.tv_nsec);
     prof_dev_atomic_enable(dev, enable_cost);
 
-    if (prof->enabled)
-        prof->enabled(dev);
-
     if (env->interval)
         timer_start(&dev->timer, env->interval * 1000000UL, false);
 
-    // Enable child dev before workload_start().
-    for_each_child_dev(child, dev)
-        prof_dev_enable(child);
+    // In enabled(), prof_dev_close() may be called.
+    if (prof->enabled)
+        prof->enabled(dev);
 
-    workload_start(&env->workload);
+    if (dev->state == PROF_DEV_STATE_ACTIVE)
+        workload_start(&env->workload);
 
-    dev->state = PROF_DEV_STATE_ACTIVE;
-    if (dev->type == PROF_DEV_TYPE_NORMAL)
-        running ++;
+    prof_dev_put(dev);
 
     return 0;
 }
@@ -1766,24 +1955,23 @@ int prof_dev_enable(struct prof_dev *dev)
 int prof_dev_disable(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
-    struct prof_dev *child;
-
-    for_each_child_dev(child, dev)
-        prof_dev_disable(child);
+    struct prof_dev *source, *child, *tmp;
 
     if (dev->state < PROF_DEV_STATE_ACTIVE)
         return 0;
 
+    prof_dev_get(dev);
+
     dev->state = PROF_DEV_STATE_INACTIVE;
     if (dev->type == PROF_DEV_TYPE_NORMAL)
-        running --;
+        if (running > 0) running --;
 
-    /*
-     * Flush remaining perf events.
-     */
-    if (dev->pages && prof_dev_is_final(dev)) {
-        // The forwarding source will also be refreshed.
-        prof_dev_flush(dev);
+    for_each_source_dev_get(source, tmp, dev)
+        prof_dev_disable(source);
+
+    for_each_child_dev_get(child, tmp, dev) {
+        if (!child->clone && child->forward.target != dev)
+            prof_dev_disable(child);
     }
 
     // Disable subsequent interval_handle() calls.
@@ -1795,6 +1983,14 @@ int prof_dev_disable(struct prof_dev *dev)
     // Disable subsequent perf_event_handle() calls.
     if (dev->pages)
         perf_evlist_poll__foreach_fd(evlist, __delfn);
+
+    if (dev->pages) {
+        // Flush the ringbuffer and submit the remaining perf events.
+        // Disabled, final flushes other buffers, such as: order.
+        prof_dev_flush(dev, PROF_DEV_FLUSH_FINAL);
+    }
+
+    prof_dev_put(dev);
 
     return 0;
 }
@@ -1827,7 +2023,8 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
             if (prof_dev_ins_oncpu(dev) != prof_dev_ins_oncpu(target) ||
                 prof_dev_nr_ins(dev) != prof_dev_nr_ins(target)) {
                 dev->forward.ins_reset = true;
-                printf("%s events are forwarded to %s, reset instance.\n", dev->prof->name, target->prof->name);
+                if (!dev->clone)
+                    printf("%s events are forwarded to %s, reset instance.\n", dev->prof->name, target->prof->name);
             }
             return 0;
         }
@@ -1835,9 +2032,11 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
     return -1;
 }
 
-void prof_dev_flush(struct prof_dev *dev)
+void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how)
 {
-    struct prof_dev *source, *next;
+    struct prof_dev *source, *tmp;
+
+    prof_dev_get(dev);
 
     if (dev->pages) {
         struct perf_evlist *evlist = dev->evlist;
@@ -1847,19 +2046,25 @@ void prof_dev_flush(struct prof_dev *dev)
         }
     }
 
-    // Recursively flush the source prof_dev.
-    for_each_source_dev_safe(source, next, dev)
-        prof_dev_flush(source);
+    if (how != PROF_DEV_FLUSH_FINAL) {
+        // Recursively flush the source prof_dev.
+        for_each_source_dev_get(source, tmp, dev)
+            prof_dev_flush(source, how);
+    }
+
+    // Flush prof_dev buffers, such as: order. At the same time, the reference
+    // count of the forwarding source is released.
+    if (dev->prof->flush)
+        dev->prof->flush(dev, how);
+
+    prof_dev_put(dev);
 }
 
-void prof_dev_close(struct prof_dev *dev)
+static void prof_dev_free(struct prof_dev *dev)
 {
     profiler *prof = dev->prof;
     struct perf_evlist *evlist = dev->evlist;
-
-    list_del(&dev->dev_link);
-
-    prof_dev_disable(dev);
+    struct prof_dev *child, *next;
 
     if (dev->env->interval) {
         timer_destroy(&dev->timer);
@@ -1868,14 +2073,14 @@ void prof_dev_close(struct prof_dev *dev)
     }
 
     /*
-     * deinit before perf_evlist__munmap.
-     * When order is enabled, some events are also cached inside the order,
-     * and then deinit will refresh all events.
-     * Order::base profiler handles events and may call perf_evlist__id_to_evsel,
-     * which requires id_hash. But perf_evlist__munmap will reset id_hash.
-     * Therefore, deinit must be executed first.
+     * When order is enabled, Order::base profiler handles events and may call
+     * perf_evlist__id_to_evsel, which requires id_hash. But perf_evlist__munmap
+     * will reset id_hash.
+     * However, the order buffer has been flushed, see PROF_DEV_FLUSH_FINAL. Here
+     * deinit() is only used to release memory and no longer handle events.
     **/
     prof->deinit(dev);
+    dev->private = NULL;
     perf_event_convert_deinit(dev);
 
     if (dev->pages)
@@ -1891,7 +2096,26 @@ void prof_dev_close(struct prof_dev *dev)
     if (dev->env->cgroups)
         cgroup_list__delete();
 
-    list_del(&dev->links.link_to_parent);
+    for_each_child_dev_safe(child, next, dev) {
+        /*
+         * The parent device of `dev' inherits all its child devices.
+         */
+        if (dev->links.parent) {
+            // In prof_dev_at_top(), used to identify the topmost device.
+            child->clone = child->links.parent->clone;
+            child->links.parent = dev->links.parent;
+            list_move_tail(&child->links.link_to_parent, &dev->links.parent->links.child_list);
+        } else {
+            child->clone = false;
+            child->links.parent = NULL;
+            list_del_init(&child->links.link_to_parent);
+        }
+    }
+
+    if (dev->links.parent) {
+        list_del(&dev->links.link_to_parent);
+    }
+
     if (dev->forward.target) {
         free(dev->forward.event_dev);
         list_del(&dev->forward.link_to_target);
@@ -1899,6 +2123,106 @@ void prof_dev_close(struct prof_dev *dev)
 
     free_env(dev->env);
     free(dev);
+}
+
+struct prof_dev *prof_dev_get(struct prof_dev *dev)
+{
+    if (dev->refcount > 0) {
+        dev->refcount ++;
+        return dev;
+    }
+    return NULL;
+}
+
+bool prof_dev_put(struct prof_dev *dev)
+{
+    dev->refcount --;
+    if (dev->refcount < 0) {
+        fprintf(stderr, "WARN: %s: dev %p ref(%ld) < 0.\n", dev->prof->name, dev, dev->refcount);
+    }
+    if (dev->refcount == 0) {
+        prof_dev_free(dev);
+        return true;
+    }
+    return false;
+}
+
+void prof_dev_close(struct prof_dev *dev)
+{
+    struct prof_dev *source, *child, *tmp;
+
+    if (dev->state == PROF_DEV_STATE_EXIT) {
+        if (dev->refcount)
+            fprintf(stderr, "WARN: Try to close an EXIT dev, ref %ld.\n", dev->refcount);
+        if (!list_empty(&dev->dev_link))
+            fprintf(stderr, "WARN: Try to close an EXIT dev, !empty dev_link.\n");
+        return;
+    }
+
+    prof_dev_disable(dev);
+
+    dev->state = PROF_DEV_STATE_EXIT;
+    list_del_init(&dev->dev_link);
+
+    /*
+     * Close the child device, the forwarding source.
+     *
+     * clone = 0, forward = 0.
+     *     Devices opened using tp_list_new() are closed when the parent closes, not within
+     *     tp_list_free().
+     *     The child device can close themselves. If not, here is the final closing point.
+     *
+     * clone = 0, forward = 1. prof_dev_forward().
+     *     The forwarding target is closed, and the forwarding source will also be closed.
+     *     It is impossible to continue forwarding.
+     *
+     * clone = 1, forward = 0. prof_dev_clone().
+     *     The cloned device is independent of the parent and will not be closed.
+     *
+     * clone = 1, forward = 1. prof_dev_forward() && prof_dev_clone().
+     *     As a forwarding source, it will also be closed.
+     */
+    for_each_source_dev_get(source, tmp, dev)
+        prof_dev_close(source);
+
+    for_each_child_dev_get(child, tmp, dev) {
+        if (!child->clone && child->forward.target != dev)
+            prof_dev_close(child);
+    }
+
+    /*
+     * Control dev to its parent/target. Only inside prof_dev_free().
+     *
+     * This call stack will forward the event to the target.
+     *   prof_dev_close(dev) -> prof_dev_disable(dev) -> prof_dev_flush(dev) ->
+     *   perf_event_process_record(dev, event) -> perf_event_forward(dev) => target
+     *
+     * prof_dev_close(dev) =>
+     *    if (dev->links.parent) {
+     *        list_del_init(&dev->links.link_to_parent);
+     *        dev->links.parent = NULL; ==> Affects prof_dev_at_top(dev)
+     *    }
+     *    if (dev->forward.target) {
+     *        list_del_init(&dev->forward.link_to_target);
+     *        dev->forward.target = NULL; ==> Affects prof_dev_is_final(dev)
+     *    }
+     * Here, disconnect dev and parent/target in advance. Will cause some trouble.
+     *
+     *   prof_dev_close(target) -> prof_dev_disable(target) -> prof_dev_flush(target) ->
+     *   order_flush(target) -> perf_event_process_record(target, event) ->
+     *   perf_event_process_record(dev, event) -> sample(dev, event) ->
+     *   prof_dev_is_final(dev) ==> return false (target = NULL)
+     *
+     *   prof_dev_close(target) -> prof_dev_disable(target) -> prof_dev_flush(target) ->
+     *   order_flush(target) -> ordered_events__deliver(target) -> perf_event_put() ->
+     *   prof_dev_put(dev) -> prof_dev_free(dev) -> deinit(dev) ->
+     *   prof_dev_at_top(dev) ==> return true (parent = NULL)
+     *
+     * When dev is closed, events are still cached in the target's order buffer. When
+     * the target is flushed, it will continue to call dev->sample, dev->deinit.
+     */
+
+    prof_dev_put(dev);
 }
 
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
@@ -1991,11 +2315,9 @@ u64 prof_dev_list_minevtime(void)
 {
     u64 minevtime = ULLONG_MAX;
     u64 time;
-    struct prof_dev *dev, *next;
+    struct prof_dev *dev, *tmp;
 
-    list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link) {
-        if (dev->type != PROF_DEV_TYPE_NORMAL)
-            continue;
+    for_each_dev_get(dev, tmp, &prof_dev_list, dev_link) {
         time = prof_dev_minevtime(dev);
         if (time < minevtime)
             minevtime = time;
@@ -2022,8 +2344,8 @@ static void print_marker_and_interval(int fd, unsigned int revents, void *ptr)
     if (revents & EPOLLIN) {
         char *line = fgets(buf, sizeof(buf), stdin);
         if (line) {
-            struct prof_dev *dev, *next;
-            list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
+            struct prof_dev *dev, *tmp;
+            for_each_dev_get(dev, tmp, &prof_dev_list, dev_link)
                 if (prof_dev_is_final(dev))
                     interval_handle(&dev->timer);
             print_time(stdout);
@@ -2076,7 +2398,7 @@ int main(int argc, char *argv[])
     if (!prof_dev_open(main_prof, main_env))
         return -1;
 
-    while (running) {
+    while (running > 0) {
         int fds = event_poll__poll(main_epoll, -1);
 
         // -ENOENT means there are no file descriptors in event_poll.

@@ -16,6 +16,8 @@ static int ordered_events__deliver(struct ordered_events *oe,
     // The base profiler is responsible for releasing the dup event.
     if (dev->dup)
         event->event = NULL;
+    else
+        perf_event_put(event->event);
 
     return 0;
 }
@@ -36,11 +38,40 @@ static void print_nr_unordered_events(struct prof_dev *dev, bool sample)
     }
 }
 
+static void order_flush(struct prof_dev *dev, enum profdev_flush how)
+{
+    profiler *base = dev->order.base;
+    enum oe_flush oe_how;
+
+    switch (how) {
+        default:
+        case PROF_DEV_FLUSH_NORMAL:
+            return;
+        case PROF_DEV_FLUSH_FINAL:
+            oe_how = OE_FLUSH__FINAL;
+            break;
+        case PROF_DEV_FLUSH_ROUND:
+            oe_how = OE_FLUSH__ROUND;
+            break;
+    }
+
+    print_nr_unordered_events(dev, false);
+    ordered_events__flush(&dev->order.oe, oe_how);
+
+    if (how == PROF_DEV_FLUSH_FINAL) {
+        ordered_events__reinit(&dev->order.oe);
+        ordered_events__set_copy_on_queue(&dev->order.oe, true);
+        if (dev->env->order_mem)
+            ordered_events__set_alloc_size(&dev->order.oe, dev->env->order_mem);
+    }
+
+    if (base->flush)
+        base->flush(dev, how);
+}
+
 static void order_deinit(struct prof_dev *dev)
 {
     profiler *base = dev->order.base;
-    print_nr_unordered_events(dev, false);
-    ordered_events__flush(&dev->order.oe, OE_FLUSH__FINAL);
     base->deinit(dev);
     ordered_events__free(&dev->order.oe);
     if (base->lost)
@@ -80,7 +111,7 @@ static void order_sample(struct prof_dev *dev, union perf_event *event, int inst
         }
         lost_rec->lost_start_time = time;
     }
-    ordered_events__queue(&dev->order.oe, event, time, instance);
+    ordered_events__queue(&dev->order.oe, perf_event_get(event), time, instance);
 
     if (dev->order.flush_in_time)
         ordered_events__flush_time(&dev->order.oe, time);
@@ -123,6 +154,7 @@ static int order_init(struct prof_dev *dev)
     *order = *base;
     order->init = order_init;
     order->deinit = order_deinit;
+    order->flush = order_flush;
     order->sample = order_sample;
     if (base->lost)
         order->lost = order_lost;

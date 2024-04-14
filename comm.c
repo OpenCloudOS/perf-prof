@@ -365,7 +365,7 @@ char *global_comm_get(int pid)
     node = rb_entry_safe(rbn, struct pid_comm_node, rbnode);
 
     if (!node || node->flush) {
-        prof_dev_flush(global_comm_ctx->comm_dev);
+        prof_dev_flush(global_comm_ctx->comm_dev, PROF_DEV_FLUSH_NORMAL);
         rbn = rblist__find(&global_comm_ctx->pid_comm, &find);
         node = rb_entry_safe(rbn, struct pid_comm_node, rbnode);
     }

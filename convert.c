@@ -363,7 +363,7 @@ int perf_timespec_init(struct prof_dev *dev)
     clock_gettime(CLOCK_REALTIME, &dev->time_ctx.base_timespec);
     syscall(SYS_getpid); // syscall does not necessarily occur with getpid().
 
-    prof_dev_flush(evt);
+    prof_dev_flush(evt, PROF_DEV_FLUSH_NORMAL);
     prof_dev_close(evt);
 
     if (dev->time_ctx.base_evtime == 0) {
