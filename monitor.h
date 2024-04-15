@@ -508,4 +508,8 @@ void sched_event(int level, void *raw, int size, int cpu);
 bool sched_wakeup_unnecessary(int level, void *raw, int size);
 
 
+//trace.c
+struct prof_dev *trace_dev_open(const char *event, struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map,
+                 struct prof_dev *parent, void (*cb)(void *parent, void *raw), void (*hangup)(void *parent));
+
 #endif

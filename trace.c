@@ -362,5 +362,125 @@ static profiler trace = {
     .interval = trace_interval,
     .sample = trace_sample,
 };
-PROFILER_REGISTER(trace)
+PROFILER_REGISTER(trace);
+
+
+struct tracepoint_private {
+    struct tp_list *tp_list;
+    void *parent;
+    void (*cb)(void *parent, void *raw);
+    void (*hangup)(void *parent);
+};
+
+static void tracepoint_deinit(struct prof_dev *dev)
+{
+    struct tracepoint_private *p = dev->private;
+    tp_list_free(p->tp_list);
+    tep__unref();
+    free(p);
+}
+
+static int tracepoint_init(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct env *env = dev->env;
+    struct perf_event_attr attr = {
+        .type          = PERF_TYPE_TRACEPOINT,
+        .config        = 0,
+        .size          = sizeof(struct perf_event_attr),
+        .sample_period = 1,
+        .sample_type   = PERF_SAMPLE_RAW,
+        .pinned        = 1,
+        .disabled      = 1,
+        .watermark     = 0,
+        .wakeup_events = 1,
+    };
+    struct tracepoint_private *p;
+    struct tp *tp;
+    struct perf_evsel *evsel;
+    int i;
+
+    if (!env->event) return -1;
+
+    p = zalloc(sizeof(*p));
+    if (!p) return -1;
+
+    tep__ref();
+    dev->private = p;
+    dev->type = PROF_DEV_TYPE_SERVICE;
+    p->tp_list = tp_list_new(dev, env->event);
+    if (!p->tp_list)
+        goto failed;
+
+    for_each_real_tp(p->tp_list, tp, i) {
+        evsel = tp_evsel_new(tp, &attr);
+        if (!evsel)
+            goto failed;
+        perf_evlist__add(evlist, evsel);
+    }
+    return 0;
+
+failed:
+    tracepoint_deinit(dev);
+    return -1;
+}
+
+static void tracepoint_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct tracepoint_private *p = dev->private;
+    struct {
+        __u32   size;
+        __u8    data[0];
+    } *raw = (void *)event->sample.array;
+
+    if (p->cb)
+        p->cb(p->parent, raw->data);
+}
+
+static void tracepoint_hungup(struct prof_dev *dev)
+{
+    struct tracepoint_private *p = dev->private;
+    if (p->hangup)
+        p->hangup(p->parent);
+}
+
+static profiler tracepoint = {
+    .name = "tracepoint",
+    .pages = 1,
+    .init = tracepoint_init,
+    .deinit = tracepoint_deinit,
+    .hangup = tracepoint_hungup,
+    .sample = tracepoint_sample,
+};
+
+struct prof_dev *trace_dev_open(const char *event, struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map,
+                 struct prof_dev *parent, void (*cb)(void *parent, void *raw), void (*hangup)(void *parent))
+{
+    struct prof_dev *dev;
+    struct env *e;
+    char *ev;
+
+    e = zalloc(sizeof(*e)); // free in prof_dev_close()
+    if (!e) return NULL;
+
+    e->nr_events = 1;
+    e->events = calloc(e->nr_events, sizeof(*e->events));
+    ev = strdup(event);
+    if (!e->events || !ev) {
+        if (e->events) free(e->events);
+        free(e);
+        return NULL;
+    }
+    e->event = e->events[0] = ev;
+
+    dev = prof_dev_open_cpu_thread_map(&tracepoint, e, cpu_map, thread_map, parent);
+
+    if (dev) {
+        struct tracepoint_private *p = dev->private;
+        p->parent = parent;
+        p->cb = cb;
+        p->hangup = hangup;
+    }
+    return dev;
+}
 
