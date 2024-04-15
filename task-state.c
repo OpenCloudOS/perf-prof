@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <linux/rblist.h>
+#include <linux/thread_map.h>
 #include <monitor.h>
 #include <trace_helpers.h>
 #include <stack_helpers.h>
@@ -151,6 +152,9 @@ struct sample_type_raw {
     } raw;
 };
 static bool task_state_samepid(struct prof_dev *dev, union perf_event *event, int pid, int tid);
+static void task_state_fork(void *opaque, void *raw);
+static void task_state_hangup(void *opaque);
+
 
 static int task_state_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -206,10 +210,14 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->task_states.node_new = task_state_node_new;
     ctx->task_states.node_delete = task_state_node_delete;
 
-    ctx->lat_dist = latency_dist_new_quantile(env->perins, true, 0);
-    if (!ctx->lat_dist)
-        goto failed;
-
+    if (prof_dev_is_cloned(dev)) {
+        struct task_state_ctx *pctx = prof_dev_is_cloned(dev)->private;
+        ctx->lat_dist = latency_dist_ref(pctx->lat_dist);
+    } else {
+        ctx->lat_dist = latency_dist_new_quantile(env->perins, true, 0);
+        if (!ctx->lat_dist)
+            goto failed;
+    }
     return 0;
 
 failed:
@@ -391,7 +399,7 @@ static int task_state_init(struct prof_dev *dev)
 
     // sched:sched_wakeup_new//
     // sched:sched_wakeup_new/pid==xx/
-    if (ctx->mode == 0 || ctx->mode == 1) {
+    if (ctx->mode == 0 || (ctx->mode == 1 && env->filter)) {
         id = tep__event_id("sched", "sched_wakeup_new");
         if (id < 0)
             goto failed;
@@ -402,6 +410,13 @@ static int task_state_init(struct prof_dev *dev)
         perf_evlist__add(evlist, evsel);
     } else
         ctx->sched_wakeup_new = NULL;
+
+    // mode 1, mode 3, -p pid
+    // sched:sched_process_fork
+    if (ctx->thread_map && !env->filter) {
+        trace_dev_open("sched:sched_process_fork", NULL, ctx->thread_map, dev,
+                       task_state_fork, task_state_hangup);
+    }
 
     return 0;
 
@@ -472,7 +487,7 @@ static int task_state_filter(struct prof_dev *dev)
 
             tp_filter_free(next_filter);
             if (err < 0) return err;
-        } else if (evsel== ctx->sched_wakeup || evsel == ctx->sched_wakeup_new) {
+        } else if (evsel == ctx->sched_wakeup || evsel == ctx->sched_wakeup_new) {
             struct tp_filter *tp_filter = NULL;
 
             tp_filter = tp_filter_new(ctx->thread_map, "pid", env->filter, "comm");
@@ -488,6 +503,26 @@ static int task_state_filter(struct prof_dev *dev)
         }
     }
     return 0;
+}
+
+static void task_state_enabled(struct prof_dev *dev)
+{
+    if (prof_dev_is_cloned(dev)) {
+        struct task_state_ctx *ctx = dev->private;
+        int idx, pid;
+        if (!ctx->thread_map)
+            return;
+        perf_thread_map__for_each_thread(pid, idx, ctx->thread_map) {
+            if (kill(pid, 0) == 0)
+                return;
+        }
+        if (dev->env->verbose) {
+            pid = perf_thread_map__pid(ctx->thread_map, 0);
+            print_time(stdout);
+            printf("%s close %d in task_state_enabled()\n", dev->prof->name, pid);
+        }
+        prof_dev_close(dev);
+    }
 }
 
 static void task_print_node(void *opaque, struct latency_node *node)
@@ -519,6 +554,9 @@ static void task_print_node(void *opaque, struct latency_node *node)
 static void task_state_interval(struct prof_dev *dev)
 {
     struct task_state_ctx *ctx = dev->private;
+
+    if (!prof_dev_at_top(dev))
+        return;
 
     if (latency_dist_empty(ctx->lat_dist))
         return;
@@ -713,6 +751,29 @@ static inline int task_state_event_lost(struct prof_dev *dev, union perf_event *
         }
     }
     return 0;
+}
+
+static void task_state_fork(void *opaque, void *raw)
+{
+    struct prof_dev *dev = opaque;
+    struct sched_process_fork *sched_fork = raw;
+    struct perf_thread_map *map;
+
+    if (kill(sched_fork->child_pid, 0) < 0) return;
+
+    map = thread_map__new_by_tid(sched_fork->child_pid);
+    if (!map) return;
+
+    dev = prof_dev_clone(dev, NULL, map);
+
+    perf_thread_map__put(map);
+}
+
+static void task_state_hangup(void *opaque)
+{
+    struct prof_dev *dev = opaque;
+
+    prof_dev_close(dev);
 }
 
 static void task_state_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -944,6 +1005,7 @@ struct monitor task_state = {
     .order = 1,
     .init = task_state_init,
     .filter = task_state_filter,
+    .enabled = task_state_enabled,
     .deinit = task_state_deinit,
     .sigusr = task_state_sigusr,
     .interval = task_state_interval,
