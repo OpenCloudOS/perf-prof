@@ -12,6 +12,7 @@
 
 struct latency_dist {
     struct rblist lat;
+    refcount_t ref;
     bool perins;
     bool perkey;
     bool quantile;
@@ -137,6 +138,8 @@ struct latency_dist *latency_dist_new(bool perins, bool perkey, int extra_size)
     dist->lat.node_new = latency_stat_node_new;
     dist->lat.node_delete = latency_stat_node_delete;
 
+    refcount_set(&dist->ref, 1);
+
     dist->perins = perins;
     dist->perkey = perkey;
     dist->quantile = false;
@@ -154,9 +157,18 @@ struct latency_dist *latency_dist_new_quantile(bool perins, bool perkey, int ext
     return dist;
 }
 
+struct latency_dist *latency_dist_ref(struct latency_dist *dist)
+{
+    if (!dist)
+        return NULL;
+
+    refcount_inc(&dist->ref);
+    return dist;
+}
+
 void latency_dist_free(struct latency_dist *dist)
 {
-    if (dist) {
+    if (dist  && refcount_dec_and_test(&dist->ref)) {
         rblist__exit(&dist->lat);
         free(dist);
     }

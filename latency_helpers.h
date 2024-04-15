@@ -20,6 +20,7 @@ struct latency_node {
 struct latency_dist;
 struct latency_dist *latency_dist_new(bool perins, bool perkey, int extra_size);
 struct latency_dist *latency_dist_new_quantile(bool perins, bool perkey, int extra_size);
+struct latency_dist *latency_dist_ref(struct latency_dist *dist);
 void latency_dist_free(struct latency_dist *dist);
 struct latency_node *latency_dist_input(struct latency_dist *dist, u64 instance, u64 key, u64 lat, unsigned long than);
 bool latency_dist_greater_than(struct latency_dist *dist, u64 than);
