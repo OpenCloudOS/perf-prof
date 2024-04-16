@@ -89,6 +89,7 @@ struct tp {
 };
 
 struct tp_list {
+    char *event_str;
     int nr_tp;
     int nr_real_tp;
     int nr_need_stack;

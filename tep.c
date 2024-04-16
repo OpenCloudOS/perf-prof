@@ -366,8 +366,13 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     if (!tp_list)
         return NULL;
 
+    tp_list->event_str = strdup(event_str);
+    if (!tp_list->event_str) {
+        free(tp_list);
+        return NULL;
+    }
     tp_list->nr_tp = nr_tp;
-    s = event_str;
+    s = tp_list->event_str;
     i = 0;
     while ((sep = next_sep(s, ',')) != NULL) {
         tp_list->tp[i++].name = s;
@@ -682,6 +687,7 @@ void tp_list_free(struct tp_list *tp_list)
             perf_cpu_map__put(tp->cpus);
         }
     }
+    free(tp_list->event_str);
     free(tp_list);
 }
 
