@@ -171,7 +171,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             b->maybe_unpaired = 0;
             b->ins = e->ins;
             b->seq = e->seq;
-            b->event = new_event;
+            b->event = ctx->dev->dup ? new_event : perf_event_get(new_event);
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
             INIT_LIST_HEAD(&b->needed);
@@ -184,8 +184,11 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             ctx->backup_stat.new ++;
             ctx->backup_stat.mem_bytes += event->header.size;
             return &b->key_node;
-        } else
+        } else {
+            if (b) free(b);
+            if (new_event && new_event != event) free(new_event);
             return NULL;
+        }
     }
 }
 
@@ -202,6 +205,7 @@ static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node 
         list_del(&b->needed);
         ctx->backup_stat.delete ++;
         ctx->backup_stat.mem_bytes -= b->event->header.size;
+        perf_event_put(b->event);
         free(b->event);
         free(b);
     }
@@ -250,7 +254,7 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         b->maybe_unpaired = 0;
         b->ins = e->ins;
         b->seq = e->seq;
-        b->event = new_event;
+        b->event = ctx->dev->dup ? new_event : perf_event_get(new_event);
         RB_CLEAR_NODE(&b->timeline_node);
         RB_CLEAR_NODE(&b->key_node);
         INIT_LIST_HEAD(&b->pending);
@@ -273,8 +277,11 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         ctx->tl_stat.mem_bytes += event->header.size;
 
         return &b->timeline_node;
-    } else
+    } else {
+        if (b) free(b);
+        if (new_event && new_event != event) free(new_event);
         return NULL;
+    }
 }
 
 static void timeline_node_delete(struct rblist *rblist, struct rb_node *rb_node)
@@ -291,6 +298,7 @@ static void timeline_node_delete(struct rblist *rblist, struct rb_node *rb_node)
         ctx->tl_stat.unneeded --;
         ctx->tl_stat.unneeded_bytes -= b->event->header.size;
     }
+    perf_event_put(b->event);
     free(b->event);
     free(b);
 }
@@ -828,6 +836,17 @@ static void multi_trace_exit(struct prof_dev *dev)
 {
     multi_trace_interval(dev);
     monitor_ctx_exit(dev);
+}
+
+static void multi_trace_flush(struct prof_dev *dev, enum profdev_flush how)
+{
+    if (how == PROF_DEV_FLUSH_FINAL) {
+        struct multi_trace_ctx *ctx = dev->private;
+
+        while (multi_trace_first_pending(dev, NULL)) ;
+        rblist__exit(&ctx->backup);
+        rblist__exit(&ctx->timeline);
+    }
 }
 
 static u64 multi_trace_minevtime(struct prof_dev *dev)
@@ -1460,7 +1479,7 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
 
     if (event->header.type == PERF_RECORD_DEV) {
         event_dev = (void *)event;
-        evsel = (void *)event_dev->dev;
+        evsel = (void *)prof_dev_top_cloned(event_dev->dev);
     } else {
         evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
     }
@@ -1483,6 +1502,7 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
 
 free_dup_event:
     if (dev->dup) {
+        perf_event_put(event);
         free(event);
         ctx->dup_stat.nr_free ++;
     }
@@ -1772,6 +1792,7 @@ static profiler multi_trace = {
     .filter = multi_trace_filter,
     .enabled = multi_trace_enabled,
     .deinit = multi_trace_exit,
+    .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
@@ -1826,6 +1847,7 @@ static profiler kmemprof = {
     .filter = multi_trace_filter,
     .enabled = multi_trace_enabled,
     .deinit = multi_trace_exit,
+    .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
@@ -1927,6 +1949,7 @@ static profiler syscalls = {
     .filter = multi_trace_filter,
     .enabled = multi_trace_enabled,
     .deinit = multi_trace_exit,
+    .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
@@ -2105,6 +2128,7 @@ static profiler nested_trace = {
     .filter = multi_trace_filter,
     .enabled = multi_trace_enabled,
     .deinit = nested_trace_exit,
+    .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
     .interval = nested_trace_interval,
     .minevtime = multi_trace_minevtime,
@@ -2248,6 +2272,7 @@ static profiler rundelay = {
     .filter = rundelay_filter,
     .enabled = multi_trace_enabled,
     .deinit = multi_trace_exit,
+    .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
