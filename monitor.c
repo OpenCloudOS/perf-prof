@@ -323,8 +323,9 @@ struct option main_options[] = {
     OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
     OPT_INT_NONEG   ('m',  "mmap-pages", &env.mmap_pages, "pages",         "Number of mmap data pages and AUX area tracing mmap pages"),
     OPT_LONG_NONEG  ('N',      "exit-N", &env.exit_n, "N",                 "Exit after N events have been sampled."),
-    OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf time to tsc time."),
-    OPT_U64_NONEG   ( 0 ,  "tsc-offset", &env.tsc_offset,  NULL,           "Sum with tsc-offset to get the final tsc time."),
+    OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf clock to tsc."),
+    OPT_STRDUP_NONEG( 0 ,    "kvmclock", &env.kvmclock,    "uuid",         "Convert perf clock to Guest's kvmclock."),
+    OPT_U64_NONEG   ( 0 ,"clock-offset", &env.clock_offset, NULL,          "Sum with clock-offset to get the final clock."),
     OPT_INT_NONEG   ( 0 ,  "usage-self", &env.usage_self,  "ms",           "Periodically output the CPU usage of perf-prof itself, Unit: ms"),
     OPT_PARSE_NOARG ('V',     "version", NULL,             NULL,           "Version info"),
     OPT__VERBOSITY(&env.verbose),
@@ -449,6 +450,7 @@ static void free_env(struct env *e)
     if (e->heatmap) free(e->heatmap);
     if (e->symbols) free(e->symbols);
     if (e->device) free(e->device);
+    if (e->kvmclock) free(e->kvmclock);
     if (e->workload.pid > 0) {
         kill(e->workload.pid, SIGTERM);
     }
@@ -495,6 +497,7 @@ static struct env *clone_env(struct env *p)
     CLONE (heatmap);
     CLONE (symbols);
     CLONE (device);
+    CLONE (kvmclock);
 
     return e;
 
@@ -1299,7 +1302,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
 
             // The source device forwards events after its `enabled_after' to the target device.
             event_dev = (void *)event;
-            if (unlikely(event_dev->time < dev->time_ctx.enabled_after)) {
+            if (unlikely(event_dev->time < dev->time_ctx.enabled_after.clock)) {
                 return 0;
             }
         }
@@ -1362,8 +1365,8 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
                     event = perf_event_convert(dev, event, writable);
 
                 if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME) {
-                    dev->time_ctx.last_evtime = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
-                    if (unlikely(dev->time_ctx.last_evtime < dev->time_ctx.enabled_after)) {
+                    dev->time_ctx.last_evtime.clock = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
+                    if (unlikely(dev->time_ctx.last_evtime.clock < dev->time_ctx.enabled_after.clock)) {
                         if (dev->sampled_events > 0)
                             dev->sampled_events --;
                         break;
@@ -1886,10 +1889,10 @@ enabled_after:
      * Events after `enabled_after_ns' are safe and there is no enablement loss.
     **/
     perf_event_convert_read_tsc_conversion(dev, map);
-    dev->time_ctx.enabled_after = perf_time_to_tsc(dev, enabled_after_ns);
+    dev->time_ctx.enabled_after = perfclock_to_evclock(dev, enabled_after_ns);
     if (dev->env->verbose) {
-        printf("%s: enabled after %lu.%06lu\n", dev->prof->name, dev->time_ctx.enabled_after/NSEC_PER_SEC,
-                    (dev->time_ctx.enabled_after%NSEC_PER_SEC)/1000);
+        printf("%s: enabled after %lu.%06lu\n", dev->prof->name, dev->time_ctx.enabled_after.clock/NSEC_PER_SEC,
+                    (dev->time_ctx.enabled_after.clock%NSEC_PER_SEC)/1000);
     }
     return 0;
 }
@@ -2227,20 +2230,22 @@ void prof_dev_close(struct prof_dev *dev)
 
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
 {
+    u64 ns;
     s64 off_ns;
     char timebuff[64];
     struct timeval tv;
     struct tm *result;
 
-    if (likely(dev->time_ctx.base_evtime > 0 && evtime > 0)) {
-        if (likely(!dev->convert.need_tsc_conv))
-            off_ns = evtime - dev->time_ctx.base_evtime;
+    if (likely(dev->time_ctx.base_evtime.clock > 0 && evtime > 0)) {
+        if (likely(dev->convert.need_conv != CONVERT_TO_TSC))
+            off_ns = evtime - dev->time_ctx.base_evtime.clock;
         else
-            off_ns = perf_time_to_ns(dev, evtime) - perf_time_to_ns(dev, dev->time_ctx.base_evtime);
+            off_ns = evclock_to_perfclock(dev, (evclock_t)evtime) - evclock_to_perfclock(dev, dev->time_ctx.base_evtime);
         off_ns += dev->time_ctx.base_timespec.tv_nsec;
 
-        tv.tv_sec = dev->time_ctx.base_timespec.tv_sec + off_ns / NSEC_PER_SEC;
-        tv.tv_usec = (off_ns % NSEC_PER_SEC) / 1000;
+        ns = dev->time_ctx.base_timespec.tv_sec * NSEC_PER_SEC + off_ns;
+        tv.tv_sec = ns / NSEC_PER_SEC;
+        tv.tv_usec = (ns % NSEC_PER_SEC) / 1000;
     } else
         gettimeofday(&tv, NULL);
 
@@ -2249,9 +2254,9 @@ void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
 }
 
-static u64 prof_dev_minevtime(struct prof_dev *dev)
+static perfclock_t prof_dev_minevtime(struct prof_dev *dev)
 {
-    u64 minevtime = ULLONG_MAX;
+    u64 /* evclock_t */ minevtime = ULLONG_MAX;
 
     /*
      * The minimum event time is taken from the ringbuffer, order buffer, and profiler.
@@ -2287,15 +2292,15 @@ static u64 prof_dev_minevtime(struct prof_dev *dev)
                 perf_event_process_record(dev, event, idx, writable, false);
                 perf_mmap__consume(map);
                 if (event->header.type == PERF_RECORD_SAMPLE) {
-                    u64 last_evtime;
+                    evclock_t last_evtime;
 
                     if (dev->forward.target) // last_evtime is stored on the target prof_dev.
                         last_evtime = dev->forward.target->time_ctx.last_evtime;
                     else
                         last_evtime = dev->time_ctx.last_evtime;
 
-                    if (last_evtime < minevtime)
-                        minevtime = last_evtime;
+                    if (last_evtime.clock < minevtime)
+                        minevtime = last_evtime.clock;
                     break;
                 }
             }
@@ -2308,16 +2313,20 @@ static u64 prof_dev_minevtime(struct prof_dev *dev)
     if (minevtime == ULLONG_MAX || minevtime == 0)
         return minevtime;
     else
-        return perf_time_to_ns(dev, minevtime);
+        return evclock_to_perfclock(dev, (evclock_t)minevtime);
 }
 
-u64 prof_dev_list_minevtime(void)
+perfclock_t prof_dev_list_minevtime(void)
 {
-    u64 minevtime = ULLONG_MAX;
-    u64 time;
+    perfclock_t minevtime = ULLONG_MAX;
+    perfclock_t time;
     struct prof_dev *dev, *tmp;
 
     for_each_dev_get(dev, tmp, &prof_dev_list, dev_link) {
+        if (dev->type != PROF_DEV_TYPE_NORMAL)
+            continue;
+        if (dev->silent)
+            continue;
         time = prof_dev_minevtime(dev);
         if (time < minevtime)
             minevtime = time;

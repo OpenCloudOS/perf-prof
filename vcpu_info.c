@@ -4,21 +4,23 @@
 #include <string.h>
 #include <limits.h>
 #include <ctype.h>
+#include <dirent.h>
 
 #include <vcpu_info.h>
 
-struct vcpu_info *vcpu_info_new(const char *vm)
+static struct list_head vm_list = LIST_HEAD_INIT(vm_list);
+
+static void vcpu_info_free(struct vcpu_info *vcpu);
+
+
+static struct vcpu_info *vcpu_info_hmp_info_cpus(const char *uuid)
 {
     char buff[512];
     FILE *info = NULL;
     struct vcpu_info *vcpu = NULL;
     int nr_vcpu = 0;
 
-    // Popen's process disable HEAPCHECK.
-    // See: https://gperftools.github.io/gperftools/heap_checker.html
-    unsetenv("HEAPCHECK");
-
-    snprintf(buff, sizeof(buff), "virsh qemu-monitor-command %s --hmp info cpus", vm);
+    snprintf(buff, sizeof(buff), "virsh qemu-monitor-command %s --hmp info cpus", uuid);
     info = popen(buff, "r");
     if (!info)
         goto cleanup;
@@ -75,9 +77,26 @@ struct vcpu_info *vcpu_info_new(const char *vm)
         vcpu->vcpu[cpuid].thread_id = (int)tid;
     }
     pclose(info);
+    info = NULL;
 
+    // Non-existent vm.
+    if (!vcpu)
+        goto cleanup;
 
-    snprintf(buff, sizeof(buff), "virsh vcpupin --live %s", vm);
+    return vcpu;
+
+cleanup:
+    if (info) pclose(info);
+    if (vcpu) free(vcpu);
+    return NULL;
+}
+
+static int vcpu_info_vcpupin(struct vcpu_info *vcpu)
+{
+    char buff[512];
+    FILE *info = NULL;
+
+    snprintf(buff, sizeof(buff), "virsh vcpupin --live %s", vcpu->uuid);
     info = popen(buff, "r");
     if (!info)
         goto cleanup;
@@ -131,24 +150,149 @@ struct vcpu_info *vcpu_info_new(const char *vm)
     }
     pclose(info);
 
-    return vcpu;
+    return 0;
 
 cleanup:
     if (info) pclose(info);
-    if (vcpu) vcpu_info_free(vcpu);
+    return -1;
+}
+
+static int vcpu_info_tgid(struct vcpu_info *vcpu)
+{
+    char path[256], line[256];
+    FILE *fp;
+    int pid = -1;
+
+    /*
+     * Read /proc/pid/status, get Tgid.
+     */
+    snprintf(path, sizeof(path), "/proc/%d/status", vcpu->vcpu[0].thread_id);
+    fp = fopen(path, "r");
+    if (!fp)
+        return -1;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "Tgid: %d", &pid) == 1)
+            break;
+        pid = -1;
+    }
+    fclose(fp);
+
+    if (pid == -1)
+        return -1;
+
+    vcpu->tgid = pid;
+    return 0;
+}
+
+static int vcpu_info_kvm_vm_fd(struct vcpu_info *vcpu)
+{
+    char path[256];
+    DIR *dir;
+    struct dirent *entry;
+    int kvm_vm_fd = -1;
+
+    /*
+     * Readdir /proc/pid/fd/, obtain the "anon_inode:kvm-vm" file descriptor.
+     */
+    snprintf(path, sizeof(path), "/proc/%d/fd/", vcpu->tgid);
+    dir = opendir(path);
+    if (dir == NULL)
+        return -1;
+
+    while ((entry = readdir(dir)) != NULL) {
+        char link_target[256];
+        char link_path[256];
+        ssize_t len;
+
+        if (entry->d_name[0] == '.')
+            continue;
+
+        snprintf(link_path, sizeof(link_path), "%s/%s", path, entry->d_name);
+        len = readlink(link_path, link_target, sizeof(link_target) - 1);
+        if (len == -1)
+            continue;
+
+        link_target[len] = '\0';
+        if (strstr(link_target, "kvm-vm")) {
+            kvm_vm_fd = atoi(entry->d_name);
+            break;
+        }
+    }
+    closedir(dir);
+
+    if (kvm_vm_fd == -1)
+        return -1;
+
+    vcpu->kvm_vm_fd = kvm_vm_fd;
+    return 0;
+}
+
+static struct vcpu_info *vcpu_info_new(const char *uuid)
+{
+    struct vcpu_info *vcpu = NULL;
+
+    // Popen's process disable HEAPCHECK.
+    // See: https://gperftools.github.io/gperftools/heap_checker.html
+    unsetenv("HEAPCHECK");
+
+    vcpu = vcpu_info_hmp_info_cpus(uuid);
+    if (!vcpu)
+        return NULL;
+
+    INIT_LIST_HEAD(&vcpu->vm_link);
+    vcpu->uuid = uuid;
+    refcount_set(&vcpu->ref, 1);
+
+    if (vcpu_info_vcpupin(vcpu) < 0)
+        goto cleanup;
+
+    if (vcpu_info_tgid(vcpu) < 0)
+        goto cleanup;
+
+    if (vcpu_info_kvm_vm_fd(vcpu) < 0)
+        goto cleanup;
+
+    list_add(&vcpu->vm_link, &vm_list);
+
+    return vcpu;
+
+cleanup:
+    vcpu_info_free(vcpu);
     return NULL;
 }
 
-void vcpu_info_free(struct vcpu_info *vcpu)
+static void vcpu_info_free(struct vcpu_info *vcpu)
 {
     int i;
 
-    if (!vcpu) return;
     if (vcpu->host_cpus) {
         for (i = 0; i < vcpu->nr_vcpu; i ++)
             perf_cpu_map__put(vcpu->host_cpus[i]);
         free(vcpu->host_cpus);
     }
+    list_del(&vcpu->vm_link);
     free(vcpu);
+}
+
+struct vcpu_info *vcpu_info_get(const char *uuid)
+{
+    struct vcpu_info *vcpu;
+
+    list_for_each_entry(vcpu, &vm_list, vm_link) {
+        if (strcmp(vcpu->uuid, uuid) == 0) {
+            if (refcount_inc_not_zero(&vcpu->ref))
+                return vcpu;
+        }
+    }
+    vcpu = vcpu_info_new(uuid);
+    return vcpu;
+}
+
+void vcpu_info_put(struct vcpu_info *vcpu)
+{
+    if (!vcpu) return;
+    if (refcount_dec_and_test(&vcpu->ref))
+        vcpu_info_free(vcpu);
 }
 

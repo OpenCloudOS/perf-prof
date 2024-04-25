@@ -449,9 +449,11 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             env = parse_string_options(s);
             if (!env)
                 goto err_out;
-            // --tsc remains the same.
+            // --tsc, --kvmclock remains the same.
             env->tsc = dev->env->tsc;
-            env->tsc_offset = dev->env->tsc_offset;
+            env->clock_offset = dev->env->clock_offset;
+            if (env->kvmclock) free(env->kvmclock);
+            env->kvmclock = dev->env->kvmclock ? strdup(dev->env->kvmclock) : NULL;
             // Using (dev->cpus, dev->threads).
             // Make sure instance is consistent between source_dev and dev.
             tp->source_dev = prof_dev_open_cpu_thread_map(prof, env, dev->cpus, dev->threads, dev);
@@ -565,7 +567,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                 } else if (strcmp(attr, "pull") == 0) {
                     if (id >= 0 && tp_receive_new(tp, value) < 0) goto err_out;
                 } else if (strcmp(attr, "vm") == 0) {
-                    tp->vcpu = vcpu_info_new(value);
+                    tp->vcpu = vcpu_info_get(value);
                     if (tp->vcpu)
                         tp->vm = value;
                 } else  if (strcmp(attr, "exec") == 0) {
@@ -678,7 +680,7 @@ void tp_list_free(struct tp_list *tp_list)
         tp_broadcast_free(tp);
         tp_receive_free(tp);
         if (tp->vcpu)
-            vcpu_info_free(tp->vcpu);
+            vcpu_info_put(tp->vcpu);
         if (tp->exec_prog)
             expr_destroy(tp->exec_prog);
         if (tp->cpus) {

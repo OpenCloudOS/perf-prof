@@ -167,7 +167,8 @@ struct env {
     bool only_comm;
     bool cycle;
     bool tsc;
-    u64  tsc_offset;
+    char *kvmclock;
+    u64  clock_offset;
     int usage_self;
 
     /* workload */
@@ -217,7 +218,7 @@ typedef struct monitor {
     void (*sigusr)(struct prof_dev *dev, int signum);
     void (*interval)(struct prof_dev *dev);
 
-    // Profiler minimum event time. tsc or ns.
+    // Profiler minimum event time. return evclock_t.
     u64 (*minevtime)(struct prof_dev *dev);
 
     // return 0:continue; 1:break;
@@ -272,6 +273,23 @@ enum profdev_flush {
     PROF_DEV_FLUSH_ROUND,
 };
 
+enum convert_to {
+    CONVERT_NONE,
+    CONVERT_TO_TSC,
+    CONVERT_TO_KVMCLOCK,
+    CONVERT_ADD_OFFSET,
+};
+
+typedef u64 perfclock_t; // The clock used when the kernel samples events. PERF_SAMPLE_TIME.
+typedef u64 tsc_t; // convert perfclock to tsc
+typedef u64 kvmclock_t; // convert perfclock to kvmclock
+typedef union {
+    u64 clock;
+    perfclock_t perfclock; // ns
+    tsc_t tsc; // tsc
+    kvmclock_t kvmclock; // ns
+} evclock_t; // perf_event clock, after conversion.
+
 /*
  * Profiler device
  * Contains sampling ringbuffer, environment, timer, profiler-specific memory, convert, order, etc.
@@ -292,6 +310,7 @@ struct prof_dev {
     int nr_pollfd;
     bool dup; // dup event, order
     bool clone; // prof_dev is cloned
+    bool silent; // Silent device, no output.
     // | title                        | detail                                                                       |
     // | 2023-11-28 09:32:36.901715 G |           bash 197260 [000] 751890.944308: page-fault: addr 00007fb3c89d6170 |
     bool print_title;
@@ -301,17 +320,16 @@ struct prof_dev {
     struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         u64 sample_type;
         int time_pos;
-        u64 last_evtime; // ns, tsc
-        u64 enabled_after; // ns, tsc
+        evclock_t last_evtime; // ns, tsc, ...
+        evclock_t enabled_after; // ns, tsc, ...
         // Wall clock conversion of events.
-        u64 base_evtime; // base event time (i.e., local-clock, tsc)
+        evclock_t base_evtime; // base event time (i.e., local-clock)
         struct timespec base_timespec; // base real (i.e., wall-clock) time
     } time_ctx;
     struct perf_event_convert {
-        // tsc convert
-        bool need_tsc_conv;
+        enum convert_to need_conv;
         struct perf_tsc_conversion tsc_conv;
-
+        struct vcpu_info *vcpu; // kvmclock_conv
         char *event_copy; //[PERF_SAMPLE_MAX_SIZE];
     } convert;
     struct order_ctx {
@@ -358,6 +376,8 @@ struct prof_dev {
         bool (*samepid)(struct prof_dev *dev, union perf_event *event, int pid, int tid);
     } forward;
 };
+
+extern struct list_head prof_dev_list;
 
 struct prof_dev *prof_dev_get(struct prof_dev *dev);
 bool prof_dev_put(struct prof_dev *dev);
@@ -421,7 +441,10 @@ static inline struct prof_dev *prof_dev_top_cloned(struct prof_dev *dev)
         dev = dev->links.parent;
     return dev;
 }
-
+static inline bool prof_dev_enabled(struct prof_dev *dev)
+{
+    return dev->state == PROF_DEV_STATE_ACTIVE;
+}
 static inline union perf_event *perf_event_get(union perf_event *event)
 {
     if (event->header.type == PERF_RECORD_DEV) {
@@ -441,7 +464,7 @@ static inline void perf_event_put(union perf_event *event)
 
 struct env *parse_string_options(char *str);
 
-u64 prof_dev_list_minevtime(void);
+perfclock_t prof_dev_list_minevtime(void);
 
 
 #define PROFILER_DESC(name, arg, ...) \
@@ -451,7 +474,7 @@ u64 prof_dev_list_minevtime(void);
 #define PROFILER_ARGV_OPTION \
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", "watermark", \
-    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "tsc-offset", \
+    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", \
     "usage-self", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
@@ -477,8 +500,8 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 
 //convert.c
 u64 rdtsc(void);
-u64 perf_time_to_ns(struct prof_dev *dev, u64 time);
-u64 perf_time_to_tsc(struct prof_dev *dev, u64 time);
+evclock_t perfclock_to_evclock(struct prof_dev *dev, perfclock_t time);
+perfclock_t evclock_to_perfclock(struct prof_dev *dev, evclock_t time);
 int perf_sample_forward_init(struct prof_dev *dev);
 int perf_sample_time_init(struct prof_dev *dev);
 int perf_event_convert_init(struct prof_dev *dev);

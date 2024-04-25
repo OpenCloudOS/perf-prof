@@ -116,4 +116,27 @@ struct task_rename {
 };
 
 
+#if defined(__i386__) || defined(__x86_64__)
+struct kvm_pvclock_update {
+    COMMON_HEADER
+
+    unsigned int vcpu_id;//     offset:8;       size:4; signed:0;
+    __u32 version;//    offset:12;      size:4; signed:0;
+    __u64 tsc_timestamp;//      offset:16;      size:8; signed:0;
+    __u64 system_time;//        offset:24;      size:8; signed:0;
+    __u32 tsc_to_system_mul;//  offset:32;      size:4; signed:0;
+    __s8 tsc_shift;//   offset:36;      size:1; signed:1;
+    __u8 flags;//       offset:37;      size:1; signed:0;
+};
+
+struct kvm_write_tsc_offset {
+    COMMON_HEADER
+
+    unsigned int vcpu_id;//     offset:8;       size:4; signed:0;
+    __u64 previous_tsc_offset;//        offset:16;      size:8; signed:0;
+    __u64 next_tsc_offset;//    offset:24;      size:8; signed:0;
+};
+
+#endif
+
 #endif

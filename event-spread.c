@@ -308,14 +308,22 @@ static int block_process_event(struct event_block *block, union perf_event *even
                 return -1;
             }
         case PERF_RECORD_SAMPLE:
+            /*
+             * -e sched:sched_switch//pull=9900/vm=$uuid/ --kvmclock $uuid
+             * --kvmclock, when waiting for pvclock update, do not process the pulled events in advance.
+             */
+            if (!prof_dev_enabled(tp->dev))
+                return 0;
             ins = block_event_convert(block, event);
             if (ins < 0) return 0;
             else break;
         default:
+            if (!prof_dev_enabled(tp->dev))
+                return 0;
             break;
     }
 
-    perf_event_process_record(block->eb_list->tp->dev, event, ins, true, true);
+    perf_event_process_record(tp->dev, event, ins, true, true);
     return 0;
 }
 

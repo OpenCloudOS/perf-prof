@@ -407,7 +407,7 @@ static int tracepoint_init(struct prof_dev *dev)
 
     tep__ref();
     dev->private = p;
-    dev->type = PROF_DEV_TYPE_SERVICE;
+    dev->silent = true;
     p->tp_list = tp_list_new(dev, env->event);
     if (!p->tp_list)
         goto failed;

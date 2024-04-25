@@ -4,11 +4,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <syscall.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include <monitor.h>
 #include <tep.h>
 #include <linux/thread_map.h>
-
+#include <tp_struct.h>
+#include <linux/math64.h>
 
 /*
  *  { u64           id;   } && PERF_SAMPLE_IDENTIFIER
@@ -31,58 +35,383 @@ u64 rdtsc(void)
 #endif
 }
 
-static inline u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
-{
-	u32 ah, al;
-	u64 ret;
-
-	al = a;
-	ah = a >> 32;
-
-	ret = ((u64)al * mul) >> shift;
-	if (ah)
-		ret += ((u64)ah * mul) << (32 - shift);
-
-	return ret;
-}
-
-static inline u64 perf_tsc_to_ns(struct prof_dev *dev, u64 tsc)
-{
-    struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
-    u64 ns;
-
-    tsc -= dev->env->tsc_offset;
-    ns = mul_u64_u32_shr(tsc, tc->time_mult, tc->time_shift);
-    return ns + tc->time_zero;
-}
-
-u64 perf_time_to_ns(struct prof_dev *dev, u64 time)
-{
-    if (likely(!dev->convert.need_tsc_conv))
-        return time;
-    else
-        return perf_tsc_to_ns(dev, time);
-}
-
-static inline u64 __perf_time_to_tsc(struct prof_dev *dev, u64 ns)
+static inline tsc_t perfclock_to_tsc(struct prof_dev *dev, perfclock_t ns)
 {
     struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
     u64 t, quot, rem;
 
+    // ((ns - time_zero) << time_shift) / time_mult
     t = ns - tc->time_zero;
     quot = t / tc->time_mult;
     rem  = t % tc->time_mult;
     return (quot << tc->time_shift) +
-           (rem << tc->time_shift) / tc->time_mult +
-           dev->env->tsc_offset;
+           (rem << tc->time_shift) / tc->time_mult;
 }
 
-u64 perf_time_to_tsc(struct prof_dev *dev, u64 time)
+static inline perfclock_t tsc_to_perfclock(struct prof_dev *dev, tsc_t tsc)
 {
-    if (likely(!dev->convert.need_tsc_conv))
-        return time;
+    struct perf_tsc_conversion *tc = &dev->convert.tsc_conv;
+    u64 ns;
+
+    // (tsc * time_mult) >> time_mult + time_zaro
+    ns = mul_u64_u32_shr(tsc, tc->time_mult, tc->time_shift);
+    return ns + tc->time_zero;
+}
+
+#if defined(__i386__) || defined(__x86_64__)
+
+#define __USE_GNU
+#include <sched.h>
+#include <cpuid.h>
+#include <api/fs/fs.h>
+
+u8  __read_mostly kvm_tsc_scaling_ratio_frac_bits = 0;
+u64 __read_mostly kvm_default_tsc_scaling_ratio = 0;
+unsigned short kvm_pvclock_update_id;
+unsigned short kvm_write_tsc_offset_id;
+
+#define MSR_IA32_VMX_PROCBASED_CTLS     0x00000482
+#define CPU_BASED_ACTIVATE_SECONDARY_CONTROLS   0x80000000
+
+#define MSR_IA32_VMX_PROCBASED_CTLS2    0x0000048b
+#define SECONDARY_EXEC_TSC_SCALING              0x02000000
+
+static int adjust_vmx_controls(uint64_t msr_value)
+{
+    u32 vmx_msr_low = (u32)msr_value;
+    u32 vmx_msr_high = msr_value >> 32;
+    u32 ctl = -1;
+
+    ctl &= vmx_msr_high; /* bit == 0 in high word ==> must be zero */
+    ctl |= vmx_msr_low;  /* bit == 1 in low word  ==> must be one  */
+
+    return ctl;
+}
+
+static int tsc_scaling_setup(void)
+{
+    static int once = 0;
+    int vendor;
+
+    if (once != 0) return once;
+
+    once = -1;
+    vendor = get_cpu_vendor();
+
+    if (vendor == X86_VENDOR_INTEL) {
+        char path[64];
+        int fd, cpu = sched_getcpu();
+        uint64_t msr_value;
+
+        snprintf(path, sizeof(path), "/dev/cpu/%d/msr", cpu < 0 ? 0 : cpu);
+        fd = open(path, O_RDONLY);
+        if (fd < 0) return -1;
+
+        if (pread(fd, &msr_value, sizeof(msr_value), MSR_IA32_VMX_PROCBASED_CTLS) != sizeof(msr_value))
+            goto ret;
+        if (!(adjust_vmx_controls(msr_value) & CPU_BASED_ACTIVATE_SECONDARY_CONTROLS))
+            goto ret;
+        if (pread(fd, &msr_value, sizeof(msr_value), MSR_IA32_VMX_PROCBASED_CTLS2) != sizeof(msr_value))
+            goto ret;
+        if (!(adjust_vmx_controls(msr_value) & SECONDARY_EXEC_TSC_SCALING))
+            goto ret;
+
+        kvm_tsc_scaling_ratio_frac_bits = 48;
+        kvm_default_tsc_scaling_ratio = 1ULL << kvm_tsc_scaling_ratio_frac_bits;
+        once = 1;
+    ret:
+        close(fd);
+    } else if (vendor == X86_VENDOR_AMD) {
+        __u32 eax, ebx, ecx, edx;
+
+        eax = ebx = ecx = edx = 0;
+        __get_cpuid(0x80000000, &eax, &ebx, &ecx, &edx);
+        if (eax >= 0x8000000a) {
+            __get_cpuid(0x8000000a, &eax, &ebx, &ecx, &edx);
+            /*
+             * CPUID Fn8000_000A_EDX SVM Feature Identification
+             * bit4 TscRateMsr MSR based TSC rate control. Indicates support for MSR TSC ratio
+             * MSRC000_0104. See "TSC Ratio MSR (C000_0104h)."
+             */
+            if (edx & 0x8) {
+                kvm_tsc_scaling_ratio_frac_bits = 32;
+                kvm_default_tsc_scaling_ratio = 1ULL << kvm_tsc_scaling_ratio_frac_bits;
+                once = 1;
+            }
+        }
+    }
+
+    return once;
+}
+
+static int vcpu_info_update_vcpu0_tsc(struct vcpu_info *vcpu)
+{
+    const char *debugfs;
+    char path[512];
+    unsigned long long tsc_offset;
+    unsigned long long tsc_scaling_ratio;
+    unsigned long long tsc_scaling_ratio_frac_bits;
+
+    /*
+     * Read /sys/kernel/debug/kvm/$pid-$kvm_vm_fd/vcpu/tsc-offset
+     * Only read vcpu0, use the master clock to ensure that the values of all vcpu are the same.
+     */
+    debugfs = debugfs__mountpoint();
+
+    snprintf(path, sizeof(path), "%s/kvm/%d-%d/vcpu0/tsc-offset", debugfs, vcpu->tgid, vcpu->kvm_vm_fd);
+    if (filename__read_ull(path, &tsc_offset) < 0)
+        return -1;
+
+    snprintf(path, sizeof(path), "%s/kvm/%d-%d/vcpu0/tsc-scaling-ratio", debugfs, vcpu->tgid, vcpu->kvm_vm_fd);
+    if (filename__read_ull(path, &tsc_scaling_ratio) < 0)
+        tsc_scaling_ratio = 0;
+
+    snprintf(path, sizeof(path), "%s/kvm/%d-%d/vcpu0/tsc-scaling-ratio-frac-bits", debugfs, vcpu->tgid, vcpu->kvm_vm_fd);
+    if (filename__read_ull(path, &tsc_scaling_ratio_frac_bits) < 0)
+        tsc_scaling_ratio_frac_bits = 0;
+
+    vcpu->vcpu[0].tsc_offset = tsc_offset;
+    vcpu->vcpu[0].tsc_scaling_ratio = tsc_scaling_ratio;
+    vcpu->vcpu[0].tsc_scaling_ratio_frac_bits = tsc_scaling_ratio_frac_bits;
+
+    return 0;
+}
+
+
+static void kvm_pvclock_update(void *parent, void *raw)
+{
+    struct prof_dev *dev = parent, *tmp;
+    struct kvm_pvclock_update *pvclock = raw;
+    struct kvm_write_tsc_offset *tsc = raw;
+    struct vcpu_info *vcpu = dev->convert.vcpu;
+
+    if (likely(pvclock->common_type == kvm_pvclock_update_id)) {
+        struct pvclock_vcpu_time_info *pvti = &vcpu->vcpu[0].pvti;
+        bool update = !pvti->version;
+
+        pvti->version = pvclock->version;
+        pvti->tsc_timestamp = pvclock->tsc_timestamp;
+        pvti->system_time = pvclock->system_time;
+        pvti->tsc_to_system_mul = pvclock->tsc_to_system_mul;
+        pvti->tsc_shift = pvclock->tsc_shift;
+        pvti->flags = pvclock->flags;
+
+        // The same --kvmclock option points to the same vcpu. So, enable the same for all devices.
+        for_each_dev_get(dev, tmp, &prof_dev_list, dev_link) {
+            if (dev->convert.vcpu != vcpu)
+                continue;
+
+            if (update) {
+                print_time(stdout);
+                printf("%s: pvclock updated.\n", dev->prof->name);
+            }
+            prof_dev_enable(dev);
+        }
+    } else if (tsc->common_type == kvm_write_tsc_offset_id) {
+        u64 *tsc_offset = &vcpu->vcpu[0].tsc_offset;
+
+        if (tsc->vcpu_id == 0 &&
+            tsc->previous_tsc_offset == *tsc_offset) {
+            *tsc_offset = tsc->next_tsc_offset;
+        } else {
+            fprintf(stderr, "%s: tsc_offset update failed\n", dev->prof->name);
+        }
+    }
+}
+
+static void kvm_pvclock_hangup(void *parent)
+{
+    prof_dev_disable(parent);
+}
+
+static inline u64 __scale_tsc(u64 ratio, u64 tsc)
+{
+	return mul_u64_u64_shr(tsc, ratio, kvm_tsc_scaling_ratio_frac_bits);
+}
+
+static inline u64 kvm_scale_tsc(struct prof_dev *dev, u64 tsc)
+{
+	u64 _tsc = tsc;
+	u64 ratio = dev->convert.vcpu->vcpu[0].tsc_scaling_ratio;
+
+	if (ratio != kvm_default_tsc_scaling_ratio)
+		_tsc = __scale_tsc(ratio, tsc);
+
+	return _tsc;
+}
+
+static inline u64 kvm_read_l1_tsc(struct prof_dev *dev, u64 host_tsc)
+{
+	return dev->convert.vcpu->vcpu[0].tsc_offset + kvm_scale_tsc(dev, host_tsc);
+}
+
+static inline kvmclock_t host_tsc_to_kvmclock(struct prof_dev *dev, tsc_t host_tsc)
+{
+    // host_tsc => guest_tsc
+    // guest_tsc = tsc_offset + (host_tsc * tsc_scaling_ratio) >> kvm_tsc_scaling_ratio_frac_bits
+    tsc_t guest_tsc = kvm_read_l1_tsc(dev, host_tsc);
+
+    // guest_tsc => kvmclock
+    // nsec = (guest_tsc - tsc_timestamp) * tsc_to_system_mul * 2^(tsc_shift-32)
+    //          + system_time
+    return __pvclock_read_cycles(&dev->convert.vcpu->vcpu[0].pvti, guest_tsc);
+}
+
+static inline kvmclock_t perfclock_to_kvmclock(struct prof_dev *dev, perfclock_t time)
+{
+    tsc_t host_tsc = perfclock_to_tsc(dev, time);
+    return host_tsc_to_kvmclock(dev, host_tsc);
+}
+
+static inline perfclock_t kvmclock_to_perfclock(struct prof_dev *dev, kvmclock_t time)
+{
+    struct vcpu_data *v0 = &dev->convert.vcpu->vcpu[0];
+    int tsc_shift = v0->pvti.tsc_shift - 32;
+    u64 offset;
+    u64 delta;
+    u64 guest_tsc;
+    u64 host_tsc;
+
+    // kvmclock => guest_tsc
+    // guest_tsc = ((time - system_time) << -(tsc_shift-32)) / tsc_to_system_mul + tsc_timestamp
+    if (tsc_shift < 0) tsc_shift = -tsc_shift;
+    offset = time - v0->pvti.system_time;
+    delta = mul_u64_u64_div64(offset, 1UL << tsc_shift, v0->pvti.tsc_to_system_mul);
+    guest_tsc = delta + v0->pvti.tsc_timestamp;
+
+    // guest_tsc => host_tsc
+    // host_tsc = ((guest_tsc - tsc_offset) << kvm_tsc_scaling_ratio_frac_bits) / tsc_scaling_ratio
+    host_tsc = guest_tsc - v0->tsc_offset;
+    if (v0->tsc_scaling_ratio != kvm_default_tsc_scaling_ratio)
+        host_tsc = mul_u64_u64_div64(guest_tsc, kvm_default_tsc_scaling_ratio, v0->tsc_scaling_ratio);
+
+    // host_tsc => perfclock
+    return tsc_to_perfclock(dev, host_tsc);
+}
+
+static int perf_event_convert_kvmclock_init(struct prof_dev *dev)
+{
+    struct vcpu_data *vcpu0;
+
+    tsc_scaling_setup();
+
+    // The same --kvmclock option points to the same vcpu.
+    dev->convert.vcpu = vcpu_info_get(dev->env->kvmclock);
+    if (!dev->convert.vcpu)
+        goto failed;
+
+    vcpu0 = &dev->convert.vcpu->vcpu[0];
+    if (!vcpu0->pvclock_update) {
+        struct perf_thread_map *vcpumap;
+        struct prof_dev *pvclock;
+
+        vcpumap = thread_map__new_by_tid(vcpu0->thread_id);
+        if (!vcpumap)
+            goto failed;
+
+        pvclock = trace_dev_open("kvm:kvm_pvclock_update,kvm:kvm_write_tsc_offset", NULL, vcpumap,
+                                  dev, kvm_pvclock_update, kvm_pvclock_hangup);
+        perf_thread_map__put(vcpumap);
+        if (!pvclock)
+            goto failed;
+
+        if (prof_dev_enable(pvclock) < 0)
+            goto failed;
+
+        if (vcpu_info_update_vcpu0_tsc(dev->convert.vcpu) < 0)
+            goto failed;
+
+        kvm_pvclock_update_id = tep__event_id("kvm", "kvm_pvclock_update");
+        kvm_write_tsc_offset_id = tep__event_id("kvm", "kvm_write_tsc_offset");
+
+        vcpu0->pvclock_update = true;
+    }
+
+    // version == 0, means pvclock has not been updated.
+    if (!vcpu0->pvti.version) {
+        print_time(stdout);
+        printf("%s: wait pvclock update\n", dev->prof->name);
+        dev->state = PROF_DEV_STATE_OFF;
+    }
+    dev->convert.need_conv = CONVERT_TO_KVMCLOCK;
+    return 0;
+
+failed:
+    fprintf(stderr, "Could not convert to kvmclock.\n");
+    return -1;
+}
+
+static void perf_event_convert_kvmclock_deinit(struct prof_dev *dev)
+{
+    if (dev->convert.vcpu)
+        vcpu_info_put(dev->convert.vcpu);
+}
+
+#else
+
+
+static inline kvmclock_t host_tsc_to_kvmclock(struct prof_dev *dev, tsc_t host_tsc)
+{
+    return (kvmclock_t)host_tsc;
+}
+
+static inline kvmclock_t perfclock_to_kvmclock(struct prof_dev *dev, perfclock_t time)
+{
+    return (kvmclock_t)time;
+}
+
+static inline perfclock_t kvmclock_to_perfclock(struct prof_dev *dev, kvmclock_t time)
+{
+    return (perfclock_t)time;
+}
+
+static int perf_event_convert_kvmclock_init(struct prof_dev *dev)
+{
+    fprintf(stderr, "Non-x86 architecture cannot be converted to kvmclock.\n");
+    return -1;
+}
+
+static void perf_event_convert_kvmclock_deinit(struct prof_dev *dev) {}
+
+#endif
+
+static inline evclock_t __perfclock_to_evclock(struct prof_dev *dev, perfclock_t time)
+{
+    evclock_t evclock;
+
+    if (dev->convert.need_conv == CONVERT_TO_TSC) {
+        evclock.tsc = perfclock_to_tsc(dev, time);
+    } else if (dev->convert.need_conv == CONVERT_TO_KVMCLOCK) {
+        evclock.kvmclock = perfclock_to_kvmclock(dev, time);
+    } else
+        evclock.perfclock = time;
+
+    evclock.clock += dev->env->clock_offset;
+    return evclock;
+}
+
+evclock_t perfclock_to_evclock(struct prof_dev *dev, perfclock_t time)
+{
+    if (likely(!dev->convert.need_conv))
+        return (evclock_t)time;
     else
-        return __perf_time_to_tsc(dev, time);
+        return __perfclock_to_evclock(dev, time);
+}
+
+perfclock_t evclock_to_perfclock(struct prof_dev *dev, evclock_t time)
+{
+    if (likely(!dev->convert.need_conv)) {
+        return time.perfclock;
+    }
+
+    time.clock -= dev->env->clock_offset;
+
+    if (dev->convert.need_conv == CONVERT_TO_TSC) {
+        return tsc_to_perfclock(dev, time.tsc);
+    } else if (dev->convert.need_conv == CONVERT_TO_KVMCLOCK) {
+        return kvmclock_to_perfclock(dev, time.kvmclock);
+    } else
+        return time.perfclock;
 }
 
 static inline bool is_sampling_event(struct perf_event_attr *attr)
@@ -169,7 +498,7 @@ int perf_sample_time_init(struct prof_dev *dev)
 
     dev->time_ctx.sample_type = sample_type;
     dev->time_ctx.time_pos = 0;
-    dev->time_ctx.last_evtime = ULLONG_MAX;
+    dev->time_ctx.last_evtime.clock = ULLONG_MAX;
 
     if (sample_type & PERF_SAMPLE_TIME) {
         if (sample_type & PERF_SAMPLE_IDENTIFIER)
@@ -190,8 +519,8 @@ int perf_event_convert_init(struct prof_dev *dev)
 
     err = perf_sample_time_init(dev);
 
-    if (!env->tsc && !env->tsc_offset) {
-        dev->convert.need_tsc_conv = false;
+    if (!env->tsc && !env->kvmclock && !env->clock_offset) {
+        dev->convert.need_conv = CONVERT_NONE;
         return 0;
     }
 
@@ -200,8 +529,14 @@ int perf_event_convert_init(struct prof_dev *dev)
 
     sample_type = dev->time_ctx.sample_type;
     if (sample_type & PERF_SAMPLE_TIME) {
-        env->tsc = true;
-        dev->convert.need_tsc_conv = true;
+        if (env->tsc) {
+            env->tsc = true;
+            dev->convert.need_conv = CONVERT_TO_TSC;
+        } else if (env->kvmclock) {
+            if (perf_event_convert_kvmclock_init(dev) < 0)
+                return -1;
+        } else
+            dev->convert.need_conv = CONVERT_ADD_OFFSET;
 
         dev->convert.event_copy = malloc(PERF_SAMPLE_MAX_SIZE);
         if (!dev->convert.event_copy) {
@@ -210,8 +545,8 @@ int perf_event_convert_init(struct prof_dev *dev)
         }
     } else {
         env->tsc = false;
-        env->tsc_offset = 0;
-        dev->convert.need_tsc_conv = false;
+        env->clock_offset = 0;
+        dev->convert.need_conv = CONVERT_NONE;
     }
 
     return 0;
@@ -219,19 +554,21 @@ int perf_event_convert_init(struct prof_dev *dev)
 
 void perf_event_convert_deinit(struct prof_dev *dev)
 {
+    perf_event_convert_kvmclock_deinit(dev);
     if (dev->convert.event_copy)
         free(dev->convert.event_copy);
-    dev->convert.need_tsc_conv = false;
+    dev->convert.need_conv = CONVERT_NONE;
 }
 
 void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mmap *map)
 {
-    if (unlikely(dev->convert.need_tsc_conv)) {
+    if (unlikely(dev->convert.need_conv == CONVERT_TO_TSC ||
+                 dev->convert.need_conv == CONVERT_TO_KVMCLOCK)) {
         if (perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv) == -EOPNOTSUPP) {
             fprintf(stderr, "TSC conversion is not supported.\n");
             dev->env->tsc = false;
-            dev->env->tsc_offset = 0;
-            dev->convert.need_tsc_conv = false;
+            dev->env->clock_offset = 0;
+            dev->convert.need_conv = CONVERT_NONE;
         }
     }
 }
@@ -239,9 +576,9 @@ void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mm
 union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable)
 {
     void *data;
-    u64 *time;
+    evclock_t *time;
 
-    if (likely(!dev->convert.need_tsc_conv))
+    if (likely(!dev->convert.need_conv))
         return event;
 
     if (likely(!writable)) {
@@ -251,8 +588,8 @@ union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *eve
 
     data = (void *)event->sample.array;
 
-    time = (u64 *)(data + dev->time_ctx.time_pos);
-    *time = __perf_time_to_tsc(dev, *time);
+    time = (evclock_t *)(data + dev->time_ctx.time_pos);
+    *time = __perfclock_to_evclock(dev, time->perfclock);
 
     return event;
 }
@@ -302,7 +639,7 @@ static void evtime_sample(struct prof_dev *dev, union perf_event *event, int ins
         __u64   time;
     } *data = (void *)event->sample.array;
 
-    pdev->time_ctx.base_evtime = data->time;
+    pdev->time_ctx.base_evtime.clock = data->time;
 }
 
 static profiler evtime = {
@@ -330,14 +667,27 @@ int perf_timespec_init(struct prof_dev *dev)
     perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
         int err = 0;
         perf_event_convert_read_tsc_conversion(dev, map);
-        if (dev->convert.need_tsc_conv ||
+        if (dev->convert.need_conv == CONVERT_TO_TSC ||
+            dev->convert.need_conv == CONVERT_TO_KVMCLOCK ||
             (err = perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv)) == 0) {
             clock_gettime(CLOCK_REALTIME, &dev->time_ctx.base_timespec);
-            dev->time_ctx.base_evtime = rdtsc();
-            if (dev->time_ctx.base_evtime > 0) {
-                dev->time_ctx.base_evtime += dev->env->tsc_offset;
-                if (!dev->convert.need_tsc_conv)
-                    dev->time_ctx.base_evtime = perf_tsc_to_ns(dev, dev->time_ctx.base_evtime);
+            dev->time_ctx.base_evtime.tsc = rdtsc();
+            if (dev->time_ctx.base_evtime.tsc > 0) {
+                /*
+                 * First, tsc -> perfclock; secondly, perfclock -> evclock.
+                 *
+                 * Simplified:
+                 * CONVERT_NONE,        tsc => perfclock.
+                 * CONVERT_TO_TSC,      tsc => tsc + clock_offset
+                 * CONVERT_TO_KVMCLOCK, tsc => kvmclock + clock_offset.
+                 * CONVERT_ADD_OFFSET,  tsc => perfclock + clock_offset.
+                 */
+                if (!dev->convert.need_conv || dev->convert.need_conv == CONVERT_ADD_OFFSET)
+                    dev->time_ctx.base_evtime.perfclock = tsc_to_perfclock(dev, dev->time_ctx.base_evtime.tsc);
+                else if (dev->convert.need_conv == CONVERT_TO_KVMCLOCK)
+                    dev->time_ctx.base_evtime.kvmclock = host_tsc_to_kvmclock(dev, dev->time_ctx.base_evtime.tsc);
+
+                dev->time_ctx.base_evtime.clock += dev->env->clock_offset;
                 return 0;
             }
         }
@@ -350,8 +700,6 @@ int perf_timespec_init(struct prof_dev *dev)
 
     e = zalloc(sizeof(*e)); // free in prof_dev_close()
     if (!e) goto NULL_e;
-    e->tsc = dev->env->tsc;
-    e->tsc_offset = dev->env->tsc_offset;
 
     evt = prof_dev_open_cpu_thread_map(&evtime, e, NULL, tidmap, NULL);
     e = NULL;
@@ -366,13 +714,14 @@ int perf_timespec_init(struct prof_dev *dev)
     prof_dev_flush(evt, PROF_DEV_FLUSH_NORMAL);
     prof_dev_close(evt);
 
-    if (dev->time_ctx.base_evtime == 0) {
+    if (dev->time_ctx.base_evtime.clock == 0) {
         dev->time_ctx.base_timespec.tv_sec = 0;
         dev->time_ctx.base_timespec.tv_nsec = 0;
-    }
+    } else
+        dev->time_ctx.base_evtime = perfclock_to_evclock(dev, dev->time_ctx.base_evtime.perfclock);
 
 NULL_e:
     perf_thread_map__put(tidmap);
 NULL_tidmap:
-    return dev->time_ctx.base_evtime > 0 ? 0 : -1;
+    return dev->time_ctx.base_evtime.clock > 0 ? 0 : -1;
 }
