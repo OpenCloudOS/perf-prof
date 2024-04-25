@@ -32,8 +32,8 @@ def test_kvm_exit(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
 def test_sched_stat_runtime(runtime, memleak_check):
-    #perf-prof top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -m 64
-    top = PerfProf(['top', '-e', 'sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/', '-m', '64'])
+    #perf-prof top -e sched:sched_stat_runtime//key=pid/comm=comm/top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -m 64
+    top = PerfProf(['top', '-e', 'sched:sched_stat_runtime//key=pid/comm=comm/top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/', '-m', '64'])
     for std, line in top.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 

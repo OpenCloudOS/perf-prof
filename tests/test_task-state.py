@@ -75,4 +75,20 @@ def test_task_state_ip_link_show(runtime, memleak_check):
     for std, line in task_state.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_task_state_pthread1(runtime, memleak_check):
+    # perf-prof task-state -i 1000 --perins -m 64 -- ./pthread --loop 10 --depth 3
+    task_state = PerfProf(['task-state', '-i', '1000', '--perins', '-m', '64', '--', './pthread', '--loop', '10', '--depth', '3'])
+    for std, line in task_state.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
 
+def test_task_state_pthread2(runtime, memleak_check):
+    # perf-prof task-state -i 1000 --perins -m 64 -- ./pthread --depth 2
+    task_state = PerfProf(['task-state', '-i', '1000', '--perins', '-m', '64', '--', './pthread', '--depth', '2'])
+    for std, line in task_state.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_task_state_pthread3(runtime, memleak_check):
+    # perf-prof task-state -i 1000 --perins -m 64 -- ./pthread --daemonize --depth 5
+    task_state = PerfProf(['task-state', '-i', '1000', '--perins', '-m', '64', '--', './pthread', '--daemonize', '--depth', '5'])
+    for std, line in task_state.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

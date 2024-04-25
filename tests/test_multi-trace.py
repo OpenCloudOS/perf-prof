@@ -50,6 +50,28 @@ def test_multi_trace_softirq_pair(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
 
+def test_multi_trace_pthread1(runtime, memleak_check):
+    # perf-prof multi-trace -e syscalls:sys_enter_nanosleep -e 'syscalls:sys_exit_nanosleep,task-state/-m 64/untraced/' \
+    #           --order -i 1000 -N 50  -- ./pthread --loop 10 --depth 3
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'syscalls:sys_enter_nanosleep',
+                            '-e', 'syscalls:sys_exit_nanosleep,task-state/-m 64/untraced/',
+                            '--order', '-i', '1000', '-N', '50', '--', './pthread', '--loop', '10', '--depth', '3'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
+
+def test_multi_trace_pthread2(runtime, memleak_check):
+    # perf-prof multi-trace -e syscalls:sys_enter_nanosleep -e 'syscalls:sys_exit_nanosleep,task-state/-m 64/untraced/' \
+    #           --order -i 1000 --than 200010us --detail  -- ./pthread --loop 100 --depth 3
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'syscalls:sys_enter_nanosleep',
+                            '-e', 'syscalls:sys_exit_nanosleep,task-state/-m 64/untraced/',
+                            '--order', '-i', '1000', '--than', '200010us', '--detail', '--', './pthread', '--loop', '100', '--depth', '3'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
+
 def test_multi_trace_softirq_timer_detail(runtime, memleak_check):
     # perf-prof multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms
     multi_trace = PerfProf(["multi-trace",

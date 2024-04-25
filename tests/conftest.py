@@ -2,12 +2,18 @@
 
 from PerfProf import PerfProf
 import pytest
-
+import subprocess
 
 def pytest_addoption(parser):
     parser.addoption("--memleak-check", action="store", default=0, type=int, dest="Bytes",
                      help="perf-prof tool allow leaked bytes check (default: %(default)s, disable memleak check)")
     parser.addoption("--runtime", action="store", default=10, type=int, help="perf-prof tool runtime (default: %(default)s)")
+
+def pytest_sessionstart(session):
+    subprocess.call(['make'])
+
+def pytest_sessionfinish(session):
+    subprocess.call(['make', 'clean'])
 
 @pytest.fixture(scope="session")
 def memleak_check(pytestconfig):
