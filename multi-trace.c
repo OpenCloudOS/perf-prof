@@ -2158,7 +2158,7 @@ static int rundelay_init(struct prof_dev *dev)
 
     return multi_trace_init(dev);
 }
-
+#define TASK_REPORT_MAX  0x100 // kernel 4.14 and later.
 static int rundelay_filter(struct prof_dev *dev)
 {
     struct env *env = dev->env;
@@ -2185,13 +2185,16 @@ static int rundelay_filter(struct prof_dev *dev)
                     }
                 } else if (tp->id == sched_switch) {
                     if (i == 0 && strcmp(tp->key, "prev_pid") == 0) {
+                        int preempt = kernel_release() >= KERNEL_VERSION(4, 14, 0) ? TASK_REPORT_MAX : 0;
                         match ++;
                         tp_filter = tp_filter_new(ctx->thread_map, "prev_pid", env->filter, "prev_comm");
                         if (tp_filter) {
-                            snprintf(buff, sizeof(buff), "prev_state==0 && (%s)", tp_filter->filter);
+                            snprintf(buff, sizeof(buff), "prev_state==%d && (%s)", preempt, tp_filter->filter);
                             filter = buff;
-                        } else
-                            tp_update_filter(tp, "prev_state==0&&prev_pid>0");
+                        } else {
+                            snprintf(buff, sizeof(buff), "prev_state==%d&&prev_pid>0", preempt);
+                            tp_update_filter(tp, buff);
+                        }
                     }
                     if (i == 1 && strcmp(tp->key, "next_pid") == 0) {
                         match ++;
