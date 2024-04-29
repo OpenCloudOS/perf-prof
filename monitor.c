@@ -1780,6 +1780,17 @@ out_free:
     return NULL;
 }
 
+/**
+ * prof_dev_open_cpu_thread_map - open a new prof_dev
+ * @prof: profiler
+ * @env: env
+ * @cpu_map: new prof_dev attach to this cpu_map
+ * @thread_map: new prof_dev attach to this thread_map
+ * @parent: parent prof_dev
+ *
+ * If parent is not NULL, the new prof_dev will not be enabled by default. You can
+ * call prof_dev_enable() to enable it directly, or wait for parent to enable it.
+ */
 struct prof_dev *prof_dev_open_cpu_thread_map(profiler *prof, struct env *env,
                  struct perf_cpu_map *cpu_map, struct perf_thread_map *thread_map, struct prof_dev *parent)
 {
@@ -1908,7 +1919,9 @@ int prof_dev_enable(struct prof_dev *dev)
     u64 enable_cost;
     int err;
 
-    if (!dev || dev->state == PROF_DEV_STATE_ACTIVE)
+    if (!dev ||
+        dev->state == PROF_DEV_STATE_ACTIVE ||
+        dev->state == PROF_DEV_STATE_EXIT)
         return 0;
 
     prof = dev->prof;
