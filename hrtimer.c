@@ -443,51 +443,6 @@ static profiler hrtimer = {
 PROFILER_REGISTER(hrtimer);
 
 
-static int irq_off_read(struct prof_dev *dev, struct perf_evsel *ev, struct perf_counts_values *count, int instance)
-{
-    struct hrtimer_ctx *ctx = dev->private;
-    int n = dev->env->event ? ctx->tp_list->nr_real_tp : 0;
-    u64 *jcounter = ctx->counters + instance * (n + 1);
-    u64 counter, cpu_clock = 0;
-    struct {
-        u64 nr;
-        struct {
-            u64 value;
-            u64 id;
-        } ctnr[0];
-    } *groups = (void *)count;
-    int i, j, print = BREAK;
-    int verbose = dev->env->verbose;
-
-    for (i = 0; i < groups->nr; i++) {
-        struct perf_evsel *evsel;
-        evsel = perf_evlist__id_to_evsel(dev->evlist, groups->ctnr[i].id, NULL);
-        if (!evsel)
-            continue;
-        if (evsel == ctx->leader) {
-            cpu_clock = groups->ctnr[i].value - jcounter[n];
-            ctx->ins_counters[n] = cpu_clock;
-            continue;
-        }
-        for (j = 0; j < n; j++) {
-            struct tp *tp = &ctx->tp_list->tp[j];
-            if (tp->evsel == evsel) {
-                counter = groups->ctnr[i].value - jcounter[j];
-                ctx->ins_counters[j] = counter;
-                break;
-            }
-        }
-    }
-
-    print = ctx->analyzer(ctx, instance, n, ctx->ins_counters);
-
-    if (print == PRINT || verbose) {
-        print_time(stdout);
-        printf(" %13s [%03d] %s: cpu-clock: %lu ns\n", "read", prof_dev_ins_cpu(dev, instance), dev->prof->name, cpu_clock);
-    }
-    return 0;
-}
-
 static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
     "[OPTION...] [-F freq] [--period ns] [--than ns] [-g]",
     "Detect the hrtimer latency to determine if the irq is off.",
@@ -500,10 +455,10 @@ static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
     "",
     "EXAMPLES",
     "    "PROGRAME" irq-off --period 10ms --than 20ms -g",
-    "    "PROGRAME" irq-off -C 0 --period 10ms --than 20ms -g -i 200");
+    "    "PROGRAME" irq-off -C 0 --period 10ms --than 20ms -g");
 static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
     "OPTION:",
-    "cpus", "watermark", "interval", "output", "mmap-pages", "exit-N", "usage-self",
+    "cpus", "watermark", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
     PROFILER_ARGV_PROFILER, "freq", "period", "than", "call-graph");
@@ -515,7 +470,6 @@ struct monitor irq_off = {
     .init = hrtimer_init,
     .filter = hrtimer_filter,
     .deinit = hrtimer_exit,
-    .read = irq_off_read,
     .sample = hrtimer_sample,
 };
 MONITOR_REGISTER(irq_off);
