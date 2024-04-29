@@ -232,7 +232,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     for_each_real_tp(ctx->tp_list, tp, i) {
         for (j = 0; j < tp->nr_top; j++) {
             char *field = (j == 0 && tp->alias) ? tp->alias : tp->top_add[j].field;
-            ctx->fields[f].field = ctx->EVENT + (field - env->event);
+            ctx->fields[f].field = ctx->EVENT + (field - ctx->tp_list->event_str);
             ctx->fields[f].len = strlen(field);
             ctx->fields[f].field[ctx->fields[f].len] = '\0';
             ctx->fields[f].top_by = tp->top_add[j].top_by;
