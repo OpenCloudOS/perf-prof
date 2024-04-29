@@ -29,7 +29,6 @@ struct watchdog_info {
 struct watchdog_ctx {
     int stage;
     struct prof_dev *dev_watchdog;
-    struct prof_dev *dev_stage_init;
     struct perf_evsel *perf_evsel_hrtimer_expire_entry;
     struct callchain_ctx *cc;
     int in_guest;
@@ -197,7 +196,7 @@ static int watchdog_init(struct prof_dev *dev)
     env_init = malloc(sizeof(*env_init));
     *env_init = *env;
 
-    dev_init = prof_dev_open(&stage_init, env_init);
+    dev_init = prof_dev_open_cpu_thread_map(&stage_init, env_init, NULL, NULL, dev);
     if (!dev_init)
         return -1;
 
@@ -207,7 +206,6 @@ static int watchdog_init(struct prof_dev *dev)
      */
     ctx = dev_init->private;
     ctx->dev_watchdog = dev;
-    ctx->dev_stage_init = dev_init;
     dev->private = ctx;
     dev->pages = dev_init->pages;
     perf_cpu_map__put(dev->cpus);
@@ -220,6 +218,9 @@ static int watchdog_init(struct prof_dev *dev)
         attr.type = PERF_TYPE_SOFTWARE;
         attr.config = PERF_COUNT_SW_CPU_CLOCK;
     }
+
+    if (prof_dev_enable(dev_init) < 0)
+        goto failed;
 
     evsel = perf_tp_event(evlist, "timer", "hrtimer_expire_entry");
     if (!evsel)
@@ -324,10 +325,6 @@ static void watchdog_stage_deinit(struct prof_dev *dev)
 
 static void watchdog_exit(struct prof_dev *dev)
 {
-    struct watchdog_ctx *ctx = dev->private;
-
-    if (ctx->dev_stage_init)
-        prof_dev_close(ctx->dev_stage_init);
     monitor_ctx_exit(dev);
 }
 
@@ -395,7 +392,7 @@ static void watchdog_stage_sample(struct prof_dev *dev, union perf_event *event,
 
             ctx->stage = STAGE_MONITOR;
             ctx->perf_evsel_hrtimer_expire_entry = NULL;
-            prof_dev_disable(dev);
+            prof_dev_close(dev);
             watchdog_filter(ctx->dev_watchdog);
             prof_dev_enable(ctx->dev_watchdog);
         }
