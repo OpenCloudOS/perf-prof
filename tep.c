@@ -558,6 +558,13 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 
                     tp->key_prog = prog;
                     tp->key = value;
+                } else if (strcmp(attr, "role") == 0) {
+                    if (!fields) fields = tep__event_fields(id);
+                    if (fields)  prog = expr_compile(value, fields);
+                    if (!prog) { free(fields); goto err_out; }
+
+                    tp->role_prog = prog;
+                    tp->role = value;
                 } else if (strcmp(attr, "untraced") == 0) {
                     tp->untraced = true;
                 } else if (strcmp(attr, "trigger") == 0) {
@@ -677,6 +684,8 @@ void tp_list_free(struct tp_list *tp_list)
             expr_destroy(tp->num_prog);
         if (tp->key_prog)
             expr_destroy(tp->key_prog);
+        if (tp->role_prog)
+            expr_destroy(tp->role_prog);
         tp_broadcast_free(tp);
         tp_receive_free(tp);
         if (tp->vcpu)
@@ -735,6 +744,12 @@ char *tp_get_comm(struct tp *tp, void *data, int size)
 unsigned long tp_get_key(struct tp *tp, void *data, int size)
 {
     long key = tp_prog_run(tp, tp->key_prog, data, size);
+    return key == -1 ? 0 : (unsigned long)key;
+}
+
+unsigned long tp_get_role(struct tp *tp, void *data, int size)
+{
+    long key = tp_prog_run(tp, tp->role_prog, data, size);
     return key == -1 ? 0 : (unsigned long)key;
 }
 

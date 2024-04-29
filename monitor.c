@@ -363,6 +363,7 @@ struct option main_options[] = {
                                                                 "      size=EXPR: kmemleak, size field, Dflt: size=bytes_alloc\n"
                                                                 "      num=EXPR: num-dist, num field\n"
                                                                 "      key=EXPR: key for multiple events: top, multi-trace\n"
+                                                                "      role=EXPR: multi-trace, Bit 0: as event1, Bit 1: as event2.\n"
                                                                 "      untraced: multi-trace, auxiliary, no two-event analysis\n"
                                                                 "      trigger: multi-trace, use events to trigger interval output\n"
                                                                 "      vm=uuid: get the mapping from Guest vcpu to Host tid\n"

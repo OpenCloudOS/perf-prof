@@ -1523,14 +1523,30 @@ found:
 
     if (!ctx->nested) {
         bool event_is_sched_wakeup_and_unnecessary = false;
+        union {
+            unsigned long role;
+            struct {
+                unsigned long as_event1 : 1,
+                              as_event2 : 1;
+            };
+        } role = {.role = 3};
         if (!event_dev) {
             sched_event(ctx->level, raw, size, hdr->cpu_entry.cpu);
             event_is_sched_wakeup_and_unnecessary = sched_wakeup_unnecessary(ctx->level, raw, size);
             if (event_is_sched_wakeup_and_unnecessary) ctx->sched_wakeup_unnecessary ++;
+
+            if (tp->role_prog)
+                role.role = tp_get_role(tp, raw, size);
         }
-        need_find_prev = i != 0 || env->cycle;
-        need_backup = (i != ctx->nr_list - 1 && !event_is_sched_wakeup_and_unnecessary) ||
-                      (i == ctx->nr_list - 1 && env->cycle);
+        /*
+         * The role ATTR can only change the `need_find_prev' and `need_backup' variables
+         * from 1 to 0.
+         * For --cyele, role=3 for all events, you can use role ATTR to make some events
+         * only as event1 or only as event2.
+         */
+        need_find_prev = (i != 0 || env->cycle) && role.as_event2;
+        need_backup = (i != ctx->nr_list - 1 ? !event_is_sched_wakeup_and_unnecessary : env->cycle) &&
+                      (role.as_event1);
         need_remove_from_backup = 1;
         // no need to use tp1
         tp1 = NULL;
@@ -1635,6 +1651,8 @@ static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key
                 printf("key=%s/", tp->key?:".");
             if (tp->key)
                 *has_key = true;
+            if (tp->role)
+                printf("role=%s/", tp->role?:".");
             if (strcmp(impl, TWO_EVENT_MEM_PROFILE) == 0)
                 printf("ptr=%s/size=%s/", tp->mem_ptr?:".", tp->mem_size?:".");
             if (strcmp(impl, TWO_EVENT_PAIR_IMPL) != 0)
@@ -1645,6 +1663,8 @@ static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key
                 printf("trigger/");
             if (tp->alias)
                 printf("alias=%s/", tp->alias);
+            if (!tp->role)
+                printf("[role=./]");
             if (!tp->untraced)
                 printf("[untraced/]");
             if (!tp->trigger)
@@ -1770,7 +1790,7 @@ static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
     "    syscalls - syscalls latency analysis",
     "",
     "EXAMPLES",
-    "    "PROGRAME" multi-trace -e sched:sched_switch --cycle -i 1000",
+    "    "PROGRAME" multi-trace -e sched:sched_switch//role=\"(next_pid?1:0)|(prev_pid?2:0)\"/ --cycle -i 1000",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --impl pair",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us",

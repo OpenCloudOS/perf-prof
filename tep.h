@@ -64,12 +64,16 @@ struct tp {
     struct expr_prog *num_prog;
     const char *num;
 
-    //multi-trace profiler
+    // multi-trace profiler
     // unsigned long tp_get_key(struct tp *tp, ...)
     struct expr_prog *key_prog;
     const char *key;
     bool untraced;
     bool trigger;
+
+    // multi-trace profiler
+    struct expr_prog *role_prog;
+    const char *role;
 
     // event spread
     void *broadcast;
@@ -172,6 +176,7 @@ char *tp_get_comm(struct tp *tp, void *data, int size);
 void *tp_get_mem_ptr(struct tp *tp, void *data, int size);
 unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
 unsigned long tp_get_key(struct tp *tp, void *data, int size);
+unsigned long tp_get_role(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
