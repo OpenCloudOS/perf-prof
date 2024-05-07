@@ -392,6 +392,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
         .only_print_greater_than = env->only_print_greater_than,
         .greater_than = env->greater_than,
         .lower_than = env->lower_than,
+        .hide_than = env->hide_than,
         .heatmap = env->heatmap,
         .first_n = 10,
         .sort_print = ctx->nested ? false : true,

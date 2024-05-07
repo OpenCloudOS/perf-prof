@@ -25,6 +25,7 @@ struct two_event_options {
     bool only_print_greater_than;
     unsigned long greater_than;
     unsigned long lower_than;
+    unsigned long hide_than; // hide<1ms
     char *heatmap;
     unsigned int first_n;
     bool sort_print;

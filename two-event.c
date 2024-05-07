@@ -341,18 +341,43 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 if (iter) {
                     bool first = true;
                     char buff[32];
+                    int hide = 0;
+                    struct {
+                        __u64 time;
+                        union perf_event *event;
+                        struct tp *tp;
+                    } prev = {0, NULL, NULL};
                     snprintf(buff, sizeof(buff), "| %12.3f %s", delta/1000.0, unit);
                     event_iter_cmd(iter, CMD_EVENT1);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
                         if (iter->curr == iter->event2)
                             break;
                         if (event_need_to_print(event1, event2, info, iter)) {
+                            struct multi_trace_type_header *data = (void *)iter->event->sample.array;
+
+                            if (!first && opts->hide_than) {
+                                if (data->time - prev.time < opts->hide_than) {
+                                    hide ++;
+                                    goto set_prev;
+                                }
+                                if (hide) {
+                                    if (--hide) printf("| %17d hidden\n", hide);
+                                    multi_trace_print_title(prev.event, prev.tp, "|");
+                                }
+                            }
                             multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
                             first = false;
+                            hide = 0;
+                       set_prev:
+                            prev.time = data->time;
+                            prev.event = iter->event;
+                            prev.tp = iter->tp;
                         }
                     }
                     if (first)
                         printf("%s\n", buff);
+                    if (hide)
+                        printf("| %17d hidden\n", hide);
                 }
 
                 // print event2

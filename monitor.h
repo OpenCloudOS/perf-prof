@@ -156,6 +156,7 @@ struct env {
     // detail_arg
         unsigned long before_event1;// unit: ns
         unsigned long after_event2; // unit: ns
+        unsigned long hide_than;  // unit: ns
         bool samecpu;
         bool samepid;
         bool sametid;

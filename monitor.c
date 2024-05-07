@@ -222,6 +222,8 @@ static void detail_parse(const char *s)
         env.sametid = true;
     else if (strcmp(s, "samekey") == 0)
         env.samekey = true;
+    else if (strncmp(s, "hide<", 5) == 0)
+        env.hide_than = nsparse(s+5, NULL);
     else if (s[0] == '-')
         env.before_event1 = nsparse(s+1, NULL);
     else
@@ -404,6 +406,7 @@ struct option main_options[] = {
                                                        "For multi-trace profiler:\n"
                                                        "   -N: Before event1, print events within N nanoseconds.\n"
                                                        "   +N: After event2, print events within N nanoseconds.\n"
+                                                       "hide<N: Hide event intervals less than N nanoseconds.\n"
                                                        "samecpu: Only show events with the same cpu as event1 or event2.\n"
                                                        "samepid: Only show events with the same pid as event1 or event2.\n"
                                                        "sametid: Only show events with the same tid as event1 or event2.\n"
