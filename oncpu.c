@@ -516,7 +516,7 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
         ctx->last_time[instance] = data->time;
 
         // exclude swapper
-        if (strncmp(comm, "swapper/", 8) == 0)
+        if (tid == 0)
             return;
     }
 
