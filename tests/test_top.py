@@ -2,6 +2,7 @@
 
 from PerfProf import PerfProf
 from conftest import result_check
+import pytest
 
 def test_sched_wakeup(runtime, memleak_check):
     #perf-prof top -e sched:sched_wakeup//comm=comm/ --only-comm -m 64

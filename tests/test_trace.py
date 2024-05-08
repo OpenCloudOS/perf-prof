@@ -15,9 +15,9 @@ def test_sched_wakeup_tsc(runtime, memleak_check):
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
-def test_sched_wakeup_tsc_offset(runtime, memleak_check):
+def test_sched_wakeup_clock_offset(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup -C 0
-    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup', '-C', '0', '-m', '64', '--tsc-offset', '0xff', '-N', '20'])
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup', '-C', '0', '-m', '64', '--clock-offset', '0xff', '-N', '20'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 

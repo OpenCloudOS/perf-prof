@@ -12,6 +12,14 @@ def test_multi_trace_switch(runtime, memleak_check):
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)
 
+def test_multi_trace_switch_role(runtime, memleak_check):
+    # perf-prof multi-trace -e sched:sched_switch//role="(next_pid?1:0)|(prev_pid?2:0)"/ --cycle -i 1000 --perins
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'sched:sched_switch//role="(next_pid?1:0)|(prev_pid?2:0)"',
+                            '--cycle', '-i', '1000', '--perins'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
 def test_multi_trace_hrtimer(runtime, memleak_check):
     # perf-prof multi-trace -e timer:hrtimer_expire_entry/function==0x$tick/ -e timer:hrtimer_expire_exit -i 1000
     multi_trace = PerfProf(["multi-trace"])
@@ -128,7 +136,7 @@ def test_multi_trace_rundelay_page_faults(runtime, memleak_check):
     multi_trace = PerfProf(["multi-trace",
                             '-e', 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/',
                             '-e', 'sched:sched_switch//key=next_pid/,sched:sched_migrate_task//untraced/key=pid/,page-faults/--exclude-user --watermark 50 -m 16/untraced/',
-                            '-k', 'pid', '-m', '512', '-i', '1000', '--order', '--than', '100ms', '--detail=samecpu'])
+                            '-k', 'pid', '-m', '512', '-i', '1000', '--order', '--than', '100ms', '--detail=samecpu,hide<1ms'])
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)
 

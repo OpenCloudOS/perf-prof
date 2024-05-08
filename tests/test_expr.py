@@ -41,6 +41,8 @@ def test_expr_sched_wakeup13(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("pid=%d, pid++=%d, pid--=%d, pid=%d ", pid, pid++, pid--, pid)'], runtime, memleak_check)
 def test_expr_sched_wakeup14(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("pid=%d, %s %s !", pid, "hello", "world")'], runtime, memleak_check)
+def test_expr_sched_wakeup15(runtime, memleak_check):
+    expr(['-e', 'sched:sched_wakeup', 'printf("strcmp(%s, sap, 3) = %d", comm, strncmp(comm, "sap", 3))'], runtime, memleak_check)
 
 def test_expr_kfree_skb(runtime, memleak_check):
     expr(['-e', 'skb:kfree_skb', 'printf("protocol=%d ", ntohs(protocol))'], runtime, memleak_check)

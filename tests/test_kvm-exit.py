@@ -2,6 +2,7 @@
 
 from PerfProf import PerfProf
 from conftest import result_check
+import pytest
 
 def test_kvm_exit(runtime, memleak_check):
     exist, _ = PerfProf.tracepoint_exists('kvm:kvm_exit')
