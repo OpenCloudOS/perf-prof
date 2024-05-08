@@ -83,7 +83,7 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       PRTF, KSYM, NTHL, NTHS, STRCMP, EXIT };
+       PRTF, KSYM, NTHL, NTHS, STRNCMP, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY, PTR = 0x8 };
@@ -389,8 +389,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("ntohl", INT, NTHL);
     // uint16_t ntohs(uint16_t netshort);
     ADD_LIB("ntohs", SHORT, NTHS);
-    // int strcmp(const char *s1, const char *s2);
-    ADD_LIB("strcmp", INT, STRCMP);
+    // int strncmp(const char *s1, const char *s2, long n);
+    ADD_LIB("strncmp", INT, STRNCMP);
 
     data = d; // reset data
     memset(d, 0, datasize);
@@ -541,7 +541,7 @@ long expr_run(struct expr_prog *prog)
             case KSYM: a = (long)(void *)ksymbol(*sp); break;
             case NTHL: a = (int)ntohl((int)*sp); break;
             case NTHS: a = (short)ntohs((short)*sp); break;
-            case STRCMP: t = sp + pc[1]; a = strcmp((const char *)t[-1], (const char *)t[-2]); break;
+            case STRNCMP: t = sp + pc[1]; a = strncmp((const char *)t[-1], (const char *)t[-2], (long)t[-3]); break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -863,7 +863,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "    short ntohs(short netshort)",
     "        These functions convert network byte order to host byte order.",
     "",
-    "    int strcmp(const char *s1, const char *s2)",
+    "    int strncmp(const char *s1, const char *s2, long n)",
     "        Compare two strings.",
     "",
     "EXAMPLES",
