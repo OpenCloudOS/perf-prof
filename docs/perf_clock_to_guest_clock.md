@@ -62,6 +62,8 @@ TSC conversion is not supported.
 $ cat /sys/kernel/debug/kvm/11524-15/vcpu0/tsc-offset 
 -4949202418480468
 # 11524-15, 11524是qemu进程的pid，15是kvm-vm的文件描述符。
+$ printf '0x%x\n' $(cat /sys/kernel/debug/kvm/11524-15/vcpu0/tsc-offset)
+0xffee6aba03eccaac
 ```
 
 转换成16进制值。
@@ -158,7 +160,7 @@ $ ./perf-prof trace -e sched:sched_wakeup -N 1 --kvmclock 8ab13543-95fc-4a78-905
 
 首先会提示等待pvclock更新，更新完成之后，会正常采样时间。`16132.145419`就是转换后的kvmclock时钟，使用的是`8ab13543-95fc-4a78-9056-d605a03e9033`虚拟机的pvclock结构。
 
-如果Guest使用的是tsc时钟源，则`wait pvclock update`会一直等待，不会有pvclock使用
+如果Guest使用的是tsc时钟源，则`wait pvclock update`会一直等待，不会有pvclock更新事件。
 
 内部的转换过程，分为2个阶段：
 
@@ -210,6 +212,8 @@ kvm_clock_read() = local_clock() + kvm_sched_clock_offset - __sched_clock_offset
 $ echo 'p:try_to_wake_up try_to_wake_up kvm_sched_clock_offset=@kvm_sched_clock_offset __sched_clock_offset=@__sched_clock_offset' > /sys/kernel/debug/tracing/kprobe_events
 $ ./perf-prof trace -e kprobes:try_to_wake_up -N 1
 2024-04-24 16:41:10.346226            swapper      0 d.s. [004] 17890.752743: kprobes:try_to_wake_up: (ffffffff810ba2a0) kvm_sched_clock_offset=0x1abf681cf __sched_clock_offset=0xfffffffffcc60c03
+$ printf "0x%x\n" $((0x1abf681cf-0xfffffffffcc60c03))
+0x1af3075cc
 ```
 
 `kvm_sched_clock_offset`和`__sched_clock_offset`都是内核变量，可以直接获取。

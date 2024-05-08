@@ -100,12 +100,12 @@ Host也采样`irq:irq_handler_entry`事件，只不过事件来自 127.0.0.1:990
 ## 4.3 Host处理事件
 
 ```
-./perf-prof multi-trace -e 'kvm:kvm_msi_set_irq/common_pid==26027/key="(((address>>18)&1)?42:0) + ((address>>12)&0x3f)"/' -e 'irq:irq_handler_entry//pull=9900/key="83-irq+32"/' --tsc --tsc-offset 0xffdafd48df582d22 --order -i 1000 --than 1ms
+./perf-prof multi-trace -e 'kvm:kvm_msi_set_irq/common_pid==26027/key="(((address>>18)&1)?42:0) + ((address>>12)&0x3f)"/' -e 'irq:irq_handler_entry//pull=9900/key="83-irq+32"/' --tsc --clock-offset 0xffdafd48df582d22 --order -i 1000 --than 1ms
 ```
 
 Host采样`kvm:kvm_msi_set_irq`事件，这个来自Host内核；采样`irq:irq_handler_entry`事件，来自Guest。`multi-trace`分析`kvm:kvm_msi_set_irq =>  irq:irq_handler_entry`的延迟，就是网卡中断响应的延迟，包含了Guest内关中断导致的延迟。
 
-- `--tsc --tsc-offset 0xffdafd48df582d22` 把`kvm:kvm_msi_set_irq`事件转换为Guest tsc时间戳。来自Guest的`irq:irq_handler_entry`事件不会转换，其已经在Guest内转换过了。
+- `--tsc --clock-offset 0xffdafd48df582d22` 把`kvm:kvm_msi_set_irq`事件转换为Guest tsc时间戳。来自Guest的`irq:irq_handler_entry`事件不会转换，其已经在Guest内转换过了。
 - `key="(((address>>18)&1)?42:0) + ((address>>12)&0x3f)"` 把`kvm:kvm_msi_set_irq`事件address参数转换成对应的Guest CPU编号。
 - `key="83-irq+32"` 把`irq:irq_handler_entry`事件的irq参数转换成对应的Guest CPU编号。virio-net中断已经在Guest内绑定CPU了。
 
