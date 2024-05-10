@@ -204,11 +204,15 @@ static int vcpu_info_kvm_vm_fd(struct vcpu_info *vcpu)
         char link_target[256];
         char link_path[256];
         ssize_t len;
+        int ret;
 
         if (entry->d_name[0] == '.')
             continue;
 
-        snprintf(link_path, sizeof(link_path), "%s/%s", path, entry->d_name);
+        ret = snprintf(link_path, sizeof(link_path), "%s/%s", path, entry->d_name);
+        if (ret >= sizeof(link_path))
+            continue;
+
         len = readlink(link_path, link_target, sizeof(link_target) - 1);
         if (len == -1)
             continue;
