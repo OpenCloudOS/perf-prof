@@ -551,8 +551,12 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
      */
     if (tp->key_prog)
         info.key = tp_get_key(tp, data, size);
-    else
+    else {
         info.key = raw->tid_entry.tid;
+        // raw->tid_entry.pid may be -1, when process exits.
+        if (info.key == (u32)-1)
+            return;
+    }
 
     if (ctx->show_comm) {
         if (tp->comm_prog)
