@@ -211,8 +211,20 @@ void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
         watermark = env->watermark;
     else {
         if (!attr->watermark) {
-            watermark = 0;
-            wakeup_events = attr->wakeup_events;
+            /*
+             * Enable watermark to reduce the number of wake-ups.
+             * For device wakeup_events = 1, when used as a child-device, adjust to use watermark.
+             *
+             * In principle, it should be the forwarding source device, which will be flushed by
+             * the parent device. However, when reduce_wakeup_times() is called, the device cannot
+             * yet be marked as a forwarding source, so prof_dev_has_parent() is used.
+             */
+            if (prof_dev_has_parent(dev))
+                watermark = 50;
+            else {
+                watermark = 0;
+                wakeup_events = attr->wakeup_events;
+            }
         } else {
             watermark = 50;
             wakeup_watermark = attr->wakeup_watermark;

@@ -432,6 +432,10 @@ static inline struct prof_dev *prof_dev_is_cloned(struct prof_dev *dev)
 {
     return dev->clone ? dev->links.parent : NULL;
 }
+static inline bool prof_dev_has_parent(struct prof_dev *dev)
+{
+    return !!dev->links.parent;
+}
 static inline bool prof_dev_at_top(struct prof_dev *dev)
 {
     return !dev->links.parent || (!dev->clone && !dev->forward.target);
