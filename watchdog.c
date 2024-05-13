@@ -185,7 +185,7 @@ static int watchdog_init(struct prof_dev *dev)
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU |
                          (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
-        .pinned        = 1,
+        .pinned        = 0,
         .disabled      = 1,
         .exclude_callchain_user = 1,
         .wakeup_events = 1,

@@ -113,7 +113,7 @@ static int profile_init(struct prof_dev *dev)
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ |
                          (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = 0,
-        .pinned        = 1,
+        .pinned        = 0,
         .disabled      = 1,
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
