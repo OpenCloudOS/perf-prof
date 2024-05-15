@@ -274,7 +274,7 @@ enum profdev_flush {
     PROF_DEV_FLUSH_ROUND,
 };
 
-enum convert_to {
+enum perfclock_convert_to {
     CONVERT_NONE,
     CONVERT_TO_TSC,
     CONVERT_TO_KVMCLOCK,
@@ -290,6 +290,7 @@ typedef union {
     tsc_t tsc; // tsc
     kvmclock_t kvmclock; // ns
 } evclock_t; // perf_event clock, after conversion.
+typedef u64 real_ns_t; // real ns unit.
 
 /*
  * Profiler device
@@ -324,12 +325,15 @@ struct prof_dev {
         evclock_t last_evtime; // ns, tsc, ...
         evclock_t enabled_after; // ns, tsc, ...
         // Wall clock conversion of events.
-        evclock_t base_evtime; // base event time (i.e., local-clock)
+        real_ns_t base_evtime; // base event time
         struct timespec base_timespec; // base real (i.e., wall-clock) time
+        struct timer base_timer; // Periodically synchronize base_evtime and base_timespec.
     } time_ctx;
     struct perf_event_convert {
-        enum convert_to need_conv;
+        enum perfclock_convert_to need_conv;
+        bool need_fixed;
         struct perf_tsc_conversion tsc_conv;
+        struct perf_tsc_conversion tsc_conv_fixed; // tsc_to_fixed_perfclock()
         struct vcpu_info *vcpu; // kvmclock_conv
         char *event_copy; //[PERF_SAMPLE_MAX_SIZE];
     } convert;
@@ -507,6 +511,7 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
 u64 rdtsc(void);
 evclock_t perfclock_to_evclock(struct prof_dev *dev, perfclock_t time);
 perfclock_t evclock_to_perfclock(struct prof_dev *dev, evclock_t time);
+real_ns_t evclock_to_real_ns(struct prof_dev *dev, evclock_t time);
 int perf_sample_forward_init(struct prof_dev *dev);
 int perf_sample_time_init(struct prof_dev *dev);
 int perf_event_convert_init(struct prof_dev *dev);

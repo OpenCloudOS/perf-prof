@@ -58,6 +58,16 @@ static inline perfclock_t tsc_to_perfclock(struct prof_dev *dev, tsc_t tsc)
     return ns + tc->time_zero;
 }
 
+static inline perfclock_t tsc_to_fixed_perfclock(struct prof_dev *dev, tsc_t tsc)
+{
+    struct perf_tsc_conversion *tc = &dev->convert.tsc_conv_fixed;
+    u64 ns;
+
+    // (tsc * time_mult) >> time_mult + time_zaro
+    ns = mul_u64_u32_shr(tsc, tc->time_mult, tc->time_shift);
+    return ns + tc->time_zero;
+}
+
 #if defined(__i386__) || defined(__x86_64__)
 
 #define __USE_GNU
@@ -414,6 +424,49 @@ perfclock_t evclock_to_perfclock(struct prof_dev *dev, evclock_t time)
         return time.perfclock;
 }
 
+/*
+ * evclock converts to real ns units.
+ *
+ * CONVERT_NONE
+ * perfclock is originally in ns unit.
+ *   kernel <  4.12.0: perfclock is inaccurate and needs to be fixed.
+ *   kernel >= 4.12.0: is accurate, no fix needed.
+ * See the comments for tsc_conv_fixed().
+ *
+ * CONVERT_TO_TSC
+ * Needs to be converted to perfclock, which is in ns units.
+ *   kernel <  4.12.0: Convert to fixed perfclock.
+ *   kernel >= 4.12.0: Convert to perfclock.
+ *
+ * CONVERT_TO_KVMCLOCK
+ * It is originally in ns units and does not need to be converted.
+ *
+ * CONVERT_ADD_OFFSET
+ * Same as CONVERT_NONE.
+ */
+real_ns_t evclock_to_real_ns(struct prof_dev *dev, evclock_t time)
+{
+    if (likely(!dev->convert.need_conv)) {
+convert_none:
+        if (dev->convert.need_fixed) {
+            tsc_t tsc = perfclock_to_tsc(dev, time.perfclock);
+            return tsc_to_fixed_perfclock(dev, tsc);
+        } else
+            return time.perfclock;
+    }
+
+    time.clock -= dev->env->clock_offset;
+
+    if (dev->convert.need_conv == CONVERT_TO_TSC) {
+        return dev->convert.need_fixed ?
+               tsc_to_fixed_perfclock(dev, time.tsc) :
+               tsc_to_perfclock(dev, time.tsc);
+    } else if (dev->convert.need_conv == CONVERT_TO_KVMCLOCK) {
+        return time.kvmclock;
+    } else
+        goto convert_none;
+}
+
 static inline bool is_sampling_event(struct perf_event_attr *attr)
 {
 	return attr->sample_period != 0;
@@ -594,6 +647,111 @@ union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *eve
     return event;
 }
 
+#include <asm/div64.h>
+
+/**
+ * clocks_calc_mult_shift - calculate mult/shift factors for scaled math of clocks
+ * @mult:	pointer to mult variable
+ * @shift:	pointer to shift variable
+ * @from:	frequency to convert from
+ * @to:		frequency to convert to
+ * @maxsec:	guaranteed runtime conversion range in seconds
+ *
+ * The function evaluates the shift/mult pair for the scaled math
+ * operations of clocksources and clockevents.
+ *
+ * @to and @from are frequency values in HZ. For clock sources @to is
+ * NSEC_PER_SEC == 1GHz and @from is the counter frequency. For clock
+ * event @to is the counter frequency and @from is NSEC_PER_SEC.
+ *
+ * The @maxsec conversion range argument controls the time frame in
+ * seconds which must be covered by the runtime conversion with the
+ * calculated mult and shift factors. This guarantees that no 64bit
+ * overflow happens when the input value of the conversion is
+ * multiplied with the calculated mult factor. Larger ranges may
+ * reduce the conversion accuracy by chosing smaller mult and shift
+ * factors.
+ */
+static void
+clocks_calc_mult_shift(u32 *mult, u16 *shift, u32 from, u32 to, u32 maxsec)
+{
+	u64 tmp;
+	u32 sft, sftacc= 32;
+
+	/*
+	 * Calculate the shift factor which is limiting the conversion
+	 * range:
+	 */
+	tmp = ((u64)maxsec * from) >> 32;
+	while (tmp) {
+		tmp >>=1;
+		sftacc--;
+	}
+
+	/*
+	 * Find the conversion shift/mult pair which has the best
+	 * accuracy and fits the maxsec conversion range:
+	 */
+	for (sft = 32; sft > 0; sft--) {
+		tmp = (u64) to << sft;
+		tmp += from / 2;
+		do_div(tmp, from);
+		if ((tmp >> sftacc) == 0)
+			break;
+	}
+	*mult = tmp;
+	*shift = sft;
+}
+
+static void tsc_conv_fixed(struct prof_dev *dev)
+{
+    static int once = 0;
+    static int tsc_khz = 0;
+
+    /*
+     * For kernels before 4.12
+     *
+     * LINUX aa7b630 x86/tsc: Feed refined TSC calibration into sched_clock()
+     *
+     * In the Linux kernel, the initial tsc_khz=2500000, is refined in
+     * tsc_refine_calibration_work(), and then tsc_khz=2494140. cyc2ns_mul, cyc2ns_shift
+     * are used to convert tsc to ns, but they are not re-modified after tsc_khz changes.
+     * It's fixed in aa7b630.
+     *
+     * Therefore, within sched_clock(), tsc to ns are not accurate, and so is perfclock.
+     * Get the correct tsc_khz, and calculate cyc2ns_mul and cyc2ns_shift, here.
+     */
+    if (kernel_release() < KERNEL_VERSION(4,12,0)) {
+        if (once == 0) {
+            once = 1;
+            tsc_khz = get_tsc_khz();
+        }
+
+        dev->convert.need_fixed = tsc_khz > 0;
+        if (dev->convert.need_fixed) {
+            dev->convert.tsc_conv_fixed = dev->convert.tsc_conv;
+            /*
+             * Compute a new multiplier as per the above comment and ensure our
+             * time function is continuous; see the comment near struct
+             * cyc2ns_data.
+            */
+            clocks_calc_mult_shift(&dev->convert.tsc_conv_fixed.time_mult,
+                                   &dev->convert.tsc_conv_fixed.time_shift,
+                                   tsc_khz, NSEC_PER_MSEC, 0);
+
+            /*
+             * cyc2ns_shift is exported via arch_perf_update_userpage() where it is
+             * not expected to be greater than 31 due to the original published
+             * conversion algorithm shifting a 32-bit value (now specifies a 64-bit
+             * value) - refer perf_event_mmap_page documentation in perf_event.h.
+            */
+            if (dev->convert.tsc_conv_fixed.time_shift == 32) {
+                dev->convert.tsc_conv_fixed.time_shift = 31;
+                dev->convert.tsc_conv_fixed.time_mult >>= 1;
+            }
+        }
+    }
+}
 
 static int evtime_init(struct prof_dev *dev)
 {
@@ -639,7 +797,7 @@ static void evtime_sample(struct prof_dev *dev, union perf_event *event, int ins
         __u64   time;
     } *data = (void *)event->sample.array;
 
-    pdev->time_ctx.base_evtime.clock = data->time;
+    pdev->time_ctx.base_evtime = data->time;
 }
 
 static profiler evtime = {
@@ -649,6 +807,12 @@ static profiler evtime = {
     .deinit = evtime_deinit,
     .sample = evtime_sample,
 };
+
+static void perf_timespec_sync(struct timer *timer)
+{
+    struct prof_dev *dev = container_of(timer, struct prof_dev, time_ctx.base_timer);
+    perf_timespec_init(dev);
+}
 
 int perf_timespec_init(struct prof_dev *dev)
 {
@@ -664,30 +828,49 @@ int perf_timespec_init(struct prof_dev *dev)
     if (!(dev->time_ctx.sample_type & PERF_SAMPLE_TIME))
         return 0;
 
+    if (dev->silent)
+        return 0;
+
     perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
         int err = 0;
         perf_event_convert_read_tsc_conversion(dev, map);
         if (dev->convert.need_conv == CONVERT_TO_TSC ||
             dev->convert.need_conv == CONVERT_TO_KVMCLOCK ||
             (err = perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv)) == 0) {
+            evclock_t base_evtime;
+
+            base_evtime.tsc = rdtsc();
             clock_gettime(CLOCK_REALTIME, &dev->time_ctx.base_timespec);
-            dev->time_ctx.base_evtime.tsc = rdtsc();
-            if (dev->time_ctx.base_evtime.tsc > 0) {
+
+            if (base_evtime.tsc > 0) {
                 /*
                  * First, tsc -> perfclock; secondly, perfclock -> evclock.
                  *
                  * Simplified:
-                 * CONVERT_NONE,        tsc => perfclock.
+                 * CONVERT_NONE,        tsc => perfclock + 0.
                  * CONVERT_TO_TSC,      tsc => tsc + clock_offset
                  * CONVERT_TO_KVMCLOCK, tsc => kvmclock + clock_offset.
                  * CONVERT_ADD_OFFSET,  tsc => perfclock + clock_offset.
                  */
                 if (!dev->convert.need_conv || dev->convert.need_conv == CONVERT_ADD_OFFSET)
-                    dev->time_ctx.base_evtime.perfclock = tsc_to_perfclock(dev, dev->time_ctx.base_evtime.tsc);
+                    base_evtime.perfclock = tsc_to_perfclock(dev, base_evtime.tsc);
                 else if (dev->convert.need_conv == CONVERT_TO_KVMCLOCK)
-                    dev->time_ctx.base_evtime.kvmclock = host_tsc_to_kvmclock(dev, dev->time_ctx.base_evtime.tsc);
+                    base_evtime.kvmclock = host_tsc_to_kvmclock(dev, base_evtime.tsc);
 
-                dev->time_ctx.base_evtime.clock += dev->env->clock_offset;
+                base_evtime.clock += dev->env->clock_offset;
+
+                if (!timer_started(&dev->time_ctx.base_timer)) {
+                    tsc_conv_fixed(dev);
+                    /*
+                     * There will be a slight difference between tsc_khz and the real frequency.
+                     * After a long time, the converted nanoseconds will accumulate a large error.
+                     * Therefore, Synchronize base_evtime and base_timespec every 30 seconds.
+                     */
+                    if (timer_init(&dev->time_ctx.base_timer, perf_timespec_sync) == 0)
+                        timer_start(&dev->time_ctx.base_timer, 30 * NSEC_PER_SEC, false);
+                }
+
+                dev->time_ctx.base_evtime = evclock_to_real_ns(dev, base_evtime);
                 return 0;
             }
         }
@@ -714,14 +897,23 @@ int perf_timespec_init(struct prof_dev *dev)
     prof_dev_flush(evt, PROF_DEV_FLUSH_NORMAL);
     prof_dev_close(evt);
 
-    if (dev->time_ctx.base_evtime.clock == 0) {
+    if (dev->time_ctx.base_evtime == 0) {
         dev->time_ctx.base_timespec.tv_sec = 0;
         dev->time_ctx.base_timespec.tv_nsec = 0;
-    } else
-        dev->time_ctx.base_evtime = perfclock_to_evclock(dev, dev->time_ctx.base_evtime.perfclock);
+    } else {
+        evclock_t base_evtime = perfclock_to_evclock(dev, dev->time_ctx.base_evtime);
+        dev->time_ctx.base_evtime = evclock_to_real_ns(dev, base_evtime);
+
+        if (!timer_started(&dev->time_ctx.base_timer)) {
+            // Synchronize base_evtime and base_timespec every 60 seconds.
+            // evtime is very slow from open to close, so choose 60s synchronization interval.
+            if (timer_init(&dev->time_ctx.base_timer, perf_timespec_sync) == 0)
+                timer_start(&dev->time_ctx.base_timer, 60 * NSEC_PER_SEC, false);
+        }
+    }
 
 NULL_e:
     perf_thread_map__put(tidmap);
 NULL_tidmap:
-    return dev->time_ctx.base_evtime.clock > 0 ? 0 : -1;
+    return dev->time_ctx.base_evtime > 0 ? 0 : -1;
 }

@@ -115,6 +115,7 @@ static int comm_init(struct prof_dev *dev)
     if (!ctx) return -1;
     dev->private = ctx;
     dev->type = PROF_DEV_TYPE_SERVICE;
+    dev->silent = true;
     global_comm_ctx = ctx;
 
     ctx->comm_dev = dev;

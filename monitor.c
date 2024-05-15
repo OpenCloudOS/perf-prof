@@ -2091,6 +2091,8 @@ static void prof_dev_free(struct prof_dev *dev)
         if (dev->values)
             free(dev->values);
     }
+    if (timer_started(&dev->time_ctx.base_timer))
+        timer_destroy(&dev->time_ctx.base_timer);
 
     /*
      * When order is enabled, Order::base profiler handles events and may call
@@ -2253,11 +2255,8 @@ void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
     struct timeval tv;
     struct tm *result;
 
-    if (likely(dev->time_ctx.base_evtime.clock > 0 && evtime > 0)) {
-        if (likely(dev->convert.need_conv != CONVERT_TO_TSC))
-            off_ns = evtime - dev->time_ctx.base_evtime.clock;
-        else
-            off_ns = evclock_to_perfclock(dev, (evclock_t)evtime) - evclock_to_perfclock(dev, dev->time_ctx.base_evtime);
+    if (likely(dev->time_ctx.base_evtime > 0 && evtime > 0)) {
+        off_ns = evclock_to_real_ns(dev, (evclock_t)evtime) - dev->time_ctx.base_evtime;
         off_ns += dev->time_ctx.base_timespec.tv_nsec;
 
         ns = dev->time_ctx.base_timespec.tv_sec * NSEC_PER_SEC + off_ns;
