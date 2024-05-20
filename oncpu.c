@@ -406,11 +406,20 @@ static void print_tidmap(struct prof_dev *dev, struct runtime *first)
 {
     struct runtime *run;
     u64 sum = 0;
+    int nr_run = 0;
+    int cpu = prof_dev_ins_cpu(dev, first->instance);
 
-    for_each_runtime(first, run, rbn, instance)
+    for_each_runtime(first, run, rbn, instance) {
         sum += run->runtime;
+        nr_run += run->nr_run;
+    }
 
-    printf("%03d %-7lu ", prof_dev_ins_cpu(dev, first->instance), sum/1000000);
+    if (dev->env->detail) {
+        char buff[32];
+        snprintf(buff, sizeof(buff), "%lums/%d", sum/1000000, nr_run);
+        printf("%03d %-11s ", cpu, buff);
+    } else
+        printf("%03d %-7lu ", cpu, sum/1000000);
 
     for_each_runtime(first, run, rbn, instance)
         if (dev->env->detail)
@@ -457,8 +466,12 @@ static void oncpu_interval(struct prof_dev *dev)
         printf("THREAD %-16s %-7s %sCPUS(ms) %s\n", "COMM", "SUM(ms)",
             ctx->percpu_thread_siblings ? "CO(ms) CO(%)  " : "",
             ctx->percpu_thread_siblings ? ", SIBLINGS" : "");
-    else
-        printf("CPU %-7s COMM:TID(ms%s)\n", "SUM(ms)", env->detail ? "/switches/max_ms" : "");
+    else {
+        if (env->detail)
+            printf("CPU %-11s COMM:TID(ms/sws/max_ms)\n", "SUM(ms/sws)");
+        else
+            printf("CPU %-7s COMM:TID(ms)\n", "SUM(ms)");
+    }
 
     first = rb_entry_safe(next, struct runtime, rbn);
     while (first) {
