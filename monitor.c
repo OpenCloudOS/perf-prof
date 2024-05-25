@@ -1707,7 +1707,7 @@ reinit:
         if (!dev->values)
             goto out_close;
 
-        err = timer_init(&dev->timer, interval_handle);
+        err = timer_init(&dev->timer, 1, interval_handle);
         if (err) {
             fprintf(stderr, "monitor(%s) timer init failed\n", prof->name);
             goto out_close;
@@ -2415,7 +2415,7 @@ int main(int argc, char *argv[])
     if (!isatty(STDIN_FILENO))
         main_epoll_add(STDIN_FILENO, EPOLLIN, NULL, print_marker_and_interval);
     if (env.usage_self) {
-        timer_init(&usage_self, usage_self_handle);
+        timer_init(&usage_self, 1, usage_self_handle);
         timer_start(&usage_self, env.usage_self * 1000000UL, false);
         usage_self_start = true;
     }

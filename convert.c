@@ -866,7 +866,7 @@ int perf_timespec_init(struct prof_dev *dev)
                      * After a long time, the converted nanoseconds will accumulate a large error.
                      * Therefore, Synchronize base_evtime and base_timespec every 30 seconds.
                      */
-                    if (timer_init(&dev->time_ctx.base_timer, perf_timespec_sync) == 0)
+                    if (timer_init(&dev->time_ctx.base_timer, 1, perf_timespec_sync) == 0)
                         timer_start(&dev->time_ctx.base_timer, 30 * NSEC_PER_SEC, false);
                 }
 
@@ -907,7 +907,7 @@ int perf_timespec_init(struct prof_dev *dev)
         if (!timer_started(&dev->time_ctx.base_timer)) {
             // Synchronize base_evtime and base_timespec every 60 seconds.
             // evtime is very slow from open to close, so choose 60s synchronization interval.
-            if (timer_init(&dev->time_ctx.base_timer, perf_timespec_sync) == 0)
+            if (timer_init(&dev->time_ctx.base_timer, 1, perf_timespec_sync) == 0)
                 timer_start(&dev->time_ctx.base_timer, 60 * NSEC_PER_SEC, false);
         }
     }

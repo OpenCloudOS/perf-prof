@@ -20,11 +20,14 @@ static void timer_expire(int fd, unsigned int revents, void *ptr)
         return;
     }
 
+    if (timer->max_exp_once > 0 && exp > timer->max_exp_once)
+        exp = timer->max_exp_once;
+
     while (exp--)
         timer->function(timer);
 }
 
-int timer_init(struct timer *timer, void (*func)(struct timer *))
+int timer_init(struct timer *timer, int max_exp_once, void (*func)(struct timer *))
 {
     int fd;
 
@@ -34,6 +37,7 @@ int timer_init(struct timer *timer, void (*func)(struct timer *))
 
     timer->fd = fd;
     timer->started = 0;
+    timer->max_exp_once = max_exp_once;
     timer->function = func;
     return 0;
 }
