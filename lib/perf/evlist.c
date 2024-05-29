@@ -181,10 +181,11 @@ int perf_evlist__open(struct perf_evlist *evlist)
 					perf_thread_map__nr(evlist->threads);
 		rl.rlim_cur += evlist->rl_file;
 		if (rl.rlim_cur > rl.rlim_max) {
-			rl.rlim_max = rl.rlim_cur;
+			rl.rlim_cur -= evlist->rl_file;
 			evlist->rl_file = rl.rlim_max - rl.rlim_cur;
+			rl.rlim_cur = rl.rlim_max;
 		}
-		if (setrlimit(RLIMIT_NOFILE, &rl) < 0) {
+		if (evlist->rl_file > 0 && setrlimit(RLIMIT_NOFILE, &rl) < 0) {
 			evlist->rl_file = 0;
 			return -errno;
 		}
