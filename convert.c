@@ -14,6 +14,8 @@
 #include <tp_struct.h>
 #include <linux/math64.h>
 
+bool current_clocksource_is_tsc = false;
+
 /*
  *  { u64           id;   } && PERF_SAMPLE_IDENTIFIER
  *  { u64           ip;   } && PERF_SAMPLE_IP
@@ -617,7 +619,8 @@ void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mm
 {
     if (unlikely(dev->convert.need_conv == CONVERT_TO_TSC ||
                  dev->convert.need_conv == CONVERT_TO_KVMCLOCK)) {
-        if (perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv) == -EOPNOTSUPP) {
+        if (perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv) == -EOPNOTSUPP ||
+            !current_clocksource_is_tsc) {
             fprintf(stderr, "TSC conversion is not supported.\n");
             dev->env->tsc = false;
             dev->env->clock_offset = 0;
@@ -814,6 +817,23 @@ static void perf_timespec_sync(struct timer *timer)
     perf_timespec_init(dev);
 }
 
+__attribute__((constructor)) static void current_clocksource(void)
+{
+    char *current_clocksource = NULL;
+    size_t size;
+    /*
+     * LINUX 698eff6355f (sched/clock, x86/perf: Fix "perf test tsc")
+     * Only for tsc clocksource. Determine whether the current clocksource is tsc.
+     */
+    current_clocksource_is_tsc =
+        (sysfs__read_str("devices/system/clocksource/clocksource0/current_clocksource",
+         &current_clocksource, &size) == 0 && strncmp(current_clocksource, "tsc", 3) == 0);
+
+    if (current_clocksource)
+        free(current_clocksource);
+}
+
+
 int perf_timespec_init(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
@@ -831,12 +851,20 @@ int perf_timespec_init(struct prof_dev *dev)
     if (dev->silent)
         return 0;
 
+    current_clocksource();
+
     perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
         int err = 0;
         perf_event_convert_read_tsc_conversion(dev, map);
         if (dev->convert.need_conv == CONVERT_TO_TSC ||
             dev->convert.need_conv == CONVERT_TO_KVMCLOCK ||
-            (err = perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv)) == 0) {
+            /*
+             * Guest uses kvm-clock source, perf_mmap__read_tsc_conversion() can also return successfully
+             * on old kernels, but tsc_conv_fixed() cannot fix the conversion. Therefore, the tsc conversion
+             * can only be done when the current clocksource is tsc.
+             */
+            ((err = perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv)) == 0 &&
+            current_clocksource_is_tsc)) {
             evclock_t base_evtime;
 
             base_evtime.tsc = rdtsc();
