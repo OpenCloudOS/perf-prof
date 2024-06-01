@@ -401,6 +401,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     const char *keyname = NULL;
     bool untraced = false;
     int min_nr_events = 2;
+    int nr_pull = 0, nr_real_nonpull_tp = 0;
+    int nr_ringbuffer = 0;
 
     ctx->dev = dev;
     ctx->oncpu = oncpu;
@@ -440,6 +442,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
                 printf("name %s id %d filter %s stack %d\n", tp->name, tp->id, tp->filter, tp->stack);
             if (tp->untraced && !tp->trigger)
                 untraced = true;
+            if (tp->receive)
+                nr_pull += env->detail ? 1 : !tp->untraced;
+            else
+                nr_real_nonpull_tp += env->detail ? 1 : !tp->untraced;
             if (tp->untraced) {
                 if ((env->samekey || env->samepid || env->sametid) &&
                     !tp_kernel(tp) && !tp->vcpu)
@@ -467,31 +473,44 @@ static int monitor_ctx_init(struct prof_dev *dev)
     } else
         ctx->cc = NULL;
 
+    // Each pull event comes from an independent channel and is regarded as a different
+    // ringbuffer. Need to order.
+    nr_ringbuffer = nr_pull;
+
     if (keyname) {
         options.keyname = keyname;
         options.keylen = strlen(keyname);
         if (options.keylen < 6)
             options.keylen = 6;
-        if (!using_order(dev)) {
-            fprintf(stderr, "WARN: Enable the --key parameter, it is recommended to enable the "
-                            "--order parameter to order events.\n");
+        // All events are ordered only when nr_ins==1.
+        nr_ringbuffer += ctx->nr_ins;
+        if (nr_ringbuffer > 1 && !using_order(dev)) {
+            fprintf(stderr, "Enable --key or pull= attr, also need to enable --order.\n");
+            goto failed;
         }
     } else {
-        // use instance as key, cpu or pid.
+        // Use instance as key, cpu or pid.
         if (!ctx->oncpu) {
             ctx->comm = 1;
             options.comm = 1;
         }
+        /* Use instance as key.
+         * When --detail is enabled, the events of all instance need to be ordered for
+         * detailed output. Each instance accumulates a ringbuffer.
+         *
+         * Do not enable --detail, and use the instance as the key. All events participating
+         * in latency tracing are ordered on a single instance. No matter how many instances
+         * there are, ringbuffer is only + 1. Because correctness can be guaranteed without
+         * enabling --order.
+         */
+        nr_ringbuffer += env->detail ? ctx->nr_ins : !!nr_real_nonpull_tp;
+        if (nr_ringbuffer > 1 && !using_order(dev)) {
+            fprintf(stderr, "Enable --detail or pull= attr, also need to enable --order.\n");
+            goto failed;
+        }
     }
 
     ctx->level = sched_init(ctx->nr_list, ctx->tp_list);
-
-    if (env->detail &&
-        ctx->nr_ins > 1 &&
-        !using_order(dev)) {
-        fprintf(stderr, "Enable --detail, also need to enable --order.\n");
-        goto failed;
-    }
 
     if (env->impl && impl_based_on_call(env->impl))
         ctx->impl_based_on_call = true;
