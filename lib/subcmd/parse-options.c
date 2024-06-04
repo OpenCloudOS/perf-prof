@@ -746,6 +746,9 @@ static int compgen_possible_options(struct parse_opt_ctx_t *ctx, const struct op
 		if (noarg) { // -g[TAB]
 			arg = ctx->argv[-1];
 			goto start;
+		} else if (last_opt && last_opt->compgen) {
+			const char *val = ctx->argv[-1];
+			last_opt->compgen(last_opt, val, ctx->comp_type);
 		}
 		return 0;
 	}
@@ -863,11 +866,11 @@ retry:
 		} else { // [Tab][Tab]
 			if (short_opt && isshort(options->short_name) &&
 				(!arg[0] || arg[0] == options->short_name))
-				output += printf("\"-%c", options->short_name);
+				output += printf("'-%c", options->short_name);
 
 			if (long_opt && options->long_name &&
 				(!arg[0] || strstarts(options->long_name, arg))) {
-				output += printf("%s--%s", output ? ", " : "\"", options->long_name);
+				output += printf("%s--%s", output ? ", " : "'", options->long_name);
 			}
 
 			if (output) {
@@ -930,7 +933,7 @@ retry:
 				case OPTION_SET_PTR:
 					break;
 				}
-				printf("\"\n");
+				printf("'\n");
 			}
 		}
 	}

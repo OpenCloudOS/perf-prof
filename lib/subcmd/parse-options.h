@@ -57,6 +57,7 @@ enum parse_opt_option_flags {
 
 struct option;
 typedef int parse_opt_cb(const struct option *, const char *arg, int unset);
+typedef int compgen_cb(const struct option *, const char *arg, int comp_type);
 
 /*
  * `type`::
@@ -112,6 +113,7 @@ struct option {
 
 	int flags;
 	parse_opt_cb *callback;
+	compgen_cb *compgen;
 	intptr_t defval;
 	bool *set;
 	void *data;
