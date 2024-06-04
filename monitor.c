@@ -290,6 +290,64 @@ static int parse_arg_cb(const struct option *opt, const char *arg, int unset)
     return parse_arg(opt->short_name, (char *)arg);
 }
 
+static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
+{
+    const char *comma;
+    char *prefix = NULL;
+    char *COMP_SKIPLEN = getenv("COMP_SKIPLEN");
+    int skiplen = 0;
+
+    switch (opt->short_name) {
+    case 'e':
+        comma = strrchr(arg, ',');
+        if (comp_type != '?') {
+            if (COMP_SKIPLEN) {
+                /*
+                 * If option parameter contains "$COMP_WORDBREAKS" characters, it will be separated
+                 * into multiple words. But completion only operates on the word pointed to by
+                 * COMP_POINT.
+                 * COMP_SKIPLEN represents the length of the previous word, which needs to be skipped
+                 * when perf-prof outputs completion.
+                 *
+                 * perf-prof trace -e sched:sched_wakeup/pid>1/,sch[TAB]
+                 *   COMP_WORDBREAKS=" \n\"'><=;|&(:"
+                 *   COMP_WORDS='(... [2]="-e" [3]="sched" [4]=":" [5]="sched_wakeup/pid" [6]=">" [7]="1/,sch")'
+                 *   COMP_SKIPLEN=23 (Contains the length of COMP_WORDS [3], [4], [5], [6])
+                 *   OUTPUT='([0]="1/,sched:sched_kthread_stop" ...)'
+                 */
+                int comp_skiplen = atoi(COMP_SKIPLEN);
+                const char *skip = arg + comp_skiplen;
+
+                if (comma) {
+                    if (skip < comma) {
+                        arg = skip;
+                        goto make_prefix;
+                    }
+                    arg = comma + 1;
+                    comma = NULL;
+                }
+                if (arg < skip)
+                    skiplen = skip - arg;
+            } else if (comma) {
+            make_prefix:
+                prefix = malloc(comma - arg + 3);
+                if (prefix) {
+                    prefix[0] = '\'';
+                    strncpy(prefix + 1, arg, comma - arg + 1);
+                    prefix[comma - arg + 2] = '\0';
+                }
+            }
+        }
+        if (print_tracepoint_events(prefix ?: "'", comma ? comma + 1 : arg, "'", skiplen) == 1)
+            print_tracepoint_events(prefix ?: "'", comma ? comma + 1 : arg, ",'", skiplen);
+        if (prefix) free(prefix);
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
 #define OPT_BOOL_NONEG(s, l, v, h)       { .type = OPTION_BOOLEAN, .short_name = (s), .long_name = (l), .value = check_vtype(v, bool *), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_INT_NONEG(s, l, v, a, h)     { .type = OPTION_INTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_INT_NONEG_SET(s, l, v, os, a, h) { .type = OPTION_INTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .set = check_vtype(os, bool *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
@@ -299,7 +357,7 @@ static int parse_arg_cb(const struct option *opt, const char *arg, int unset)
 #define OPT_U64_NONEG(s, l, v, a, h)     { .type = OPTION_U64, .short_name = (s), .long_name = (l), .value = check_vtype(v, u64 *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_STRDUP_NONEG(s, l, v, a, h)  { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, char **), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_NOEMPTY }
 #define OPT_PARSE_NONEG(s, l, v, a, h) \
-    { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG, .callback = (parse_arg_cb) }
+    { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG, .callback = (parse_arg_cb), .compgen = (compgen_arg) }
 #define OPT_PARSE_NOARG(s, l, v, a, h) \
     { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_NOARG, .callback = (parse_arg_cb) }
 #define OPT_PARSE_OPTARG(s, l, v, a, h) \
@@ -401,7 +459,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ('g',      "call-graph", &env.callchain,                    "Enable call-graph recording"),
     OPT_STRDUP_NONEG( 0 ,     "flame-graph", &env.flame_graph,         "file",  "Specify the folded stack file."),
     OPT_STRDUP_NONEG( 0 ,         "heatmap", &env.heatmap,             "file",  "Specify the output latency file."),
-    OPT_PARSE_OPTARG( LONG_OPT_detail, "detail", NULL, "-N,+N,samecpu,samepid",
+    OPT_PARSE_OPTARG( LONG_OPT_detail, "detail", NULL, "-N,+N,hide<N,same*",
                                                        "More detailed information output.\n"
                                                        "For multi-trace profiler:\n"
                                                        "   -N: Before event1, print events within N nanoseconds.\n"

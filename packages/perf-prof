@@ -1,8 +1,33 @@
 _perf_prof() {
-	if [ -z "$2" ]; then
+	local cur prev cword words=()
+	_get_comp_words_by_ref -n '><=|&(:' cur prev words cword
+
+	if [ -z "$cur" ]; then
 		eval COMPREPLY=($(eval COMP_TYPE=$COMP_TYPE "${COMP_LINE:0:COMP_POINT} ''" 2>/dev/null))
 	else
-		eval COMPREPLY=($(eval COMP_TYPE=$COMP_TYPE "${COMP_LINE:0:COMP_POINT}" 2>/dev/null))
+		local char="${cur:0:1}"
+		local cmd="${COMP_LINE:0:COMP_POINT}"
+		local skip
+		if [ "$char" != "'" -a "$char" != '"' ]; then
+			if [[ "$COMP_WORDBREAKS" =~ "${COMP_WORDS[COMP_CWORD]:0:1}" ]]; then
+				skip="${words[cword]}"
+			else
+				skip="${words[cword]%${COMP_WORDS[COMP_CWORD]}}"
+			fi
+			# Add single quotes to the `cur' option. If cur contains "$COMP_WORDBREAKS"
+			# characters, it will be separated into multiple words. But completion only
+			# operates on the word pointed to by COMP_POINT. COMP_SKIPLEN represents the
+			# length of the previous word, which needs to be skipped when perf-prof
+			# outputs completion.
+			# perf-prof trace -e sched:sched_wakeup/pid>1/,sch[TAB]
+			#   COMP_WORDS='(... [2]="-e" [3]="sched" [4]=":" [5]="sched_wakeup/pid" [6]=">" [7]="1/,sch")'
+			#   COMP_SKIPLEN=23 (Contains the length of COMP_WORDS [3], [4], [5], [6])
+			#   COMPREPLY='([0]="1/,sched:sched_kthread_stop" ...)'
+			cmd="COMP_SKIPLEN=${#skip} ${cmd%${cur}} '${cur}'"
+		else
+			cmd="${cmd}${char}"
+		fi
+                eval COMPREPLY=($(eval COMP_TYPE=$COMP_TYPE ${cmd} 2>/dev/null))
 	fi
 }
 complete -o bashdefault -o default -F _perf_prof perf-prof 2>/dev/null \
