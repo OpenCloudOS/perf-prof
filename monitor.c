@@ -782,16 +782,19 @@ static profiler *parse_main_options(int argc, char *argv[])
             if (m != NULL) {
                 if (strcmp(m->name, "help") == 0)
                     env.help_monitor = prof;
-#ifdef MULTI_PROF
                 else if (prof) {
+#ifdef MULTI_PROF
                     struct env *e = zalloc(sizeof(struct env));
                     if (e) {
                         *e = env;
                         prof_dev_open(prof, e);
                     }
                     memset(&env, 0, sizeof(struct env));
-                }
+#else
+                    goto stop_at;
 #endif
+                }
+
                 prof = m;
                 monitor = m; // monitor only used in help();
                 flush_main_options(m);
@@ -799,7 +802,7 @@ static profiler *parse_main_options(int argc, char *argv[])
                 continue;
             } else if (comp_type) {
                 break;
-            } else if (stop_at_non_option) {
+            } else stop_at: if (stop_at_non_option) {
                 stop_at_non_option = false;
                 disable_help();
                 continue;
