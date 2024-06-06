@@ -51,25 +51,20 @@ static int cmp_string(const void *a, const void *b)
  * Print the events from <debugfs_mount_point>/tracing/events
  */
 
-int print_tracepoint_events(const char *prefix, const char *match, const char *suffix, int match_skiplen)
+void print_tracepoint_events(tracepoint_cb cb, void *opaque)
 {
     DIR *sys_dir, *evt_dir;
     struct dirent *sys_dirent, *evt_dirent;
     char evt_path[MAXPATHLEN];
     char *dir_path;
     char **evt_list = NULL;
-    int match_len = match ? strlen(match) : 0;
     unsigned int evt_i = 0, evt_num = 0;
     bool evt_num_known = false;
-    int matched = 0;
-
-    prefix = prefix ?: "";
-    suffix = suffix ?: "";
 
 restart:
     sys_dir = tracing_events__opendir();
     if (!sys_dir)
-        return -1;
+        return;
 
     if (evt_num_known) {
         evt_list = zalloc(sizeof(char *) * evt_num);
@@ -112,37 +107,37 @@ next:
         goto restart;
     }
     qsort(evt_list, evt_num, sizeof(char *), cmp_string);
-    evt_i = 0;
-    while (evt_i < evt_num) {
-        if (!match || strncmp(evt_list[evt_i], match, match_len) == 0) {
-            printf("%s%s%s\n", prefix, evt_list[evt_i] + match_skiplen, suffix);
-            matched++;
+
+    if (cb)
+        cb(evt_list, evt_num, opaque);
+    else {
+        evt_i = 0;
+        while (evt_i < evt_num) {
+            printf("%s\n", evt_list[evt_i]);
+            evt_i++;
         }
-        evt_i++;
     }
 
 out_free:
-    evt_num = evt_i;
     for (evt_i = 0; evt_i < evt_num; evt_i++)
         zfree(&evt_list[evt_i]);
     zfree(&evt_list);
-    return matched;
+    return;
 
 out_close_evt_dir:
     closedir(evt_dir);
 out_close_sys_dir:
     closedir(sys_dir);
 
+    evt_num = evt_i;
     if (evt_list)
         goto out_free;
-    return matched;
 }
-
 
 static int list_argc_init(int argc, char *argv[])
 {
     setup_pager();
-    print_tracepoint_events(NULL, NULL, NULL, 0);
+    print_tracepoint_events(NULL, NULL);
     exit(0);
 }
 

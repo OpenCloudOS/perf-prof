@@ -290,6 +290,100 @@ static int parse_arg_cb(const struct option *opt, const char *arg, int unset)
     return parse_arg(opt->short_name, (char *)arg);
 }
 
+static void compgen_events(char **evt_list, int evt_num, void *opaque)
+{
+    struct {
+        char *prefix;
+        const char *match;
+        int skiplen;
+        int comp_type;
+    } *op = opaque;
+    const char *prefix = op->prefix ?: "";
+    char *prev = NULL, *found;
+    int match_len = op->match ? strlen(op->match) : 0;
+    int i, j, matched = 0;
+    unsigned int maxprefix = -1;
+
+    if (match_len == 0) {
+        for (i = 0; i < evt_num; i++)
+            printf("'%s%s'\n", prefix, evt_list[i]);
+        return;
+    }
+
+    /*
+     # COMP_TYPE              Need prefix?   Substring matching?   matched==1
+     # 9 [Tab]                Y              Y (Prefix first)      Output ','
+     # ? [Tab][Tab]           N              Y                     Output ','
+     # % menu-complete        Y              Y                     Output ','
+     # * insert-completions   Y              Y (!prefix)           No output ','
+     #
+     # ! show-all-if-ambiguous   Same as [Tab][Tab]
+     # @ show-all-if-unmodified  Same as [Tab][Tab]
+     */
+
+    // ![Tab]: [Tab][Tab], menu-complete, etc.
+    // substring matching: strstr.
+    if (op->comp_type != 9) {
+        for (i = 0; i < evt_num; i++)
+            if (strstr(evt_list[i], op->match) != NULL) {
+                if (op->comp_type != '*')
+                    printf("'%s%s'\n", prefix, evt_list[i] + op->skiplen);
+                else if (!op->prefix)
+                    printf("'%s'\n", evt_list[i]);
+                found = evt_list[i];
+                matched++;
+            }
+        if (matched == 1 && op->comp_type != '*')
+            printf("'%s%s,'\n", prefix, found + op->skiplen);
+        return;
+    }
+
+    // [Tab] prefix matching: strncmp.
+    for (i = 0; i < evt_num; i++)
+        if (strncmp(evt_list[i], op->match, match_len) == 0)
+            matched++;
+    if (matched != 0) {
+        j = matched;
+        for (i = 0; j; i++)
+            if (strncmp(evt_list[i], op->match, match_len) == 0) {
+                printf("'%s%s'\n", prefix, evt_list[i] + op->skiplen);
+                if (matched == 1)
+                    printf("'%s%s,'\n", prefix, evt_list[i] + op->skiplen);
+                j--;
+            }
+        return;
+    }
+
+    // [Tab] substring matching. The longest common prefix must contain `op->match'.
+    for (i = 0; i < evt_num; i++)
+        if ((found = strstr(evt_list[i], op->match)) != NULL) {
+            matched++;
+            if (prev) {
+                const char *s1 = prev, *s2 = evt_list[i];
+                j = 0; while (*s1++ == *s2++) j++;
+                if (j < maxprefix) maxprefix = j;
+                if (maxprefix < found - evt_list[i] + match_len)
+                    goto failed;
+            }
+            prev = evt_list[i];
+        }
+    if (matched != 0) {
+        j = matched;
+        for (i = 0; j; i++)
+            if (strstr(evt_list[i], op->match) != NULL) {
+                printf("'%s%s'\n", prefix, evt_list[i] + op->skiplen);
+                if (matched == 1)
+                    printf("'%s%s,'\n", prefix, evt_list[i] + op->skiplen);
+                j--;
+            }
+        return;
+    }
+
+failed:
+    printf("'%s%s'\n", prefix, op->match);
+    printf("'%s%s,'\n", prefix, op->match);
+}
+
 static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
 {
     const char *comma;
@@ -300,7 +394,7 @@ static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
     switch (opt->short_name) {
     case 'e':
         comma = strrchr(arg, ',');
-        if (comp_type != '?') {
+        if (comp_type == 9 || comp_type == '%' || comp_type == '*') {
             if (COMP_SKIPLEN) {
                 /*
                  * If option parameter contains "$COMP_WORDBREAKS" characters, it will be separated
@@ -330,16 +424,22 @@ static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
                     skiplen = skip - arg;
             } else if (comma) {
             make_prefix:
-                prefix = malloc(comma - arg + 3);
-                if (prefix) {
-                    prefix[0] = '\'';
-                    strncpy(prefix + 1, arg, comma - arg + 1);
-                    prefix[comma - arg + 2] = '\0';
-                }
+                prefix = strndup(arg, comma - arg + 1);
             }
+        } {
+            struct {
+                char *prefix;
+                const char *match;
+                int skiplen;
+                int comp_type;
+            } op = {
+                .prefix = prefix,
+                .match = comma ? comma + 1 : arg,
+                .skiplen = skiplen,
+                .comp_type = comp_type,
+            };
+            print_tracepoint_events(compgen_events, (void *)&op);
         }
-        if (print_tracepoint_events(prefix ?: "'", comma ? comma + 1 : arg, "'", skiplen) == 1)
-            print_tracepoint_events(prefix ?: "'", comma ? comma + 1 : arg, ",'", skiplen);
         if (prefix) free(prefix);
         break;
     default:

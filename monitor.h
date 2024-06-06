@@ -547,6 +547,7 @@ struct prof_dev *trace_dev_open(const char *event, struct perf_cpu_map *cpu_map,
 
 
 //list.c
-int print_tracepoint_events(const char *prefix, const char *match, const char *suffix, int match_skiplen);
+typedef void (*tracepoint_cb)(char **evt_list, int evt_num, void *opaque);
+void print_tracepoint_events(tracepoint_cb cb, void *opaque);
 
 #endif
