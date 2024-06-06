@@ -8,3 +8,9 @@ def test_list(runtime, memleak_check):
     prof = PerfProf(["list"])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_list_trace(runtime, memleak_check):
+    #perf-prof list trace
+    prof = PerfProf(["list", "trace"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

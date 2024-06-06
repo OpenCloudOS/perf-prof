@@ -134,15 +134,28 @@ out_close_sys_dir:
         goto out_free;
 }
 
+static void event_match(char **evt_list, int evt_num, void *opaque)
+{
+    int i;
+    char *e = opaque;
+
+    for (i = 0; i < evt_num; i++)
+        if (strstr(evt_list[i], e))
+            printf("%s\n", evt_list[i]);
+}
+
 static int list_argc_init(int argc, char *argv[])
 {
     setup_pager();
-    print_tracepoint_events(NULL, NULL);
+    if (argc == 0)
+        print_tracepoint_events(NULL, NULL);
+    else
+        print_tracepoint_events(event_match, argv[0]);
     exit(0);
 }
 
 static const char *list_desc[] = PROFILER_DESC("list",
-    "[OPTION...]",
+    "[OPTION...] event",
     "List all tracepoint events.",
     "",
     "SYNOPSIS",
