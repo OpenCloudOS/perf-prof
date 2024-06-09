@@ -165,11 +165,19 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
         char *comm = global_comm_get(pid);
         trace_seq_printf(&s, "%16s %6u ", comm ? : "<...>", pid);
         tep_print_event(tep, &s, &record, "%s", TEP_PRINT_LATENCY);
-        trace_seq_printf(&s, " [%03d] %llu.%06llu: %s:%s: ", cpu, ts/USEC_PER_SEC, ts%USEC_PER_SEC,
+        if (likely(cpu >= 0))
+            trace_seq_printf(&s, " [%03d] %llu.%06llu: %s:%s: ", cpu, ts/USEC_PER_SEC, ts%USEC_PER_SEC,
+                         e->system, e->name);
+        else
+            trace_seq_printf(&s, " [---] %llu.%06llu: %s:%s: ", ts/USEC_PER_SEC, ts%USEC_PER_SEC,
                          e->system, e->name);
     } else {
-        tep_print_event(tep, &s, &record, "%16s %6u %s [%03d] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
+        if (likely(cpu >= 0))
+            tep_print_event(tep, &s, &record, "%16s %6u %s [%03d] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
                     TEP_PRINT_LATENCY, TEP_PRINT_CPU, TEP_PRINT_TIME);
+        else
+            tep_print_event(tep, &s, &record, "%16s %6u %s [---] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
+                    TEP_PRINT_LATENCY, TEP_PRINT_TIME);
         trace_seq_printf(&s, "%s:%s: ", e->system, e->name);
     }
     tep_print_event(tep, &s, &record, "%s\n", TEP_PRINT_INFO);

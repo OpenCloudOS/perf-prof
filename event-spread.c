@@ -202,7 +202,10 @@ static int block_event_convert(struct event_block *block, union perf_event *even
                 threadidx = perf_thread_map__idx(tp->dev->threads, tp->vcpu->vcpu[cpu].thread_id);
 
             // Guest vcpu => Host cpu
-            *(u32 *)(data + block->cpu_pos) = tp->vcpu->vcpu[cpu].host_cpu;
+            if (perf_cpu_map__nr(tp->vcpu->host_cpus[cpu]) > 1)
+                *(u32 *)(data + block->cpu_pos) = -1;
+            else
+                *(u32 *)(data + block->cpu_pos) = tp->vcpu->vcpu[cpu].host_cpu;
 
             // Guest vcpu => Host tid
             if (block->pid_pos != -1) {
