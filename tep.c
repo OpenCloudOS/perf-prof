@@ -813,7 +813,7 @@ struct tp_matcher *tp_matcher_find(char *sys, char *name)
     return NULL;
 }
 
-static bool __sched_wakeup_samecpu(void *raw, int size, int cpu)
+static bool __sched_wakeup_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
     if (size == TP_RAW_SIZE(struct sched_wakeup)) {
         return ((struct sched_wakeup *)raw)->target_cpu == cpu;
@@ -823,12 +823,12 @@ static bool __sched_wakeup_samecpu(void *raw, int size, int cpu)
         return false;
 }
 
-static bool __sched_wakeup_samepid(void *raw, int size, int pid)
+static bool __sched_wakeup_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_wakeup *)raw)->pid;
 }
 
-static bool __sched_wakeup_target_cpu(void *raw, int size, int pid, int *cpu)
+static bool __sched_wakeup_target_cpu(struct tp *tp, void *raw, int size, int pid, int *cpu)
 {
     if (pid == ((struct sched_wakeup *)raw)->pid) {
         if (size == TP_RAW_SIZE(struct sched_wakeup)) {
@@ -842,24 +842,24 @@ static bool __sched_wakeup_target_cpu(void *raw, int size, int pid, int *cpu)
     return false;
 }
 
-static bool __sched_switch_samepid(void *raw, int size, int pid)
+static bool __sched_switch_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_switch *)raw)->prev_pid ||
            pid == ((struct sched_switch *)raw)->next_pid;
 }
 
-static bool __sched_migrate_task_samecpu(void *raw, int size, int cpu)
+static bool __sched_migrate_task_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
     return cpu == ((struct sched_migrate_task *)raw)->orig_cpu ||
            cpu == ((struct sched_migrate_task *)raw)->dest_cpu;
 }
 
-static bool __sched_migrate_task_samepid(void *raw, int size, int pid)
+static bool __sched_migrate_task_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_migrate_task *)raw)->pid;
 }
 
-static bool __sched_migrate_task_target_cpu(void *raw, int size, int pid, int *cpu)
+static bool __sched_migrate_task_target_cpu(struct tp *tp, void *raw, int size, int pid, int *cpu)
 {
     if (pid == ((struct sched_migrate_task *)raw)->pid) {
         *cpu = ((struct sched_migrate_task *)raw)->dest_cpu;
@@ -868,23 +868,23 @@ static bool __sched_migrate_task_target_cpu(void *raw, int size, int pid, int *c
     return false;
 }
 
-static bool __sched_stat_runtime_samepid(void *raw, int size, int pid)
+static bool __sched_stat_runtime_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_stat_runtime *)raw)->pid;
 }
 
-static bool __sched_process_free_samepid(void *raw, int size, int pid)
+static bool __sched_process_free_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_process_free *)raw)->pid;
 }
 
-static bool __sched_process_fork_samepid(void *raw, int size, int pid)
+static bool __sched_process_fork_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_process_fork *)raw)->parent_pid ||
            pid == ((struct sched_process_fork *)raw)->child_pid;
 }
 
-static bool __sched_process_exec_samepid(void *raw, int size, int pid)
+static bool __sched_process_exec_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     return pid == ((struct sched_process_exec *)raw)->pid;
 }
