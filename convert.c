@@ -13,6 +13,7 @@
 #include <linux/thread_map.h>
 #include <tp_struct.h>
 #include <linux/math64.h>
+#include <api/fs/fs.h>
 
 bool current_clocksource_is_tsc = false;
 
@@ -75,7 +76,6 @@ static inline perfclock_t tsc_to_fixed_perfclock(struct prof_dev *dev, tsc_t tsc
 #define __USE_GNU
 #include <sched.h>
 #include <cpuid.h>
-#include <api/fs/fs.h>
 
 u8  __read_mostly kvm_tsc_scaling_ratio_frac_bits = 0;
 u64 __read_mostly kvm_default_tsc_scaling_ratio = 0;
