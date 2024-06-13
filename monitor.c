@@ -380,8 +380,8 @@ static void compgen_events(char **evt_list, int evt_num, void *opaque)
     }
 
 failed:
-    printf("'%s%s'\n", prefix, op->match);
-    printf("'%s%s,'\n", prefix, op->match);
+    printf("'%s%s'\n", prefix, op->match + op->skiplen);
+    printf("'%s%s,'\n", prefix, op->match + op->skiplen);
 }
 
 static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
