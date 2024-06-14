@@ -76,6 +76,7 @@ struct task_state_ctx {
     struct perf_evsel *sched_switch_next;
     struct perf_evsel *sched_wakeup;
     struct perf_evsel *sched_wakeup_new;
+    struct tp_matcher *matcher_switch, *matcher_wakeup, *matcher_wakeup_new;
     struct rblist task_states;
     struct latency_dist *lat_dist;
     struct comm_notify notify;
@@ -375,6 +376,7 @@ static int task_state_init(struct prof_dev *dev)
     if (!evsel)
         goto failed;
     perf_evlist__add(evlist, evsel);
+    ctx->matcher_switch = tp_matcher_find("sched", "sched_switch");
 
     // sched:sched_switch/next_pid==xx/
     // sched:sched_switch/next_comm==xx/
@@ -396,6 +398,7 @@ static int task_state_init(struct prof_dev *dev)
     if (!evsel)
         goto failed;
     perf_evlist__add(evlist, evsel);
+    ctx->matcher_wakeup = tp_matcher_find("sched", "sched_wakeup");
 
     // sched:sched_wakeup_new//
     // sched:sched_wakeup_new/pid==xx/
@@ -408,6 +411,7 @@ static int task_state_init(struct prof_dev *dev)
         if (!evsel)
             goto failed;
         perf_evlist__add(evlist, evsel);
+        ctx->matcher_wakeup_new = tp_matcher_find("sched", "sched_wakeup_new");
     } else
         ctx->sched_wakeup_new = NULL;
 
@@ -613,6 +617,10 @@ static void task_state_lost(struct prof_dev *dev, union perf_event *event, int i
     struct task_lost_node *lost;
 
     print_lost_fn(dev, event, ins);
+
+    // task-state serves as the forwarding source device.
+    if (unlikely(!prof_dev_is_final(dev)))
+        return;
 
     // Order is enabled by default.
     // When order is enabled, event loss will be sensed in advance, but it
@@ -1013,6 +1021,75 @@ struct monitor task_state = {
     .lost = task_state_lost,
     .sample = task_state_sample,
 };
-MONITOR_REGISTER(task_state)
+MONITOR_REGISTER(task_state);
 
+
+struct matcher_result {
+    struct tp_matcher *matcher;
+    void *true_raw;
+    int true_size;
+};
+
+/*
+ * task-state itself does not use tp. But when it is used as a forwarding source,
+ * tp will be assigned to it in the forwarding target device.
+ */
+static void task_state_matcher(struct tp *tp, void *raw, int size, struct matcher_result *result)
+{
+    union perf_event *event = raw;
+    struct prof_dev *dev;
+    struct task_state_ctx *ctx;
+    struct sample_type_header *data;
+    struct perf_evsel *evsel;
+
+    if (!tp_is_dev(tp))
+        return;
+
+    if (event->header.type == PERF_RECORD_DEV) {
+        struct perf_record_dev *event_dev = (void *)event;
+        event = &event_dev->event;
+        dev = event_dev->dev;
+    } else
+        dev = tp->source_dev;
+
+    ctx = dev->private;
+    data = (void *)event->sample.array;
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    if (!evsel)
+        return;
+
+    __raw_size(dev, event, &result->true_raw, &result->true_size);
+
+    if (evsel == ctx->sched_switch)
+        result->matcher = ctx->matcher_switch;
+    else if (evsel == ctx->sched_switch_next)
+        result->matcher = ctx->matcher_switch;
+    else if (evsel == ctx->sched_wakeup)
+        result->matcher = ctx->matcher_wakeup;
+    else if (evsel == ctx->sched_wakeup_new)
+        result->matcher = ctx->matcher_wakeup_new;
+}
+
+static bool __task_state_samecpu(struct tp *tp, void *raw, int size, int cpu)
+{
+    struct matcher_result result = {};
+    task_state_matcher(tp, raw, size, &result);
+    return tp_matcher_samecpu(result.matcher, tp, result.true_raw, result.true_size, cpu);
+}
+
+static bool __task_state_samepid(struct tp *tp, void *raw, int size, int pid)
+{
+    struct matcher_result result = {};
+    task_state_matcher(tp, raw, size, &result);
+    return tp_matcher_samepid(result.matcher, tp, result.true_raw, result.true_size, pid);
+}
+
+static bool __task_state_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+{
+    struct matcher_result result = {};
+    task_state_matcher(tp, raw, size, &result);
+    return tp_matcher_target_cpu(result.matcher, tp, result.true_raw, result.true_size, cpu, pid, target_cpu);
+}
+
+TP_MATCHER_REGISTER5(NULL, "task-state", __task_state_samecpu, __task_state_samepid, __task_state_target_cpu);
 
