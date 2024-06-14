@@ -183,8 +183,12 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
 
 /*
  * Each tp is used to determine whether it is related to the specified cpu/pid.
- * @raw, @size specifies the tracepoint structure and size. Specify PERF_SAMPLE_RAW
- * to sample the tracepoint structure.
+ *
+ * If tp is a forwarding source device, @raw, @size specify the `perf_record_dev'
+ * structure and size, and the forwarding device determines whether @raw is related
+ * to the specified cpu/pid.
+ * If not, tp is used for kernel events, @raw, @size specifies the tracepoint
+ * structure and size. Specify PERF_SAMPLE_RAW to sample the tracepoint structure.
  *
  * Only tp itself knows whether there are fields in its structure that are the
  * same as the specified cpu/pid.
@@ -195,7 +199,7 @@ struct tp_matcher {
     const char *name;
     bool (*samecpu)(struct tp *tp, void *raw, int size, int cpu);
     bool (*samepid)(struct tp *tp, void *raw, int size, int pid);
-    bool (*target_cpu)(struct tp *tp, void *raw, int size, int pid, int *cpu);
+    bool (*target_cpu)(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu);
 };
 
 #define __TP_MATCHER_REGISTER(SYS, NAME, SAMECPU, SAMEPID, TARGET_CPU) \
@@ -217,24 +221,40 @@ static void __PASTE(tp_matcher_register_, __LINE__) (void) \
 
 
 void tp_matcher_register(struct tp_matcher *matcher);
-struct tp_matcher *tp_matcher_find(char *sys, char *name);
+struct tp_matcher *tp_matcher_find(const char *sys, const char *name);
+
+
+static inline bool tp_matcher_samecpu(struct tp_matcher *matcher, struct tp *tp, void *raw, int size, int cpu)
+{
+    return matcher && matcher->samecpu ?
+           matcher->samecpu(tp, raw, size, cpu) : false;
+}
+
+static inline bool tp_matcher_samepid(struct tp_matcher *matcher, struct tp *tp, void *raw, int size, int pid)
+{
+    return matcher && matcher->samepid ?
+           matcher->samepid(tp, raw, size, pid) : false;
+}
+
+static inline bool tp_matcher_target_cpu(struct tp_matcher *matcher, struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+{
+    return matcher && matcher->target_cpu ?
+           matcher->target_cpu(tp, raw, size, cpu, pid, target_cpu) : false;
+}
 
 static inline bool tp_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
-    return tp->matcher && tp->matcher->samecpu ?
-            tp->matcher->samecpu(tp, raw, size, cpu) : false;
+    return tp_matcher_samecpu(tp->matcher, tp, raw, size, cpu);
 }
 
 static inline bool tp_samepid(struct tp *tp, void *raw, int size, int pid)
 {
-    return tp->matcher && tp->matcher->samepid ?
-        tp->matcher->samepid(tp, raw, size, pid) : false;
+    return tp_matcher_samepid(tp->matcher, tp, raw, size, pid);
 }
 
-static inline bool tp_target_cpu(struct tp *tp, void *raw, int size, int pid, int *cpu)
+static inline bool tp_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
 {
-    return tp->matcher && tp->matcher->target_cpu ?
-        tp->matcher->target_cpu(tp, raw, size, pid, cpu) : false;
+    return tp_matcher_target_cpu(tp->matcher, tp, raw, size, cpu, pid, target_cpu);
 }
 
 #endif

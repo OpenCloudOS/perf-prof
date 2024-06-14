@@ -1111,7 +1111,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     if (env->samecpu) {
         if (ctx->comm) { // rundelay, syscalls. The key is pid.
             if (raw)
-                tp_target_cpu(curr->tp, raw, size, (int)info->key, &info->recent_cpu);
+                tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, (int)info->key, &info->recent_cpu);
             if (e->cpu_entry.cpu == info->recent_cpu ||
                 (raw && tp_samecpu(curr->tp, raw, size, info->recent_cpu)))
                 return true;

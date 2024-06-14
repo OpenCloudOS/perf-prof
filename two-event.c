@@ -333,7 +333,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     info->recent_cpu = e1->cpu_entry.cpu;
                     if (opts->comm) { // rundelay, syscalls. The key is pid.
                         multi_trace_raw_size(event1, &raw, &size, two->tp1);
-                        tp_target_cpu(two->tp1, raw, size, (int)key, &info->recent_cpu);
+                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, (int)key, &info->recent_cpu);
                     }
                 }
 
@@ -387,7 +387,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     info->recent_cpu = e2->cpu_entry.cpu;
                     if (opts->comm) { // rundelay, syscalls. The key is pid.
                         multi_trace_raw_size(event2, &raw, &size, two->tp2);
-                        tp_target_cpu(two->tp2, raw, size, (int)key, &info->recent_cpu);
+                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, (int)key, &info->recent_cpu);
                     }
                 }
 
