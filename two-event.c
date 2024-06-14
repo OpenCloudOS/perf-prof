@@ -285,6 +285,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     const char *unit;
     void *raw;
     int size;
+    int track_tid;
 
     if (two) {
         delay = container_of(two, struct delay, base);
@@ -303,6 +304,9 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 unlikely(opts->lower_than && delta < opts->lower_than)) {
                 unit = opts->env->tsc ? "kcyc" : "us";
 
+                if (iter)
+                    info->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
+
                 // print events before event1
                 if (iter && iter->start && iter->start != iter->event1) {
                     struct multi_trace_type_header *e;
@@ -314,7 +318,6 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     e = (void *)iter->event->sample.array;
                     neg = e->time - e1->time;
 
-                    info->recent_cpu = e1->cpu_entry.cpu;
                     do {
                         if (event_need_to_print(event1, event2, info, iter)) {
                             if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
@@ -330,10 +333,11 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 multi_trace_print(event1, two->tp1);
                 if (iter) {
                     // cpu tracking for event1
-                    info->recent_cpu = e1->cpu_entry.cpu;
-                    if (opts->comm) { // rundelay, syscalls. The key is pid.
+                    // opts->comm: rundelay, syscalls. The key is pid.
+                    track_tid = opts->comm ? (int)key : e1->tid_entry.tid;
+                    if (track_tid > 0) {
                         multi_trace_raw_size(event1, &raw, &size, two->tp1);
-                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, (int)key, &info->recent_cpu);
+                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &info->recent_cpu);
                     }
                 }
 
@@ -384,10 +388,10 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 multi_trace_print(event2, two->tp2);
                 if (iter) {
                     // cpu tracking for event2
-                    info->recent_cpu = e2->cpu_entry.cpu;
-                    if (opts->comm) { // rundelay, syscalls. The key is pid.
+                    track_tid = opts->comm ? (int)key : e1->tid_entry.tid;
+                    if (track_tid > 0) {
                         multi_trace_raw_size(event2, &raw, &size, two->tp2);
-                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, (int)key, &info->recent_cpu);
+                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, track_tid, &info->recent_cpu);
                     }
                 }
 
@@ -419,6 +423,9 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     const char *unit;
     u64 delta = 0;
+    void *raw;
+    int size;
+    int track_tid;
 
     if (two) {
         opts = &two->class->opts;
@@ -429,6 +436,9 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
         delta = info->recent_time - e1->time;
         if (delta > opts->greater_than) {
             unit = opts->env->tsc ? "kcyc" : "us";
+
+            if (iter)
+                info->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
 
             // print events before event1
             if (iter && iter->start && iter->start != iter->event1) {
@@ -454,6 +464,13 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
 
             // print event1
             multi_trace_print(event1, two->tp1);
+            if (iter) {
+                track_tid = opts->comm ? (int)info->key : e1->tid_entry.tid;
+                if (track_tid > 0) {
+                    multi_trace_raw_size(event1, &raw, &size, two->tp1);
+                    tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &info->recent_cpu);
+                }
+            }
 
             // print event1 to event2
             if (iter) {

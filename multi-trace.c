@@ -775,8 +775,8 @@ static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node
 
     two = ctx->impl->object_find(ctx->class, left->tp, NULL);
     if (two) {
-        struct event_info info;
-        struct event_iter iter;
+        struct event_info info = {};
+        struct event_iter iter = {};
         info.tp1 = left->tp;
         info.tp2 = NULL;
         info.key = left->key;
@@ -1081,6 +1081,39 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
     }
 }
 
+static inline bool event_comparable(union perf_event *event1, struct tp *tp1, union perf_event *event2, struct tp *tp2)
+{
+    // tp_kernel: Compare key values directly.
+    //!tp_kernel: Rely on vm attr to convert the fields of the Guest events.
+    /*
+     * Guest
+     *   tp_kernel(tp) == false
+     *   tp->vcpu: vm= attr, convert to Host event.
+     *
+     * Host-kernel
+     *   tp_kernel(tp) == false && tp_is_dev(tp) == false
+     * Host-forward
+     *   tp_kernel(tp) == false && tp_is_dev(tp) == true
+     *
+     * Event comparability.
+     *   Guest <=> Guest
+     *     tp_kernel(tp1) == tp_kernel(tp2) == false  and
+     *     !!tp1->vcpu == !!tp2->vcpu
+     *   Host  <=> Host
+     *     tp_kernel(tp1) == tp_kernel(tp2) == true
+     *
+     *   Guest <=> Host
+     *     tp_kernel(tp1) == false and tp_kernel(tp2) == true and
+     *     !!tp1->vcpu
+     *   Host  <=> Guest
+     *     tp_kernel(tp1) == true and tp_kernel(tp2) == false and
+     *     !!tp2->vcpu
+     */
+    bool tp1_host = tp1 && (tp_kernel(tp1) || !!tp1->vcpu); // event, tp maybe NULL.
+    bool tp2_host = tp2 && (tp_kernel(tp2) || !!tp2->vcpu);
+    return tp1_host == tp2_host;
+}
+
 bool event_need_to_print(union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
 {
     struct prof_dev *dev = info->tp1->dev;
@@ -1091,83 +1124,103 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     struct multi_trace_type_header *e  = (void *)event->sample.array;
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     struct multi_trace_type_header *e2 = event2 ? (void *)event2->sample.array : NULL;
-    bool match;
+    bool cmp_e1, cmp_e2;
     void *raw = NULL;
     int size = 0;
 
     if (!(env->samecpu || env->samepid || env->sametid || env->samekey))
         return true;
 
-    // tp_kernel: Compare key values directly.
-    //!tp_kernel: Rely on vm attr to convert the fields of the Guest events.
-    match = tp_kernel(curr->tp) ? 1 : !!(curr->tp->vcpu);
-
-    if (!match)
+    cmp_e1 = event_comparable(event, curr->tp, event1, info->tp1);
+    cmp_e2 = event_comparable(event, curr->tp, event2, info->tp2); // event2, tp2 maybe NULL.
+    if (!cmp_e1 && !cmp_e2)
         return false;
 
-    if (event->header.type != PERF_RECORD_DEV && tp_kernel(curr->tp))
+    if (event->header.type != PERF_RECORD_DEV) {
+        // Guest  Host-kernel
         multi_trace_raw_size(event, &raw, &size, curr->tp);
+    } else {
+        raw = event;
+        size = event->header.size;
+    }
 
-    if (env->samecpu) {
-        if (ctx->comm) { // rundelay, syscalls. The key is pid.
-            if (raw)
-                tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, (int)info->key, &info->recent_cpu);
+    // e->cpu_entry.cpu maybe -1, See block_event_convert()
+    if (env->samecpu && e->cpu_entry.cpu != -1) {
+        if (cmp_e1) {
+            // cpu tracking
+            // ctx->comm: rundelay, syscalls. The key is pid.
+            int track_tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
+            if (track_tid > 0) {
+                if (tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, track_tid, &info->recent_cpu)) {
+                    goto TRUE;
+                } else if (!ctx->comm && /* info->recent_cpu maybe -1, See block_event_convert() */
+                        e->cpu_entry.cpu != info->recent_cpu &&
+                        e->tid_entry.tid == track_tid) {
+                    info->recent_cpu = e->cpu_entry.cpu;
+                    goto TRUE;
+                }
+            }
+
             if (e->cpu_entry.cpu == info->recent_cpu ||
-                (raw && tp_samecpu(curr->tp, raw, size, info->recent_cpu)))
-                return true;
-        } else {
-            if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
-                (e2 && e->cpu_entry.cpu == e2->cpu_entry.cpu))
-                return true;
+                tp_samecpu(curr->tp, raw, size, info->recent_cpu))
+                goto TRUE;
 
-            if (raw)
-            if (tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu) ||
-                (e2 && e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
-                    tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
-                return true;
+            if (!ctx->comm) {
+                if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
+                    tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu))
+                    goto TRUE;
+            }
+        }
+        if (cmp_e2) {
+            if (!ctx->comm) {
+                if (e->cpu_entry.cpu == e2->cpu_entry.cpu ||
+                   (e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
+                        tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
+                    goto TRUE;
+            }
         }
     }
 
     if (env->samepid) {
-        if (ctx->comm) { // rundelay, syscalls. The key is pid.
-            if (e->tid_entry.pid == (int)info->key ||
-                (raw && tp_samepid(curr->tp, raw, size, (int)info->key)))
-                return true;
-        } else {
-            if (e->tid_entry.pid == e1->tid_entry.pid ||
-                (e2 && e->tid_entry.pid == e2->tid_entry.pid))
-                return true;
-
-            if (raw)
-            if (tp_samepid(curr->tp, raw, size, e1->tid_entry.pid) ||
-                (e2 && e1->tid_entry.pid != e2->tid_entry.pid &&
-                    tp_samepid(curr->tp, raw, size, e2->tid_entry.pid)))
-                return true;
+        if (cmp_e1) {
+            // ctx->comm: rundelay, syscalls. The key is pid.
+            int pid = ctx->comm ? (int)info->key : e1->tid_entry.pid;
+            if (e->tid_entry.pid == pid ||
+                tp_samepid(curr->tp, raw, size, pid))
+                goto TRUE;
+        }
+        if (cmp_e2) {
+            if (!ctx->comm) {
+                if (e->tid_entry.pid == e2->tid_entry.pid ||
+                   (e1->tid_entry.pid != e2->tid_entry.pid &&
+                        tp_samepid(curr->tp, raw, size, e2->tid_entry.pid)))
+                    goto TRUE;
+            }
         }
     }
 
     if (env->sametid) {
-        if (ctx->comm) { // rundelay, syscalls. The key is pid.
-            if (e->tid_entry.tid == (int)info->key ||
-                (raw && tp_samepid(curr->tp, raw, size, (int)info->key)))
-                return true;
-        } else {
-            if (e->tid_entry.tid == e1->tid_entry.tid ||
-                (e2 && e->tid_entry.tid == e2->tid_entry.tid))
-                return true;
-
-            if (raw)
-            if (tp_samepid(curr->tp, raw, size, e1->tid_entry.tid) ||
-                (e2 && e1->tid_entry.tid != e2->tid_entry.tid &&
-                    tp_samepid(curr->tp, raw, size, e2->tid_entry.tid)))
-                return true;
+        if (cmp_e1) {
+            // ctx->comm: rundelay, syscalls. The key is pid.
+            int tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
+            if (e->tid_entry.tid == tid ||
+                tp_samepid(curr->tp, raw, size, tid))
+                goto TRUE;
+        }
+        if (cmp_e2) {
+            if (!ctx->comm) {
+                if (e->tid_entry.tid == e2->tid_entry.tid ||
+                   (e1->tid_entry.tid != e2->tid_entry.tid &&
+                        tp_samepid(curr->tp, raw, size, e2->tid_entry.tid)))
+                    goto TRUE;
+            }
         }
     }
 
     if (env->samekey)
     if ((!!curr->tp->key) == (!!info->tp1->key) &&
         curr->key == info->key)
-        return true;
+        goto TRUE;
 
     if (env->samepid || env->sametid)
     if (event->header.type == PERF_RECORD_DEV) {
@@ -1177,15 +1230,18 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         if (unlikely(source_dev->forward.samepid)) {
             if (source_dev->forward.samepid(source_dev, &event_dev->event,
                 env->samepid ? e1->tid_entry.pid : -1, env->sametid ? e1->tid_entry.tid : -1))
-                return true;
+                goto TRUE;
             if (e2 &&
                 source_dev->forward.samepid(source_dev, &event_dev->event,
                 env->samepid ? e2->tid_entry.pid : -1, env->sametid ? e2->tid_entry.tid : -1))
-                return true;
+                goto TRUE;
         }
     }
 
     return false;
+
+TRUE:
+    return true;
 }
 
 int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
@@ -1274,13 +1330,13 @@ static void multi_trace_tryto_call_two(struct prof_dev *dev, struct timeline_nod
             prev->maybe_unpaired = 0;
             two = ctx->impl->object_find(ctx->class, prev->tp, tp);
             if (two) {
-                struct event_info info;
+                struct event_info info = {};
                 info.tp1 = prev->tp;
                 info.tp2 = tp;
                 info.key = key;
                 info.recent_time = ctx->recent_time;
                 if (ctx->need_timeline) {
-                    struct event_iter iter;
+                    struct event_iter iter = {};
                     if (env->before_event1) {
                         backup.time = prev->time - env->before_event1;
                         backup.seq = 0;
@@ -1307,7 +1363,7 @@ static void multi_trace_tryto_call_two(struct prof_dev *dev, struct timeline_nod
             two = ctx->impl->object_find(ctx->class, tp, NULL);
             if (two) {
                 // two(A, NULL), first call A.
-                struct event_info info;
+                struct event_info info = {};
                 info.tp1 = tp;
                 info.tp2 = NULL;
                 info.key = key;
