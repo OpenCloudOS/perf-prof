@@ -1152,21 +1152,21 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             int track_tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
             if (track_tid > 0) {
                 iter->debug_msg = "cpu tracking";
-                if (tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, track_tid, &info->recent_cpu)) {
-                    if (info->recent_cpu == -1)
+                if (tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, track_tid, &iter->recent_cpu)) {
+                    if (iter->recent_cpu == -1)
                         iter->debug_msg = "cpu tracking end";
                     goto TRUE;
                 } else if (!ctx->comm && /* info->recent_cpu maybe -1, See block_event_convert() */
-                        e->cpu_entry.cpu != info->recent_cpu &&
+                        e->cpu_entry.cpu != iter->recent_cpu &&
                         e->tid_entry.tid == track_tid) {
-                    info->recent_cpu = e->cpu_entry.cpu;
+                    iter->recent_cpu = e->cpu_entry.cpu;
                     goto TRUE;
                 }
             }
 
             iter->debug_msg = "samecpu-track";
-            if (e->cpu_entry.cpu == info->recent_cpu ||
-                tp_samecpu(curr->tp, raw, size, info->recent_cpu))
+            if (e->cpu_entry.cpu == iter->recent_cpu ||
+                tp_samecpu(curr->tp, raw, size, iter->recent_cpu))
                 goto TRUE;
 
             if (!ctx->comm) {

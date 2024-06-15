@@ -318,7 +318,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 unit = opts->env->tsc ? "kcyc" : "us";
 
                 if (iter)
-                    info->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
+                    iter->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
 
                 // print events before event1
                 if (iter && iter->start && iter->start != iter->event1) {
@@ -351,7 +351,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     track_tid = opts->comm ? (int)key : e1->tid_entry.tid;
                     if (track_tid > 0) {
                         multi_trace_raw_size(event1, &raw, &size, two->tp1);
-                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &info->recent_cpu);
+                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu);
                     }
                 }
 
@@ -408,7 +408,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     track_tid = opts->comm ? (int)key : e1->tid_entry.tid;
                     if (track_tid > 0) {
                         multi_trace_raw_size(event2, &raw, &size, two->tp2);
-                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, track_tid, &info->recent_cpu);
+                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, track_tid, &iter->recent_cpu);
                     }
                 }
 
@@ -456,7 +456,7 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
             unit = opts->env->tsc ? "kcyc" : "us";
 
             if (iter)
-                info->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
+                iter->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
 
             // print events before event1
             if (iter && iter->start && iter->start != iter->event1) {
@@ -486,7 +486,7 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
                 track_tid = opts->comm ? (int)info->key : e1->tid_entry.tid;
                 if (track_tid > 0) {
                     multi_trace_raw_size(event1, &raw, &size, two->tp1);
-                    tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &info->recent_cpu);
+                    tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu);
                 }
             }
 
