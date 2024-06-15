@@ -51,6 +51,7 @@ struct event_iter {
     void *curr;
     union perf_event *event;
     struct tp *tp;
+    const char *debug_msg;
 };
 
 struct two_event {

@@ -1151,7 +1151,10 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             // ctx->comm: rundelay, syscalls. The key is pid.
             int track_tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
             if (track_tid > 0) {
+                iter->debug_msg = "cpu tracking";
                 if (tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, track_tid, &info->recent_cpu)) {
+                    if (info->recent_cpu == -1)
+                        iter->debug_msg = "cpu tracking end";
                     goto TRUE;
                 } else if (!ctx->comm && /* info->recent_cpu maybe -1, See block_event_convert() */
                         e->cpu_entry.cpu != info->recent_cpu &&
@@ -1161,11 +1164,13 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
                 }
             }
 
+            iter->debug_msg = "samecpu-track";
             if (e->cpu_entry.cpu == info->recent_cpu ||
                 tp_samecpu(curr->tp, raw, size, info->recent_cpu))
                 goto TRUE;
 
             if (!ctx->comm) {
+                iter->debug_msg = "samecpu-1";
                 if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
                     tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu))
                     goto TRUE;
@@ -1173,6 +1178,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         }
         if (cmp_e2) {
             if (!ctx->comm) {
+                iter->debug_msg = "samecpu-2";
                 if (e->cpu_entry.cpu == e2->cpu_entry.cpu ||
                    (e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
                         tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
@@ -1185,11 +1191,13 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         if (cmp_e1) {
             // ctx->comm: rundelay, syscalls. The key is pid.
             int pid = ctx->comm ? (int)info->key : e1->tid_entry.pid;
+            iter->debug_msg = "samepid-1";
             if (e->tid_entry.pid == pid ||
                 tp_samepid(curr->tp, raw, size, pid))
                 goto TRUE;
         }
         if (cmp_e2) {
+            iter->debug_msg = "samepid-2";
             if (!ctx->comm) {
                 if (e->tid_entry.pid == e2->tid_entry.pid ||
                    (e1->tid_entry.pid != e2->tid_entry.pid &&
@@ -1203,11 +1211,13 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         if (cmp_e1) {
             // ctx->comm: rundelay, syscalls. The key is pid.
             int tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
+            iter->debug_msg = "sametid-1";
             if (e->tid_entry.tid == tid ||
                 tp_samepid(curr->tp, raw, size, tid))
                 goto TRUE;
         }
         if (cmp_e2) {
+            iter->debug_msg = "sametid-2";
             if (!ctx->comm) {
                 if (e->tid_entry.tid == e2->tid_entry.tid ||
                    (e1->tid_entry.tid != e2->tid_entry.tid &&
@@ -1217,14 +1227,18 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         }
     }
 
+    iter->debug_msg = "samekey";
     if (env->samekey)
     if ((!!curr->tp->key) == (!!info->tp1->key) &&
         curr->key == info->key)
         goto TRUE;
 
+    iter->debug_msg = NULL;
     return false;
 
 TRUE:
+    if (!env->verbose)
+        iter->debug_msg = NULL;
     return true;
 }
 
@@ -1379,7 +1393,7 @@ static int multi_trace_tryto_backup(struct prof_dev *dev, struct timeline_node *
                  * The same event occurs multiple times, only the last event is backed up.
                  * Previous events will be marked as unneeded and released on the timeline in time.
                 **/
-                if (env->verbose >= VERBOSE_NOTICE)
+                if (env->verbose > VERBOSE_NOTICE)
                     multi_trace_print_title(new->event, new->tp, "EEXIST");
                 rblist__remove_node(&ctx->backup, rbn);
                 *need_free = true;
@@ -1611,7 +1625,7 @@ found:
         // no need to use tp1
         tp1 = NULL;
 
-        if (env->verbose >= VERBOSE_NOTICE &&
+        if (env->verbose > VERBOSE_NOTICE &&
             i != ctx->nr_list - 1 && event_is_sched_wakeup_and_unnecessary)
             multi_trace_print_title(event, tp, "UNNECESSARY");
     } else {

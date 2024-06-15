@@ -273,6 +273,18 @@ static void delay_delete(struct two_event_class *class, struct two_event *two)
     }
 }
 
+static inline void __make_buff(char *buff, int len, const char *debug_msg)
+{
+    *buff++ = '|';
+    if (debug_msg) {
+        char *end = buff + len - 1;
+        *buff++ = ' ';
+        while (*debug_msg && buff < end)
+            *buff++ = *debug_msg++;
+    }
+    *buff++ = '\0';
+}
+
 static void delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
 {
     struct delay *delay = NULL;
@@ -286,6 +298,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     void *raw;
     int size;
     int track_tid;
+    char buff[28];
 
     if (two) {
         delay = container_of(two, struct delay, base);
@@ -322,7 +335,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                         if (event_need_to_print(event1, event2, info, iter)) {
                             if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
                             printed = true;
-                            multi_trace_print_title(iter->event, iter->tp, "|");
+                            __make_buff(buff, sizeof(buff), iter->debug_msg);
+                            multi_trace_print_title(iter->event, iter->tp, buff);
                         }
                         if (!event_iter_cmd(iter, CMD_NEXT))
                             break;
@@ -344,13 +358,13 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 // print event1 to event2
                 if (iter) {
                     bool first = true;
-                    char buff[32];
                     int hide = 0;
                     struct {
                         __u64 time;
                         union perf_event *event;
                         struct tp *tp;
-                    } prev = {0, NULL, NULL};
+                        const char *debug_msg;
+                    } prev = {0, NULL, NULL, NULL};
                     snprintf(buff, sizeof(buff), "| %12.3f %s", delta/1000.0, unit);
                     event_iter_cmd(iter, CMD_EVENT1);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
@@ -366,16 +380,19 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                                 }
                                 if (hide) {
                                     if (--hide) printf("| %17d hidden\n", hide);
-                                    multi_trace_print_title(prev.event, prev.tp, "|");
+                                    __make_buff(buff, sizeof(buff), prev.debug_msg);
+                                    multi_trace_print_title(prev.event, prev.tp, buff);
                                 }
                             }
-                            multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
+                            if (!first) __make_buff(buff, sizeof(buff), iter->debug_msg);
+                            multi_trace_print_title(iter->event, iter->tp, buff);
                             first = false;
                             hide = 0;
                        set_prev:
                             prev.time = data->time;
                             prev.event = iter->event;
                             prev.tp = iter->tp;
+                            prev.debug_msg = iter->debug_msg;
                         }
                     }
                     if (first)
@@ -402,7 +419,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     event_iter_cmd(iter, CMD_EVENT2);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
                         if (event_need_to_print(event1, event2, info, iter)) {
-                            multi_trace_print_title(iter->event, iter->tp, "|");
+                            __make_buff(buff, sizeof(buff), iter->debug_msg);
+                            multi_trace_print_title(iter->event, iter->tp, buff);
                             last = iter->event;
                         } else if (last)
                             last = iter->event;
