@@ -1143,6 +1143,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         raw = event;
         size = event->header.size;
     }
+    iter->reason = NULL;
 
     // e->cpu_entry.cpu maybe -1, See block_event_convert()
     if (env->samecpu && e->cpu_entry.cpu != -1) {
@@ -1152,7 +1153,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             int track_tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
             if (track_tid > 0) {
                 iter->debug_msg = "cpu tracking";
-                if (tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, track_tid, &iter->recent_cpu)) {
+                if (tp_target_cpu(curr->tp, raw, size, e->cpu_entry.cpu, track_tid, &iter->recent_cpu, &iter->reason)) {
                     if (iter->recent_cpu == -1)
                         iter->debug_msg = "cpu tracking end";
                     goto TRUE;
@@ -1239,6 +1240,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
 TRUE:
     if (!env->verbose)
         iter->debug_msg = NULL;
+    iter->time_to_e1 = e->time - e1->time;
     return true;
 }
 

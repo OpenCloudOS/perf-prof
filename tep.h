@@ -199,7 +199,8 @@ struct tp_matcher {
     const char *name;
     bool (*samecpu)(struct tp *tp, void *raw, int size, int cpu);
     bool (*samepid)(struct tp *tp, void *raw, int size, int pid);
-    bool (*target_cpu)(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu);
+    bool (*target_cpu)(struct tp *tp, void *raw, int size, int cpu, int pid,
+                       int *target_cpu, const char **reason);
 };
 
 #define __TP_MATCHER_REGISTER(SYS, NAME, SAMECPU, SAMEPID, TARGET_CPU) \
@@ -236,10 +237,11 @@ static inline bool tp_matcher_samepid(struct tp_matcher *matcher, struct tp *tp,
            matcher->samepid(tp, raw, size, pid) : false;
 }
 
-static inline bool tp_matcher_target_cpu(struct tp_matcher *matcher, struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+static inline bool tp_matcher_target_cpu(struct tp_matcher *matcher, struct tp *tp, void *raw, int size, int cpu, int pid,
+                                                 int *target_cpu, const char **reason)
 {
     return matcher && matcher->target_cpu ?
-           matcher->target_cpu(tp, raw, size, cpu, pid, target_cpu) : false;
+           matcher->target_cpu(tp, raw, size, cpu, pid, target_cpu, reason) : false;
 }
 
 static inline bool tp_samecpu(struct tp *tp, void *raw, int size, int cpu)
@@ -252,9 +254,9 @@ static inline bool tp_samepid(struct tp *tp, void *raw, int size, int pid)
     return tp_matcher_samepid(tp->matcher, tp, raw, size, pid);
 }
 
-static inline bool tp_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+static inline bool tp_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu, const char **reason)
 {
-    return tp_matcher_target_cpu(tp->matcher, tp, raw, size, cpu, pid, target_cpu);
+    return tp_matcher_target_cpu(tp->matcher, tp, raw, size, cpu, pid, target_cpu, reason);
 }
 
 #endif

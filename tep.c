@@ -829,14 +829,16 @@ static bool __sched_wakeup_samepid(struct tp *tp, void *raw, int size, int pid)
     return pid == ((struct sched_wakeup *)raw)->pid;
 }
 
-static bool __sched_wakeup_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+static bool __sched_wakeup_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu, const char **reason)
 {
     if (pid == ((struct sched_wakeup *)raw)->pid) {
         if (size == TP_RAW_SIZE(struct sched_wakeup)) {
             *target_cpu = ((struct sched_wakeup *)raw)->target_cpu;
+            *reason = "wakeup";
             return true;
         } else if (size == TP_RAW_SIZE(struct sched_wakeup_no_success)) {
             *target_cpu = ((struct sched_wakeup_no_success *)raw)->target_cpu;
+            *reason = "wakeup";
             return true;
         }
     }
@@ -871,19 +873,23 @@ static void __sched_switch_preempt_state(void)
         preempt_state = TASK_STATE_MAX;
 }
 
-static bool __sched_switch_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+static bool __sched_switch_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu, const char **reason)
 {
     struct sched_switch *sched_switch = raw;
 
     if (pid == sched_switch->next_pid) {
         *target_cpu = cpu;
+        *reason = "running";
         return true;
     } else if (pid == sched_switch->prev_pid) {
         if (sched_switch->prev_state == 0 ||
-            sched_switch->prev_state == preempt_state)
+            sched_switch->prev_state == preempt_state) {
             *target_cpu = cpu;
-        else
+            *reason = "preempt";
+        } else {
             *target_cpu = -1;
+            *reason = sched_switch->prev_state == 1 ? "sleeping" : "waiting";
+        }
         return true;
     }
     return false;
@@ -900,10 +906,11 @@ static bool __sched_migrate_task_samepid(struct tp *tp, void *raw, int size, int
     return pid == ((struct sched_migrate_task *)raw)->pid;
 }
 
-static bool __sched_migrate_task_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+static bool __sched_migrate_task_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu, const char **reason)
 {
     if (pid == ((struct sched_migrate_task *)raw)->pid) {
         *target_cpu = ((struct sched_migrate_task *)raw)->dest_cpu;
+        *reason = "migrate";
         return true;
     }
     return false;

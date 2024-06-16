@@ -1034,11 +1034,11 @@ static bool __task_state_samepid(struct tp *tp, void *raw, int size, int pid)
     return tp_matcher_samepid(result.matcher, tp, result.true_raw, result.true_size, pid);
 }
 
-static bool __task_state_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu)
+static bool __task_state_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu, const char **reason)
 {
     struct matcher_result result = {};
     task_state_matcher(tp, raw, size, &result);
-    return tp_matcher_target_cpu(result.matcher, tp, result.true_raw, result.true_size, cpu, pid, target_cpu);
+    return tp_matcher_target_cpu(result.matcher, tp, result.true_raw, result.true_size, cpu, pid, target_cpu, reason);
 }
 
 TP_MATCHER_REGISTER5(NULL, "task-state", __task_state_samecpu, __task_state_samepid, __task_state_target_cpu);

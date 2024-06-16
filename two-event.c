@@ -273,14 +273,17 @@ static void delay_delete(struct two_event_class *class, struct two_event *two)
     }
 }
 
-static inline void __make_buff(char *buff, int len, const char *debug_msg)
+static inline void __make_buff(char *buff, int len, const char *debug_msg, s64 time_to_e1, const char *reason)
 {
     *buff++ = '|';
-    if (debug_msg) {
+    if (unlikely(debug_msg)) {
         char *end = buff + len - 1;
         *buff++ = ' ';
         while (*debug_msg && buff < end)
             *buff++ = *debug_msg++;
+    } else if (reason) {
+        snprintf(buff, len - 1, " %12.3f %s", time_to_e1/1000.0, reason);
+        return;
     }
     *buff++ = '\0';
 }
@@ -298,7 +301,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
     void *raw;
     int size;
     int track_tid;
-    char buff[28];
+    char buff[27];
 
     if (two) {
         delay = container_of(two, struct delay, base);
@@ -330,12 +333,11 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                     e = (void *)iter->event->sample.array;
                     neg = e->time - e1->time;
-
                     do {
                         if (event_need_to_print(event1, event2, info, iter)) {
                             if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
                             printed = true;
-                            __make_buff(buff, sizeof(buff), iter->debug_msg);
+                            __make_buff(buff, sizeof(buff), iter->debug_msg, iter->time_to_e1, iter->reason);
                             multi_trace_print_title(iter->event, iter->tp, buff);
                         }
                         if (!event_iter_cmd(iter, CMD_NEXT))
@@ -351,7 +353,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     track_tid = opts->comm ? (int)key : e1->tid_entry.tid;
                     if (track_tid > 0) {
                         multi_trace_raw_size(event1, &raw, &size, two->tp1);
-                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu);
+                        tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu, &iter->reason);
                     }
                 }
 
@@ -364,8 +366,10 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                         union perf_event *event;
                         struct tp *tp;
                         const char *debug_msg;
+                        s64 time_to_e1;
+                        const char *reason;
                     } prev = {0, NULL, NULL, NULL};
-                    snprintf(buff, sizeof(buff), "| %12.3f %s", delta/1000.0, unit);
+                    snprintf(buff, sizeof(buff), "|+%12.3f %s", delta/1000.0, unit);
                     event_iter_cmd(iter, CMD_EVENT1);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
                         if (iter->curr == iter->event2)
@@ -380,11 +384,11 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                                 }
                                 if (hide) {
                                     if (--hide) printf("| %17d hidden\n", hide);
-                                    __make_buff(buff, sizeof(buff), prev.debug_msg);
+                                    __make_buff(buff, sizeof(buff), prev.debug_msg, prev.time_to_e1, prev.reason);
                                     multi_trace_print_title(prev.event, prev.tp, buff);
                                 }
                             }
-                            if (!first) __make_buff(buff, sizeof(buff), iter->debug_msg);
+                            if (!first) __make_buff(buff, sizeof(buff), iter->debug_msg, iter->time_to_e1, iter->reason);
                             multi_trace_print_title(iter->event, iter->tp, buff);
                             first = false;
                             hide = 0;
@@ -393,6 +397,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                             prev.event = iter->event;
                             prev.tp = iter->tp;
                             prev.debug_msg = iter->debug_msg;
+                            prev.time_to_e1 = iter->time_to_e1;
+                            prev.reason = iter->reason;
                         }
                     }
                     if (first)
@@ -408,7 +414,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     track_tid = opts->comm ? (int)key : e1->tid_entry.tid;
                     if (track_tid > 0) {
                         multi_trace_raw_size(event2, &raw, &size, two->tp2);
-                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, track_tid, &iter->recent_cpu);
+                        tp_target_cpu(two->tp2, raw, size, e2->cpu_entry.cpu, track_tid, &iter->recent_cpu, &iter->reason);
                     }
                 }
 
@@ -419,7 +425,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     event_iter_cmd(iter, CMD_EVENT2);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
                         if (event_need_to_print(event1, event2, info, iter)) {
-                            __make_buff(buff, sizeof(buff), iter->debug_msg);
+                            __make_buff(buff, sizeof(buff), iter->debug_msg, iter->time_to_e1, iter->reason);
                             multi_trace_print_title(iter->event, iter->tp, buff);
                             last = iter->event;
                         } else if (last)
@@ -468,7 +474,6 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
 
                 e = (void *)iter->event->sample.array;
                 neg = e->time - e1->time;
-
                 do {
                     if (event_need_to_print(event1, NULL, info, iter)) {
                         if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
@@ -486,7 +491,7 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
                 track_tid = opts->comm ? (int)info->key : e1->tid_entry.tid;
                 if (track_tid > 0) {
                     multi_trace_raw_size(event1, &raw, &size, two->tp1);
-                    tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu);
+                    tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu, &iter->reason);
                 }
             }
 
