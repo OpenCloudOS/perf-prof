@@ -15,6 +15,7 @@
 #include <stack_helpers.h>
 
 typedef u64 sector_t;
+typedef u32 __kernel_dev_t;
 
 static profiler blktrace;
 
@@ -68,7 +69,7 @@ struct trace_block_getrq {
     unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
     int common_pid;//   offset:4;       size:4; signed:1;
 
-    dev_t dev;//        offset:8;       size:4; signed:0;
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
     sector_t sector;//  offset:16;      size:8; signed:0;
     unsigned int nr_sector;//   offset:24;      size:4; signed:0;
     char rwbs[8];//     offset:28;      size:8; signed:1;
@@ -81,7 +82,7 @@ struct trace_block_rq_insert {
     unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
     int common_pid;//   offset:4;       size:4; signed:1;
 
-    dev_t dev;//        offset:8;       size:4; signed:0;
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
     sector_t sector;//  offset:16;      size:8; signed:0;
     unsigned int nr_sector;//   offset:24;      size:4; signed:0;
     unsigned int bytes;//       offset:28;      size:4; signed:0;
@@ -96,7 +97,7 @@ struct trace_block_rq_issue {
     unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
     int common_pid;//   offset:4;       size:4; signed:1;
 
-    dev_t dev;//        offset:8;       size:4; signed:0;
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
     sector_t sector;//  offset:16;      size:8; signed:0;
     unsigned int nr_sector;//   offset:24;      size:4; signed:0;
     unsigned int bytes;//       offset:28;      size:4; signed:0;
@@ -111,7 +112,7 @@ struct trace_block_rq_complete {
     unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
     int common_pid;//   offset:4;       size:4; signed:1;
 
-    dev_t dev;//        offset:8;       size:4; signed:0;
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
     sector_t sector;//  offset:16;      size:8; signed:0;
     unsigned int nr_sector;//   offset:24;      size:4; signed:0;
     int error;//        offset:28;      size:4; signed:1;
