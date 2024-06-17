@@ -451,6 +451,9 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
     int size;
     int track_tid;
 
+    if (info->rr != REMAINING_LOST)
+        return REMAINING_BREAK;
+
     if (two) {
         opts = &two->class->opts;
 
@@ -773,7 +776,7 @@ static remaining_return syscalls_remaining(struct two_event *two, union perf_eve
     int enter_size;
     u64 delta = 0;
 
-    if (info->rr == REMAINING_LOST)
+    if (info->rr != REMAINING_SYSCALLS)
         return REMAINING_BREAK;
 
     if (two) {

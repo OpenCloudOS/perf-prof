@@ -805,7 +805,7 @@ static int multi_trace_call_remaining(struct prof_dev *dev, struct timeline_node
     return REMAINING_CONTINUE;
 }
 
-static void multi_trace_handle_lost(struct prof_dev *dev)
+static void multi_trace_handle_remaining(struct prof_dev *dev, remaining_reason rr)
 {
     struct multi_trace_ctx *ctx = dev->private;
     struct rb_node *next = rb_first_cached(&ctx->backup.entries);
@@ -813,7 +813,7 @@ static void multi_trace_handle_lost(struct prof_dev *dev)
 
     while (next) {
         left = rb_entry(next, struct timeline_node, key_node);
-        if (multi_trace_call_remaining(dev, left, REMAINING_LOST) == REMAINING_BREAK)
+        if (multi_trace_call_remaining(dev, left, rr) == REMAINING_BREAK)
             break;
         next = rb_next(next);
     }
@@ -862,6 +862,8 @@ static void multi_trace_flush(struct prof_dev *dev, enum profdev_flush how)
 {
     if (how == PROF_DEV_FLUSH_FINAL) {
         struct multi_trace_ctx *ctx = dev->private;
+
+        multi_trace_handle_remaining(dev, REMAINING_EXIT);
 
         while (multi_trace_first_pending(dev, NULL)) ;
         rblist__exit(&ctx->backup);
@@ -965,7 +967,7 @@ static inline void lost_reclaim(struct prof_dev *dev, int ins)
         u64 key = ctx->oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins);
         reclaim(dev, key, REMAINING_LOST);
     } else {
-        multi_trace_handle_lost(dev);
+        multi_trace_handle_remaining(dev, REMAINING_LOST);
         rblist__exit(&ctx->backup);
     }
 }

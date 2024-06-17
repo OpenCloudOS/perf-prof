@@ -15,6 +15,7 @@ typedef enum {
     NOT_REMAINING,
     REMAINING_LOST,
     REMAINING_SYSCALLS, // exit, exit_group
+    REMAINING_EXIT,
 } remaining_reason;
 
 struct two_event_options {
