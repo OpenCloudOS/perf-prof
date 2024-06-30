@@ -325,14 +325,11 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
 
                 // print events before event1
                 if (iter && iter->start && iter->start != iter->event1) {
-                    struct multi_trace_type_header *e;
                     bool printed = false;
                     s64  neg;
 
                     event_iter_cmd(iter, CMD_RESET);
-
-                    e = (void *)iter->event->sample.array;
-                    neg = e->time - e1->time;
+                    neg = iter->time - e1->time;
                     do {
                         if (event_need_to_print(event1, event2, info, iter)) {
                             if (!printed) printf("-Previous %.3f %s\n", neg/1000.0, unit);
@@ -362,7 +359,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                     bool first = true;
                     int hide = 0;
                     struct {
-                        __u64 time;
+                        u64 time;
                         union perf_event *event;
                         struct tp *tp;
                         const char *debug_msg;
@@ -375,10 +372,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                         if (iter->curr == iter->event2)
                             break;
                         if (event_need_to_print(event1, event2, info, iter)) {
-                            struct multi_trace_type_header *data = (void *)iter->event->sample.array;
-
                             if (!first && opts->hide_than) {
-                                if (data->time - prev.time < opts->hide_than) {
+                                if (iter->time - prev.time < opts->hide_than) {
                                     hide ++;
                                     goto set_prev;
                                 }
@@ -393,7 +388,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                             first = false;
                             hide = 0;
                        set_prev:
-                            prev.time = data->time;
+                            prev.time = iter->time;
                             prev.event = iter->event;
                             prev.tp = iter->tp;
                             prev.debug_msg = iter->debug_msg;
@@ -419,11 +414,13 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 }
 
                 // print events after event2
-                if (iter) {
+                if (iter && opts->env->after_event2) {
                     union perf_event *last = NULL;
 
                     event_iter_cmd(iter, CMD_EVENT2);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
+                        if (iter->time - e2->time > opts->env->after_event2)
+                            break;
                         if (event_need_to_print(event1, event2, info, iter)) {
                             __make_buff(buff, sizeof(buff), iter->debug_msg, iter->time_to_e1, iter->reason);
                             multi_trace_print_title(iter->event, iter->tp, buff);

@@ -1251,22 +1251,13 @@ int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
     struct timeline_node *curr;
     struct rb_node *rbn;
 
-    if (!iter || cmd >= CMD_MAX)
-        return 0;
-
     switch (cmd) {
         case CMD_RESET:
             curr = iter->curr = iter->start;
-            if (curr) {
-                iter->event = curr->event;
-                iter->tp = curr->tp;
-            }
             break;
         case CMD_EVENT1:
         case CMD_EVENT2:
             curr = iter->curr = (cmd == CMD_EVENT1 ? iter->event1 : iter->event2);
-            iter->event = curr->event;
-            iter->tp = curr->tp;
             break;
         case CMD_PREV:
         case CMD_NEXT:
@@ -1280,13 +1271,15 @@ int event_iter_cmd(struct event_iter *iter, enum event_iter_cmd cmd)
                 return 0;
 
             curr = iter->curr;
-            iter->event = curr->event;
-            iter->tp = curr->tp;
             break;
         case CMD_MAX:
         default:
             return 0;
     }
+
+    iter->event = curr->event;
+    iter->tp = curr->tp;
+    iter->time = curr->time;
     return 1;
 }
 
@@ -1331,7 +1324,7 @@ static void multi_trace_tryto_call_two(struct prof_dev *dev, struct timeline_nod
             prev = container_of(rbn, struct timeline_node, key_node);
             prev->maybe_unpaired = 0;
             two = ctx->impl->object_find(ctx->class, prev->tp, tp);
-            if (two) {
+            if (two && prev->time < tl_event->time/* Out of order */) {
                 struct event_info info = {};
                 info.tp1 = prev->tp;
                 info.tp2 = tp;
@@ -1391,14 +1384,17 @@ static int multi_trace_tryto_backup(struct prof_dev *dev, struct timeline_node *
         rbn = rblist__findnew(&ctx->backup, tl_event);
         if (rbn) {
             if (nr_entries == rblist__nr_entries(&ctx->backup)) {
-                struct timeline_node *new;
-                new = rb_entry(rbn, struct timeline_node, key_node);
+                struct timeline_node *exist;
+                exist = rb_entry(rbn, struct timeline_node, key_node);
+                // Out of order
+                if (unlikely(tl_event->time < exist->time))
+                    goto unneeded;
                 /*
                  * The same event occurs multiple times, only the last event is backed up.
                  * Previous events will be marked as unneeded and released on the timeline in time.
                 **/
                 if (env->verbose > VERBOSE_NOTICE)
-                    multi_trace_print_title(new->event, new->tp, "EEXIST");
+                    multi_trace_print_title(exist->event, exist->tp, "EEXIST");
                 rblist__remove_node(&ctx->backup, rbn);
                 *need_free = true;
 
@@ -1410,7 +1406,10 @@ static int multi_trace_tryto_backup(struct prof_dev *dev, struct timeline_node *
             } else
                 ret = 0;
         } else {
+        unneeded:
             tl_event->unneeded = 1;
+            ctx->tl_stat.unneeded ++;
+            ctx->tl_stat.unneeded_bytes += tl_event->event->header.size;
             *need_free = true;
         }
     } else

@@ -51,6 +51,7 @@ struct event_iter {
     void *curr;
     union perf_event *event;
     struct tp *tp;
+    u64 time;
 
     int recent_cpu; // samecpu: cpu tracking.
     const char *debug_msg;
