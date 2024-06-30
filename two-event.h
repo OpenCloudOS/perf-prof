@@ -55,7 +55,6 @@ struct event_iter {
 
     int recent_cpu; // samecpu: cpu tracking.
     const char *debug_msg;
-    s64 time_to_e1; // curr.time - event1.time
     const char *reason;
 };
 

@@ -1242,7 +1242,6 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
 TRUE:
     if (!env->verbose)
         iter->debug_msg = NULL;
-    iter->time_to_e1 = e->time - e1->time;
     return true;
 }
 
