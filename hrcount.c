@@ -286,7 +286,7 @@ static void direct_print(void *opaque, struct count_node *node)
     struct prof_dev *dev = opaque;
     struct hrcount_ctx *ctx = dev->private;
     int i, h;
-    char buf[64];
+    char buf[512];
     struct tp *tp = &ctx->tp_list->tp[node->id];
 
     if (tp->alias)
