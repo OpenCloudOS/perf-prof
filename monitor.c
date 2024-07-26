@@ -2557,7 +2557,9 @@ int main(int argc, char *argv[])
     struct env *main_env = NULL;
 
     sigusr2_handler(0);
-
+    setlinebuf(stdin);
+    setlinebuf(stdout);
+    setlinebuf(stderr);
     libperf_init(libperf_print);
 
     main_epoll = event_poll__alloc(64);
