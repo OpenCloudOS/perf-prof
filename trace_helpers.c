@@ -1287,7 +1287,7 @@ void syms_cache__stat(struct syms_cache *syms_cache, FILE *fp)
         fprintf(fp, "    PID %d %s\n", cache->tgid, global_comm_get(cache->tgid) ? : "");
         for (i = 0; i < cache->syms->dso_sz; i++) {
             dso = &cache->syms->dsos[i];
-            fprintf(fp, "        %s\n", dso__name(dso));
+            fprintf(fp, "        %s\n", dso__name(dso) ?: "");
         }
     }
 }
