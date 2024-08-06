@@ -152,7 +152,7 @@ static int num_dist_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
                          PERF_SAMPLE_RAW | (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
@@ -196,17 +196,7 @@ failed:
 static int num_dist_filter(struct prof_dev *dev)
 {
     struct num_dist_ctx *ctx = dev->private;
-    struct tp *tp;
-    int i, err;
-
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
+    return tp_list_apply_filter(dev, ctx->tp_list);
 }
 
 static void print_num_node(void *opaque, struct latency_node *node)
@@ -284,6 +274,18 @@ static void __print_callchain(struct num_dist_ctx *ctx, union perf_event *event,
     struct sample_type_callchain *data = (void *)event->sample.array;
 
     print_callchain_common(ctx->cc, &data->callchain, data->h.tid_entry.pid);
+}
+
+static long num_dist_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct num_dist_ctx *ctx = dev->private;
+    struct sample_type_header *hdr = (void *)event->sample.array;
+    struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
+    bool callchain = !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
+    void *raw;
+    int size;
+    __raw_size(event, &raw, &size, callchain);
+    return tp_list_ftrace_filter(dev, ctx->tp_list, raw, size);
 }
 
 static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -390,6 +392,7 @@ static profiler num_dist = {
     .filter = num_dist_filter,
     .deinit = num_dist_exit,
     .interval = num_dist_interval,
+    .ftrace_filter = num_dist_ftrace_filter,
     .sample = num_dist_sample,
 };
 PROFILER_REGISTER(num_dist)
