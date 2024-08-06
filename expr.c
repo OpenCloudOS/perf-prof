@@ -740,17 +740,7 @@ failed:
 static int expr_filter(struct prof_dev *dev)
 {
     struct expression_info *info = dev->private;
-    struct tp *tp;
-    int i, err;
-
-    for_each_real_tp(info->tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
+    return tp_list_apply_filter(dev, info->tp_list);
 }
 
 static void expr_deinit(struct prof_dev *dev)
@@ -764,28 +754,37 @@ static void expr_deinit(struct prof_dev *dev)
     free(info);
 }
 
+// in linux/perf_event.h
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
+struct sample_type_header {
+    struct {
+        __u32    pid;
+        __u32    tid;
+    }    tid_entry;
+    __u64   time;
+    __u64   id;
+    struct {
+        __u32    cpu;
+        __u32    reserved;
+    }    cpu_entry;
+    __u64       period;
+    struct {
+        __u32   size;
+        __u8    data[0];
+    } raw;
+};
+
+static long expr_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct expression_info *info = dev->private;
+    struct sample_type_header *raw = (void *)event->sample.array;
+    return tp_list_ftrace_filter(dev, info->tp_list, raw->raw.data, raw->raw.size);
+}
+
 static void expr_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct expression_info *info = dev->private;
-    // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW
-    struct sample_type_header {
-        struct {
-            __u32    pid;
-            __u32    tid;
-        }    tid_entry;
-        __u64   time;
-        __u64   id;
-        struct {
-            __u32    cpu;
-            __u32    reserved;
-        }    cpu_entry;
-        __u64       period;
-        struct {
-            __u32   size;
-            __u8    data[0];
-        } raw;
-    } *raw = (void *)event->sample.array;
+    struct sample_type_header *raw = (void *)event->sample.array;
     long result;
 
     prof_dev_print_time(dev, raw->time, stdout);
@@ -889,6 +888,7 @@ static profiler _expr = {
     .init = expr_init,
     .filter = expr_filter,
     .deinit = expr_deinit,
+    .ftrace_filter = expr_ftrace_filter,
     .sample = expr_sample,
 };
 PROFILER_REGISTER(_expr);
