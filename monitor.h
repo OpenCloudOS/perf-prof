@@ -498,6 +498,7 @@ perfclock_t prof_dev_list_minevtime(void);
 void order(struct prof_dev *dev);
 bool using_order(struct prof_dev *dev);
 void ordered_events(struct prof_dev *dev);
+void prof_dev_null_ftrace_filter(struct prof_dev *dev);
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
 
 //help.c

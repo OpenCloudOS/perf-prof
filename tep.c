@@ -815,8 +815,9 @@ int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list)
             }
         }
     }
-    if (dev && !fallback)
-        dev->prof->ftrace_filter = NULL;
+    if (dev && !fallback) {
+        prof_dev_null_ftrace_filter(dev);
+    }
     return fallback;
 }
 

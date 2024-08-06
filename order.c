@@ -173,25 +173,39 @@ static int order_init(struct prof_dev *dev)
     return 0;
 }
 
-void order(struct prof_dev *dev)
+static inline void order_base(struct prof_dev *dev)
 {
     if (dev->prof != &dev->order.order) {
         dev->order.base = dev->prof;
         dev->order.order = *dev->prof;
-        dev->order.order.init = order_init;
         dev->prof = &dev->order.order;
     }
 }
 
+void order(struct prof_dev *dev)
+{
+    order_base(dev);
+    dev->prof->init = order_init;
+}
+
 bool using_order(struct prof_dev *dev)
 {
-    return dev->prof == &dev->order.order;
+    return dev->prof->init == order_init;
 }
 
 void ordered_events(struct prof_dev *dev)
 {
     if (using_order(dev))
         dev->order.flush_in_time = true;
+}
+
+void prof_dev_null_ftrace_filter(struct prof_dev *dev)
+{
+    if (dev->prof->ftrace_filter == NULL)
+        return;
+
+    order_base(dev);
+    dev->prof->ftrace_filter = NULL;
 }
 
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)

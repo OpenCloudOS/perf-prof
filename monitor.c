@@ -2001,7 +2001,7 @@ struct prof_dev *prof_dev_clone(struct prof_dev *parent,
     if (parent->state == PROF_DEV_STATE_EXIT)
         goto put;
 
-    if (using_order(parent))
+    if (parent->prof == &parent->order.order)
         prof = parent->order.base;
     else
         prof = parent->prof;
