@@ -148,17 +148,7 @@ failed:
 static int trace_filter(struct prof_dev *dev)
 {
     struct trace_ctx *ctx = dev->private;
-    struct tp *tp;
-    int i, err;
-
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
+    return tp_list_apply_filter(dev, ctx->tp_list);
 }
 
 static void trace_exit(struct prof_dev *dev)
@@ -250,6 +240,30 @@ static inline bool have_callchain(struct prof_dev *dev, union perf_event *event,
     }
 
     return false;
+}
+
+static long trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct trace_ctx *ctx = dev->private;
+    struct sample_type_header *data = (void *)event->sample.array;
+    struct perf_evsel *evsel;
+    struct tp *tp;
+    void *raw;
+    int size, i;
+
+    if (event->header.type == PERF_RECORD_DEV)
+        return 1;
+
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        if (tp->evsel == evsel) {
+            if (!tp->ftrace_filter)
+                return 1;
+            __raw_size(event, &raw, &size, have_callchain(dev, event, evsel));
+            return tp_prog_run(tp, tp->ftrace_filter, raw, size);
+        }
+    }
+    return 0;
 }
 
 static void trace_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -360,6 +374,7 @@ static profiler trace = {
     .filter = trace_filter,
     .deinit = trace_exit,
     .interval = trace_interval,
+    .ftrace_filter = trace_ftrace_filter,
     .sample = trace_sample,
 };
 PROFILER_REGISTER(trace);
