@@ -1526,12 +1526,17 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     case PERF_RECORD_SAMPLE:
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n) {
             if (prof->sample) {
+                if (unlikely(prof->ftrace_filter &&
+                             prof->ftrace_filter(dev, event, instance) <= 0))
+                    goto __break;
+
                 if (likely(!converted))
                     event = perf_event_convert(dev, event, writable);
 
                 if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME) {
                     dev->time_ctx.last_evtime.clock = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
                     if (unlikely(dev->time_ctx.last_evtime.clock < dev->time_ctx.enabled_after.clock)) {
+                    __break:
                         if (dev->sampled_events > 0)
                             dev->sampled_events --;
                         break;

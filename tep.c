@@ -662,6 +662,8 @@ void tp_list_free(struct tp_list *tp_list)
         //    prof_dev_close(tp->source_dev);
         if (tp->filter)
             free(tp->filter);
+        if (tp->ftrace_filter)
+            expr_destroy(tp->ftrace_filter);
         for (j = 0; j < tp->nr_top; j++) {
             if (tp->top_add[j].field_prog)
                 expr_destroy(tp->top_add[j].field_prog);
@@ -789,6 +791,35 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
 
     return evsel;
 }
+
+int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list)
+{
+    struct tp *tp;
+    event_fields *fields;
+    int i, err;
+    int fallback = 0;
+
+    for_each_real_tp(tp_list, tp, i) {
+        if (tp->filter && tp->filter[0] && tp->evsel) {
+            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
+            if (err < 0) {
+                fields = tep__event_fields(tp->id);
+                if (fields) {
+                    tp->ftrace_filter = expr_compile(tp->filter, fields);
+                    free(fields);
+                }
+                if (!tp->ftrace_filter)
+                    return err;
+                printf("%s:%s filters '%s' in userspace\n", tp->sys, tp->name, tp->filter);
+                fallback++;
+            }
+        }
+    }
+    if (dev && !fallback)
+        dev->prof->ftrace_filter = NULL;
+    return fallback;
+}
+
 
 static LIST_HEAD(tp_matcher_list);
 

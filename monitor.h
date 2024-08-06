@@ -245,6 +245,8 @@ typedef struct monitor {
     void (*fork)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_SAMPLE            = 9,
+    // userspace ftrace filter: return >0: sample; <=0: drop.
+    long (*ftrace_filter)(struct prof_dev *dev, union perf_event *event, int instance);
     void (*sample)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_SWITCH            = 14,

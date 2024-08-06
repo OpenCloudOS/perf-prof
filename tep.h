@@ -40,6 +40,8 @@ struct tp {
     void *private;
     struct tp_matcher *matcher;
 
+    struct expr_prog *ftrace_filter;
+
     // top profiler
     struct {
         // long tp_prog_run(struct tp *tp, ...)
@@ -180,6 +182,8 @@ unsigned long tp_get_role(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
+int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list);
+
 
 /*
  * Each tp is used to determine whether it is related to the specified cpu/pid.
