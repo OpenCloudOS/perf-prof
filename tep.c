@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <linux/time64.h>
 #include <api/fs/tracing_path.h>
 #include <monitor.h>
@@ -803,13 +804,18 @@ int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list)
         if (tp->filter && tp->filter[0] && tp->evsel) {
             err = perf_evsel__apply_filter(tp->evsel, tp->filter);
             if (err < 0) {
+                err = -errno;
+                if (dev && !dev->prof->ftrace_filter)
+                    goto err_return;
+
                 fields = tep__event_fields(tp->id);
                 if (fields) {
                     tp->ftrace_filter = expr_compile(tp->filter, fields);
                     free(fields);
                 }
                 if (!tp->ftrace_filter)
-                    return err;
+                    goto err_return;
+
                 printf("%s:%s filters '%s' in userspace\n", tp->sys, tp->name, tp->filter);
                 fallback++;
             }
@@ -819,8 +825,11 @@ int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list)
         prof_dev_null_ftrace_filter(dev);
     }
     return fallback;
-}
 
+err_return:
+    fprintf(stderr, "%s:%s filter '%s' failed, %d\n", tp->sys, tp->name, tp->filter, err);
+    return err;
+}
 
 static LIST_HEAD(tp_matcher_list);
 
