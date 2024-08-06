@@ -705,18 +705,12 @@ static void kvm_mmu_interval(struct prof_dev *dev)
 static int kvm_mmu_filter(struct prof_dev *dev)
 {
     struct kvmmmu_ctx *ctx = dev->private;
-    struct tp *tp;
-    int i, err;
-
     if (ctx->tp_list)
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
+        return tp_list_apply_filter(dev, ctx->tp_list);
+    else {
+        prof_dev_null_ftrace_filter(dev);
+        return 0;
     }
-    return 0;
 }
 
 static void kvm_mmu_deinit(struct prof_dev *dev)
@@ -735,6 +729,21 @@ static inline unsigned long __mmu_valid_gen(struct kvmmmu_ctx *ctx, unsigned lon
         default:
             return gen;
     }
+}
+
+static long kvm_mmu_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct kvmmmu_ctx *ctx = dev->private;
+    struct sample_type_raw *raw = (void *)event->sample.array;
+    unsigned short common_type = raw->raw.common_type;
+
+    if (common_type == ctx->kvm_mmu_get_page ||
+        common_type == ctx->kvm_mmu_prepare_zap_page ||
+        common_type == ctx->kvm_mmu_set_spte ||
+        common_type == ctx->mark_mmio_spte)
+        return 1;
+    else
+        return tp_list_ftrace_filter(dev, ctx->tp_list, raw->raw.data, raw->raw.size);
 }
 
 static void kvm_mmu_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -784,7 +793,7 @@ static void kvm_mmu_sample(struct prof_dev *dev, union perf_event *event, int in
 }
 
 static const char *kvmmmu_desc[] = PROFILER_DESC("kvmmmu",
-    "[OPTION...] [--spte] [--mmio] [--detail]",
+    "[OPTION...] [--spte] [--mmio] [--detail] [-e EVENT]",
     "Observe the kvm_mmu_page mapping on x86 platforms.", "",
     "TRACEPOINT",
     "    kvmmmu:kvm_mmu_get_page, kvmmmu:kvm_mmu_prepare_zap_page",
@@ -794,7 +803,7 @@ static const char *kvmmmu_desc[] = PROFILER_DESC("kvmmmu",
     "    "PROGRAME" kvmmmu -p 2347 -i 5000 --spte --mmio --detail");
 static const char *kvmmmu_argv[] = PROFILER_ARGV("kvmmmu",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "spte", "mmio", "detail");
+    PROFILER_ARGV_PROFILER, "spte", "mmio", "detail", "event");
 struct monitor kvm_mmu = {
     .name = "kvmmmu",
     .desc = kvmmmu_desc,
@@ -805,6 +814,7 @@ struct monitor kvm_mmu = {
     .filter = kvm_mmu_filter,
     .deinit = kvm_mmu_deinit,
     .interval = kvm_mmu_interval,
+    .ftrace_filter = kvm_mmu_ftrace_filter,
     .sample = kvm_mmu_sample,
 };
 MONITOR_REGISTER(kvm_mmu)
