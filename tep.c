@@ -831,6 +831,23 @@ err_return:
     return err;
 }
 
+long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, void *data, int size)
+{
+    unsigned short common_type = *(unsigned short *)data;
+    struct tp *tp;
+    int i;
+
+    for_each_real_tp(tp_list, tp, i) {
+        if (tp->id == common_type) {
+            if (!tp->ftrace_filter)
+                return 1;
+            else
+                return tp_prog_run(tp, tp->ftrace_filter, data, size);
+        }
+    }
+    return -1;
+}
+
 static LIST_HEAD(tp_matcher_list);
 
 void tp_matcher_register(struct tp_matcher *matcher)

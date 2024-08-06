@@ -183,6 +183,7 @@ unsigned long tp_get_num(struct tp *tp, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
 int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list);
+long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, void *data, int size);
 
 
 /*
