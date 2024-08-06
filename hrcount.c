@@ -237,17 +237,7 @@ failed:
 static int hrcount_filter(struct prof_dev *dev)
 {
     struct hrcount_ctx *ctx = dev->private;
-    struct tp *tp;
-    int i, err;
-
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
+    return tp_list_apply_filter(dev, ctx->tp_list);
 }
 
 static void hrcount_exit(struct prof_dev *dev)

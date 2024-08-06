@@ -242,17 +242,13 @@ failed:
 static int hrtimer_filter(struct prof_dev *dev)
 {
     struct hrtimer_ctx *ctx = dev->private;
-    int i, err;
+    int err;
 
     if (dev->env->event) {
-        struct tp *tp;
-        for_each_real_tp(ctx->tp_list, tp, i) {
-            if (tp->filter && tp->filter[0]) {
-                err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-                if (err < 0)
-                    return err;
-            }
-        }
+        err = tp_list_apply_filter(dev, ctx->tp_list);
+        if (err < 0)
+            return err;
+
         if (ctx->filter.bpf_fd >= 0) {
             err = perf_evsel__set_bpf(ctx->leader, ctx->filter.bpf_fd);
             if (err < 0)
