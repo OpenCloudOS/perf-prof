@@ -491,8 +491,6 @@ static struct perf_mmap* perf_evlist__alloc_mmap(struct perf_evlist *evlist, boo
 		return NULL;
 
 	for (i = 0; i < evlist->nr_mmaps; i++) {
-		struct perf_mmap *prev = i ? &map[i - 1] : NULL;
-
 		/*
 		 * When the perf_mmap() call is made we grab one refcount, plus
 		 * one extra to let perf_mmap__consume() get the last
@@ -502,7 +500,7 @@ static struct perf_mmap* perf_evlist__alloc_mmap(struct perf_evlist *evlist, boo
 		 * Each PERF_EVENT_IOC_SET_OUTPUT points to this mmap and
 		 * thus does perf_mmap__get() on it.
 		 */
-		perf_mmap__init(&map[i], prev, overwrite, NULL);
+		perf_mmap__init(&map[i], NULL, overwrite, NULL);
 		map[i].idx = i;
 		map[i].evlist = evlist;
 	}
@@ -552,10 +550,13 @@ perf_evlist__mmap_cb_mmap(struct perf_mmap *map, struct perf_mmap_param *mp,
 static void perf_evlist__set_mmap_first(struct perf_evlist *evlist, struct perf_mmap *map,
 					bool overwrite)
 {
-	if (overwrite)
+	if (overwrite) {
+		map->next = evlist->mmap_ovw_first;
 		evlist->mmap_ovw_first = map;
-	else
+	} else {
+		map->next = evlist->mmap_first;
 		evlist->mmap_first = map;
+	}
 }
 
 static int
@@ -610,8 +611,7 @@ mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 			if (ops->mmap(map, mp, *output, evlist_cpu) < 0)
 				return -1;
 
-			if (!idx)
-				perf_evlist__set_mmap_first(evlist, map, overwrite);
+			perf_evlist__set_mmap_first(evlist, map, overwrite);
 		} else {
 			if (ioctl(fd, PERF_EVENT_IOC_SET_OUTPUT, *output) != 0)
 				return -1;
