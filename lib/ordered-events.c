@@ -78,7 +78,7 @@ static void free_dup_event(struct ordered_events *oe, union perf_event *event)
 		__free_dup_event(oe, event);
 }
 
-#define MAX_SAMPLE_BUFFER	(64 * 1024 / sizeof(struct ordered_event))
+#define MAX_SAMPLE_BUFFER	((64*1024 - sizeof(struct ordered_events_buffer)) / sizeof(struct ordered_event))
 static struct ordered_event *alloc_event(struct ordered_events *oe,
 					 union perf_event *event)
 {
@@ -144,6 +144,7 @@ static struct ordered_event *alloc_event(struct ordered_events *oe,
 		new = &oe->buffer->event[0];
 	} else {
 		pr("allocation limit reached %" PRIu64 "B\n", oe->max_alloc_size);
+		free_dup_event(oe, new_event);
 		return NULL;
 	}
 
