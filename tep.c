@@ -468,6 +468,15 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             event = tep_find_event_by_name(tep, sys, name);
             if (!event)
                 goto err_out;
+
+            // Remove single and double quotes around filter
+            if (filter && (filter[0] == '\'' || filter[0] == '"')) {
+                int len = strlen(filter);
+                if (filter[len-1] == filter[0]) {
+                    filter[len-1] = '\0';
+                    filter++;
+                }
+            }
         }
         // ATTR
         if (slash) {
