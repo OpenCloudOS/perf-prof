@@ -351,23 +351,20 @@ failed:
 static int kmemleak_filter(struct prof_dev *dev)
 {
     struct kmemleak_ctx *ctx = dev->private;
-    struct tp *tp;
-    int i, err;
+    int err;
+    int fallback = 0;
 
-    for_each_real_tp(ctx->tp_alloc, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    for_each_real_tp(ctx->tp_free, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
+    if ((err = tp_list_apply_filter(NULL, ctx->tp_alloc)) < 0)
+        return err;
+    fallback += err;
+
+    if ((err = tp_list_apply_filter(NULL, ctx->tp_free)) < 0)
+        return err;
+    fallback += err;
+
+    if (!fallback)
+        prof_dev_null_ftrace_filter(dev);
+
     return 0;
 }
 
@@ -707,6 +704,23 @@ static inline int kmemleak_event_lost(struct prof_dev *dev, union perf_event *ev
     return 0;
 }
 
+static long kmemleak_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct kmemleak_ctx *ctx = dev->private;
+    struct sample_type_header *data = (void *)event->sample.array;
+    struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    bool callchain = !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
+    void *raw;
+    int size;
+    long err;
+
+    __raw_size(event, callchain, &raw, &size);
+    err = tp_list_ftrace_filter(dev, ctx->tp_alloc, raw, size);
+    if (err < 0)
+        err = tp_list_ftrace_filter(dev, ctx->tp_free, raw, size);
+    return err;
+}
+
 static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct kmemleak_ctx *ctx = dev->private;
@@ -883,6 +897,7 @@ struct monitor kmemleak = {
     .deinit = kmemleak_exit,
     .sigusr = kmemleak_sigusr,
     .lost = kmemleak_lost,
+    .ftrace_filter = kmemleak_ftrace_filter,
     .sample = kmemleak_sample,
 };
 MONITOR_REGISTER(kmemleak)
