@@ -373,17 +373,7 @@ failed:
 static int top_filter(struct prof_dev *dev)
 {
     struct top_ctx *ctx = dev->private;
-    struct tp *tp;
-    int i, err;
-
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
+    return tp_list_apply_filter(dev, ctx->tp_list);
 }
 
 static void top_interval(struct prof_dev *dev);
@@ -458,6 +448,13 @@ struct sample_type_raw {
         __u8    data[0];
     } raw;
 };
+
+static long top_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct top_ctx *ctx = dev->private;
+    struct sample_type_raw *raw = (void *)event->sample.array;
+    return tp_list_ftrace_filter(dev, ctx->tp_list, raw->raw.data, raw->raw.size);
+}
 
 static void top_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
@@ -789,6 +786,7 @@ static profiler top = {
     .deinit = top_exit,
     .sigusr = top_sigusr,
     .interval = top_interval,
+    .ftrace_filter = top_ftrace_filter,
     .sample = top_sample,
 };
 PROFILER_REGISTER(top)
