@@ -12,6 +12,13 @@ def test_multi_trace_switch(runtime, memleak_check):
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)
 
+def test_multi_trace_userspace_ftrace_filter(runtime, memleak_check):
+    # perf-prof multi-trace -e sched:sched_switch/prev_prio!=next_prio/ --cycle -i 1000 --perins
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'sched:sched_switch/prev_prio!=next_prio/', '--cycle', '-i', '1000', '--perins'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
 def test_multi_trace_switch_role(runtime, memleak_check):
     # perf-prof multi-trace -e sched:sched_switch//role="(next_pid?1:0)|(prev_pid?2:0)"/ --cycle -i 1000 --perins
     multi_trace = PerfProf(["multi-trace",

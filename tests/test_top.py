@@ -10,6 +10,12 @@ def test_sched_wakeup(runtime, memleak_check):
     for std, line in top.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_userspace_ftrace_filter(runtime, memleak_check):
+    #perf-prof top -e sched:sched_wakeup/pid<prio/comm=comm/key=pid/ -m 64
+    top = PerfProf(['top', '-e', 'sched:sched_wakeup/pid<prio/comm=comm/key=pid/', '-m', '64'])
+    for std, line in top.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
 def test_block_rq_issue(runtime, memleak_check):
     #perf-prof top -e block:block_rq_issue//top-by=nr_sector/comm=comm/ --only-comm -m 32
     top = PerfProf(['top', '-e', 'block:block_rq_issue//top-by=nr_sector/comm=comm/', '--only-comm', '-m', '32'])

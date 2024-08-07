@@ -20,6 +20,11 @@ def test_num_dist_sched_stat_runtime_us(runtime, memleak_check):
     for std, line in num_dist.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_num_dist_userspace_ftrace_filter(runtime, memleak_check):
+    num_dist = PerfProf(['num-dist', '-e', 'sched:sched_stat_runtime/pid>runtime/num=runtime/', '-i', '1000'])
+    for std, line in num_dist.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
 def test_num_dist_sched_stat_blocked(runtime, memleak_check):
     num_dist = PerfProf(['num-dist', '-e', 'sched:sched_stat_blocked//num=delay/', '-i', '1000'])
     for std, line in num_dist.run(runtime, memleak_check):

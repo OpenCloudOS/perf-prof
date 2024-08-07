@@ -21,6 +21,12 @@ def test_sched_wakeup_clock_offset(runtime, memleak_check):
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_userspace_ftrace_filter(runtime, memleak_check):
+    #perf-prof trace -e sched:sched_wakeup,sched:sched_switch -C 0
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup/pid<prio/stack/,sched:sched_switch/next_pid<next_prio&&next_pid>0/', '-C', '0', '-m', '64'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
 def test_flame_graph(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup -C 0 -g
     prof = PerfProf(['trace', '-e', 'sched:sched_wakeup', '-C', '0', '-m', '64', '-g', '--flame-graph', 'wakeup'])

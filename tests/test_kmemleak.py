@@ -12,6 +12,13 @@ def test_kmemleak_kmalloc(runtime, memleak_check):
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_kmemleak_userspace_ftrace_filter(runtime, memleak_check):
+    kmemleak = PerfProf(['kmemleak',
+                '--alloc', 'kmem:kmalloc/bytes_req==bytes_alloc/ptr=ptr/size=bytes_req/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/',
+                '--free', 'kmem:kfree//ptr=ptr/',
+                '-m', '256', '--order', '--order-mem', '64M', '-g'])
+    for std, line in kmemleak.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
 
 def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
