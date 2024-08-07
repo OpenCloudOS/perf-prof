@@ -735,18 +735,18 @@ failed:
 static int multi_trace_filter(struct prof_dev *dev)
 {
     struct multi_trace_ctx *ctx = dev->private;
-    int i, j, err;
+    int i, err;
+    int fallback = 0;
 
     for (i = 0; i < ctx->nr_list; i++) {
-        struct tp *tp;
-        for_each_real_tp(ctx->tp_list[i], tp, j) {
-            if (tp->filter && tp->filter[0]) {
-                err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-                if (err < 0)
-                    return err;
-            }
-        }
+        if ((err = tp_list_apply_filter(NULL, ctx->tp_list[i])) < 0)
+            return err;
+        fallback += err;
     }
+
+    if (!fallback)
+        prof_dev_null_ftrace_filter(dev);
+
     return 0;
 }
 
@@ -1532,6 +1532,33 @@ static inline void multi_trace_event_lost(struct prof_dev *dev, struct timeline_
     }
 }
 
+static long multi_trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+    struct multi_trace_type_header *hdr = (void *)event->sample.array;
+    struct perf_evsel *evsel;
+    struct tp *tp;
+    int i, j;
+    void *raw;
+    int size;
+
+    if (event->header.type == PERF_RECORD_DEV)
+        return 1;
+
+    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
+    for (i = 0; i < ctx->nr_list; i++) {
+        for_each_real_tp(ctx->tp_list[i], tp, j) {
+            if (tp->evsel == evsel) {
+                if (!tp->ftrace_filter)
+                    return 1;
+                multi_trace_raw_size(event, &raw, &size, tp);
+                return tp_prog_run(tp, tp->ftrace_filter, raw, size);
+            }
+        }
+    }
+    return 0;
+}
+
 static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct env *env = dev->env;
@@ -1893,6 +1920,7 @@ static profiler multi_trace = {
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
+    .ftrace_filter = multi_trace_ftrace_filter,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(multi_trace);
@@ -1948,6 +1976,7 @@ static profiler kmemprof = {
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
+    .ftrace_filter = multi_trace_ftrace_filter,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(kmemprof);
@@ -2050,6 +2079,7 @@ static profiler syscalls = {
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
+    .ftrace_filter = multi_trace_ftrace_filter,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(syscalls);
@@ -2229,6 +2259,7 @@ static profiler nested_trace = {
     .interval = nested_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
+    .ftrace_filter = multi_trace_ftrace_filter,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(nested_trace);
@@ -2259,7 +2290,7 @@ static int rundelay_filter(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
-    int i, j, err;
+    int i, j;
     int sched_wakeup = tep__event_id("sched", "sched_wakeup");
     int sched_wakeup_new = tep__event_id("sched", "sched_wakeup_new");
     int sched_switch = tep__event_id("sched", "sched_switch");
@@ -2307,12 +2338,6 @@ static int rundelay_filter(struct prof_dev *dev)
                 if (env->verbose >= VERBOSE_NOTICE)
                     printf("%s:%s filter \"%s\"\n", tp->sys, tp->name, tp->filter ? : "");
             }
-
-            if (tp->filter && tp->filter[0]) {
-                err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-                if (err < 0)
-                    return err;
-            }
         }
     }
 
@@ -2321,7 +2346,7 @@ static int rundelay_filter(struct prof_dev *dev)
         return -1;
     }
     ctx->level = sched_init(ctx->nr_list, ctx->tp_list);
-    return 0;
+    return multi_trace_filter(dev);
 }
 
 static void rundelay_help(struct help_ctx *hctx)
@@ -2376,6 +2401,7 @@ static profiler rundelay = {
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
+    .ftrace_filter = multi_trace_ftrace_filter,
     .sample = multi_trace_sample,
 };
 PROFILER_REGISTER(rundelay);
