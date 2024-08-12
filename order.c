@@ -100,7 +100,7 @@ static void order_sample(struct prof_dev *dev, union perf_event *event, int inst
 {
     profiler *base = dev->order.base;
     void *data = (void *)event->sample.array;
-    u64 time = *(u64 *)(data + dev->time_ctx.time_pos);
+    u64 time = *(u64 *)(data + dev->pos.time_pos);
 
     if (base->lost) {
         struct lost_record *lost_rec = &dev->order.lost_records[instance];
@@ -146,7 +146,7 @@ static int order_init(struct prof_dev *dev)
 
     if (perf_sample_time_init(dev) < 0)
         return -1;
-    if (!(dev->time_ctx.sample_type & PERF_SAMPLE_TIME)) {
+    if (!(dev->pos.sample_type & PERF_SAMPLE_TIME)) {
         fprintf(stderr, "--order cannot be enabled\n");
         return -1;
     }

@@ -1437,12 +1437,12 @@ perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance,
 
     // Build perf_event with sample_type, PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU.
     data = (void *)event_dev->event.sample.array;
-    event_dev->pid = *(u32 *)(data + dev->forward.tid_pos);
-    event_dev->tid = *(u32 *)(data + dev->forward.tid_pos + sizeof(u32));
-    event_dev->time = *(u64 *)(data + dev->forward.time_pos);
-    if (dev->forward.id_pos >= 0)
-        event_dev->id = *(u64 *)(data + dev->forward.id_pos);
-    event_dev->cpu = *(u32 *)(data + dev->forward.cpu_pos);
+    event_dev->pid = *(u32 *)(data + dev->pos.tid_pos);
+    event_dev->tid = *(u32 *)(data + dev->pos.tid_pos + sizeof(u32));
+    event_dev->time = *(u64 *)(data + dev->pos.time_pos);
+    if (dev->pos.id_pos >= 0)
+        event_dev->id = *(u64 *)(data + dev->pos.id_pos);
+    event_dev->cpu = *(u32 *)(data + dev->pos.cpu_pos);
     event_dev->instance = *instance;
     event_dev->dev = dev;
 
@@ -1533,8 +1533,8 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
                 if (likely(!converted))
                     event = perf_event_convert(dev, event, writable);
 
-                if (dev->time_ctx.sample_type & PERF_SAMPLE_TIME) {
-                    dev->time_ctx.last_evtime.clock = *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
+                if (dev->pos.sample_type & PERF_SAMPLE_TIME) {
+                    dev->time_ctx.last_evtime.clock = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
                     if (unlikely(dev->time_ctx.last_evtime.clock < dev->time_ctx.enabled_after.clock)) {
                     __break:
                         if (dev->sampled_events > 0)
@@ -2041,7 +2041,7 @@ static int prof_dev_atomic_enable(struct prof_dev *dev, u64 enable_cost)
     if (dev->env->overwrite)
         return -1;
 
-    if (!(dev->time_ctx.sample_type & PERF_SAMPLE_TIME))
+    if (!(dev->pos.sample_type & PERF_SAMPLE_TIME))
         return -1;
 
     perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
@@ -2050,7 +2050,7 @@ static int prof_dev_atomic_enable(struct prof_dev *dev, u64 enable_cost)
 
         while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
             perf_mmap__consume(map);
-            enabled_after_ns = enable_cost + *(u64 *)((void *)event->sample.array + dev->time_ctx.time_pos);
+            enabled_after_ns = enable_cost + *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
             goto enabled_after;
         }
         if (!event)
@@ -2185,7 +2185,7 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
 {
     if (perf_sample_forward_init(dev) == 0) {
         if (using_order(target) && perf_sample_time_init(target) == 0 &&
-            target->time_ctx.time_pos != dev->forward.forwarded_time_pos) {
+            target->pos.time_pos != dev->forward.forwarded_time_pos) {
             fprintf(stderr, "%s cannot forward to %s: time_pos is different.\n", dev->prof->name, target->prof->name);
             return -1;
         }

@@ -321,9 +321,12 @@ struct prof_dev {
     int max_read_size;
     struct perf_counts_values *values;
     long sampled_events;
-    struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
+    struct perf_sample_pos {
         u64 sample_type;
-        int time_pos;
+        // Starting from event->sample.array, not include perf_event_header.
+        short tid_pos, time_pos, id_pos, cpu_pos;
+    } pos;
+    struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         evclock_t last_evtime; // ns, tsc, ...
         evclock_t enabled_after; // ns, tsc, ...
         // Wall clock conversion of events.
@@ -375,7 +378,6 @@ struct prof_dev {
         struct list_head source_list;
         struct list_head link_to_target;
         struct perf_record_dev *event_dev; // PERF_SAMPLE_MAX_SIZE
-        short tid_pos, time_pos, id_pos, cpu_pos;
         short forwarded_time_pos; // perf_record_dev.time
         bool ins_reset;
     } forward;
