@@ -74,6 +74,7 @@ struct runtime_entry {
         int cpu;
         int tid;
     };
+    char *comm;
 };
 
 static int runtime_node_cmp(struct rb_node *rbn, const void *entry)
@@ -81,11 +82,37 @@ static int runtime_node_cmp(struct rb_node *rbn, const void *entry)
     struct runtime *run = rb_entry(rbn, struct runtime, rbn);
     const struct runtime_entry *e = entry;
 
+    // tid
     if (run->instance > e->instance)
         return 1;
     else if (run->instance < e->instance)
         return -1;
 
+    // cpu
+    if (run->another > e->another)
+        return 1;
+    else if (run->another < e->another)
+        return -1;
+
+    return 0;
+}
+
+static int runtime_node_cmp_comm(struct rb_node *rbn, const void *entry)
+{
+    struct runtime *run = rb_entry(rbn, struct runtime, rbn);
+    const struct runtime_entry *e = entry;
+
+    // cpu
+    if (run->instance > e->instance)
+        return 1;
+    else if (run->instance < e->instance)
+        return -1;
+
+    // only-comm
+    if (e->another == 0)
+        return strcmp(run->comm, e->comm);
+
+    // tid
     if (run->another > e->another)
         return 1;
     else if (run->another < e->another)
@@ -113,7 +140,7 @@ static struct rb_node *runtime_node_new(struct rblist *rlist, const void *new_en
         run->runtime = 0;
         run->nr_run = 0;
         run->max = 0;
-        memset(run->comm, 0, 16);
+        memcpy(run->comm, e->comm, 16);
         return &run->rbn;
     }
     return NULL;
@@ -254,7 +281,7 @@ static int oncpu_init(struct prof_dev *dev)
         goto failed;
 
     rblist__init(&ctx->runtimes);
-    ctx->runtimes.node_cmp = runtime_node_cmp;
+    ctx->runtimes.node_cmp = ctx->tid_to_cpumap ? runtime_node_cmp : runtime_node_cmp_comm;
     ctx->runtimes.node_new = runtime_node_new;
     ctx->runtimes.node_delete = runtime_node_delete;
 
@@ -421,12 +448,19 @@ static void print_tidmap(struct prof_dev *dev, struct runtime *first)
     } else
         printf("%03d %-7lu ", cpu, sum/1000000);
 
-    for_each_runtime(first, run, rbn, instance)
-        if (dev->env->detail)
-            printf("%s:%d(%.1fms/%lu/%.1fms) ", run->comm, run->tid, run->runtime/1000000.0, run->nr_run, run->max/1000000.0);
-        else
-            printf("%s:%d(%.1fms) ", run->comm, run->tid, run->runtime/1000000.0);
-
+    if (dev->env->only_comm) {
+        for_each_runtime(first, run, rbn, instance)
+            if (dev->env->detail)
+                printf("%s(%.1fms/%lu/%.1fms) ", run->comm, run->runtime/1000000.0, run->nr_run, run->max/1000000.0);
+            else
+                printf("%s(%.1fms) ", run->comm, run->runtime/1000000.0);
+    } else {
+        for_each_runtime(first, run, rbn, instance)
+            if (dev->env->detail)
+                printf("%s:%d(%.1fms/%lu/%.1fms) ", run->comm, run->tid, run->runtime/1000000.0, run->nr_run, run->max/1000000.0);
+            else
+                printf("%s:%d(%.1fms) ", run->comm, run->tid, run->runtime/1000000.0);
+    }
     printf("\n");
 }
 
@@ -468,9 +502,9 @@ static void oncpu_interval(struct prof_dev *dev)
             ctx->percpu_thread_siblings ? ", SIBLINGS" : "");
     else {
         if (env->detail)
-            printf("CPU %-11s COMM:TID(ms/sws/max_ms)\n", "SUM(ms/sws)");
+            printf("CPU %-11s COMM%s(ms/sws/max_ms)\n", "SUM(ms/sws)", env->only_comm ? "" : ":TID");
         else
-            printf("CPU %-7s COMM:TID(ms)\n", "SUM(ms)");
+            printf("CPU %-7s COMM%s(ms)\n", "SUM(ms)", env->only_comm ? "" : ":TID");
     }
 
     first = rb_entry_safe(next, struct runtime, rbn);
@@ -563,7 +597,8 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
     }
 
     entry.instance = instance;
-    entry.another = ctx->tid_to_cpumap ? cpu : tid;
+    entry.another = ctx->tid_to_cpumap ? cpu : (env->only_comm ? 0 : tid);
+    entry.comm = comm;
     rbn = rblist__findnew(&ctx->runtimes, &entry);
     if (rbn) {
         run = rb_entry(rbn, struct runtime, rbn);
@@ -571,9 +606,6 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
         run->nr_run += 1;
         if (runtime > run->max)
             run->max = runtime;
-        if (run->comm[0] == 0) {
-            memcpy(run->comm, comm, 16);
-        }
     }
 }
 
@@ -587,7 +619,7 @@ static const char *oncpu_desc[] = PROFILER_DESC("oncpu",
     "    "PROGRAME" oncpu -C 0-3");
 static const char *oncpu_argv[] = PROFILER_ARGV("oncpu",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "detail", "filter");
+    PROFILER_ARGV_PROFILER, "detail", "filter", "only-comm");
 static profiler oncpu = {
     .name = "oncpu",
     .desc = oncpu_desc,
