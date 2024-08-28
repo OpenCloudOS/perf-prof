@@ -172,6 +172,11 @@ struct env {
     u64  clock_offset;
     int usage_self;
 
+    /* performance evaluation */
+    int sampling_limit;
+    char *perfeval_cpus;
+    char *perfeval_pids;
+
     /* workload */
     struct workload workload;
 
@@ -381,6 +386,13 @@ struct prof_dev {
         short forwarded_time_pos; // perf_record_dev.time
         bool ins_reset;
     } forward;
+    struct performance_evaluation { // env->sampling_limit
+        struct hlist_head *hashmap; // cpu/tid => samples
+        short mem_pos;
+        int nr_ins;
+        u64 matched_events;
+        u64 sampled_events;
+    } perfeval[2]; // 0: cpu; 1: tid;
 };
 
 extern struct list_head prof_dev_list;
@@ -485,7 +497,7 @@ perfclock_t prof_dev_list_minevtime(void);
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", "watermark", \
     "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", \
-    "usage-self", "version", "verbose", "quiet", "help"
+    "usage-self", "sampling-limit", "perfeval-cpus", "perfeval-pids", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
     "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", \
@@ -551,5 +563,11 @@ struct prof_dev *trace_dev_open(const char *event, struct perf_cpu_map *cpu_map,
 //list.c
 typedef void (*tracepoint_cb)(char **evt_list, int evt_num, void *opaque);
 void print_tracepoint_events(tracepoint_cb cb, void *opaque);
+
+//perfeval.c
+int perfeval_init(struct prof_dev *dev);
+void perfeval_free(struct prof_dev *dev);
+void perfeval_sample(struct prof_dev *dev, union perf_event *event, int instance);
+void perfeval_evaluate(struct prof_dev *dev);
 
 #endif

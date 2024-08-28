@@ -487,6 +487,9 @@ struct option main_options[] = {
     OPT_STRDUP_NONEG( 0 ,    "kvmclock", &env.kvmclock,    "uuid",         "Convert perf clock to Guest's kvmclock."),
     OPT_U64_NONEG   ( 0 ,"clock-offset", &env.clock_offset, NULL,          "Sum with clock-offset to get the final clock."),
     OPT_INT_NONEG   ( 0 ,  "usage-self", &env.usage_self,  "ms",           "Periodically output the CPU usage of perf-prof itself, Unit: ms"),
+    OPT_INT_NONEG   ( 0 ,"sampling-limit", &env.sampling_limit, "N",       "Limit the number of samples per second per instance."),
+    OPT_STRDUP_NONEG( 0 , "perfeval-cpus", &env.perfeval_cpus, "cpu",      "Performance evaluation cpu list."),
+    OPT_STRDUP_NONEG( 0 , "perfeval-pids", &env.perfeval_pids, "pid",      "Performance evaluation pid list."),
     OPT_PARSE_NOARG ('V',     "version", NULL,             NULL,           "Version info"),
     OPT__VERBOSITY(&env.verbose),
     OPT_HELP(),
@@ -613,6 +616,8 @@ static void free_env(struct env *e)
     if (e->symbols) free(e->symbols);
     if (e->device) free(e->device);
     if (e->kvmclock) free(e->kvmclock);
+    if (e->perfeval_cpus) free(e->perfeval_cpus);
+    if (e->perfeval_pids) free(e->perfeval_pids);
     if (e->workload.pid > 0) {
         kill(e->workload.pid, SIGTERM);
     }
@@ -660,6 +665,8 @@ static struct env *clone_env(struct env *p)
     CLONE (symbols);
     CLONE (device);
     CLONE (kvmclock);
+    CLONE (perfeval_cpus);
+    CLONE (perfeval_pids);
 
     return e;
 
@@ -1524,6 +1531,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         break;
     case PERF_RECORD_DEV:
     case PERF_RECORD_SAMPLE:
+        perfeval_sample(dev, event, instance);
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n) {
             if (prof->sample) {
                 if (unlikely(prof->ftrace_filter &&
@@ -1704,6 +1712,8 @@ static void interval_handle(struct timer *timer)
     if (prof->interval)
         prof->interval(dev);
 
+    perfeval_evaluate(dev);
+
     prof_dev_put(dev);
 }
 
@@ -1871,6 +1881,9 @@ reinit:
         dev->max_read_size = perf_evlist__max_read_size(evlist);
         dev->values = zalloc(dev->max_read_size);
         if (!dev->values)
+            goto out_close;
+
+        if (perfeval_init(dev) < 0)
             goto out_close;
 
         err = timer_init(&dev->timer, 1, interval_handle);
@@ -2256,6 +2269,7 @@ static void prof_dev_free(struct prof_dev *dev)
         timer_destroy(&dev->timer);
         if (dev->values)
             free(dev->values);
+        perfeval_free(dev);
     }
     if (timer_started(&dev->time_ctx.base_timer))
         timer_destroy(&dev->time_ctx.base_timer);
