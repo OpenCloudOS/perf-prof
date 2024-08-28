@@ -408,9 +408,15 @@ static int task_state_init(struct prof_dev *dev)
     } else
         ctx->sched_wakeup_new = NULL;
 
-    // mode 1, mode 3, -p pid
-    // sched:sched_process_fork
-    if (ctx->thread_map && !env->filter) {
+    /*
+     * mode 1, mode 3, !-p pid, !-t tids, only for workload and cloned prof_dev.
+     *
+     * For trace_dev_open(), if the event is attached to `thread_map' and sched
+     * switching is frequent, the CPU utilization of these threads will increase.
+     * So, for workload only, trace sched_process_fork.
+     */
+    if (ctx->thread_map && !env->filter && !env->pids && !env->tids) {
+        // sched:sched_process_fork
         trace_dev_open("sched:sched_process_fork", NULL, ctx->thread_map, dev,
                        task_state_fork, task_state_hangup);
     }
