@@ -1195,11 +1195,12 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             // ctx->comm: rundelay, syscalls. The key is pid.
             int pid = ctx->comm ? (int)info->key : e1->tid_entry.pid;
             iter->debug_msg = "samepid-1";
+            if (pid > 0) // exclude 0 and e1->tid_entry.pid maybe -1
             if (e->tid_entry.pid == pid ||
                 tp_samepid(curr->tp, raw, size, pid))
                 goto TRUE;
         }
-        if (cmp_e2) {
+        if (cmp_e2 && (int)e2->tid_entry.pid > 0) {
             iter->debug_msg = "samepid-2";
             if (!ctx->comm) {
                 if (e->tid_entry.pid == e2->tid_entry.pid ||
@@ -1215,11 +1216,12 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             // ctx->comm: rundelay, syscalls. The key is pid.
             int tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
             iter->debug_msg = "sametid-1";
+            if (tid > 0) // exclude 0 and e1->tid_entry.tid maybe -1
             if (e->tid_entry.tid == tid ||
                 tp_samepid(curr->tp, raw, size, tid))
                 goto TRUE;
         }
-        if (cmp_e2) {
+        if (cmp_e2 && (int)e2->tid_entry.tid > 0) {
             iter->debug_msg = "sametid-2";
             if (!ctx->comm) {
                 if (e->tid_entry.tid == e2->tid_entry.tid ||
