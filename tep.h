@@ -206,9 +206,11 @@ struct tp_matcher {
     bool (*samepid)(struct tp *tp, void *raw, int size, int pid);
     bool (*target_cpu)(struct tp *tp, void *raw, int size, int cpu, int pid,
                        int *target_cpu, const char **reason);
+    bool (*oncpu)(struct tp *tp, void *raw, int size,
+                        int *pid, const char **prev_comm);
 };
 
-#define __TP_MATCHER_REGISTER(SYS, NAME, SAMECPU, SAMEPID, TARGET_CPU) \
+#define __TP_MATCHER_REGISTER(SYS, NAME, SAMECPU, SAMEPID, TARGET_CPU, ONCPU) \
 __attribute__((constructor)) \
 static void __PASTE(tp_matcher_register_, __LINE__) (void) \
 { \
@@ -218,12 +220,14 @@ static void __PASTE(tp_matcher_register_, __LINE__) (void) \
         .samecpu = SAMECPU, \
         .samepid = SAMEPID, \
         .target_cpu = TARGET_CPU, \
+        .oncpu = ONCPU, \
     }; \
     tp_matcher_register(&tp_matcher); \
 }
 
-#define TP_MATCHER_REGISTER(a,b,c,d) __TP_MATCHER_REGISTER((a),(b),(c),(d),NULL)
-#define TP_MATCHER_REGISTER5(a,b,c,d,e) __TP_MATCHER_REGISTER((a),(b),(c),(d),(e))
+#define TP_MATCHER_REGISTER(a,b,c,d) __TP_MATCHER_REGISTER((a),(b),(c),(d),NULL,NULL)
+#define TP_MATCHER_REGISTER5(a,b,c,d,e) __TP_MATCHER_REGISTER((a),(b),(c),(d),(e),NULL)
+#define TP_MATCHER_REGISTER6(a,b,c,d,e,f) __TP_MATCHER_REGISTER((a),(b),(c),(d),(e),(f))
 
 
 void tp_matcher_register(struct tp_matcher *matcher);
@@ -249,6 +253,13 @@ static inline bool tp_matcher_target_cpu(struct tp_matcher *matcher, struct tp *
            matcher->target_cpu(tp, raw, size, cpu, pid, target_cpu, reason) : false;
 }
 
+static inline bool tp_matcher_oncpu(struct tp_matcher *matcher, struct tp *tp, void *raw, int size,
+                                                 int *pid, const char **prev_comm)
+{
+    return matcher && matcher->oncpu ?
+           matcher->oncpu(tp, raw, size, pid, prev_comm) : false;
+}
+
 static inline bool tp_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
     return tp_matcher_samecpu(tp->matcher, tp, raw, size, cpu);
@@ -259,9 +270,16 @@ static inline bool tp_samepid(struct tp *tp, void *raw, int size, int pid)
     return tp_matcher_samepid(tp->matcher, tp, raw, size, pid);
 }
 
+// From the tracepoint(@raw, @size, @cpu), get the @target_cpu and @reason where the @pid may survive.
 static inline bool tp_target_cpu(struct tp *tp, void *raw, int size, int cpu, int pid, int *target_cpu, const char **reason)
 {
     return tp_matcher_target_cpu(tp->matcher, tp, raw, size, cpu, pid, target_cpu, reason);
+}
+
+// From the tracepoint(@raw, @size), get the current @pid and the previous @Prev_comm.
+static inline bool tp_oncpu(struct tp *tp, void *raw, int size, int *pid, const char **prev_comm)
+{
+    return tp_matcher_oncpu(tp->matcher, tp, raw, size, pid, prev_comm);
 }
 
 #endif

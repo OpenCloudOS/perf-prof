@@ -962,6 +962,14 @@ static bool __sched_switch_target_cpu(struct tp *tp, void *raw, int size, int cp
     return false;
 }
 
+static bool __sched_switch_oncpu(struct tp *tp, void *raw, int size, int *pid, const char **prev_comm)
+{
+    struct sched_switch *sched_switch = raw;
+    *pid = sched_switch->next_pid;
+    *prev_comm = sched_switch->prev_comm;
+    return true;
+}
+
 static bool __sched_migrate_task_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
     return cpu == ((struct sched_migrate_task *)raw)->orig_cpu ||
@@ -1008,7 +1016,7 @@ static bool __sched_process_exec_samepid(struct tp *tp, void *raw, int size, int
 TP_MATCHER_REGISTER5("sched", "sched_wakeup", __sched_wakeup_samecpu, __sched_wakeup_samepid, __sched_wakeup_target_cpu);
 TP_MATCHER_REGISTER5("sched", "sched_waking", __sched_wakeup_samecpu, __sched_wakeup_samepid, __sched_wakeup_target_cpu);
 TP_MATCHER_REGISTER5("sched", "sched_wakeup_new", __sched_wakeup_samecpu, __sched_wakeup_samepid, __sched_wakeup_target_cpu);
-TP_MATCHER_REGISTER5("sched", "sched_switch", NULL, __sched_switch_samepid, __sched_switch_target_cpu);
+TP_MATCHER_REGISTER6("sched", "sched_switch", NULL, __sched_switch_samepid, __sched_switch_target_cpu, __sched_switch_oncpu);
 TP_MATCHER_REGISTER5("sched", "sched_migrate_task", __sched_migrate_task_samecpu, __sched_migrate_task_samepid, __sched_migrate_task_target_cpu);
 TP_MATCHER_REGISTER("sched", "sched_stat_runtime", NULL, __sched_stat_runtime_samepid);
 TP_MATCHER_REGISTER("sched", "sched_process_free", NULL, __sched_process_free_samepid);
