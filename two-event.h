@@ -23,6 +23,7 @@ struct two_event_options {
     int keylen;
     bool perins;
     bool comm;
+    bool rundelay;
     bool only_print_greater_than;
     unsigned long greater_than;
     unsigned long lower_than;
@@ -56,6 +57,13 @@ struct event_iter {
     int recent_cpu; // samecpu: cpu tracking.
     const char *debug_msg;
     const char *reason;
+
+    // rundelay, sched_switch
+    int curr_cpu[3];
+    int curr_pid[3];  // samecpu-1, samecpu-2, samecpu-track
+    u64 curr_time[3]; // samecpu-1, samecpu-2, samecpu-track
+    u64 running_time;
+    const char *comm;
 };
 
 struct two_event {
