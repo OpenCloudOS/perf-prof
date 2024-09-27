@@ -63,6 +63,7 @@
 #define TASK_REPORT (TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE | __TASK_STOPPED | __TASK_TRACED)
 #define RUNDELAY   (TASK_STATE_MAX << 1)
 
+#define TASK_REPORT_IDLE  0x80 // kernel 4.14 and later.
 #define TASK_REPORT_MAX  0x100 // kernel 4.14 and later.
 
 struct task_state_ctx {
@@ -306,17 +307,18 @@ static int task_state_init(struct prof_dev *dev)
         dev->threads = perf_thread_map__new_dummy();
     }
 
+    ctx->task_report = TASK_REPORT;
+    if (env->interruptible_set && !env->interruptible)
+        ctx->task_report &= ~TASK_INTERRUPTIBLE;
+
     if (kernel_release() >= KERNEL_VERSION(4, 14, 0)) {
         ctx->state_dead = EXIT_ZOMBIE|EXIT_DEAD;
         ctx->report_max = TASK_REPORT_MAX;
+        ctx->task_report |= TASK_REPORT_IDLE;
     } else {
         ctx->state_dead = EXIT_ZOMBIE|EXIT_DEAD|TASK_DEAD;
         ctx->report_max = TASK_STATE_MAX;
     }
-
-    ctx->task_report = TASK_REPORT;
-    if (env->interruptible_set && !env->interruptible)
-        ctx->task_report &= ~TASK_INTERRUPTIBLE;
 
     if (env->greater_than && using_order(dev))
         dev->dup = true;
@@ -542,6 +544,7 @@ static void task_print_node(void *opaque, struct latency_node *node)
         case TASK_UNINTERRUPTIBLE: state = "D "; break;
         case __TASK_STOPPED: state = "T "; break;
         case __TASK_TRACED: state = "t "; break;
+        case TASK_REPORT_IDLE: state = "I "; break;
         case RUNDELAY: state = "RD"; break;
         default: return;
     }
@@ -887,7 +890,7 @@ parse_next:
         task = rb_entry_safe(rbn, struct task_state_node, rbnode);
         if (task) {
             if (task->pid != -1 && data->time > task->time) {
-                // S/D/T/t
+                // S/D/T/t/I
                 int state = task->state & ctx->task_report;
                 if (state) {
                     u64 delta = data->time - task->time;
