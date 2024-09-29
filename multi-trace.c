@@ -1132,7 +1132,6 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     bool cmp_e1, cmp_e2;
     void *raw = NULL;
     int size = 0;
-    int cpuslot = -1;
 
     if (!(env->samecpu || env->samepid || env->sametid || env->samekey))
         return true;
@@ -1172,14 +1171,12 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
             }
 
             iter->debug_msg = "samecpu-track";
-            cpuslot = 2; // track
             if (e->cpu_entry.cpu == iter->recent_cpu ||
                 tp_samecpu(curr->tp, raw, size, iter->recent_cpu))
                 goto TRUE;
 
             if (!ctx->comm) {
                 iter->debug_msg = "samecpu-1";
-                cpuslot = 0;
                 if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
                     tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu))
                     goto TRUE;
@@ -1188,7 +1185,6 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
         if (cmp_e2) {
             if (!ctx->comm) {
                 iter->debug_msg = "samecpu-2";
-                cpuslot = 1;
                 if (e->cpu_entry.cpu == e2->cpu_entry.cpu ||
                    (e1->cpu_entry.cpu != e2->cpu_entry.cpu &&
                         tp_samecpu(curr->tp, raw, size, e2->cpu_entry.cpu)))
@@ -1254,28 +1250,33 @@ TRUE:
 
     // rundelay, samecpu
     if (ctx->rundelay && env->samecpu && e->cpu_entry.cpu != -1) {
-        int next_pid;
+        int next_pid, cpuslot = -1;
         const char *prev_comm;
         iter->running_time = 0;
         iter->comm = NULL;
         if (tp_oncpu(curr->tp, raw, size, &next_pid, &prev_comm)) {
-            if (iter->curr_cpu[cpuslot] == e->cpu_entry.cpu &&
-                iter->curr_time[cpuslot] &&
-                iter->curr_pid[cpuslot] != next_pid) {
-                iter->running_time = iter->time - iter->curr_time[cpuslot];
-                iter->comm = prev_comm;
-            }
-            iter->curr_pid[cpuslot] = next_pid;
-            iter->curr_time[cpuslot] = iter->time;
-            if (cpuslot == 2) {
-                iter->curr_cpu[2] = e->cpu_entry.cpu;
-                if (iter->curr_cpu[0] == iter->curr_cpu[2]) {
-                    iter->curr_pid[0] = iter->curr_pid[2];
-                    iter->curr_time[0] = iter->curr_time[2];
+            if (e->cpu_entry.cpu == iter->recent_cpu) cpuslot = 2;
+            else if (e->cpu_entry.cpu == e1->cpu_entry.cpu) cpuslot = 0;
+            else if (e->cpu_entry.cpu == e2->cpu_entry.cpu) cpuslot = 1;
+            if (cpuslot >= 0) {
+                if (iter->curr_cpu[cpuslot] == e->cpu_entry.cpu &&
+                    iter->curr_time[cpuslot] &&
+                    iter->curr_pid[cpuslot] != next_pid) {
+                    iter->running_time = iter->time - iter->curr_time[cpuslot];
+                    iter->comm = prev_comm;
                 }
-                if (iter->curr_cpu[1] == iter->curr_cpu[2]) {
-                    iter->curr_pid[1] = iter->curr_pid[2];
-                    iter->curr_time[1] = iter->curr_time[2];
+                iter->curr_pid[cpuslot] = next_pid;
+                iter->curr_time[cpuslot] = iter->time;
+                if (cpuslot == 2) {
+                    iter->curr_cpu[2] = e->cpu_entry.cpu;
+                    if (iter->curr_cpu[0] == iter->curr_cpu[2]) {
+                        iter->curr_pid[0] = iter->curr_pid[2];
+                        iter->curr_time[0] = iter->curr_time[2];
+                    }
+                    if (iter->curr_cpu[1] == iter->curr_cpu[2]) {
+                        iter->curr_pid[1] = iter->curr_pid[2];
+                        iter->curr_time[1] = iter->curr_time[2];
+                    }
                 }
             }
         }
