@@ -358,12 +358,12 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                         iter->curr_cpu[0] = e1->cpu_entry.cpu;
                         iter->curr_cpu[1] = e2->cpu_entry.cpu;
                         iter->curr_cpu[2] = iter->recent_cpu;
-                        if (tp_oncpu(two->tp1, raw, size, &iter->curr_pid[0], &dummy)) {
-                            iter->curr_time[0] = iter->time;
-                            if (iter->curr_cpu[2] == iter->curr_cpu[0]) {
-                                iter->curr_pid[2] = iter->curr_pid[0];
-                                iter->curr_time[2] = iter->curr_time[0];
-                            }
+                        iter->curr_time[0] = iter->time;
+                        if (!tp_oncpu(two->tp1, raw, size, &iter->curr_pid[0], &dummy))
+                            iter->curr_pid[0] = e1->tid_entry.tid;
+                        if (iter->curr_cpu[2] == iter->curr_cpu[0]) {
+                            iter->curr_pid[2] = iter->curr_pid[0];
+                            iter->curr_time[2] = iter->curr_time[0];
                         }
                     }
                 }
