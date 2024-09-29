@@ -901,11 +901,11 @@ static bool __sched_wakeup_target_cpu(struct tp *tp, void *raw, int size, int cp
     if (pid == ((struct sched_wakeup *)raw)->pid) {
         if (size == TP_RAW_SIZE(struct sched_wakeup)) {
             *target_cpu = ((struct sched_wakeup *)raw)->target_cpu;
-            *reason = "wakeup";
+            *reason = "[wakeup]";
             return true;
         } else if (size == TP_RAW_SIZE(struct sched_wakeup_no_success)) {
             *target_cpu = ((struct sched_wakeup_no_success *)raw)->target_cpu;
-            *reason = "wakeup";
+            *reason = "[wakeup]";
             return true;
         }
     }
@@ -946,16 +946,16 @@ static bool __sched_switch_target_cpu(struct tp *tp, void *raw, int size, int cp
 
     if (pid == sched_switch->next_pid) {
         *target_cpu = cpu;
-        *reason = "running";
+        *reason = "[running]";
         return true;
     } else if (pid == sched_switch->prev_pid) {
         if (sched_switch->prev_state == 0 ||
             sched_switch->prev_state == preempt_state) {
             *target_cpu = cpu;
-            *reason = "preempt";
+            *reason = "[preempt]";
         } else {
             *target_cpu = -1;
-            *reason = sched_switch->prev_state == 1 ? "sleeping" : "waiting";
+            *reason = sched_switch->prev_state == 1 ? "[sleeping]" : "[waiting]";
         }
         return true;
     }
@@ -985,7 +985,7 @@ static bool __sched_migrate_task_target_cpu(struct tp *tp, void *raw, int size, 
 {
     if (pid == ((struct sched_migrate_task *)raw)->pid) {
         *target_cpu = ((struct sched_migrate_task *)raw)->dest_cpu;
-        *reason = "migrate";
+        *reason = "[migrate]";
         return true;
     }
     return false;
