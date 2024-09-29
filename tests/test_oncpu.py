@@ -22,6 +22,9 @@ def oncpu(args, runtime, memleak_check):
 def test_oncpu_attach_to_allcpu(runtime, memleak_check):
     oncpu(["-m", "128"], runtime, memleak_check)
 
+def test_oncpu_attach_to_allcpu_onlycomm(runtime, memleak_check):
+    oncpu(["-m", "128", "--only-comm"], runtime, memleak_check)
+
 def test_oncpu_attach_to_pid(runtime, memleak_check, dead_loop_tid):
     oncpu(['-m', '128', '-t', str(dead_loop_tid)], runtime, memleak_check)
 

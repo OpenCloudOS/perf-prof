@@ -9,6 +9,18 @@ def test_task_state_mode0(runtime, memleak_check):
     for std, line in task_state.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_task_state_mode0_perfeval_cpus(runtime, memleak_check):
+    # perf-prof task-state -i 1000 -m 256
+    task_state = PerfProf(['task-state', '-i', '1000', '-m', '256', '--perfeval-cpus', '0'])
+    for std, line in task_state.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_task_state_mode0_perfeval_limit(runtime, memleak_check):
+    # perf-prof task-state -i 1000 -m 256
+    task_state = PerfProf(['task-state', '-i', '1000', '-m', '256', '--perfeval-cpus', '0', '--sampling-limit', '1000'])
+    for std, line in task_state.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
 def test_task_state_mode1(runtime, memleak_check):
     # perf-prof task-state -i 1000 -m 256 --filter 'python,sh,bash,ls,ps,awk,grep'
     task_state = PerfProf(['task-state', '-i', '1000', '-m', '256', '--filter', 'python,sh,bash,ls,ps,awk,grep'])
@@ -27,13 +39,13 @@ def test_task_state_mode3(runtime, memleak_check):
     for std, line in task_state.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
-def test_task_state_mode0_NOD(runtime, memleak_check):
+def test_task_state_mode0_NOS(runtime, memleak_check):
     # perf-prof task-state -i 1000 -m 256 --no-interruptible
     task_state = PerfProf(['task-state', '-i', '1000', '-m', '256', '--no-interruptible'])
     for std, line in task_state.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
-def test_task_state_mode1_NOD(runtime, memleak_check):
+def test_task_state_mode1_NOS(runtime, memleak_check):
     # perf-prof task-state -i 1000 -m 256 --filter 'python,sh,bash,ls,ps,awk,grep' --no-interruptible
     task_state = PerfProf(['task-state', '-i', '1000', '-m', '256', '--filter', 'python,sh,bash,ls,ps,awk,grep', '--no-interruptible'])
     for std, line in task_state.run(runtime, memleak_check):

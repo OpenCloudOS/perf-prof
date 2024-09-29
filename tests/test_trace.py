@@ -39,6 +39,18 @@ def test_flame_graph_stdout(runtime, memleak_check):
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_sched_wakeup_perfeval_cpus(runtime, memleak_check):
+    #perf-prof trace -e sched:sched_wakeup -C 0
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup', '-C', '0', '-m', '64', "--perfeval-cpus", "0", "-i", "1000"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_sched_wakeup_perfeval_limit(runtime, memleak_check):
+    #perf-prof trace -e sched:sched_wakeup -C 0
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup', '-C', '0', '-m', '64', "--perfeval-cpus", "0", "-i", "1000", "--sampling-limit", "1000"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
 def test_overwrite(runtime, memleak_check):
     #perf-prof trace -e sched:sched_wakeup,sched:sched_switch --overwrite
     prof = PerfProf(['trace', '-e', 'sched:sched_wakeup,sched:sched_switch', '-m', '1', '--overwrite'])
