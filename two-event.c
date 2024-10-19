@@ -343,7 +343,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 }
 
                 // print event1
-                event_iter_cmd(iter, CMD_EVENT1);
+                if (iter)
+                    event_iter_cmd(iter, CMD_EVENT1);
                 multi_trace_print(event1, two->tp1);
                 if (iter) {
                     // cpu tracking for event1
@@ -417,7 +418,8 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 }
 
                 // print event2
-                event_iter_cmd(iter, CMD_EVENT2);
+                if (iter)
+                    event_iter_cmd(iter, CMD_EVENT2);
                 multi_trace_print(event2, two->tp2);
                 if (iter) {
                     // cpu tracking for event2
