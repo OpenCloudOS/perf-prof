@@ -105,8 +105,13 @@ static int llcstat_init(struct prof_dev *dev)
         } else if (ctx->cpuinfo.family == 0x19) { // AMD milan
             l3_cache_reference = 0x0300C0000040FF04UL;
             l3_cache_miss = 0x0300C00000400104UL;
-            l3_cache_miss_latency = 0x0300C00000400090UL;
-            l3_misses_by_request_type = 0x0300C00000401F9AUL;
+            if (ctx->cpuinfo.model >= 0x10) { // AMD Genoa, bergamo
+                l3_cache_miss_latency = 0x0303C00000400090UL;
+                l3_misses_by_request_type = 0x0303C00000401F9AUL;
+            } else {
+                l3_cache_miss_latency = 0x0300C00000400090UL;
+                l3_misses_by_request_type = 0x0300C00000401F9AUL;
+            }
         } else
             goto failed;
     } else
