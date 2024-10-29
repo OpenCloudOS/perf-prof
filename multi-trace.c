@@ -1261,6 +1261,7 @@ TRUE:
             if (cpuslot >= 0) {
                 if (iter->curr_cpu[cpuslot] == e->cpu_entry.cpu &&
                     iter->curr_time[cpuslot] &&
+                    iter->curr_pid[cpuslot] > 0 && // exclude swapper/*
                     iter->curr_pid[cpuslot] != next_pid) {
                     iter->running_time = iter->time - iter->curr_time[cpuslot];
                     iter->comm = prev_comm;
