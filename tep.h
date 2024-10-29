@@ -92,6 +92,10 @@ struct tp {
 
     // cpus
     struct perf_cpu_map *cpus;
+
+    // default tp_matcher
+    struct expr_prog *tp_cpu_prog;
+    struct expr_prog *tp_pid_prog;
 };
 
 struct tp_list {
@@ -276,7 +280,7 @@ static inline bool tp_target_cpu(struct tp *tp, void *raw, int size, int cpu, in
     return tp_matcher_target_cpu(tp->matcher, tp, raw, size, cpu, pid, target_cpu, reason);
 }
 
-// From the tracepoint(@raw, @size), get the current @pid and the previous @Prev_comm.
+// From the tracepoint(@raw, @size), get the current @pid and the previous @prev_comm.
 static inline bool tp_oncpu(struct tp *tp, void *raw, int size, int *pid, const char **prev_comm)
 {
     return tp_matcher_oncpu(tp->matcher, tp, raw, size, pid, prev_comm);

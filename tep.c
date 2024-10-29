@@ -703,6 +703,10 @@ void tp_list_free(struct tp_list *tp_list)
                 perf_evsel__set_own_cpus(tp->evsel, NULL);
             perf_cpu_map__put(tp->cpus);
         }
+        if (tp->tp_cpu_prog)
+            expr_destroy(tp->tp_cpu_prog);
+        if (tp->tp_pid_prog)
+            expr_destroy(tp->tp_pid_prog);
     }
     free(tp_list->event_str);
     free(tp_list);
@@ -858,6 +862,7 @@ long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, void *
 }
 
 static LIST_HEAD(tp_matcher_list);
+static struct tp_matcher default_tp_matcher;
 
 void tp_matcher_register(struct tp_matcher *matcher)
 {
@@ -868,6 +873,8 @@ void tp_matcher_register(struct tp_matcher *matcher)
 struct tp_matcher *tp_matcher_find(struct tp *tp, const char *sys, const char *name)
 {
     struct tp_matcher *matcher;
+    struct tep_event *event = NULL;
+    event_fields *fields = NULL;
 
     if (!name)
         return NULL;
@@ -878,8 +885,66 @@ struct tp_matcher *tp_matcher_find(struct tp *tp, const char *sys, const char *n
             strcmp(matcher->name, name) == 0)
             return matcher;
     }
-    return NULL;
+
+    if (!tp || tp_is_dev(tp))
+        return NULL;
+
+    matcher = NULL;
+    tep__ref();
+
+    /*
+     * default tp_matcher
+     *
+     * Get the 'cpu' and 'pid' fields from tracepoint(@raw, @size) and
+     * determine whether they are the same. The cpu and pid fields will
+     * be compiled as an expression.
+     */
+    event = tep_find_event_by_name(tep, sys, name);
+    if (!event) goto out;
+    fields = tep__event_fields(event->id);
+    if (!fields) goto out;
+
+    if (!tp->tp_cpu_prog && tep_find_any_field(event, "cpu"))
+        tp->tp_cpu_prog = expr_compile((char *)"cpu", fields);
+    if (!tp->tp_pid_prog && tep_find_any_field(event, "pid"))
+        tp->tp_pid_prog = expr_compile((char *)"pid", fields);
+
+    if (tp->tp_cpu_prog || tp->tp_pid_prog)
+        matcher = &default_tp_matcher;
+
+out:
+    if (fields) free(fields);
+    tep__unref();
+    return matcher;
 }
+
+static bool default_samecpu(struct tp *tp, void *raw, int size, int cpu)
+{
+    if (tp->tp_cpu_prog) {
+        long result = tp_prog_run(tp, tp->tp_cpu_prog, raw, size);
+        return result == cpu;
+    } else
+        return false;
+}
+
+static bool default_samepid(struct tp *tp, void *raw, int size, int pid)
+{
+    if (tp->tp_pid_prog) {
+        long result = tp_prog_run(tp, tp->tp_pid_prog, raw, size);
+        return result == pid;
+    } else
+        return false;
+}
+
+static struct tp_matcher default_tp_matcher = {
+    .sys = "default",
+    .name = "default",
+    .samecpu = default_samecpu,
+    .samepid = default_samepid,
+    .target_cpu = NULL,
+    .oncpu = NULL,
+};
+
 
 static bool __sched_wakeup_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
