@@ -231,7 +231,7 @@ static void __PASTE(tp_matcher_register_, __LINE__) (void) \
 
 
 void tp_matcher_register(struct tp_matcher *matcher);
-struct tp_matcher *tp_matcher_find(const char *sys, const char *name);
+struct tp_matcher *tp_matcher_find(struct tp *tp, const char *sys, const char *name);
 
 
 static inline bool tp_matcher_samecpu(struct tp_matcher *matcher, struct tp *tp, void *raw, int size, int cpu)

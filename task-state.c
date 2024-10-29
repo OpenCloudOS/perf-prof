@@ -371,7 +371,7 @@ static int task_state_init(struct prof_dev *dev)
     if (!evsel)
         goto failed;
     perf_evlist__add(evlist, evsel);
-    ctx->matcher_switch = tp_matcher_find("sched", "sched_switch");
+    ctx->matcher_switch = tp_matcher_find(NULL, "sched", "sched_switch");
 
     // sched:sched_switch/next_pid==xx/
     // sched:sched_switch/next_comm==xx/
@@ -393,7 +393,7 @@ static int task_state_init(struct prof_dev *dev)
     if (!evsel)
         goto failed;
     perf_evlist__add(evlist, evsel);
-    ctx->matcher_wakeup = tp_matcher_find("sched", "sched_wakeup");
+    ctx->matcher_wakeup = tp_matcher_find(NULL, "sched", "sched_wakeup");
 
     // sched:sched_wakeup_new//
     // sched:sched_wakeup_new/pid==xx/
@@ -406,7 +406,7 @@ static int task_state_init(struct prof_dev *dev)
         if (!evsel)
             goto failed;
         perf_evlist__add(evlist, evsel);
-        ctx->matcher_wakeup_new = tp_matcher_find("sched", "sched_wakeup_new");
+        ctx->matcher_wakeup_new = tp_matcher_find(NULL, "sched", "sched_wakeup_new");
     } else
         ctx->sched_wakeup_new = NULL;
 

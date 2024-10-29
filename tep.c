@@ -607,7 +607,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         tp->max_stack = max_stack;
         tp->alias = alias;
         tp->kernel = !tp->receive;
-        tp->matcher = tp_matcher_find(sys, name);
+        tp->matcher = tp_matcher_find(tp, sys, name);
         if (tp->nr_top == 0) {
             tp->nr_top = 1;
             tp->top_add = realloc(tp->top_add, tp->nr_top * sizeof(*tp->top_add));
@@ -865,7 +865,7 @@ void tp_matcher_register(struct tp_matcher *matcher)
     list_add_tail(&matcher->link, &tp_matcher_list);
 }
 
-struct tp_matcher *tp_matcher_find(const char *sys, const char *name)
+struct tp_matcher *tp_matcher_find(struct tp *tp, const char *sys, const char *name)
 {
     struct tp_matcher *matcher;
 
