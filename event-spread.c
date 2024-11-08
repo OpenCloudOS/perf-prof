@@ -25,11 +25,6 @@ enum block_type {
     TYPE_FILE,
 };
 
-static struct cdev_wait_list {
-    int sfd;
-    struct list_head wait_head;
-} cdev_wait_list = {-1, LIST_HEAD_INIT(cdev_wait_list.wait_head)};
-
 struct cdev_block { // chardev
     int fd;
     bool connected;
@@ -89,33 +84,6 @@ static inline void block_free(struct event_block *block);
 static inline void block_broadcast(struct event_block *block, const void *buf, size_t len, int flags);
 static void handle_cdev_event(int fd, unsigned int revents, void *ptr);
 
-
-static int fcntl_setfl(int fd, unsigned int flags, bool set)
-{
-    unsigned int oldflags, newflags;
-
-    if ((oldflags = fcntl(fd, F_GETFL)) < 0) return -1;
-
-    newflags = oldflags;
-    if (set) newflags |= flags;
-    else     newflags &= ~flags;
-    if (oldflags == newflags) return 0;
-
-    if (fcntl(fd, F_SETFL, newflags) < 0) return -1;
-    if ((flags = fcntl(fd, F_GETFL)) < 0) return -1;
-
-    return newflags == flags ? 0 : -1;
-}
-
-static inline int fcntl_setown(int fd, int who)
-{
-    return fcntl(fd, F_SETOWN, who);
-}
-
-static inline int fcntl_setsig(int fd, int sig)
-{
-    return fcntl(fd, F_SETSIG, sig);
-}
 
 static int block_event_convert(struct event_block *block, union perf_event *event)
 {
@@ -397,86 +365,6 @@ err:
     return ret;
 }
 
-static void handle_cdev_sigio(int fd, unsigned int revents, void *ptr)
-{
-    struct event_block *block = NULL;
-    struct cdev_block *cdev = NULL;
-    struct signalfd_siginfo fdsi;
-    int s, found = 0;
-    unsigned int events;
-
-    s = read(fd, &fdsi, sizeof(struct signalfd_siginfo));
-    if (s != sizeof(fdsi)) return ;
-    if (fdsi.ssi_signo != SIGIO) return ;
-
-    list_for_each_entry(block, &cdev_wait_list.wait_head, u.cdev.wait_link) {
-        cdev = &block->u.cdev;
-        if (cdev->fd == fdsi.ssi_fd && (fdsi.ssi_band & EPOLLOUT)) {
-            found = 1;
-            break;
-        }
-    }
-    if (found) {
-        fcntl_setfl(cdev->fd, FASYNC, 0);
-        fcntl_setsig(cdev->fd, 0);
-        fcntl_setown(cdev->fd, 0);
-        list_del_init(&cdev->wait_link);
-        events = (block->eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLHUP;
-        main_epoll_add(cdev->fd, events, block, handle_cdev_event);
-        printf("Cdev %s is connected\n", cdev->filename);
-    }
-    if (list_empty(&cdev_wait_list.wait_head)) {
-        sigset_t mask;
-
-        sigemptyset(&mask);
-        sigaddset(&mask, SIGIO);
-        sigprocmask(SIG_UNBLOCK, &mask, NULL);
-
-        main_epoll_del(cdev_wait_list.sfd);
-        cdev_wait_list.sfd = -1;
-    }
-}
-
-/*
- * cdev is required to support the FASYNC capability.
- * Currently only virtio-ports are available.
- */
-static int cdev_wait_connected(struct event_block *block)
-{
-    struct cdev_block *cdev = &block->u.cdev;
-    sigset_t mask;
-    int sfd = -1;
-
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGIO);
-    if (list_empty(&cdev_wait_list.wait_head)) {
-        sigprocmask(SIG_BLOCK, &mask, NULL);
-
-        if ((sfd = signalfd(-1, &mask, SFD_NONBLOCK)) < 0) goto e1;
-        if (main_epoll_add(sfd, EPOLLIN, NULL, handle_cdev_sigio) < 0) goto e2;
-        cdev_wait_list.sfd = sfd;
-    }
-
-    if (fcntl_setown(cdev->fd, getpid()) < 0) goto e3;
-    if (fcntl_setsig(cdev->fd, SIGIO) < 0) goto e4;
-    if (fcntl_setfl(cdev->fd, FASYNC, 1) < 0) goto e5;
-
-    list_add_tail(&cdev->wait_link, &cdev_wait_list.wait_head);
-    return 0;
-
-e5: fcntl_setsig(cdev->fd, 0);
-e4: fcntl_setown(cdev->fd, 0);
-e3: if (sfd > 0) {
-        main_epoll_del(sfd);
-        cdev_wait_list.sfd = -1;
-    } else
-        return -1;
-
-e2: close(sfd);
-e1: sigprocmask(SIG_UNBLOCK, &mask, NULL);
-    return -1;
-}
-
 static int cdev_write_header(struct event_block *block)
 {
     struct tp *tp = block->eb_list->tp;
@@ -531,25 +419,30 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
     }
 
     if (revents & EPOLLHUP) {
+        // EPOLLET: Edge Triggered.
+        // Avoid EPOLLHUP loops.
+        // Wait until the host of virtio-ports is connected and return EPOLLOUT.
+        unsigned int events = (block->eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLET | EPOLLHUP;
+
         // reset circ_buf
         cdev->head = 0;
         cdev->tail = 0;
         memset(&cdev->lost_event, 0, sizeof(struct perf_record_lost));
-        main_epoll_del(cdev->fd);
+        cdev->read = 0;
 
         // reopen.
         // There may be some dirty data in cdev, which can be refreshed by reopening.
         if (cdev->connected == 1) {
             cdev->connected = 0;
+            printf("Cdev %s has hang up\n", cdev->filename);
+
+            main_epoll_del(cdev->fd);
             close(cdev->fd);
             cdev->fd = open(cdev->filename, (block->eb_list->broadcast ? O_WRONLY : O_RDONLY) | O_NONBLOCK);
+            if (cdev->fd < 0 ||
+                main_epoll_add(cdev->fd, events, block, handle_cdev_event) < 0)
+                block_free(block);
         }
-
-        if (cdev->fd < 0 ||
-            cdev_wait_connected(block) < 0)
-            block_free(block);
-        else
-            printf("Cdev %s has hang up\n", cdev->filename);
         return ;
     }
 
@@ -559,6 +452,7 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
 
         if (unlikely(cdev->connected == 0)) {
             cdev->connected = 1;
+            printf("Cdev %s is connected\n", cdev->filename);
             cdev_write_header(block);
         }
     retry:
@@ -674,7 +568,7 @@ static int block_new(struct event_block_list *eb_list, char *value)
     if (stat(port, &st) == 0 &&
         S_ISCHR(st.st_mode)) {
         int fd = open(port, (eb_list->broadcast ? O_WRONLY : O_RDONLY) | O_NONBLOCK);
-        unsigned int events = (eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLHUP;
+        unsigned int events = (eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLET | EPOLLHUP;
         if (fd >= 0 &&
             main_epoll_add(fd, events, block, handle_cdev_event) == 0) {
             // main_epoll_add < 0 && errno == EPERM, The file fd does not support epoll.
