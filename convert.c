@@ -233,7 +233,7 @@ static void kvm_pvclock_update(void *parent, void *raw)
 
 static void kvm_pvclock_hangup(void *parent)
 {
-    prof_dev_disable(parent);
+    prof_dev_close(parent);
 }
 
 static inline u64 __scale_tsc(u64 ratio, u64 tsc)

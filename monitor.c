@@ -1555,7 +1555,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
             }
         }
         if (unlikely(env->exit_n) && dev->sampled_events >= env->exit_n)
-            prof_dev_disable(dev);
+            prof_dev_close(dev);
         break;
     case PERF_RECORD_SWITCH:
         if (prof->context_switch)
@@ -1573,7 +1573,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n)
             fprintf(stderr, "unknown perf sample type %d\n", event->header.type);
         if (unlikely(env->exit_n) && dev->sampled_events >= env->exit_n)
-            prof_dev_disable(dev);
+            prof_dev_close(dev);
         return -1;
     }
     return 0;
@@ -1608,13 +1608,10 @@ static void perf_event_handle(int fd, unsigned int revents, void *ptr)
         dev->nr_pollfd --;
         // dev->nr_pollfd == 0, All attached processes exit.
         if (dev->nr_pollfd == 0) {
-            /*
-             * Cannot use prof_dev_close().
-             * In hangup(), you can decide whether to call prof_dev_close().
-             */
-            prof_dev_disable(dev);
+            // In hangup(), you can call prof_dev_close() as well.
             if (dev->prof->hangup)
                 dev->prof->hangup(dev);
+            prof_dev_close(dev);
         }
     }
     prof_dev_put(dev);
@@ -1672,7 +1669,7 @@ static void interval_handle(struct timer *timer)
      *     00000000004138fb ordered_events__flush+0x25
      *     0000000000436386 order_flush+0x6a        # flush order of multi-trace
      *     000000000041bda8 prof_dev_flush+0x16e
-     *     000000000041ba96 prof_dev_disable+0x222  # -N 50, disable multi-trace
+     *     000000000041ba96 prof_dev_close+0x222    # -N 50, close & disable multi-trace
      *     000000000041a068 perf_event_process_record+0x45f # task-state forward to multi-trace
      *     000000000041a21f perf_event_handle_mmap+0x68
      *     000000000041a43b interval_handle+0xae    # task-state
@@ -2235,7 +2232,11 @@ void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how)
 {
     struct prof_dev *source, *tmp;
 
+    if (dev->inflush)
+        return;
+
     prof_dev_get(dev);
+    dev->inflush = true;
 
     if (dev->pages) {
         struct perf_evlist *evlist = dev->evlist;
@@ -2256,6 +2257,7 @@ void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how)
     if (dev->prof->flush)
         dev->prof->flush(dev, how);
 
+    dev->inflush = false;
     prof_dev_put(dev);
 }
 
@@ -2340,7 +2342,7 @@ bool prof_dev_put(struct prof_dev *dev)
 {
     dev->refcount --;
     if (dev->refcount < 0) {
-        fprintf(stderr, "WARN: %s: dev %p ref(%ld) < 0.\n", dev->prof->name, dev, dev->refcount);
+        fprintf(stderr, "WARN: %s: dev %p ref(%d) < 0.\n", dev->prof->name, dev, dev->refcount);
     }
     if (dev->refcount == 0) {
         prof_dev_free(dev);
@@ -2353,13 +2355,23 @@ void prof_dev_close(struct prof_dev *dev)
 {
     struct prof_dev *source, *child, *tmp;
 
-    if (dev->state == PROF_DEV_STATE_EXIT) {
-        if (dev->refcount)
-            fprintf(stderr, "WARN: Try to close an EXIT dev, ref %ld.\n", dev->refcount);
-        if (!list_empty(&dev->dev_link))
-            fprintf(stderr, "WARN: Try to close an EXIT dev, !empty dev_link.\n");
+    if (dev->inclose)
         return;
-    }
+    /*
+     * Make sure prof_dev_close() can only be called once.
+     *
+     * This prevents prof_dev_put() from being run twice.
+     *     prof_dev_close() ->
+     *         prof_dev_disable() ->
+     *         |   prof_dev_flush() ->
+     *         |       perf_event_handle_mmap() ->
+     *         |           perf_event_process_record() ->
+     *         |               prof_dev_close() -|
+     *         |               -   prof_dev_disable() # Not called.
+     *         |               -   prof_dev_put()     # Not called.
+     *         prof_dev_put()
+     */
+    dev->inclose = true;
 
     prof_dev_disable(dev);
 
@@ -2425,6 +2437,8 @@ void prof_dev_close(struct prof_dev *dev)
      */
 
     prof_dev_put(dev);
+
+    // prof_dev_close() can only be called once, so dev->inclose will not be set to false.
 }
 
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)

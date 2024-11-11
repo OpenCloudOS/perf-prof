@@ -312,9 +312,24 @@ struct prof_dev {
     struct timer timer;  // interval
     struct env *env;
     void *private;
-    s64 refcount;
+    /*
+     * @dev_users: The number of users using prof_dev.
+     *
+     * Use prof_dev_use()/prof_dev_unuse() to modify. When this drops to 0, we close prof_dev
+     * (which will disable it) and also release a reference on @refcount (which may then free
+     * the &struct prof_dev if @refcount also drops to 0).
+     */
+    int dev_users;
+    /*
+     * @refcount: The number of references to &struct prof_dev (@dev_users count as 1).
+     *
+     * Use prof_dev_get()/prof_dev_put() to modify. When this drops to 0, we call prof->deinit()
+     * to free profiler-specific memory and free the &struct prof_dev.
+     */
+    int refcount;
     enum prof_dev_type type;
     enum prof_dev_state state; // It can be set off and active again by calling prof_dev_enable.
+    bool inflush, inclose;
     int pages;
     int nr_pollfd;
     bool dup; // dup event, order
@@ -397,9 +412,25 @@ struct prof_dev {
 
 extern struct list_head prof_dev_list;
 
+void prof_dev_close(struct prof_dev *dev);
+
 struct prof_dev *prof_dev_get(struct prof_dev *dev);
 bool prof_dev_put(struct prof_dev *dev);
-
+static inline bool prof_dev_use(struct prof_dev *dev)
+{
+    if (dev->dev_users == 0 && !prof_dev_get(dev))
+        return false;
+    dev->dev_users ++;
+    return true;
+}
+static inline void prof_dev_unuse(struct prof_dev *dev)
+{
+    if (dev->dev_users > 0) {
+        dev->dev_users --;
+        if (dev->dev_users == 0 && !prof_dev_put(dev))
+            prof_dev_close(dev);
+    }
+}
 
 /**
  * for_each_dev_get - continue prof_dev iteration safe against multiple removals
@@ -437,7 +468,6 @@ int prof_dev_enable(struct prof_dev *dev);
 int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
 void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how);
-void prof_dev_close(struct prof_dev *dev);
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp);
 
 /*
