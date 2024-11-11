@@ -600,4 +600,13 @@ void perfeval_free(struct prof_dev *dev);
 void perfeval_sample(struct prof_dev *dev, union perf_event *event, int instance);
 void perfeval_evaluate(struct prof_dev *dev);
 
+
+//ptrace.c
+int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev);
+int ptrace_exited(int pid);
+int ptrace_stop(int pid, int status);
+
+#define d_printf(__fmt, __args...) // printf(__fmt, ##__args)
+
+
 #endif

@@ -982,6 +982,84 @@ static void prof_dev_winsize(struct prof_dev *new)
     }
 }
 
+static void handle_SIGCHLD(void)
+{
+    static int USE_WAITID = 1;
+    int pid;
+    int code; // same as siginfo_t::si_code
+    int status; // same as siginfo_t::si_status
+    const char * __maybe_unused str = NULL;
+
+    while (1) {
+        if (USE_WAITID) {
+            siginfo_t siginfo = {.si_pid = 0};
+            if (waitid(P_ALL, 0, &siginfo, WEXITED | WSTOPPED | WCONTINUED | WNOHANG | __WALL) < 0 &&
+                errno == EINVAL) {
+                USE_WAITID = 0;
+                continue;
+            }
+            if (siginfo.si_pid == 0)
+                break;
+
+            pid = siginfo.si_pid;
+            code = siginfo.si_code;
+            status = siginfo.si_status;
+        } else {
+            pid = waitpid(-1, &status, WUNTRACED | WCONTINUED | WNOHANG | __WALL);
+            if (pid <= 0)
+                break;
+
+            if (WIFSTOPPED(status)) {
+                code = CLD_TRAPPED; // use ptrace, not CLD_STOPPED
+                status >>= 8;
+            } else if (WIFEXITED(status)) {
+                code = CLD_EXITED;
+                status = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                code = WCOREDUMP(status) ? CLD_DUMPED : CLD_KILLED;
+                status = WTERMSIG(status);
+            } else if (WIFCONTINUED(status)) {
+                code = CLD_CONTINUED;
+                status = SIGCONT;
+            } else
+                break;
+        }
+
+        switch (code) {
+        case CLD_EXITED:    str = "EXITED return";  break;
+        case CLD_KILLED:    str = "KILLED sig";     break;
+        case CLD_DUMPED:    str = "DUMPED sig";     break;
+        case CLD_TRAPPED:   str = "TRAPPED status"; break;
+        case CLD_STOPPED:   str = "STOPPED sig";    break;
+        case CLD_CONTINUED: str = "CONTINUED sig";  break;
+        default: continue;
+        }
+        d_printf("CHILD %d %s %d\n", pid, str, status);
+
+        switch (code) {
+        case CLD_EXITED:
+        case CLD_KILLED:
+        case CLD_DUMPED: {
+                struct prof_dev *dev, *next;
+                list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
+                    if (prof_dev_is_final(dev) && dev->env->workload.pid == pid) {
+                        dev->env->workload.pid = 0;
+                        // Automatically close prof_dev after the workload exits.
+                        prof_dev_close(dev);
+                        break;
+                    }
+            }
+            ptrace_exited(pid);
+            break;
+        case CLD_TRAPPED:
+            ptrace_stop(pid, status);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 static void handle_signal(int fd, unsigned int revents, void *ptr)
 {
     struct prof_dev *dev, *next;
@@ -993,21 +1071,7 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
 
     switch (fdsi.ssi_signo) {
         case SIGCHLD:
-            if (fdsi.ssi_code == CLD_EXITED ||
-                fdsi.ssi_code == CLD_KILLED ||
-                fdsi.ssi_code == CLD_DUMPED) {
-                int status;
-                int pid = waitpid(fdsi.ssi_pid, &status, WNOHANG);
-                if (pid > 0) {
-                    list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
-                        if (prof_dev_is_final(dev) && dev->env->workload.pid == pid) {
-                            dev->env->workload.pid = 0;
-                            // Automatically close prof_dev after the workload exits.
-                            prof_dev_close(dev);
-                            break;
-                        }
-                }
-            }
+            handle_SIGCHLD();
             break;
         case SIGINT:
         case SIGTERM:
