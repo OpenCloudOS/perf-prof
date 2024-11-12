@@ -171,6 +171,7 @@ struct env {
     char *kvmclock;
     u64  clock_offset;
     int usage_self;
+    bool using_ptrace;
 
     /* performance evaluation */
     int sampling_limit;

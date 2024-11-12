@@ -409,12 +409,14 @@ static int task_state_init(struct prof_dev *dev)
 
     /*
      * mode 1, mode 3, !-p pid, !-t tids, only for workload and cloned prof_dev.
+     * or using_ptrace.
      *
      * For trace_dev_open(), if the event is attached to `thread_map' and sched
      * switching is frequent, the CPU utilization of these threads will increase.
      * Therefore, we use ptrace.
      */
-    if (ctx->thread_map && !env->filter && !env->pids && !env->tids) {
+    if (ctx->thread_map && !env->filter && ((!env->pids && !env->tids) ||
+                                              env->using_ptrace)) {
         ptrace_attach(ctx->thread_map, dev);
     }
 
@@ -935,7 +937,8 @@ static const char *task_state_desc[] = PROFILER_DESC("task-state",
 static const char *task_state_argv[] = PROFILER_ARGV("task-state",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "interruptible", "uninterruptible", "than", "filter", "perins", "call-graph", "flame-graph");
+    PROFILER_ARGV_PROFILER, "interruptible", "uninterruptible", "than", "filter", "perins",
+    "call-graph", "flame-graph", "ptrace");
 struct monitor task_state = {
     .name = "task-state",
     .desc = task_state_desc,
