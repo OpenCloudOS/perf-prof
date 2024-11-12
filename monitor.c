@@ -643,7 +643,7 @@ static struct env *clone_env(struct env *p)
         e->events = calloc(e->nr_events, sizeof(*e->events));
         e->nr_events = 0;
         if (!e->events) goto failed;
-        for (i = 0 ; i < e->nr_events; i++) {
+        for (i = 0 ; i < p->nr_events; i++) {
             e->events[i] = strdup(p->events[i]);
             if (!e->events[i]) goto failed;
             e->nr_events ++;
