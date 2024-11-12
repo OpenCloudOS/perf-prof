@@ -153,9 +153,6 @@ struct sample_type_raw {
         __u8    data[0];
     } raw;
 };
-static void task_state_fork(void *opaque, void *raw);
-static void task_state_hangup(void *opaque);
-
 
 static int task_state_node_cmp(struct rb_node *rbn, const void *entry)
 {
@@ -415,12 +412,10 @@ static int task_state_init(struct prof_dev *dev)
      *
      * For trace_dev_open(), if the event is attached to `thread_map' and sched
      * switching is frequent, the CPU utilization of these threads will increase.
-     * So, for workload only, trace sched_process_fork.
+     * Therefore, we use ptrace.
      */
     if (ctx->thread_map && !env->filter && !env->pids && !env->tids) {
-        // sched:sched_process_fork
-        trace_dev_open("sched:sched_process_fork", NULL, ctx->thread_map, dev,
-                       task_state_fork, task_state_hangup);
+        ptrace_attach(ctx->thread_map, dev);
     }
 
     return 0;
@@ -718,29 +713,6 @@ static inline int task_state_event_lost(struct prof_dev *dev, union perf_event *
         }
     }
     return 0;
-}
-
-static void task_state_fork(void *opaque, void *raw)
-{
-    struct prof_dev *dev = opaque;
-    struct sched_process_fork *sched_fork = raw;
-    struct perf_thread_map *map;
-
-    if (kill(sched_fork->child_pid, 0) < 0) return;
-
-    map = thread_map__new_by_tid(sched_fork->child_pid);
-    if (!map) return;
-
-    dev = prof_dev_clone(dev, NULL, map);
-
-    perf_thread_map__put(map);
-}
-
-static void task_state_hangup(void *opaque)
-{
-    struct prof_dev *dev = opaque;
-
-    prof_dev_close(dev);
 }
 
 static void task_state_sample(struct prof_dev *dev, union perf_event *event, int instance)
