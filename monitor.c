@@ -1029,17 +1029,29 @@ static void handle_SIGCHLD(void)
         case CLD_EXITED:    str = "EXITED return";  break;
         case CLD_KILLED:    str = "KILLED sig";     break;
         case CLD_DUMPED:    str = "DUMPED sig";     break;
-        case CLD_TRAPPED:   str = "TRAPPED status"; break;
+        case CLD_TRAPPED:                           break;
         case CLD_STOPPED:   str = "STOPPED sig";    break;
         case CLD_CONTINUED: str = "CONTINUED sig";  break;
         default: continue;
         }
-        d_printf("CHILD %d %s %d\n", pid, str, status);
+        if (code != CLD_TRAPPED)
+            d_printf("CHILD %d %s %d\n", pid, str, status);
 
         switch (code) {
         case CLD_EXITED:
         case CLD_KILLED:
-        case CLD_DUMPED: {
+        case CLD_DUMPED:
+            /*
+             * ptrace_detach() needs to know the exit of the process.
+             * Call chain:
+             *  ptrace_exited() ->
+             *      __ptrace_unlink() ->
+             *          prof_dev_unuse() ->
+             *              prof_dev_close() ->
+             *                  ptrace_detach() # dev->ptrace_list
+             */
+            ptrace_exited(pid);
+            {
                 struct prof_dev *dev, *next;
                 list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
                     if (prof_dev_is_final(dev) && dev->env->workload.pid == pid) {
@@ -1049,7 +1061,6 @@ static void handle_SIGCHLD(void)
                         break;
                     }
             }
-            ptrace_exited(pid);
             break;
         case CLD_TRAPPED:
             ptrace_stop(pid, status);
@@ -1807,6 +1818,7 @@ struct prof_dev *prof_dev_open_internal(profiler *prof, struct env *env,
     INIT_LIST_HEAD(&dev->links.link_to_parent);
     INIT_LIST_HEAD(&dev->forward.source_list);
     INIT_LIST_HEAD(&dev->forward.link_to_target);
+    INIT_LIST_HEAD(&dev->ptrace_list);
 
     if (parent) {
         dev->clone = clone;
@@ -2442,6 +2454,8 @@ void prof_dev_close(struct prof_dev *dev)
     dev->state = PROF_DEV_STATE_EXIT;
     list_del_init(&dev->dev_link);
 
+    ptrace_detach(dev);
+
     /*
      * Close the child device, the forwarding source.
      *
@@ -2617,6 +2631,11 @@ restart:
         prof_dev_close(dev);
         // May also close other prof_dev.
         goto restart;
+    }
+    // SIGINT
+    if (running < 0) {
+        while (!ptrace_detach_done())
+            event_poll__poll(main_epoll, -1);
     }
 }
 

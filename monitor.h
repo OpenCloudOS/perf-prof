@@ -408,6 +408,7 @@ struct prof_dev {
         u64 matched_events;
         u64 sampled_events;
     } perfeval[2]; // 0: cpu; 1: tid;
+    struct list_head ptrace_list;  // link &struct pid_node
 };
 
 extern struct list_head prof_dev_list;
@@ -603,6 +604,8 @@ void perfeval_evaluate(struct prof_dev *dev);
 
 //ptrace.c
 int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev);
+void ptrace_detach(struct prof_dev *dev);
+bool ptrace_detach_done(void);
 int ptrace_exited(int pid);
 int ptrace_stop(int pid, int status);
 
