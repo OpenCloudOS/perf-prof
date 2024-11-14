@@ -363,7 +363,7 @@ static const char *trace_desc[] = PROFILER_DESC("trace",
 static const char *trace_argv[] = PROFILER_ARGV("trace",
     PROFILER_ARGV_OPTION, "inherit",
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "event", "overwrite", "call-graph", "flame-graph");
+    PROFILER_ARGV_PROFILER, "event", "overwrite", "call-graph", "flame-graph", "ptrace");
 static profiler trace = {
     .name = "trace",
     .desc = trace_desc,
