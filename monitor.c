@@ -2010,6 +2010,8 @@ out_deinit:
     // prof->init() may open child devices.
     for_each_child_dev_get(child, tmp, dev)
         prof_dev_close(child);
+    // prof->init() may call ptrace_attach().
+    ptrace_detach(dev);
 
     perf_event_convert_deinit(dev);
     prof->deinit(dev);
