@@ -1971,6 +1971,10 @@ reinit:
         }
     }
 
+    if (dev->env->using_ptrace && !prof_dev_ins_oncpu(dev) &&
+        perf_thread_map__pid(dev->threads, 0) != -1)
+        ptrace_attach(dev->threads, dev);
+
     if (dev->type == PROF_DEV_TYPE_NORMAL) {
         /*
          * In prof_dev_list_close(), make sure to close the parent device first. In this way,
