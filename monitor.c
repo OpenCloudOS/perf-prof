@@ -1050,8 +1050,12 @@ static void handle_SIGCHLD(void)
              *          prof_dev_unuse() ->
              *              prof_dev_close() ->
              *                  ptrace_detach() # dev->ptrace_list
+             *
+             * ptrace uses @dev_users to use prof_dev to prevent it from being closed.
+             * For the exited process, it may not be closed in ptrace_exited(), so we
+             * cannot determine env->workload to call prof_dev_close().
              */
-            ptrace_exited(pid);
+            if (!ptrace_exited(pid))
             {
                 struct prof_dev *dev, *next;
                 list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)

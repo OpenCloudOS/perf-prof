@@ -29,11 +29,19 @@
 struct pid_node {
     struct rb_node rbnode;
     int pid, ppid;
-    bool initial, detach;
-    int ptrace_request;
+    int initial;
+    bool detach, workload;
+
     struct prof_dev *dev;
     struct list_head link_to_dev;
+
+    int refcount;
+    struct pid_node *parent;
+    struct list_head initial_child_list;
+    struct list_head initial_link;
 };
+
+static int put_pid(struct pid_node *p, int pid);
 
 static int __ptrace_link(struct pid_node *node, struct prof_dev *dev)
 {
@@ -68,7 +76,12 @@ static struct rb_node *__node_new(struct rblist *rlist, const void *new_entry)
         memset(b, 0, sizeof(*b));
         RB_CLEAR_NODE(&b->rbnode);
         b->pid = e->pid;
+        b->initial = e->initial;
+        b->workload = e->workload;
+        b->refcount = 1;
         INIT_LIST_HEAD(&b->link_to_dev);
+        INIT_LIST_HEAD(&b->initial_child_list);
+        INIT_LIST_HEAD(&b->initial_link);
         if (!e->dev || __ptrace_link(b, e->dev))
             return &b->rbnode;
     }
@@ -78,6 +91,11 @@ static void __node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct pid_node *b = container_of(rb_node, struct pid_node, rbnode);
     __ptrace_unlink(b);
+    if (b->parent)
+        put_pid(b->parent, 0);
+    list_del_init(&b->initial_link);
+    if (b->refcount != 0 || !list_empty(&b->initial_child_list))
+        fprintf(stderr, "BUG: initial_child_list not empty\n");
     free(b);
 }
 
@@ -87,6 +105,42 @@ struct rblist pid_list = {
     .node_new = __node_new,
     .node_delete = __node_delete,
 };
+
+static struct pid_node *new_find_pid(int pid)
+{
+    struct pid_node node = {.dev = NULL, .initial = 0, .workload = 0};
+    struct pid_node *p;
+
+    node.pid = pid;
+    p = rb_entry_safe(rblist__findnew(&pid_list, &node), struct pid_node, rbnode);
+    return p;
+}
+
+static struct pid_node *get_pid(struct pid_node *p, int pid)
+{
+    if (!p) {
+        struct pid_node node = {.pid = pid};
+        struct rb_node *rbn = rblist__find(&pid_list, &node);
+        p = rb_entry_safe(rbn, struct pid_node, rbnode);
+    }
+    if (p) {
+        p->refcount++;
+    }
+    return p;
+}
+
+static int put_pid(struct pid_node *p, int pid)
+{
+    if (!p) {
+        struct pid_node node = {.pid = pid};
+        struct rb_node *rbn = rblist__find(&pid_list, &node);
+        p = rb_entry_safe(rbn, struct pid_node, rbnode);
+    }
+    if (p && --p->refcount == 0) {
+        rblist__remove_node(&pid_list, &p->rbnode);
+    }
+    return p != NULL;
+}
 
 int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
 {
@@ -102,6 +156,8 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
         return 0;
 
     workload = dev->env->workload.pid > 0;
+    node.initial = 2;
+    node.workload = workload;
     perf_thread_map__for_each_thread(pid, idx, thread_map) {
         /*
          * The pid can only be attached to one tracer. If this pid is attached
@@ -135,10 +191,8 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
 
 void ptrace_detach(struct prof_dev *dev)
 {
-    struct pid_node *node, *n;
+    struct pid_node *node, *n, *initial;
     struct prof_dev *child, *tmp;
-    struct prof_dev *top = prof_dev_top_cloned(dev);
-    bool workload = top->env->workload.pid > 0;
 
     /*
      * When prof_dev is closed in advance(i.e. -N 10), ptrace_list is not
@@ -154,11 +208,29 @@ void ptrace_detach(struct prof_dev *dev)
     list_for_each_entry_safe(node, n, &dev->ptrace_list, link_to_dev) {
         if (!node->detach) {
             node->detach = 1;
-            node->ptrace_request = workload ? PTRACE_KILL : PTRACE_DETACH;
-            if (ptrace(PTRACE_INTERRUPT, node->pid, 0, 0) < 0)
-                rblist__remove_node(&pid_list, &node->rbnode);
-            else
-                d_printf("PTRACE_INTERRUPT %d\n", node->pid);
+            if (node->workload) {
+                // node is free within ptrace_exited().
+                kill(node->pid, SIGKILL);
+            } else {
+                // node is free on this path:
+                //    __new_or_interrupt() ->
+                //        __detach()
+                if (ptrace(PTRACE_INTERRUPT, node->pid, 0, 0) < 0)
+                    put_pid(node, 0);
+                else
+                    d_printf("PTRACE_INTERRUPT %d\n", node->pid);
+            }
+
+            list_for_each_entry(initial, &node->initial_child_list, initial_link) {
+                initial->detach = 1;
+                if (initial->workload)
+                    kill(initial->pid, SIGKILL);
+                else {
+                    // Dont need PTRACE_INTERRUPT
+                    // IN initial STOP
+                    d_printf("MAYBE-STOP %d\n", initial->pid);
+                }
+            }
         }
     }
 
@@ -182,86 +254,193 @@ enum {
     KEEP_STOP = 1,
 };
 
-static struct prof_dev *__clone_dev(int ppid, int pid)
+static inline void __cont(int pid)
 {
-    struct pid_node node = {.pid = ppid, .dev = NULL};
-    struct pid_node *parent;
+    ptrace(PTRACE_CONT, pid, 0, 0);
+    d_printf("        CONT %d signo 0\n", pid);
+}
 
-    parent = rb_entry_safe(rblist__find(&pid_list, &node), struct pid_node, rbnode);
-    if (parent && parent->dev) {
+static int __detach(struct pid_node *node)
+{
+    if (unlikely(node->workload))
+        fprintf(stderr, "BUG: The workload cannot be detached.\n");
+    else {
+        ptrace(PTRACE_DETACH, node->pid, 0, 0);
+        d_printf("        DETACH %d signo 0\n", node->pid);
+        put_pid(node, 0);
+    }
+
+    return SKIP_CONT;
+}
+
+static int __fork__new(struct pid_node *child)
+{
+    struct pid_node *parent = child->parent;
+
+    list_del_init(&child->initial_link);
+
+    if (child->detach)
+        return __detach(child);
+
+    if (parent) {
         struct prof_dev *dev;
         struct perf_thread_map *map;
 
-        map = thread_map__new_by_tid(pid);
-        if (!map) return NULL;
+        map = thread_map__new_by_tid(child->pid);
+        if (map) {
+            dev = prof_dev_clone(parent->dev, NULL, map);
+            perf_thread_map__put(map);
 
-        dev = prof_dev_clone(parent->dev, NULL, map);
-        perf_thread_map__put(map);
-        return dev;
+            __ptrace_link(child, dev);
+        }
+        put_pid(parent, 0);
+        child->parent = NULL;
     }
-    return NULL;
+    if (unlikely(!child->dev))
+        return __detach(child);
+
+    __cont(child->pid);
+    return SKIP_CONT;
 }
 
 static int __fork(int ppid, int pid)
 {
-    struct pid_node node = {.pid = pid, .dev = NULL};
-    struct pid_node *new;
+    struct pid_node *parent, *child;
 
-    ptrace(PTRACE_CONT, ppid, 0, 0);
-    d_printf("        CONT %d signo 0\n", ppid);
+    parent = get_pid(NULL, ppid);
+    child = new_find_pid(pid);
 
-    new = rb_entry_safe(rblist__findnew(&pid_list, &node), struct pid_node, rbnode);
-    if (new) {
-        new->ppid = ppid;
-        if (new->initial) {
-            struct prof_dev *dev = __clone_dev(new->ppid, new->pid);
-            __ptrace_link(new, dev);
-            new->initial = 0;
-            ptrace(PTRACE_CONT, new->pid, 0, 0);
-            d_printf("        CONT %d signo 0\n", new->pid);
+    // parent
+    if (unlikely(!parent)) {
+        ptrace(PTRACE_DETACH, ppid, 0, 0);
+        d_printf("        DETACH %d signo 0\n", ppid);
+        fprintf(stderr, "BUG: The parent node is freed.\n");
+    }
+
+    // child
+    if (unlikely(!child)) {
+        if (parent)
+            __cont(ppid);
+        fprintf(stderr, "BUG: Cannot alloc the child node.\n");
+    } else {
+        child->ppid = ppid;
+        /*
+         * PTRACE_INTERRUPT 23024        # 20234 detach=1, in ptrace_detach().
+         * PTRACE 23028 PTRACE_INTERRUPT | SIGCONT | initial new
+         * PTRACE 23024 CLONE 23028      # 23028 detach=1
+         *         CONT 23024 signo 0
+         *         DETACH 23028 signo 0  # DETACH, not CONT
+         * PTRACE 23024 PTRACE_INTERRUPT | SIGCONT | initial new
+         *         DETACH 23024 signo 0
+         */
+        child->detach = parent ? parent->detach : 1;
+        child->workload = parent ? parent->workload : 0;
+        /*
+         * Reference parent->dev to prevent it from being closed.
+         *
+         * After fork, the parent process may exit before the child process,
+         * close prof_dev and free pid_node in ptrace_exited(). Within __fork(),
+         * the parent process is in a stopped state (see PTRACE_EVENT stops)
+         * and it is impossible to exit. Therefore, it is safe to reference
+         * parent->dev.
+         *
+         *   PTRACE 17645 FORK 17646
+         *           CONT 17645 signo 0
+         *   CHILD 17645 EXITED return 0
+         *   PTRACE 17646 PTRACE_INTERRUPT | SIGCONT | initial new
+         *           CONT 17646 signo 0
+         *
+         * For the same reason, 'workload' and detach' also need to be passed
+         * to the child node in advance.
+         */
+        child->parent = parent;
+
+        child->initial ++;
+        if (child->initial == 2) {
+            if (parent) {
+                /*
+                 * Save one PTRACE_INTERRUPT for parent.
+                 *
+                 * PTRACE_INTERRUPT 12101
+                 * PTRACE 12142 PTRACE_INTERRUPT | SIGCONT | initial new
+                 * PTRACE 12101 CLONE 12142
+                 *         DETACH 12101 signo 0   # not CONT
+                 *         DETACH 12142 signo 0
+                 */
+                if (parent->detach)
+                    __detach(parent);
+                else
+                    __cont(ppid);
+            }
+
+            __fork__new(child);
+        } else if (parent) {
+            /*
+             * PTRACE 17645 FORK 17646
+             *         CONT 17645 signo 0
+             * PTRACE 17645 FORK 17647
+             *         CONT 17645 signo 0
+             * PTRACE 17645 FORK 17648
+             *         CONT 17645 signo 0
+             * PTRACE_INTERRUPT 17645     # detach 17645 17646 17647 17648
+             * PTRACE 17645 PTRACE_INTERRUPT | SIGCONT | initial new
+             *         DETACH 17645 signo 0
+             * PTRACE 17646 PTRACE_INTERRUPT | SIGCONT | initial new
+             *         DETACH 17646 signo 0
+             * ...
+             */
+            list_add_tail(&child->initial_link, &parent->initial_child_list);
+
+            __cont(ppid);
         }
     }
+
     return SKIP_CONT;
 }
 
 static int __new_or_interrupt(int pid)
 {
-    struct pid_node node = {.pid = pid, .dev = NULL};
-    struct pid_node *new;
+    struct pid_node *curr = new_find_pid(pid);
 
-    new = rb_entry_safe(rblist__findnew(&pid_list, &node), struct pid_node, rbnode);
-    if (new) {
-        if (new->detach)
-            goto detach;
-
-        if (new->ppid) {
-            if (!new->dev) {
-                struct prof_dev *dev = __clone_dev(new->ppid, new->pid);
-                __ptrace_link(new, dev);
-            }
-        } else
-            new->initial = 1;
-        return new->initial ? KEEP_STOP : CONT;
+    if (unlikely(!curr)) {
+        fprintf(stderr, "BUG: Cannot alloc the child node.\n");
+        ptrace(PTRACE_DETACH, pid, 0, 0);
+        d_printf("        DETACH %d signo 0\n", pid);
+        return SKIP_CONT;
     }
-    return CONT;
 
-detach:
-    ptrace(new->ptrace_request, new->pid, 0, 0);
-    if (new->ptrace_request == PTRACE_KILL)
-        d_printf("        KILL %d\n", pid);
-    if (new->ptrace_request == PTRACE_DETACH)
-        d_printf("        DETACH %d\n", pid);
-    rblist__remove_node(&pid_list, &new->rbnode);
-    return SKIP_CONT;
+    if (curr->parent) {
+        /*
+         * PTRACE 14002 CLONE 14010      # 14010 detach=0
+         *        CONT 14002 signo 0
+         * PTRACE_INTERRUPT 14002        # 14002 detach=1, 14010 detach = 1
+         * PTRACE 14010 PTRACE_INTERRUPT | SIGCONT | initial new
+         *         DETACH 14010 signo 0
+         * CHILD 14002 EXITED return 0
+         */
+        if (curr->detach != curr->parent->detach)
+            fprintf(stderr, "BUG: detach of parent and child is not equal.\n");
+    }
+
+    // PTRACE_INTERRUPT, SIGCONT
+    if (curr->initial == 2) {
+        if (curr->detach)
+            return __detach(curr);
+        // SIGCONT
+        return CONT;
+    }
+
+    // initial new
+    curr->initial ++;
+    if (curr->initial == 2)
+        return __fork__new(curr);
+
+    return KEEP_STOP;
 }
 
 int ptrace_exited(int pid)
 {
-    struct pid_node node = {.pid = pid};
-    struct rb_node *rbn = rblist__find(&pid_list, &node);
-    if (rbn)
-        rblist__remove_node(&pid_list, rbn);
-    return 0;
+    return put_pid(NULL, pid);
 }
 
 int ptrace_stop(int pid, int status)
