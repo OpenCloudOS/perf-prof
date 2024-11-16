@@ -209,14 +209,26 @@ void ptrace_detach(struct prof_dev *dev)
             node->detach = 1;
             if (node->workload) {
                 // node is free within ptrace_exited().
-                kill(node->pid, SIGKILL);
+                kill(node->pid, SIGKILL); // PTRACE_KILL is deprecated; do not use it!
             } else {
                 // node is free on this path:
                 //    __new_or_interrupt() ->
                 //        __detach()
-                if (ptrace(PTRACE_INTERRUPT, node->pid, 0, 0) < 0)
-                    put_pid(node, 0);
-                else
+                if (ptrace(PTRACE_INTERRUPT, node->pid, 0, 0) < 0) {
+                    /*
+                     * PTRACE 32261 FORK 32307
+                     *         CONT 32261 signo 0
+                     * CHILD 32261 EXITED return 0  # put_pid(NULL, 32261) has been called,
+                     *                              # but it is not free and is referenced
+                     *                              # by 32307.
+                     * PTRACE_INTERRUPT 32261       # errno = ESRCH
+                     * PTRACE 32307 PTRACE_INTERRUPT | SIGCONT | initial new
+                     *         DETACH 32307 signo 0
+                     */
+                    // ESRCH is the only errno.
+                    if (errno != ESRCH)
+                        fprintf(stderr, "BUG: PTRACE_INTERRUPT return %d !ESRCH\n", errno);
+                } else
                     d_printf("PTRACE_INTERRUPT %d\n", node->pid);
             }
 
