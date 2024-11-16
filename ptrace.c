@@ -41,7 +41,7 @@ struct pid_node {
     struct list_head initial_link;
 };
 
-static int put_pid(struct pid_node *p, int pid);
+static void put_pid(struct pid_node *p, int pid);
 
 static int __ptrace_link(struct pid_node *node, struct prof_dev *dev)
 {
@@ -129,7 +129,7 @@ static struct pid_node *get_pid(struct pid_node *p, int pid)
     return p;
 }
 
-static int put_pid(struct pid_node *p, int pid)
+static void put_pid(struct pid_node *p, int pid)
 {
     if (!p) {
         struct pid_node node = {.pid = pid};
@@ -139,7 +139,6 @@ static int put_pid(struct pid_node *p, int pid)
     if (p && --p->refcount == 0) {
         rblist__remove_node(&pid_list, &p->rbnode);
     }
-    return p != NULL;
 }
 
 int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
@@ -438,9 +437,22 @@ static int __new_or_interrupt(int pid)
     return KEEP_STOP;
 }
 
-int ptrace_exited(int pid)
+// Returns the prof_dev of the pid link that is still in use.
+struct prof_dev *ptrace_exited(int pid)
 {
-    return put_pid(NULL, pid);
+    struct pid_node *p = get_pid(NULL, pid);
+    if (p) {
+        struct prof_dev *dev = p->dev;
+        if (dev)
+            prof_dev_get(dev);
+
+        put_pid(p, 0);
+        put_pid(p, 0);
+
+        if (dev && !prof_dev_put(dev))
+            return dev;
+    }
+    return NULL;
 }
 
 int ptrace_stop(int pid, int status)

@@ -607,7 +607,7 @@ void perfeval_evaluate(struct prof_dev *dev);
 int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev);
 void ptrace_detach(struct prof_dev *dev);
 bool ptrace_detach_done(void);
-int ptrace_exited(int pid);
+struct prof_dev *ptrace_exited(int pid);
 int ptrace_stop(int pid, int status);
 
 #define d_printf(__fmt, __args...) // printf(__fmt, ##__args)
