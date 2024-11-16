@@ -91,9 +91,9 @@ static void __node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
     struct pid_node *b = container_of(rb_node, struct pid_node, rbnode);
     __ptrace_unlink(b);
+    list_del_init(&b->initial_link);
     if (b->parent)
         put_pid(b->parent, 0);
-    list_del_init(&b->initial_link);
     if (b->refcount != 0 || !list_empty(&b->initial_child_list))
         fprintf(stderr, "BUG: initial_child_list not empty\n");
     free(b);
