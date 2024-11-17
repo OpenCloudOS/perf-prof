@@ -78,6 +78,7 @@ struct task_state_ctx {
     struct perf_evsel *sched_wakeup;
     struct perf_evsel *sched_wakeup_new;
     struct tp_matcher *matcher_switch, *matcher_wakeup, *matcher_wakeup_new;
+    char *filter_switch, *filter_switch_next, *filter_wakeup;
     struct rblist task_states;
     struct latency_dist *lat_dist;
     struct comm_notify notify;
@@ -230,6 +231,10 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 
     list_for_each_entry_safe(lost, next, &ctx->lost_list, lost_link)
         free(lost);
+
+    if (ctx->filter_switch) free(ctx->filter_switch);
+    if (ctx->filter_switch_next) free(ctx->filter_switch_next);
+    if (ctx->filter_wakeup) free(ctx->filter_wakeup);
 
     perf_thread_map__put(ctx->thread_map);
     rblist__exit(&ctx->task_states);
@@ -470,8 +475,11 @@ static int task_state_filter(struct prof_dev *dev)
 
             tp_filter_free(prev_filter);
 
-            if (filter[0])
+            if (filter[0]) {
                 err = perf_evsel__apply_filter(evsel, filter);
+                if (!err)
+                    ctx->filter_switch = strdup(filter);
+            }
 
             if (err < 0 || env->verbose >= VERBOSE_NOTICE)
                 fprintf(err < 0 ? stderr : stdout, "sched:sched_switch filter \"%s\"\n", filter);
@@ -481,8 +489,11 @@ static int task_state_filter(struct prof_dev *dev)
             struct tp_filter *next_filter = NULL;
 
             next_filter = tp_filter_new(ctx->thread_map, "next_pid", env->filter, "next_comm");
-            if (next_filter)
+            if (next_filter) {
                 err = perf_evsel__apply_filter(evsel, next_filter->filter);
+                if (!err)
+                    ctx->filter_switch_next = strdup(next_filter->filter);
+            }
 
             if (err < 0 || env->verbose >= VERBOSE_NOTICE)
                 fprintf(err < 0 ? stderr : stdout, "sched:sched_switch filter \"%s\"\n", next_filter ? next_filter->filter : "");
@@ -493,8 +504,11 @@ static int task_state_filter(struct prof_dev *dev)
             struct tp_filter *tp_filter = NULL;
 
             tp_filter = tp_filter_new(ctx->thread_map, "pid", env->filter, "comm");
-            if (tp_filter)
+            if (tp_filter) {
                 err = perf_evsel__apply_filter(evsel, tp_filter->filter);
+                if (!err && !ctx->filter_wakeup)
+                    ctx->filter_wakeup = strdup(tp_filter->filter);
+            }
 
             if (err < 0 || env->verbose >= VERBOSE_NOTICE)
                 fprintf(err < 0 ? stderr : stdout, "sched:sched_wakeup%s filter \"%s\"\n",
@@ -924,6 +938,26 @@ static void task_state_sigusr(struct prof_dev *dev, int signum)
     }
 }
 
+static void task_state_print_dev(struct prof_dev *dev, int indent)
+{
+    struct task_state_ctx *ctx = dev->private;
+    dev_printf("filter:\n");
+    if (ctx->sched_switch)
+        dev_printf("    sched_switch: %s\n", ctx->filter_switch ?: "");
+    if (ctx->sched_switch_next)
+        dev_printf("    sched_switch: %s\n", ctx->filter_switch_next ?: "");
+    if (ctx->sched_wakeup)
+        dev_printf("    sched_wakeup: %s\n", ctx->filter_wakeup ?: "");
+    if (ctx->sched_wakeup_new)
+        dev_printf("    sched_wakeup_new: %s\n", ctx->filter_wakeup ?: "");
+    dev_printf("task_states: %d\n", rblist__nr_entries(&ctx->task_states));
+    if (dev->dup) {
+        dev_printf("sampled: %lu\n", ctx->stat.sampled);
+        dev_printf("freed: %lu\n", ctx->stat.freed);
+        dev_printf("mem_bytes: %lu\n", ctx->stat.mem_bytes);
+    }
+}
+
 static const char *task_state_desc[] = PROFILER_DESC("task-state",
     "[OPTION...] [-S] [-D] [--than ns] [--filter comm] [--perins] [-g [--flame-graph file]]",
     "Trace task state, wakeup, switch, INTERRUPTIBLE, UNINTERRUPTIBLE.", "",
@@ -950,6 +984,7 @@ struct monitor task_state = {
     .enabled = task_state_enabled,
     .deinit = task_state_deinit,
     .sigusr = task_state_sigusr,
+    .print_dev = task_state_print_dev,
     .interval = task_state_interval,
     .minevtime = task_state_minevtime,
     .lost = task_state_lost,
