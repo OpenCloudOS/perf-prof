@@ -31,6 +31,7 @@
 
 
 static int daylight_active;
+static unsigned int page_size;
 
 struct event_poll *main_epoll = NULL;
 
@@ -904,6 +905,147 @@ struct env *parse_string_options(char *str)
     return e;
 }
 
+static void print_event(struct perf_event_attr *attr)
+{
+    const char *str = "unknown";
+    if (attr->type == PERF_TYPE_HARDWARE) {
+        switch (attr->config) {
+            case PERF_COUNT_HW_CPU_CYCLES: str = "cpu-cycles"; break;
+            case PERF_COUNT_HW_INSTRUCTIONS: str = "instructions"; break;
+            case PERF_COUNT_HW_CACHE_REFERENCES: str = "cache-references"; break;
+            case PERF_COUNT_HW_CACHE_MISSES: str = "cache-misses"; break;
+            case PERF_COUNT_HW_BRANCH_INSTRUCTIONS: str = "branch-instructions"; break;
+            case PERF_COUNT_HW_BRANCH_MISSES: str = "branch-misses"; break;
+            case PERF_COUNT_HW_BUS_CYCLES: str = "bus-cycles"; break;
+            case PERF_COUNT_HW_STALLED_CYCLES_FRONTEND: str = "stalled-frontend"; break;
+            case PERF_COUNT_HW_STALLED_CYCLES_BACKEND: str = "stalled-backend"; break;
+            case PERF_COUNT_HW_REF_CPU_CYCLES: str = "ref-cpu-cycles"; break;
+            default: break;
+        }
+        printf("%s", str);
+    } else if (attr->type == PERF_TYPE_SOFTWARE) {
+        switch (attr->config) {
+            case PERF_COUNT_SW_CPU_CLOCK: str = "cpu-clock"; break;
+            case PERF_COUNT_SW_TASK_CLOCK: str = "task-clock"; break;
+            case PERF_COUNT_SW_PAGE_FAULTS: str = "page-faults"; break;
+            case PERF_COUNT_SW_CONTEXT_SWITCHES: str = "context-switches"; break;
+            case PERF_COUNT_SW_CPU_MIGRATIONS: str = "cpu-migrations"; break;
+            case PERF_COUNT_SW_PAGE_FAULTS_MIN: str = "page-faults-min"; break;
+            case PERF_COUNT_SW_PAGE_FAULTS_MAJ: str = "page-faults-maj"; break;
+            case PERF_COUNT_SW_ALIGNMENT_FAULTS: str = "alignment-faults"; break;
+            case PERF_COUNT_SW_EMULATION_FAULTS: str = "emulation-faults"; break;
+            case PERF_COUNT_SW_DUMMY: str = "dummy"; break;
+            case PERF_COUNT_SW_BPF_OUTPUT: str = "bpf-output"; break;
+            case PERF_COUNT_SW_CGROUP_SWITCHES: str = "cgroup-switches"; break;
+            default: break;
+        }
+        printf("%s", str);
+    } else if (attr->type == PERF_TYPE_TRACEPOINT) {
+        struct tep_event *e = tep_find_event(tep__ref(), (int)attr->config);
+        if (e) printf("%s:%s", e->system, e->name);
+        tep__unref();
+    } else if (attr->type == PERF_TYPE_RAW) {
+        printf("raw:0x%lx", (long)attr->config);
+    } else if (attr->type == PERF_TYPE_BREAKPOINT) {
+        printf("breakpoint");
+    } else
+        printf("unknown");
+}
+
+static void print_thread(struct perf_thread_map *threads)
+{
+    int pid, pid_1 = -1, pid_start = -1;
+    int idx;
+
+    perf_thread_map__for_each_thread(pid, idx, threads) {
+        if (idx == 0) {
+            printf("%d", pid);
+            pid_1 = pid_start = pid;
+            continue;
+        }
+        // The pids are sorted from small to large and can be used to
+        // judge whether they are numerically continuous.
+        if (pid_1 + 1 != pid) {
+            if (pid_start == pid_1) printf(",%d", pid);
+            else printf("-%d,%d", pid_1, pid);
+            pid_start = pid;
+        }
+        pid_1 = pid;
+    }
+    if (pid_start != pid_1)
+        printf("-%d", pid_1);
+}
+
+static void print_dev(struct prof_dev *dev, int indent)
+{
+    struct prof_dev *source, *child, *tmp;
+    struct perf_evsel *evsel, *last = NULL;
+    char *cpu_str = perf_cpu_map__string(dev->cpus);
+
+    printf("%*s- %s:\n", indent-4, "", dev->prof->name);
+    dev_printf("state: %s\n", prof_dev_state(dev));
+    dev_printf("cpu: %s\n", cpu_str);
+    dev_printf("thread: "); print_thread(dev->threads); printf("\n");
+    if (dev->env->workload.pid) dev_printf("workload: %d\n", dev->env->workload.pid);
+    dev_printf("event: ");
+    perf_evlist__for_each_evsel(dev->evlist, evsel) last = evsel;
+    perf_evlist__for_each_evsel(dev->evlist, evsel) {
+        struct perf_event_attr *attr = perf_evsel__attr(evsel);
+        print_event(attr);
+        if (evsel != last) printf(",");
+    }
+    printf("\n");
+    dev_printf("ringbuffer_size: %lu\n", (u64)dev->pages * page_size * prof_dev_nr_ins(dev));
+    dev_printf("users: %d\n", dev->dev_users);
+    dev_printf("refcount: %d\n", dev->refcount - (indent>4) /* for_each_child_dev_get */);
+    dev_printf("clone: %s\n", dev->clone ? "true" : "false");
+    if (dev->convert.need_conv) {
+        dev_printf("convert:");
+        if (dev->convert.need_conv == CONVERT_TO_TSC)
+            printf(" tsc");
+        else if (dev->convert.need_conv == CONVERT_TO_KVMCLOCK)
+            printf(" kvmclock");
+        printf(" +%lu\n", dev->env->clock_offset);
+    }
+    if (using_order(dev)) {
+        dev_printf("order:\n");
+        dev_printf("    events: %u\n", dev->order.oe.nr_events);
+        dev_printf("    unordered: %u\n", dev->order.oe.nr_unordered_events);
+        dev_printf("    alloc_size: %lu\n", dev->order.oe.cur_alloc_size);
+    }
+    if (dev->prof->print_dev)
+        dev->prof->print_dev(dev, indent);
+
+    free(cpu_str);
+
+    if (!list_empty(&dev->forward.source_list)) {
+        dev_printf("forward_source:\n");
+        for_each_source_dev_get(source, tmp, dev)
+            print_dev(source, indent + 4);
+    }
+    if (!list_empty(&dev->links.child_list)) {
+        bool child_pr = false;
+        for_each_child_dev_get(child, tmp, dev) {
+            if (child->forward.target != dev) {
+                if (!child_pr) {
+                    dev_printf("child:\n");
+                    child_pr = true;
+                }
+                print_dev(child, indent + 4);
+            }
+        }
+    }
+}
+
+static void print_devtree(void)
+{
+    struct prof_dev *dev, *next;
+    printf("running: %d\n", running);
+    list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
+        if (prof_dev_at_top(dev))
+            print_dev(dev, 4);
+}
+
 static void sigusr2_handler(int sig)
 {
     static unsigned long utime = 0, stime = 0;
@@ -1122,6 +1264,7 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
             break;
         case SIGUSR2:
             sigusr2_handler(SIGUSR2);
+            print_devtree();
             break;
         case SIGWINCH:
             prof_dev_winsize(NULL);
@@ -2709,6 +2852,7 @@ int main(int argc, char *argv[])
     setlinebuf(stdout);
     setlinebuf(stderr);
     libperf_init(libperf_print);
+    page_size = sysconf(_SC_PAGE_SIZE);
 
     main_epoll = event_poll__alloc(64);
     if (!main_epoll) {

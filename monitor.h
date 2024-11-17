@@ -223,6 +223,7 @@ typedef struct monitor {
     void (*flush)(struct prof_dev *dev, enum profdev_flush how);
     void (*hangup)(struct prof_dev *dev);
     void (*sigusr)(struct prof_dev *dev, int signum);
+    void (*print_dev)(struct prof_dev *dev, int indent);
     void (*interval)(struct prof_dev *dev);
 
     // Profiler minimum event time. return evclock_t.
@@ -515,6 +516,19 @@ static inline void perf_event_put(union perf_event *event)
         prof_dev_put(event_dev->dev);
     }
 }
+
+static inline const char *prof_dev_state(struct prof_dev *dev)
+{
+    switch (dev->state) {
+        case PROF_DEV_STATE_EXIT: return "exit";
+        case PROF_DEV_STATE_OFF: return "off";
+        case PROF_DEV_STATE_INACTIVE: return "inactive";
+        case PROF_DEV_STATE_ACTIVE: return "active";
+        default: return NULL;
+    }
+}
+
+#define dev_printf(fmt, ...) printf("%*s" fmt, indent, "", ## __VA_ARGS__)
 
 struct env *parse_string_options(char *str);
 
