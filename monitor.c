@@ -983,6 +983,15 @@ static void prof_dev_winsize(struct prof_dev *new)
     }
 }
 
+static bool __continue(struct timeval *start)
+{
+    struct timeval tv;
+    u64 us;
+    gettimeofday(&tv, NULL);
+    us = tv.tv_sec*1000000UL+tv.tv_usec - (start->tv_sec*1000000UL+start->tv_usec);
+    return us < 100000UL /*100ms*/; // The interval timer delays up to 100ms.
+}
+
 static void handle_SIGCHLD(void)
 {
     static int USE_WAITID = 1;
@@ -990,8 +999,13 @@ static void handle_SIGCHLD(void)
     int code; // same as siginfo_t::si_code
     int status; // same as siginfo_t::si_status
     const char * __maybe_unused str = NULL;
+    bool more_child = true;
+    struct timeval start_time;
+    int priority = getpriority(PRIO_PROCESS, 0);
 
-    while (1) {
+    gettimeofday(&start_time, NULL);
+    setpriority(PRIO_PROCESS, 0, -20 /*highest priority*/);
+    while (__continue(&start_time)) {
         if (USE_WAITID) {
             siginfo_t siginfo = {.si_pid = 0};
             if (waitid(P_ALL, 0, &siginfo, WEXITED | WSTOPPED | WCONTINUED | WNOHANG | __WALL) < 0 &&
@@ -999,16 +1013,20 @@ static void handle_SIGCHLD(void)
                 USE_WAITID = 0;
                 continue;
             }
-            if (siginfo.si_pid == 0)
+            if (siginfo.si_pid == 0) {
+                more_child = false;
                 break;
+            }
 
             pid = siginfo.si_pid;
             code = siginfo.si_code;
             status = siginfo.si_status;
         } else {
             pid = waitpid(-1, &status, WUNTRACED | WCONTINUED | WNOHANG | __WALL);
-            if (pid <= 0)
+            if (pid <= 0) {
+                more_child = false;
                 break;
+            }
 
             if (WIFSTOPPED(status)) {
                 code = CLD_TRAPPED; // use ptrace, not CLD_STOPPED
@@ -1074,6 +1092,9 @@ static void handle_SIGCHLD(void)
             break;
         }
     }
+    setpriority(PRIO_PROCESS, 0, priority);
+    if (more_child)
+        kill(getpid(), SIGCHLD);
 }
 
 static void handle_signal(int fd, unsigned int revents, void *ptr)
