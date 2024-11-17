@@ -620,6 +620,7 @@ void perfeval_evaluate(struct prof_dev *dev);
 //ptrace.c
 int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev);
 void ptrace_detach(struct prof_dev *dev);
+void ptrace_print(struct prof_dev *dev, int indent);
 bool ptrace_detach_done(void);
 struct prof_dev *ptrace_exited(int pid);
 int ptrace_stop(int pid, int status);

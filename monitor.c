@@ -1013,6 +1013,7 @@ static void print_dev(struct prof_dev *dev, int indent)
         dev_printf("    unordered: %u\n", dev->order.oe.nr_unordered_events);
         dev_printf("    alloc_size: %lu\n", dev->order.oe.cur_alloc_size);
     }
+    ptrace_print(dev, indent);
     if (dev->prof->print_dev)
         dev->prof->print_dev(dev, indent);
 

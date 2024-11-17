@@ -254,6 +254,23 @@ void ptrace_detach(struct prof_dev *dev)
     prof_dev_put(dev);
 }
 
+void ptrace_print(struct prof_dev *dev, int indent)
+{
+    struct pid_node *node, *initial;
+
+    if (list_empty(&dev->ptrace_list))
+        return;
+
+    dev_printf("ptrace:");
+    list_for_each_entry(node, &dev->ptrace_list, link_to_dev) {
+        printf(" %d", node->pid);
+        list_for_each_entry(initial, &node->initial_child_list, initial_link) {
+            printf("/%d", initial->pid);
+        }
+    }
+    printf("\n");
+}
+
 bool ptrace_detach_done(void)
 {
     return rblist__empty(&pid_list);
