@@ -343,12 +343,31 @@ static int __fork(int ppid, int pid)
         ptrace(PTRACE_DETACH, ppid, 0, 0);
         d_printf("        DETACH %d signo 0\n", ppid);
         fprintf(stderr, "BUG: The parent node is freed.\n");
+    } else {
+        /*
+         * Save one PTRACE_INTERRUPT for parent.
+         *
+         * PTRACE_INTERRUPT 12101
+         * PTRACE 12142 PTRACE_INTERRUPT | SIGCONT | initial new
+         * PTRACE 12101 CLONE 12142
+         *         DETACH 12101 signo 0   # not CONT, get parent
+         *         DETACH 12142 signo 0   # put parent
+         *
+         * PTRACE_INTERRUPT 97252
+         * PTRACE 97252 CLONE 97257
+         *         DETACH 97252 signo 0   # not CONT, get parent
+         * PTRACE 97257 PTRACE_INTERRUPT | SIGCONT | initial new
+         *         DETACH 97257 signo 0   # put parent
+         */
+        if (parent->detach)
+            __detach(parent);
+        else
+            __cont(ppid);
     }
 
     // child
     if (unlikely(!child)) {
-        if (parent)
-            __cont(ppid);
+        if (parent) put_pid(parent, 0);
         fprintf(stderr, "BUG: Cannot alloc the child node.\n");
     } else {
         child->ppid = ppid;
@@ -382,45 +401,26 @@ static int __fork(int ppid, int pid)
          * to the child node in advance.
          */
         child->parent = parent;
-
-        child->initial ++;
-        if (child->initial == 2) {
-            if (parent) {
-                /*
-                 * Save one PTRACE_INTERRUPT for parent.
-                 *
-                 * PTRACE_INTERRUPT 12101
-                 * PTRACE 12142 PTRACE_INTERRUPT | SIGCONT | initial new
-                 * PTRACE 12101 CLONE 12142
-                 *         DETACH 12101 signo 0   # not CONT
-                 *         DETACH 12142 signo 0
-                 */
-                if (parent->detach)
-                    __detach(parent);
-                else
-                    __cont(ppid);
-            }
-
-            __fork__new(child);
-        } else if (parent) {
-            /*
-             * PTRACE 17645 FORK 17646
-             *         CONT 17645 signo 0
-             * PTRACE 17645 FORK 17647
-             *         CONT 17645 signo 0
-             * PTRACE 17645 FORK 17648
-             *         CONT 17645 signo 0
-             * PTRACE_INTERRUPT 17645     # detach 17645 17646 17647 17648
-             * PTRACE 17645 PTRACE_INTERRUPT | SIGCONT | initial new
-             *         DETACH 17645 signo 0
-             * PTRACE 17646 PTRACE_INTERRUPT | SIGCONT | initial new
-             *         DETACH 17646 signo 0
-             * ...
-             */
+        /*
+         * PTRACE 17645 FORK 17646
+         *         CONT 17645 signo 0
+         * PTRACE 17645 FORK 17647
+         *         CONT 17645 signo 0
+         * PTRACE 17645 FORK 17648
+         *         CONT 17645 signo 0
+         * PTRACE_INTERRUPT 17645     # detach 17645 17646 17647 17648
+         * PTRACE 17645 PTRACE_INTERRUPT | SIGCONT | initial new
+         *         DETACH 17645 signo 0
+         * PTRACE 17646 PTRACE_INTERRUPT | SIGCONT | initial new
+         *         DETACH 17646 signo 0
+         * ...
+         */
+        if (parent)
             list_add_tail(&child->initial_link, &parent->initial_child_list);
 
-            __cont(ppid);
-        }
+        child->initial ++;
+        if (child->initial == 2)
+            __fork__new(child);
     }
 
     return SKIP_CONT;
