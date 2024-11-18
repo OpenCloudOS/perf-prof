@@ -147,6 +147,7 @@ extern const char *syscalls_table[];
 
 struct two_event_impl *impl_get(const char *name);
 bool impl_based_on_call(const char *name);
+void two_event_class_print(struct two_event_class *class, int indent);
 
 
 // in linux/perf_event.h

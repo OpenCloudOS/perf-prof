@@ -1775,6 +1775,28 @@ found:
     }
 }
 
+static void multi_trace_print_dev(struct prof_dev *dev, int indent)
+{
+    struct multi_trace_ctx *ctx = dev->private;
+
+    two_event_class_print(ctx->class, indent);
+    if (ctx->need_timeline) {
+        dev_printf("TIMELINE:\n");
+        dev_printf("    entries: %u\n", rblist__nr_entries(&ctx->timeline));
+        dev_printf("    backup: %u\n", rblist__nr_entries(&ctx->backup));
+        dev_printf("    unneeded: %lu\n", ctx->tl_stat.unneeded);
+        dev_printf("    pending: %lu\n", ctx->tl_stat.pending);
+        dev_printf("    mem_bytes: %lu\n", ctx->tl_stat.mem_bytes);
+    } else {
+        dev_printf("BACKUP:\n");
+        dev_printf("    entries: %u\n", rblist__nr_entries(&ctx->backup));
+        dev_printf("    mem_bytes: %lu\n", ctx->backup_stat.mem_bytes);
+    }
+    if (ctx->sched_wakeup_unnecessary) {
+        dev_printf("sched:sched_wakeup unnecessary: %lu\n", ctx->sched_wakeup_unnecessary);
+    }
+}
+
 static void __help_events(struct help_ctx *hctx, const char *impl, bool *has_key)
 {
     int i, j;
@@ -1957,6 +1979,7 @@ static profiler multi_trace = {
     .deinit = multi_trace_exit,
     .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
+    .print_dev = multi_trace_print_dev,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
@@ -2013,6 +2036,7 @@ static profiler kmemprof = {
     .deinit = multi_trace_exit,
     .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
+    .print_dev = multi_trace_print_dev,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
@@ -2116,6 +2140,7 @@ static profiler syscalls = {
     .deinit = multi_trace_exit,
     .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
+    .print_dev = multi_trace_print_dev,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
@@ -2296,6 +2321,7 @@ static profiler nested_trace = {
     .deinit = nested_trace_exit,
     .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
+    .print_dev = multi_trace_print_dev,
     .interval = nested_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,
@@ -2438,6 +2464,7 @@ static profiler rundelay = {
     .deinit = multi_trace_exit,
     .flush = multi_trace_flush,
     .sigusr = multi_trace_sigusr,
+    .print_dev = multi_trace_print_dev,
     .interval = multi_trace_interval,
     .minevtime = multi_trace_minevtime,
     .lost = multi_trace_lost,

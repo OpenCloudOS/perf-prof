@@ -1281,6 +1281,7 @@ static struct two_event_impl mem_profile_impl = {
 
 struct caller {
     struct two_event base;
+    struct tp *tp2;
     int depth;
     bool recursive;
     struct caller *parent;
@@ -1352,7 +1353,7 @@ static struct two_event *call_new(struct two_event_class *class, struct tp *tp1,
 
     if (two) {
         caller = container_of(two, struct caller, base);
-
+        caller->tp2 = tp2;
         caller->parent = NULL;
         INIT_LIST_HEAD(&caller->callee_head);
         INIT_LIST_HEAD(&caller->caller_link);
@@ -1778,5 +1779,38 @@ bool impl_based_on_call(const char *name)
 {
     return strcmp(name, TWO_EVENT_CALL_IMPL) == 0 ||
            strcmp(name, TWO_EVENT_CALL_DELAY_IMPL) == 0;
+}
+
+void two_event_class_print(struct two_event_class *class, int indent)
+{
+    struct rb_node *node;
+    struct two_event *two, *first = NULL;
+    bool call = impl_based_on_call(class->impl->name);
+    struct tp *tp2;
+    int n = 0;
+
+    dev_printf("impl: %s\n", class->impl->name);
+
+    for (node = rb_first_cached(&class->two_events.entries); node; node = rb_next(node)) {
+        two = rb_entry(node, struct two_event, rbnode);
+        tp2 = two->tp2 ?: (call ? container_of(two, struct caller, base)->tp2 : NULL);
+        if (tp2 && ++n == 1)
+            first = two;
+    }
+    if (n == 0)
+        return;
+
+    if (n == 1) {
+        tp2 = first->tp2 ?: (call ? container_of(first, struct caller, base)->tp2 : NULL);
+        dev_printf("two: %s => %s\n", first->tp1->name, tp2->name);
+    } else {
+        dev_printf("two:\n");
+        for (node = rb_first_cached(&class->two_events.entries); node; node = rb_next(node)) {
+            two = rb_entry(node, struct two_event, rbnode);
+            tp2 = two->tp2 ?: (call ? container_of(two, struct caller, base)->tp2 : NULL);
+            if (tp2)
+                dev_printf("    %s => %s\n", two->tp1->name, tp2->name);
+        }
+    }
 }
 
