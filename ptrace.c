@@ -466,22 +466,9 @@ static int __new_or_interrupt(int pid)
     return KEEP_STOP;
 }
 
-// Returns the prof_dev of the pid link that is still in use.
-struct prof_dev *ptrace_exited(int pid)
+void ptrace_exited(int pid)
 {
-    struct pid_node *p = get_pid(NULL, pid);
-    if (p) {
-        struct prof_dev *dev = p->dev;
-        if (dev)
-            prof_dev_get(dev);
-
-        put_pid(p, 0);
-        put_pid(p, 0);
-
-        if (dev && !prof_dev_put(dev))
-            return dev;
-    }
-    return NULL;
+    put_pid(NULL, pid);
 }
 
 int ptrace_stop(int pid, int status)

@@ -622,8 +622,11 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev);
 void ptrace_detach(struct prof_dev *dev);
 void ptrace_print(struct prof_dev *dev, int indent);
 bool ptrace_detach_done(void);
-struct prof_dev *ptrace_exited(int pid);
+void ptrace_exited(int pid);
 int ptrace_stop(int pid, int status);
+static inline bool ptraced_dev(struct prof_dev *dev) {
+    return !list_empty(&dev->ptrace_list);
+}
 
 #define d_printf(__fmt, __args...) // printf(__fmt, ##__args)
 

@@ -1203,7 +1203,7 @@ static void handle_SIGCHLD(void)
         case CLD_EXITED:
         case CLD_KILLED:
         case CLD_DUMPED: {
-            struct prof_dev *dev, *next, *ptrace_dev;
+            struct prof_dev *dev, *next;
             /*
              * ptrace_detach() needs to know the exit of the process.
              * Call chain:
@@ -1217,10 +1217,10 @@ static void handle_SIGCHLD(void)
              * For the exited process, it may not be closed in ptrace_exited(), so we
              * can't close it directly.
              */
-            ptrace_dev = ptrace_exited(pid); /* maybe !NULL */
+            ptrace_exited(pid);
             list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
                 if (prof_dev_is_final(dev) && dev->env->workload.pid == pid &&
-                    dev != ptrace_dev) {
+                    !ptraced_dev(dev)) {
                     dev->env->workload.pid = 0;
                     // Automatically close prof_dev after the workload exits.
                     prof_dev_close(dev);
