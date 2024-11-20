@@ -32,8 +32,7 @@ struct pid_node {
     int initial;
     bool detach, workload;
 
-    struct prof_dev *dev;
-    struct list_head link_to_dev;
+    struct list_head dev_list; // link &struct pid_link_dev
 
     int refcount;
     struct pid_node *parent;
@@ -41,23 +40,46 @@ struct pid_node {
     struct list_head initial_link;
 };
 
+struct pid_link_dev {
+    struct pid_node *pid;
+    struct list_head link_to_pid;
+    struct prof_dev *dev;
+    struct list_head link_to_dev;
+};
+
 static void put_pid(struct pid_node *p, int pid);
 
 static int __ptrace_link(struct pid_node *node, struct prof_dev *dev)
 {
-    if (dev && prof_dev_use(dev)) {
-        node->dev = dev;
-        list_add(&node->link_to_dev, &dev->ptrace_list);
+    struct pid_link_dev *link = malloc(sizeof(*link));
+
+    if (link && dev && prof_dev_use(dev)) {
+        link->pid = node;
+        list_add(&link->link_to_pid, &node->dev_list);
+        link->dev = dev;
+        list_add(&link->link_to_dev, &dev->ptrace_list);
         return 1;
     }
+    if (link) free(link);
     return 0;
+}
+
+static void __ptrace_unlink_free(struct pid_link_dev *link)
+{
+    list_del(&link->link_to_pid);
+    list_del(&link->link_to_dev);
+    prof_dev_unuse(link->dev);
+    free(link);
 }
 
 static void __ptrace_unlink(struct pid_node *node)
 {
-    if (node->dev) {
-        list_del(&node->link_to_dev);
-        prof_dev_unuse(node->dev);
+    struct pid_link_dev *link;
+
+restart:
+    list_for_each_entry(link, &node->dev_list, link_to_pid) {
+        __ptrace_unlink_free(link);
+        goto restart;
     }
 }
 
@@ -79,11 +101,10 @@ static struct rb_node *__node_new(struct rblist *rlist, const void *new_entry)
         b->initial = e->initial;
         b->workload = e->workload;
         b->refcount = 1;
-        INIT_LIST_HEAD(&b->link_to_dev);
+        INIT_LIST_HEAD(&b->dev_list);
         INIT_LIST_HEAD(&b->initial_child_list);
         INIT_LIST_HEAD(&b->initial_link);
-        if (!e->dev || __ptrace_link(b, e->dev))
-            return &b->rbnode;
+        return &b->rbnode;
     }
     return NULL;
 }
@@ -108,7 +129,7 @@ struct rblist pid_list = {
 
 static struct pid_node *new_find_pid(int pid)
 {
-    struct pid_node node = {.dev = NULL, .initial = 0, .workload = 0};
+    struct pid_node node = {.initial = 0, .workload = 0};
     struct pid_node *p;
 
     node.pid = pid;
@@ -143,11 +164,12 @@ static void put_pid(struct pid_node *p, int pid)
 
 int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
 {
-    struct pid_node node = {.dev = dev};
+    struct pid_node node;
     int pid;
     int idx;
     bool workload;
     int succ = 0;
+    int ret;
 
     if (prof_dev_is_cloned(dev))
         return 0;
@@ -158,11 +180,19 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
     node.initial = 2;
     node.workload = workload;
     perf_thread_map__for_each_thread(pid, idx, thread_map) {
+        struct rb_node *rbn;
+        struct pid_node *p;
+
+        node.pid = pid;
+        rbn = rblist__find(&pid_list, &node);
+        if (rbn)
+            goto skip_ptrace;
+
         /*
          * The pid can only be attached to one tracer. If this pid is attached
          * to gdb, or strace, or other perf-prof, etc. PTRACE_SEIZE returns -1.
          */
-        int ret = ptrace(PTRACE_SEIZE, pid, 0,
+        ret = ptrace(PTRACE_SEIZE, pid, 0,
                          (workload ? PTRACE_O_EXITKILL : 0) | // tracer exits, SIGKILL workload(every tracee).
                          PTRACE_O_TRACEFORK |  // trace fork
                          PTRACE_O_TRACEVFORK | // trace vfork
@@ -170,14 +200,25 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
                          //PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT |
                          PTRACE_O_TRACESYSGOOD);
 
-        if (ret == 0) {
-            node.pid = pid;
-            ret = rblist__add_node(&pid_list, &node);
-            succ ++;
-        }
         if (ret < 0) {
             // On failure, skip it and continue with other pids.
             // Don't return -1.
+        } else
+            rbn = rblist__findnew(&pid_list, &node);
+
+    skip_ptrace:
+        p = rb_entry_safe(rbn, struct pid_node, rbnode);
+        if (p && __ptrace_link(p, dev)) {
+            succ ++;
+            // p->detach == 1: attach immediately after detach.
+            // See prof_dev_open_internal() reinit.
+            p->detach = 0;
+
+            // p->initial == 1: the initial ptrace-stop new child.
+            // p->workload != workload: BUG
+            if (!p->workload && workload)
+                fprintf(stderr, "BUG: PTRACE_O_EXITKILL flag is not "
+                                "set for workload(%d).", p->pid);
         }
     }
     if (!succ)
@@ -190,7 +231,8 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
 
 void ptrace_detach(struct prof_dev *dev)
 {
-    struct pid_node *node, *n, *initial;
+    struct pid_link_dev *link, *n;
+    struct pid_node *node, *initial;
     struct prof_dev *child, *tmp;
 
     /*
@@ -204,7 +246,13 @@ void ptrace_detach(struct prof_dev *dev)
 
     prof_dev_get(dev);
 
-    list_for_each_entry_safe(node, n, &dev->ptrace_list, link_to_dev) {
+    list_for_each_entry_safe(link, n, &dev->ptrace_list, link_to_dev) {
+        node = link->pid;
+        __ptrace_unlink_free(link);
+
+        if (!list_empty(&node->dev_list))
+            continue;
+
         if (!node->detach) {
             node->detach = 1;
             if (node->workload) {
@@ -256,13 +304,15 @@ void ptrace_detach(struct prof_dev *dev)
 
 void ptrace_print(struct prof_dev *dev, int indent)
 {
+    struct pid_link_dev *link;
     struct pid_node *node, *initial;
 
     if (list_empty(&dev->ptrace_list))
         return;
 
     dev_printf("ptrace:");
-    list_for_each_entry(node, &dev->ptrace_list, link_to_dev) {
+    list_for_each_entry(link, &dev->ptrace_list, link_to_dev) {
+        node = link->pid;
         printf(" %d", node->pid);
         list_for_each_entry(initial, &node->initial_child_list, initial_link) {
             printf("/%d", initial->pid);
@@ -313,18 +363,21 @@ static int __fork__new(struct pid_node *child)
     if (parent) {
         struct prof_dev *dev;
         struct perf_thread_map *map;
+        struct pid_link_dev *link;
 
         map = thread_map__new_by_tid(child->pid);
         if (map) {
-            dev = prof_dev_clone(parent->dev, NULL, map);
+            list_for_each_entry(link, &parent->dev_list, link_to_pid) {
+                dev = prof_dev_clone(link->dev, NULL, map);
+                if (!__ptrace_link(child, dev) && dev)
+                    prof_dev_close(dev);
+            }
             perf_thread_map__put(map);
-
-            __ptrace_link(child, dev);
         }
         put_pid(parent, 0);
         child->parent = NULL;
     }
-    if (unlikely(!child->dev))
+    if (unlikely(list_empty(&child->dev_list)))
         return __detach(child);
 
     __cont(child->pid);
