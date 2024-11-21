@@ -413,15 +413,14 @@ static int task_state_init(struct prof_dev *dev)
         ctx->sched_wakeup_new = NULL;
 
     /*
-     * mode 1, mode 3, !-p pid, !-t tids, only for workload and cloned prof_dev.
-     * or using_ptrace.
+     * mode 1, mode 3, only for workload or using_ptrace.
      *
      * For trace_dev_open(), if the event is attached to `thread_map' and sched
      * switching is frequent, the CPU utilization of these threads will increase.
      * Therefore, we use ptrace.
      */
-    if (ctx->thread_map && !env->filter && ((!env->pids && !env->tids) ||
-                                              env->using_ptrace)) {
+    if (ctx->thread_map && !env->filter && (env->workload.pid > 0 ||
+                                            env->using_ptrace)) {
         ptrace_attach(ctx->thread_map, dev);
     }
 
