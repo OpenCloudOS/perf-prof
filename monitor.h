@@ -410,7 +410,7 @@ struct prof_dev {
         u64 matched_events;
         u64 sampled_events;
     } perfeval[2]; // 0: cpu; 1: tid;
-    struct list_head ptrace_list;  // link &struct pid_node
+    struct list_head ptrace_list;  // link &struct pid_link_dev
 };
 
 extern struct list_head prof_dev_list;

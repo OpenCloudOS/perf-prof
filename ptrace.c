@@ -51,8 +51,14 @@ static void put_pid(struct pid_node *p, int pid);
 
 static int __ptrace_link(struct pid_node *node, struct prof_dev *dev)
 {
-    struct pid_link_dev *link = malloc(sizeof(*link));
+    struct pid_link_dev *link;
 
+    list_for_each_entry(link, &dev->ptrace_list, link_to_dev) {
+        if (link->pid == node)
+            return 1;
+    }
+
+    link = malloc(sizeof(*link));
     if (link && dev && prof_dev_use(dev)) {
         link->pid = node;
         list_add(&link->link_to_pid, &node->dev_list);
@@ -218,7 +224,7 @@ int ptrace_attach(struct perf_thread_map *thread_map, struct prof_dev *dev)
             // p->workload != workload: BUG
             if (!p->workload && workload)
                 fprintf(stderr, "BUG: PTRACE_O_EXITKILL flag is not "
-                                "set for workload(%d).", p->pid);
+                                "set for workload(%d).\n", p->pid);
         }
     }
     if (!succ)
