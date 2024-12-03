@@ -1169,6 +1169,20 @@ next_line:
     obj__put(obj);
 }
 
+unsigned long syms__file_offset(const char *binpath, const char *func)
+{
+    struct object *obj;
+    const struct sym *sym;
+
+    obj = obj__get(binpath);
+    if (obj) {
+        sym = obj__find_name(obj, func);
+        if (sym)
+            return sym->start - (obj->sh_addr - obj->sh_offset);
+    }
+    return 0;
+}
+
 struct syms_cache_node {
     struct rb_node rbnode;
     struct syms *syms;

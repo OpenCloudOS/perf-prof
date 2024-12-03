@@ -39,6 +39,7 @@ struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
 const struct sym *dso__find_sym(struct dso *dso, uint64_t offset);
 const char *dso__name(struct dso *dso);
 void syms__convert(FILE *fin, FILE *fout, char *binpath);
+unsigned long syms__file_offset(const char *binpath, const char *func);
 
 struct syms_cache;
 
