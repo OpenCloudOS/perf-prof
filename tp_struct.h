@@ -17,6 +17,9 @@
     unsigned char common_preempt_count;/*       offset:3;       size:1; signed:0; */ \
     int common_pid;/*   offset:4;       size:4; signed:1; */
 
+struct trace_entry {
+    COMMON_HEADER
+};
 
 struct sched_wakeup {
     COMMON_HEADER

@@ -40,6 +40,9 @@ struct tp {
     void *private;
     struct tp_matcher *matcher;
 
+    // kprobe
+    char *kprobe_func;
+
     struct expr_prog *ftrace_filter;
 
     // top profiler
@@ -184,6 +187,7 @@ unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
 unsigned long tp_get_key(struct tp *tp, void *data, int size);
 unsigned long tp_get_role(struct tp *tp, void *data, int size);
 unsigned long tp_get_num(struct tp *tp, void *data, int size);
+void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
 int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list);

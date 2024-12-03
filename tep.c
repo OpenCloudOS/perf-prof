@@ -12,6 +12,7 @@
 #include <tep.h>
 #include <stack_helpers.h>
 #include <tp_struct.h>
+#include <api/fs/fs.h>
 
 
 #define PLUGINS_DIR "/usr/lib64/perf-prof-traceevent/plugins"
@@ -19,6 +20,25 @@
 static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
 static int global_comm = 0;
+static int kprobe_type = 0;
+static char *kprobe_retprobe = NULL;
+
+#define TRACE_EVENT_TYPE_MAX \
+    ((1 << (sizeof(((struct sched_wakeup *)0)->common_type) * 8)) - 1)
+
+enum {
+    KPROBE = TRACE_EVENT_TYPE_MAX + 1,
+    KRETPROBE,
+};
+
+__attribute__((constructor))
+static void __kprobe_uprobe(void)
+{
+    size_t unused;
+    sysfs__read_int("bus/event_source/devices/kprobe/type", &kprobe_type);
+    if (sysfs__read_str("bus/event_source/devices/kprobe/format/retprobe", &kprobe_retprobe, &unused) < 0)
+        kprobe_type = 0;
+}
 
 void pr_stat(const char *fmt, ...)
 {
@@ -158,6 +178,7 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
     record.data = data;
 
     tep__ref();
+    // For KPROBE, common_type = 0, e = NULL.
     e = tep_find_event_by_record(tep, &record);
 
     trace_seq_init(&s);
@@ -168,10 +189,10 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
         tep_print_event(tep, &s, &record, "%s", TEP_PRINT_LATENCY);
         if (likely(cpu >= 0))
             trace_seq_printf(&s, " [%03d] %llu.%06llu: %s:%s: ", cpu, ts/USEC_PER_SEC, ts%USEC_PER_SEC,
-                         e->system, e->name);
+                         e ? e->system : "NULL", e ? e->name : "NULL");
         else
             trace_seq_printf(&s, " [---] %llu.%06llu: %s:%s: ", ts/USEC_PER_SEC, ts%USEC_PER_SEC,
-                         e->system, e->name);
+                         e ? e->system : "NULL", e ? e->name : "NULL");
     } else {
         if (likely(cpu >= 0))
             tep_print_event(tep, &s, &record, "%16s %6u %s [%03d] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
@@ -179,9 +200,12 @@ void tep__print_event(unsigned long long ts, int cpu, void *data, int size)
         else
             tep_print_event(tep, &s, &record, "%16s %6u %s [---] %6d: ", TEP_PRINT_COMM, TEP_PRINT_PID,
                     TEP_PRINT_LATENCY, TEP_PRINT_TIME);
-        trace_seq_printf(&s, "%s:%s: ", e->system, e->name);
+        trace_seq_printf(&s, "%s:%s: ", e ? e->system : "NULL", e ? e->name : "NULL");
     }
-    tep_print_event(tep, &s, &record, "%s\n", TEP_PRINT_INFO);
+    if (e)
+        tep_print_event(tep, &s, &record, "%s\n", TEP_PRINT_INFO);
+    else
+        trace_seq_printf(&s, "\n");
     tep__unref();
     trace_seq_do_fprintf(&s, stdout);
     trace_seq_destroy(&s);
@@ -350,6 +374,22 @@ static char *rm_quotes(char *s, char fill)
     return s;
 }
 
+static int tp_kprobe(struct tp *tp, char *sys, char *name)
+{
+    int id = -1;
+
+    // kprobe:func
+    // kretprobe:func
+    if (strcmp(sys, "kprobe") == 0) {
+        id = kprobe_type ? KPROBE : -1;
+        tp->kprobe_func = name;
+    } else if (strcmp(sys, "kretprobe") == 0) {
+        id = kprobe_type ? KRETPROBE : -1;
+        tp->kprobe_func = name;
+    }
+    return id;
+}
+
 struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 {
     char *s = event_str;
@@ -469,12 +509,16 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             name = sep + 1;
             id = tep__event_id(sys, name);
             if (id < 0) {
-                fprintf(stderr, "%s:%s not found\n", sys, name);
-                goto err_out;
+                id = tp_kprobe(tp, sys, name);
+                if (id < 0) {
+                    fprintf(stderr, "%s:%s not found\n", sys, name);
+                    goto err_out;
+                }
+            } else {
+                event = tep_find_event_by_name(tep, sys, name);
+                if (!event)
+                    goto err_out;
             }
-            event = tep_find_event_by_name(tep, sys, name);
-            if (!event)
-                goto err_out;
 
             // Remove single and double quotes around filter
             filter = rm_quotes(filter, '\0');
@@ -777,6 +821,118 @@ unsigned long tp_get_mem_size(struct tp *tp, void *data, int size)
     return mem_size == -1 ? 1 : (unsigned long)mem_size;
 }
 
+/* taken from kernel/trace/trace_output.c */
+static void trace_print_lat_fmt(struct trace_entry *entry)
+{
+    unsigned char flags = entry->common_flags;
+    unsigned char preempt_count = entry->common_preempt_count;
+    char hardsoft_irq;
+    char need_resched;
+    char irqs_off;
+    int hardirq;
+    int softirq;
+    int bh_off;
+    int nmi;
+
+    nmi = flags & TRACE_FLAG_NMI;
+    hardirq = flags & TRACE_FLAG_HARDIRQ;
+    softirq = flags & TRACE_FLAG_SOFTIRQ;
+    bh_off = flags & TRACE_FLAG_BH_OFF;
+
+    irqs_off =
+        (flags & TRACE_FLAG_IRQS_OFF && bh_off) ? 'D' :
+        (flags & TRACE_FLAG_IRQS_OFF) ? 'd' :
+        bh_off ? 'b' :
+        (flags & TRACE_FLAG_IRQS_NOSUPPORT) ? 'X' :
+        '.';
+
+    switch (flags & (TRACE_FLAG_NEED_RESCHED |
+                TRACE_FLAG_PREEMPT_RESCHED)) {
+    case TRACE_FLAG_NEED_RESCHED | TRACE_FLAG_PREEMPT_RESCHED:
+        need_resched = 'N';
+        break;
+    case TRACE_FLAG_NEED_RESCHED:
+        need_resched = 'n';
+        break;
+    case TRACE_FLAG_PREEMPT_RESCHED:
+        need_resched = 'p';
+        break;
+    default:
+        need_resched = '.';
+        break;
+    }
+
+    hardsoft_irq =
+        (nmi && hardirq)     ? 'Z' :
+        nmi                  ? 'z' :
+        (hardirq && softirq) ? 'H' :
+        hardirq              ? 'h' :
+        softirq              ? 's' :
+                               '.' ;
+
+    if (!preempt_count)
+        printf("%c%c%c.", irqs_off, need_resched, hardsoft_irq);
+    else {
+        printf("%c%c%c", irqs_off, need_resched, hardsoft_irq);
+        if (preempt_count & 0xf)
+            printf("%x", preempt_count & 0xf);
+        if (preempt_count & 0xf0)
+            printf("%x", preempt_count >> 4);
+    }
+}
+
+void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, int size)
+{
+    if (!tp)
+        tep__print_event(ts, cpu, data, size);
+    else {
+        struct trace_entry *entry = data;
+        int pid = entry->common_pid;
+        char *comm = global_comm_get(pid);
+
+        printf("%16s %6u ", comm ? : "<...>", pid);
+        trace_print_lat_fmt(entry);
+
+        if (likely(cpu >= 0))
+             printf(" [%03d]", cpu);
+        else printf(" [---]");
+
+        ts = (ts + 500) / 1000; // us
+        printf(" %llu.%06llu: %s:%s:%s", ts/USEC_PER_SEC, ts%USEC_PER_SEC,
+               tp->sys, tp->name, tp->id <= TRACE_EVENT_TYPE_MAX ? "" : "\n");
+
+        if (tp->id <= TRACE_EVENT_TYPE_MAX) {
+            struct tep_record record = {.size = size, .data = data};
+            struct tep_event *e = tep_find_event_by_record(tep__ref(), &record);
+            if (e) {
+                static struct trace_seq s;
+                static int inited = 0;
+
+                if (!inited) {
+                    inited = 1;
+                    trace_seq_init(&s);
+                } else
+                    trace_seq_reset(&s);
+
+                tep_print_event(tep, &s, &record, " %s\n", TEP_PRINT_INFO);
+                trace_seq_do_fprintf(&s, stdout);
+            } else
+                printf("\n");
+            tep__unref();
+        }
+    }
+}
+
+static void __config_retprobe(const char *retprobe, struct perf_event_attr *attr)
+{
+    const char *sep = strchr(retprobe, ':');
+    int bit = atoi(sep + 1);
+
+    //config:0
+    if (strncmp(retprobe, "config", 6) == 0)
+        attr->config |= (1<<bit);
+}
+
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
 {
     struct perf_evsel *evsel;
@@ -784,7 +940,32 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
     if (tp_is_dev(tp))
         return NULL;
 
-    attr->config = tp->id;
+    if (tp->id <= TRACE_EVENT_TYPE_MAX) {
+        attr->type = PERF_TYPE_TRACEPOINT;
+        attr->config = tp->id;
+        attr->kprobe_func = 0;
+    } else {
+        if (!(attr->sample_type & (PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_ID |
+                                   PERF_SAMPLE_STREAM_ID))) {
+            fprintf(stderr, "kprobe: PERF_SAMPLE_ID is required.\n");
+            return NULL;
+        }
+        attr->config = 0;
+
+        switch (tp->id) {
+        case KRETPROBE:
+            __config_retprobe(kprobe_retprobe, attr);
+            // passthrough
+        case KPROBE:
+            attr->type = kprobe_type;
+            attr->kprobe_func = (__u64)tp->kprobe_func;
+            break;
+
+        default:
+            return NULL;
+        }
+    }
+
     attr->sample_max_stack = tp->max_stack;
 
     evsel = perf_evsel__new(attr);
@@ -983,15 +1164,15 @@ static long preempt_state = 0;
 __attribute__((constructor))
 static void __sched_switch_preempt_state(void)
 {
-    #define TASK_STATE_MAX		1024
+    #define TASK_STATE_MAX      1024
 
     /*
-    #define TASK_REPORT			(TASK_RUNNING | TASK_INTERRUPTIBLE | \
+    #define TASK_REPORT         (TASK_RUNNING | TASK_INTERRUPTIBLE | \
                          TASK_UNINTERRUPTIBLE | __TASK_STOPPED | \
                          __TASK_TRACED | EXIT_DEAD | EXIT_ZOMBIE | \
                          TASK_PARKED)
-    #define TASK_REPORT_IDLE	(TASK_REPORT + 1)
-    #define TASK_REPORT_MAX		(TASK_REPORT_IDLE << 1)
+    #define TASK_REPORT_IDLE    (TASK_REPORT + 1)
+    #define TASK_REPORT_MAX     (TASK_REPORT_IDLE << 1)
     */
     #define TASK_REPORT_MAX  0x100 // kernel 4.14 and later.
 
