@@ -336,6 +336,20 @@ static char *next_sep(char *s, int c)
     return NULL;
 }
 
+static char *rm_quotes(char *s, char fill)
+{
+    // Remove single and double quotes around `s'
+    if (s && (s[0] == '\'' || s[0] == '"')) {
+        int len = strlen(s);
+        if (s[len-1] == s[0]) {
+            s[len-1] = fill;
+            s[0] = fill;
+            return s+1;
+        }
+    }
+    return s;
+}
+
 struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 {
     char *s = event_str;
@@ -432,14 +446,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             if (filter && filter[0])
                 filter[-1] = ' ';
 
-            // Remove single and double quotes around filter
-            if (filter && (filter[0] == '\'' || filter[0] == '"')) {
-                int len = strlen(filter);
-                if (filter[len-1] == filter[0]) {
-                    filter[len-1] = ' ';
-                    filter[0] = ' ';
-                }
-            }
+            rm_quotes(filter, ' ');
 
             env = parse_string_options(s);
             if (!env)
@@ -470,13 +477,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                 goto err_out;
 
             // Remove single and double quotes around filter
-            if (filter && (filter[0] == '\'' || filter[0] == '"')) {
-                int len = strlen(filter);
-                if (filter[len-1] == filter[0]) {
-                    filter[len-1] = '\0';
-                    filter++;
-                }
-            }
+            filter = rm_quotes(filter, '\0');
         }
         // ATTR
         if (slash) {
@@ -492,13 +493,8 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                     value = sep + 1;
                 }
                 // Remove single and double quotes around value
-                if (value && (value[0] == '\'' || value[0] == '"')) {
-                    int len = strlen(value);
-                    if (value[len-1] == value[0]) {
-                        value[len-1] = '\0';
-                        value ++;
-                    }
-                }
+                value = rm_quotes(value, '\0');
+
                 top_by = false;
                 prog = NULL;
                 if (strcmp(attr, "stack") == 0)
