@@ -40,8 +40,10 @@ struct tp {
     void *private;
     struct tp_matcher *matcher;
 
-    // kprobe
+    // kprobe, uprobe
     char *kprobe_func;
+    char *uprobe_path;
+    int uprobe_offset;
 
     struct expr_prog *ftrace_filter;
 

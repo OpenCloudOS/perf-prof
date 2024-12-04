@@ -13,6 +13,7 @@
 #include <stack_helpers.h>
 #include <tp_struct.h>
 #include <api/fs/fs.h>
+#include <trace_helpers.h>
 
 
 #define PLUGINS_DIR "/usr/lib64/perf-prof-traceevent/plugins"
@@ -21,7 +22,9 @@ static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
 static int global_comm = 0;
 static int kprobe_type = 0;
+static int uprobe_type = 0;
 static char *kprobe_retprobe = NULL;
+static char *uprobe_retprobe = NULL;
 
 #define TRACE_EVENT_TYPE_MAX \
     ((1 << (sizeof(((struct sched_wakeup *)0)->common_type) * 8)) - 1)
@@ -29,6 +32,8 @@ static char *kprobe_retprobe = NULL;
 enum {
     KPROBE = TRACE_EVENT_TYPE_MAX + 1,
     KRETPROBE,
+    UPROBE,
+    URETPROBE,
 };
 
 __attribute__((constructor))
@@ -36,8 +41,11 @@ static void __kprobe_uprobe(void)
 {
     size_t unused;
     sysfs__read_int("bus/event_source/devices/kprobe/type", &kprobe_type);
+    sysfs__read_int("bus/event_source/devices/uprobe/type", &uprobe_type);
     if (sysfs__read_str("bus/event_source/devices/kprobe/format/retprobe", &kprobe_retprobe, &unused) < 0)
         kprobe_type = 0;
+    if (sysfs__read_str("bus/event_source/devices/uprobe/format/retprobe", &uprobe_retprobe, &unused) < 0)
+        uprobe_type = 0;
 }
 
 void pr_stat(const char *fmt, ...)
@@ -374,18 +382,43 @@ static char *rm_quotes(char *s, char fill)
     return s;
 }
 
-static int tp_kprobe(struct tp *tp, char *sys, char *name)
+static int tp_kprobe_uprobe(struct tp *tp, char *sys, char *name)
 {
     int id = -1;
+    char *path;
+    char resolved_path[PATH_MAX];
 
     // kprobe:func
     // kretprobe:func
+    // uprobe:"func@path" | uprobe:func@"path"
+    // uretprobe:"func@path" | uretprobe:func@"path"
     if (strcmp(sys, "kprobe") == 0) {
         id = kprobe_type ? KPROBE : -1;
         tp->kprobe_func = name;
     } else if (strcmp(sys, "kretprobe") == 0) {
         id = kprobe_type ? KRETPROBE : -1;
         tp->kprobe_func = name;
+    } else if (strcmp(sys, "uprobe") == 0) {
+        id = uprobe_type ? UPROBE : -1;
+        goto uprobe;
+    } else if (strcmp(sys, "uretprobe") == 0) {
+        id = uprobe_type ? URETPROBE : -1;
+    uprobe:
+        tp->uprobe_path = NULL;
+        tp->uprobe_offset = 0;
+        path = strchr(name, '@');
+        if (path) {
+            *path++ = '\0';
+            path = rm_quotes(path, '\0');
+            if (id > 0 &&
+                realpath(path, resolved_path) &&
+                access(resolved_path, X_OK) == 0) {
+                tp->uprobe_path = path;
+                tp->uprobe_offset = syms__file_offset(resolved_path, name);
+            }
+        }
+        if (!tp->uprobe_offset)
+            id = -1;
     }
     return id;
 }
@@ -507,9 +540,11 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             *sep = '\0';
 
             name = sep + 1;
+            name = rm_quotes(name, '\0');
+
             id = tep__event_id(sys, name);
             if (id < 0) {
-                id = tp_kprobe(tp, sys, name);
+                id = tp_kprobe_uprobe(tp, sys, name);
                 if (id < 0) {
                     fprintf(stderr, "%s:%s not found\n", sys, name);
                     goto err_out;
@@ -944,10 +979,11 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
         attr->type = PERF_TYPE_TRACEPOINT;
         attr->config = tp->id;
         attr->kprobe_func = 0;
+        attr->probe_offset = 0;
     } else {
         if (!(attr->sample_type & (PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_ID |
                                    PERF_SAMPLE_STREAM_ID))) {
-            fprintf(stderr, "kprobe: PERF_SAMPLE_ID is required.\n");
+            fprintf(stderr, "kprobe, uprobe: PERF_SAMPLE_ID is required.\n");
             return NULL;
         }
         attr->config = 0;
@@ -961,6 +997,14 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
             attr->kprobe_func = (__u64)tp->kprobe_func;
             break;
 
+        case URETPROBE:
+            __config_retprobe(uprobe_retprobe, attr);
+            // passthrough
+        case UPROBE:
+            attr->type = uprobe_type;
+            attr->uprobe_path = (__u64)tp->uprobe_path;
+            attr->probe_offset = tp->uprobe_offset;
+            break;
         default:
             return NULL;
         }
