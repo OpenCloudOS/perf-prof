@@ -36,6 +36,11 @@ enum {
     URETPROBE,
 };
 
+/* Reserved field names, taken from kernel/trace/trace_probe.h */
+#define FIELD_STRING_IP     "__probe_ip"
+#define FIELD_STRING_RETIP  "__probe_ret_ip"
+#define FIELD_STRING_FUNC   "__probe_func"
+
 __attribute__((constructor))
 static void __kprobe_uprobe(void)
 {
@@ -276,6 +281,42 @@ int tep__event_size(int id)
     return size;
 }
 
+static event_fields *kprobe_uprobe_event_fields(int id)
+{
+    event_fields *ef = NULL;
+    int nr_fields = 0;
+    struct trace_entry entry;
+    int offset = 0;
+
+    if (id == KPROBE || id == UPROBE)
+        nr_fields = 5;
+    else if (id == KRETPROBE || id == URETPROBE)
+        nr_fields = 6;
+    else
+        return NULL;
+
+    ef = calloc(1, (nr_fields+1) * sizeof(*ef));
+    if (!ef) return NULL;
+
+    #define EF(i, _name, _size) \
+        ef[i].name = _name; \
+        ef[i].offset = offset; \
+        ef[i].size = ef[i].elementsize = _size; \
+        offset += _size;
+
+    EF(0, "common_type", sizeof(entry.common_type));
+    EF(1, "common_flags", sizeof(entry.common_flags));
+    EF(2, "common_preempt_count", sizeof(entry.common_preempt_count));
+    EF(3, "common_pid", sizeof(entry.common_pid));
+    if (id == KPROBE || id == UPROBE) {
+        EF(4, FIELD_STRING_IP, sizeof(unsigned long));
+    } else if (id == KRETPROBE || id == URETPROBE) {
+        EF(4, FIELD_STRING_FUNC, sizeof(unsigned long));
+        EF(5, FIELD_STRING_RETIP, sizeof(unsigned long));
+    }
+    return ef;
+}
+
 event_fields *tep__event_fields(int id)
 {
     struct tep_event *event;
@@ -286,6 +327,9 @@ event_fields *tep__event_fields(int id)
     event_fields *ef = NULL;
     char *extra = NULL;
     int i = 0, f = 0;
+
+    if (id > TRACE_EVENT_TYPE_MAX)
+        return kprobe_uprobe_event_fields(id);
 
     tep__ref();
     event = tep_find_event(tep, id);
