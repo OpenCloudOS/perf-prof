@@ -275,34 +275,31 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     void *raw;
     int size;
     bool callchain;
+    int i;
 
     if (event->header.type == PERF_RECORD_DEV) {
         perf_event_process_record(dev, event, instance, true, true);
         return;
     }
 
-    if (ctx->tp_list->nr_push_to || ctx->tp_list->nr_pull_from || ctx->tp_list->nr_exec_prog) {
-        int i;
-        evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-        for_each_real_tp(ctx->tp_list, tp, i) {
-            if (tp->evsel == evsel) {
-                if (tp_broadcast_event(tp, event)) return;
-                else break;
-            }
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        if (tp->evsel == evsel) {
+            if (tp_broadcast_event(tp, event)) return;
+            else break;
         }
-        if (i == ctx->tp_list->nr_tp)
-            tp = NULL;
     }
+    if (i == ctx->tp_list->nr_tp)
+        tp = NULL;
 
     callchain = have_callchain(dev, event, evsel);
-
     __raw_size(event, &raw, &size, callchain);
-    tep__update_comm(NULL, data->tid_entry.tid);
+
     if (dev->print_title) {
         prof_dev_print_time(dev, data->time, stdout);
         tp_print_marker(tp);
     }
-    tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
+    tp_print_event(tp, data->time, data->cpu_entry.cpu, raw, size);
     if (tp && tp->exec_prog)
         tp_prog_run(tp, tp->exec_prog, raw, size);
     __print_callchain(dev, event, callchain);

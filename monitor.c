@@ -509,10 +509,12 @@ struct option main_options[] = {
     OPT_INT_NONEG_SET ( 0 ,   "nr_running_max", &env.nr_running_max,   &env.nr_running_max_set,       NULL,  "ebpf, maximum number of running processes for CPU runqueue."),
 
     OPT_GROUP("PROFILER OPTION:"),
-    OPT_PARSE_NONEG ('e', "event", NULL,    "EVENT,...",        "Event selector. use 'perf list tracepoint' to list available tp events.\n"
+    OPT_PARSE_NONEG ('e', "event", NULL,    "EVENT,...",        "Event selector. use '"PROGRAME" list' to list available tp events.\n"
                                                                 "  EVENT,EVENT,...\n"
                                                                 "  EVENT: sys:name[/filter/ATTR/ATTR/.../]\n"
                                                                 "         profiler[/option/ATTR/ATTR/.../]\n"
+                                                                "         kprobe:func[/filter/ATTR/ATTR/.../]\n"
+                                                                "         uprobe:func@\"file\"[/filter/ATTR/ATTR/.../]\n"
                                                                 "  filter: trace events filter\n"
                                                                 "  ATTR:\n"
                                                                 "      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
