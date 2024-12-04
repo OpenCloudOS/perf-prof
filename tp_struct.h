@@ -21,6 +21,22 @@ struct trace_entry {
     COMMON_HEADER
 };
 
+/* taken from kernel/trace/trace.h */
+struct kprobe_trace_entry_head {
+    struct trace_entry  ent;
+    unsigned long       ip;
+};
+struct kretprobe_trace_entry_head {
+    struct trace_entry  ent;
+    unsigned long       func;
+    unsigned long       ret_ip;
+};
+/* taken from kernel/trace/trace_uprobe.c */
+struct uprobe_trace_entry_head {
+    struct trace_entry  ent;
+    unsigned long       vaddr[];
+};
+
 struct sched_wakeup {
     COMMON_HEADER
 

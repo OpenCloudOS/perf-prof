@@ -978,7 +978,7 @@ void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, i
 
         ts = (ts + 500) / 1000; // us
         printf(" %llu.%06llu: %s:%s:%s", ts/USEC_PER_SEC, ts%USEC_PER_SEC,
-               tp->sys, tp->name, tp->id <= TRACE_EVENT_TYPE_MAX ? "" : "\n");
+               tp->sys, tp->name, tp->id <= URETPROBE ? "" : "\n");
 
         if (tp->id <= TRACE_EVENT_TYPE_MAX) {
             struct tep_record record = {.size = size, .data = data};
@@ -998,6 +998,20 @@ void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, i
             } else
                 printf("\n");
             tep__unref();
+        } else {
+            if (tp->id == KPROBE) {
+                struct kprobe_trace_entry_head *field = data;
+                printf(" (0x%lx)\n", field->ip);
+            } else if (tp->id == KRETPROBE) {
+                struct kretprobe_trace_entry_head *field = data;
+                printf(" (0x%lx <- 0x%lx)\n", field->ret_ip, field->func);
+            } else if (tp->id == UPROBE) {
+                struct uprobe_trace_entry_head *field = data;
+                printf(" (0x%lx)\n", field->vaddr[0]);
+            } else if (tp->id == URETPROBE) {
+                struct uprobe_trace_entry_head *field = data;
+                printf(" (0x%lx <- 0x%lx)\n", field->vaddr[1], field->vaddr[0]);
+            }
         }
     }
 }
