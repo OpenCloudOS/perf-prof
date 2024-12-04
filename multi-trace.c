@@ -1079,7 +1079,7 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
 
     tep__update_comm(NULL, data->h.tid_entry.tid);
     multi_trace_raw_size(event, &raw, &size, tp);
-    tep__print_event(data->h.time, data->h.cpu_entry.cpu, raw, size);
+    tp_print_event(tp, data->h.time, data->h.cpu_entry.cpu, raw, size);
 
     if (tp->stack) {
         print_callchain_common(ctx->cc, &data->callchain, data->h.tid_entry.pid);
