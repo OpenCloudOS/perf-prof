@@ -27,6 +27,7 @@
 
 #define START_OF_KERNEL 0xffff000000000000UL
 
+#define __ctor __attribute__((constructor))
 
 struct monitor;
 struct prof_dev;
@@ -79,7 +80,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
 
 
 #define PROFILER_REGISTER_NAME(p, name) \
-__attribute__((constructor)) static void __monitor_register_##name(void) \
+__ctor static void __monitor_register_##name(void) \
 { \
     monitor_register(p); \
 }

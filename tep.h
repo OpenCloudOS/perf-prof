@@ -221,7 +221,7 @@ struct tp_matcher {
 };
 
 #define __TP_MATCHER_REGISTER(SYS, NAME, SAMECPU, SAMEPID, TARGET_CPU, ONCPU) \
-__attribute__((constructor)) \
+__ctor \
 static void __PASTE(tp_matcher_register_, __LINE__) (void) \
 { \
     static struct tp_matcher tp_matcher = { \

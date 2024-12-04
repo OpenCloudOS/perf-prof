@@ -816,7 +816,7 @@ static void perf_timespec_sync(struct timer *timer)
     perf_timespec_init(dev);
 }
 
-__attribute__((constructor)) static void current_clocksource(void)
+__ctor static void current_clocksource(void)
 {
     char *current_clocksource = NULL;
     size_t size;

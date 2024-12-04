@@ -41,7 +41,7 @@ enum {
 #define FIELD_STRING_RETIP  "__probe_ret_ip"
 #define FIELD_STRING_FUNC   "__probe_func"
 
-__attribute__((constructor))
+__ctor
 static void __kprobe_uprobe(void)
 {
     size_t unused;
@@ -1263,7 +1263,7 @@ static bool __sched_switch_samepid(struct tp *tp, void *raw, int size, int pid)
 }
 
 static long preempt_state = 0;
-__attribute__((constructor))
+__ctor
 static void __sched_switch_preempt_state(void)
 {
     #define TASK_STATE_MAX      1024
