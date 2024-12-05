@@ -632,7 +632,7 @@ static void free_env(struct env *e)
         memset(e, 0, sizeof(*e));
 }
 
-static struct env *clone_env(struct env *p)
+struct env *clone_env(struct env *p)
 {
     struct env *e = malloc(sizeof(*e));
 

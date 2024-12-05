@@ -196,6 +196,8 @@ struct env {
     int verbose;
 };
 
+struct env *clone_env(struct env *p);
+
 struct help_ctx {
     int nr_list;
     struct tp_list **tp_list;

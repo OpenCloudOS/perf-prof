@@ -193,8 +193,7 @@ static int watchdog_init(struct prof_dev *dev)
 
     struct perf_evsel *evsel;
 
-    env_init = malloc(sizeof(*env_init));
-    *env_init = *env;
+    env_init = clone_env(env);
 
     dev_init = prof_dev_open_cpu_thread_map(&stage_init, env_init, NULL, NULL, dev);
     if (!dev_init)
