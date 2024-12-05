@@ -9,6 +9,7 @@
 #include <ctype.h>
 #define _GNU_SOURCE
 #include <unistd.h>
+#include <dirent.h>
 #include <linux/perf_event.h>
 #include <sys/time.h>
 #include <linux/kvm.h>
@@ -28,6 +29,7 @@
 #include <tep.h>
 #include <timer.h>
 #include <stack_helpers.h>
+#include <api/fs/fs.h>
 
 
 static int daylight_active;
@@ -907,6 +909,46 @@ struct env *parse_string_options(char *str)
     return e;
 }
 
+static char *perf_type_str(int type)
+{
+    static int nr_types = 0;
+    static char **perf_types = NULL;
+
+    if (!nr_types) {
+        char path[PATH_MAX];
+        struct dirent **namelist = NULL;
+        int i, items, n, type;
+
+        n = snprintf(path, PATH_MAX, "%s/bus/event_source/devices/", sysfs__mountpoint());
+        items = scandir(path, &namelist, NULL, NULL);
+        if (items <= 0)
+            return NULL;
+
+        for (i = 0; i < items; i++) {
+            if (namelist[i]->d_name[0] == '.')
+                continue;
+            snprintf(path+n, PATH_MAX-n, "%s/type", namelist[i]->d_name);
+            if (filename__read_int(path, &type) == 0) {
+                int nr = type + 1;
+                if (nr_types < nr) {
+                    perf_types = realloc(perf_types, nr*sizeof(*perf_types));
+                    if (!perf_types) goto failed;
+                    memset(perf_types+nr_types, 0, (nr-nr_types)*sizeof(*perf_types));
+                    nr_types = nr;
+                }
+                perf_types[type] = strdup(namelist[i]->d_name);
+            }
+        }
+
+    failed:
+        for (i = 0; i < items; i++)
+            free(namelist[i]);
+        free(namelist);
+    }
+
+    return type < nr_types ? perf_types[type] : NULL;
+}
+
 static void print_event(struct perf_event_attr *attr)
 {
     const char *str = "unknown";
@@ -950,8 +992,9 @@ static void print_event(struct perf_event_attr *attr)
         printf("raw:0x%lx", (long)attr->config);
     } else if (attr->type == PERF_TYPE_BREAKPOINT) {
         printf("breakpoint");
-    } else
-        printf("unknown");
+    } else {
+        printf("%s", perf_type_str(attr->type) ?: "unknown");
+    }
 }
 
 static void print_thread(struct perf_thread_map *threads)
