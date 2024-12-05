@@ -544,7 +544,8 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
 
         if (ctx->watchdog[cpu].print_sched ||
             dev->env->verbose >= VERBOSE_EVENT) {
-            struct sample_type_raw *raw = (void *)event->sample.array;;
+            struct sample_type_raw *raw = (void *)event->sample.array;
+            if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
             tep__update_comm(NULL, data->tid_entry.tid);
             tep__print_event(data->time, data->cpu_entry.cpu, raw->raw.data, raw->raw.size);
             fflush(stdout);
