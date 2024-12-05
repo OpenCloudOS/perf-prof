@@ -305,7 +305,11 @@ static int watchdog_filter(struct prof_dev *dev)
                             printf("filter %s for cpu %d\n", filter, idx);
                     }
                 } else if (config == ctx->sched_switch) {
-                    snprintf(filter, sizeof(filter), "next_comm~\"watchdog/*\"");
+                    // Starting from 4.19, softlockup uses cpu_stop_threads.
+                    if (kernel_release() >= KERNEL_VERSION(4, 19, 0))
+                        snprintf(filter, sizeof(filter), "next_comm~\"migration/*\"");
+                    else
+                        snprintf(filter, sizeof(filter), "next_comm~\"watchdog/*\"");
                     err = perf_evsel__apply_filter(evsel, filter);
                     if (err < 0)
                         return err;
