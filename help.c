@@ -60,6 +60,29 @@ static void monitors_help(struct help_ctx *ctx)
     }
 }
 
+static void prinf_kprobe_uprobe_format(struct tp *tp)
+{
+    printf("name: %s\n", tp->name);
+    printf("ID: perf %s\n", tp->sys);
+    printf("format:\n"
+           "\tfield:unsigned short common_type;       offset:0;       size:2; signed:0;\n"
+           "\tfield:unsigned char common_flags;       offset:2;       size:1; signed:0;\n"
+           "\tfield:unsigned char common_preempt_count;       offset:3;       size:1; signed:0;\n"
+           "\tfield:int common_pid;   offset:4;       size:4; signed:1;\n"
+           "\n");
+
+    if (tp->id == KPROBE || tp->id == UPROBE)
+    printf("\tfield:unsigned long __probe_ip; offset:8;       size:8; signed:0;\n"
+           "\n"
+           "print fmt: \"(%%lx)\", REC->__probe_ip\n");
+
+    if (tp->id == KRETPROBE || tp->id == URETPROBE)
+    printf("\tfield:unsigned long __probe_func;       offset:8;       size:8; signed:0;\n"
+           "\tfield:unsigned long __probe_ret_ip;     offset:16;      size:8; signed:0;\n"
+           "\n"
+           "print fmt: \"(%%lx <- %%lx)\", REC->__probe_func, REC->__probe_ret_ip\n");
+}
+
 static void print_events_format(struct help_ctx *ctx)
 {
     int i, j;
@@ -78,7 +101,8 @@ static void print_events_format(struct help_ctx *ctx)
                 free(format);
                 if (ret == -1)
                     return;
-            }
+            } else
+                prinf_kprobe_uprobe_format(tp);
             printf("\n");
         }
     }

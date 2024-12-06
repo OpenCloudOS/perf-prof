@@ -5,6 +5,7 @@
 #include <expr.h>
 #include <net.h>
 #include <vcpu_info.h>
+#include <tp_struct.h>
 
 void pr_stat(const char *fmt, ...);
 
@@ -149,6 +150,17 @@ enum tp_event_type {
     PERF_RECORD_TP = PERF_RECORD_HEADER_MAX + 1,
     PERF_RECORD_DEV,
 };
+
+#define TRACE_EVENT_TYPE_MAX \
+    ((1 << (sizeof(((struct sched_wakeup *)0)->common_type) * 8)) - 1)
+
+enum {
+    KPROBE = TRACE_EVENT_TYPE_MAX + 1,
+    KRETPROBE,
+    UPROBE,
+    URETPROBE,
+};
+
 
 static inline bool tp_is_dev(struct tp *tp)
 {

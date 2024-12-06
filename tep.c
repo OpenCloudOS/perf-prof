@@ -11,7 +11,6 @@
 #include <monitor.h>
 #include <tep.h>
 #include <stack_helpers.h>
-#include <tp_struct.h>
 #include <api/fs/fs.h>
 #include <trace_helpers.h>
 
@@ -25,16 +24,6 @@ static int kprobe_type = 0;
 static int uprobe_type = 0;
 static char *kprobe_retprobe = NULL;
 static char *uprobe_retprobe = NULL;
-
-#define TRACE_EVENT_TYPE_MAX \
-    ((1 << (sizeof(((struct sched_wakeup *)0)->common_type) * 8)) - 1)
-
-enum {
-    KPROBE = TRACE_EVENT_TYPE_MAX + 1,
-    KRETPROBE,
-    UPROBE,
-    URETPROBE,
-};
 
 /* Reserved field names, taken from kernel/trace/trace_probe.h */
 #define FIELD_STRING_IP     "__probe_ip"
