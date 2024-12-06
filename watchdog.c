@@ -537,8 +537,6 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
             ctx->watchdog[cpu].hrtimer_touch_ts = data->time;
         } else if (config == ctx->hrtimer_cancel) {
             ctx->watchdog[cpu].watchdog_running = 0;
-        } else if (config == ctx->sched_switch) {
-            ctx->watchdog[cpu].watchdog_touch_ts = get_timestamp(data->time);
         }
 
         if (ctx->watchdog[cpu].print_sched ||
@@ -549,6 +547,11 @@ static void watchdog_sample(struct prof_dev *dev, union perf_event *event, int i
             tep__print_event(data->time, data->cpu_entry.cpu, raw->raw.data, raw->raw.size);
             fflush(stdout);
             fsync(fileno(stdout));
+        }
+
+        if (config == ctx->sched_switch) {
+            ctx->watchdog[cpu].watchdog_touch_ts = get_timestamp(data->time);
+            ctx->watchdog[cpu].print_sched = 0; // No more softlockup.
         }
     }
 }
