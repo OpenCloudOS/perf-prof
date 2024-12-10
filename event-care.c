@@ -3,12 +3,19 @@
 #include <sys/types.h>
 #include <monitor.h>
 #include <tep.h>
+#include <linux/string.h>
+#include <stack_helpers.h>
 
 struct event_care_ctx {
     struct tp_list *tp_list;
 
     // detect out-of-order
-    u64 *perins_evtime;
+    struct {
+        union perf_event *event;
+        u64 evtime;
+    } *perins_info;
+
+    struct callchain_ctx *cc;
 };
 
 static int monitor_ctx_init(struct prof_dev *dev)
@@ -29,9 +36,14 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->tp_list)
         goto failed;
 
-    ctx->perins_evtime = calloc(prof_dev_nr_ins(dev), sizeof(u64));
-    if (!ctx->perins_evtime)
+    ctx->perins_info = calloc(prof_dev_nr_ins(dev), sizeof(*ctx->perins_info));
+    if (!ctx->perins_info)
         goto free_tp_list;
+
+    if (env->callchain) {
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL), stderr);
+        dev->pages *= 2;
+    }
 
     dev->private = ctx;
     return 0;
@@ -48,7 +60,16 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct event_care_ctx *ctx = dev->private;
 
-    free(ctx->perins_evtime);
+    if (dev->env->callchain) {
+        int i, nr_ins = prof_dev_nr_ins(dev);
+
+        for (i = 0; i < nr_ins; i++)
+            if (ctx->perins_info[i].event)
+                free(ctx->perins_info[i].event);
+
+        callchain_ctx_free(ctx->cc);
+    }
+    free(ctx->perins_info);
     tp_list_free(ctx->tp_list);
     tep__unref();
     free(ctx);
@@ -64,10 +85,13 @@ static int event_care_init(struct prof_dev *dev)
         .config        = 0,
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
-        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_READ,
+        .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD |
+                         PERF_SAMPLE_READ | (dev->env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL),
         .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
@@ -134,9 +158,39 @@ struct sample_type_header {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
-    __u64		period;
-    u64         counter;
+    __u64   period;
+    u64     counter;
+    u64     read_id; // PERF_FORMAT_ID
+    struct callchain callchain;
 };
+
+static void print_unorder_event(struct prof_dev *dev, union perf_event *event)
+{
+    struct event_care_ctx *ctx = dev->private;
+    struct tp_list *tp_list = ctx->tp_list;
+    struct sample_type_header *hdr = (void *)event->sample.array;
+    struct perf_evsel *evsel;
+    struct tp *tp = NULL;
+    int i;
+    u64 us;
+
+    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
+    for_each_real_tp(tp_list, tp, i) {
+        if (tp->evsel == evsel)
+            goto found;
+    }
+    return;
+
+found:
+    us = hdr->time/1000;
+    prof_dev_print_time(dev, hdr->time, stderr);
+    fprintf(stderr, "%16s %6u .... [%03d] %lu.%06lu: %s:%s\n",
+            global_comm_get(hdr->tid_entry.tid) ? : "<...>", hdr->tid_entry.tid,
+            hdr->cpu_entry.cpu, us/USEC_PER_SEC, us%USEC_PER_SEC,
+            tp->sys, tp->name);
+    if (dev->env->callchain)
+        print_callchain_common(ctx->cc, &hdr->callchain, 0);
+}
 
 static void event_care_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
@@ -170,10 +224,21 @@ found:
     }
     counters[instance] = hdr->counter;
 
-    if (hdr->time < ctx->perins_evtime[instance])
-        fprintf(stderr, "%s:%s out-of-order %llu < %lu\n", tp->sys, tp->name, hdr->time, ctx->perins_evtime[instance]);
-    else
-        ctx->perins_evtime[instance] = hdr->time;
+    if (hdr->time < ctx->perins_info[instance].evtime) {
+        print_time(stderr);
+        fprintf(stderr, " %s:%s out-of-order %llu < %lu\n", tp->sys, tp->name, hdr->time, ctx->perins_info[instance].evtime);
+        if (dev->env->callchain) {
+            print_unorder_event(dev, ctx->perins_info[instance].event);
+            print_unorder_event(dev, event);
+        }
+    } else {
+        if (dev->env->callchain) {
+            if (ctx->perins_info[instance].event)
+                free(ctx->perins_info[instance].event);
+            ctx->perins_info[instance].event = memdup(event, event->header.size);
+        }
+        ctx->perins_info[instance].evtime = hdr->time;
+    }
 }
 
 
@@ -184,7 +249,7 @@ static const char *event_care_desc[] = PROFILER_DESC("event-care",
     "    "PROGRAME" event-care -e sched:sched_wakeup -m 64");
 static const char *event_care_argv[] = PROFILER_ARGV("event-care",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event");
+    PROFILER_ARGV_PROFILER, "event", "call-graph");
 static profiler event_care = {
     .name = "event-care",
     .desc = event_care_desc,
