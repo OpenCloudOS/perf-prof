@@ -25,7 +25,7 @@ perf-prof-y += help.o
 perf-prof-y += ldlat-loads.o
 perf-prof-y += page-faults.o
 perf-prof-y += hrtimer.o
-perf-prof-y += event-lost.o
+perf-prof-y += event-care.o
 perf-prof-y += hrcount.o
 ifeq ($(SRCARCH),x86)
 perf-prof-y += kvmmmu.o

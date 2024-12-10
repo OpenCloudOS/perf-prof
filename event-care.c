@@ -4,32 +4,60 @@
 #include <monitor.h>
 #include <tep.h>
 
+struct event_care_ctx {
+    struct tp_list *tp_list;
+
+    // detect out-of-order
+    u64 *perins_evtime;
+};
 
 static int monitor_ctx_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
+    struct event_care_ctx *ctx;
 
     if (!env->event)
         return -1;
 
-    tep__ref();
-
-    dev->private = tp_list_new(dev, env->event);
-    if (!dev->private)
+    ctx = zalloc(sizeof(*ctx));
+    if (!ctx)
         return -1;
 
+    tep__ref();
+
+    ctx->tp_list = tp_list_new(dev, env->event);
+    if (!ctx->tp_list)
+        goto failed;
+
+    ctx->perins_evtime = calloc(prof_dev_nr_ins(dev), sizeof(u64));
+    if (!ctx->perins_evtime)
+        goto free_tp_list;
+
+    dev->private = ctx;
     return 0;
+
+free_tp_list:
+    tp_list_free(ctx->tp_list);
+failed:
+    tep__unref();
+    free(ctx);
+    return -1;
 }
 
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
-    tp_list_free(dev->private);
+    struct event_care_ctx *ctx = dev->private;
+
+    free(ctx->perins_evtime);
+    tp_list_free(ctx->tp_list);
     tep__unref();
+    free(ctx);
 }
 
-static void event_lost_exit(struct prof_dev *dev);
-static int event_lost_init(struct prof_dev *dev)
+static void event_care_exit(struct prof_dev *dev);
+static int event_care_init(struct prof_dev *dev)
 {
+    struct event_care_ctx *ctx;
     struct tp_list *tp_list;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_TRACEPOINT,
@@ -48,7 +76,8 @@ static int event_lost_init(struct prof_dev *dev)
 
     if (monitor_ctx_init(dev) < 0)
         return -1;
-    tp_list = dev->private;
+    ctx = dev->private;
+    tp_list = ctx->tp_list;
 
     reduce_wakeup_times(dev, &attr);
 
@@ -67,29 +96,20 @@ static int event_lost_init(struct prof_dev *dev)
     return 0;
 
 failed:
-    event_lost_exit(dev);
+    event_care_exit(dev);
     return 0;
 }
 
-static int event_lost_filter(struct prof_dev *dev)
+static int event_care_filter(struct prof_dev *dev)
 {
-    struct tp_list *tp_list = dev->private;
-    struct tp *tp;
-    int i, err;
-
-    for_each_real_tp(tp_list, tp, i) {
-        if (tp->filter && tp->filter[0]) {
-            err = perf_evsel__apply_filter(tp->evsel, tp->filter);
-            if (err < 0)
-                return err;
-        }
-    }
-    return 0;
+    struct event_care_ctx *ctx = dev->private;
+    return tp_list_apply_filter(dev, ctx->tp_list);
 }
 
-static void event_lost_exit(struct prof_dev *dev)
+static void event_care_exit(struct prof_dev *dev)
 {
-    struct tp_list *tp_list = dev->private;
+    struct event_care_ctx *ctx = dev->private;
+    struct tp_list *tp_list = ctx->tp_list;
     struct tp *tp;
     int i;
 
@@ -118,9 +138,10 @@ struct sample_type_header {
     u64         counter;
 };
 
-static void event_lost_sample(struct prof_dev *dev, union perf_event *event, int instance)
+static void event_care_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
-    struct tp_list *tp_list = dev->private;
+    struct event_care_ctx *ctx = dev->private;
+    struct tp_list *tp_list = ctx->tp_list;
     struct sample_type_header *hdr = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct tp *tp = NULL;
@@ -148,27 +169,31 @@ found:
         fprintf(stderr, "%s:%s lost %lu events\n", tp->sys, tp->name, hdr->counter - counters[instance] - 1);
     }
     counters[instance] = hdr->counter;
+
+    if (hdr->time < ctx->perins_evtime[instance])
+        fprintf(stderr, "%s:%s out-of-order %llu < %lu\n", tp->sys, tp->name, hdr->time, ctx->perins_evtime[instance]);
+    else
+        ctx->perins_evtime[instance] = hdr->time;
 }
 
 
-static const char *event_lost_desc[] = PROFILER_DESC("event-lost",
+static const char *event_care_desc[] = PROFILER_DESC("event-care",
     "[OPTION...] -e EVENT",
-    "Determine if any events are lost.", "",
+    "Care if any events are lost or out-of-order.", "",
     "EXAMPLES",
-    "    "PROGRAME" event-lost -e sched:sched_wakeup -m 64");
-static const char *event_lost_argv[] = PROFILER_ARGV("event-lost",
+    "    "PROGRAME" event-care -e sched:sched_wakeup -m 64");
+static const char *event_care_argv[] = PROFILER_ARGV("event-care",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event");
-static profiler event_lost = {
-    .name = "event-lost",
-    .desc = event_lost_desc,
-    .argv = event_lost_argv,
+static profiler event_care = {
+    .name = "event-care",
+    .desc = event_care_desc,
+    .argv = event_care_argv,
     .pages = 2,
-    .init = event_lost_init,
-    .filter = event_lost_filter,
-    .deinit = event_lost_exit,
-    .sample = event_lost_sample,
+    .init = event_care_init,
+    .filter = event_care_filter,
+    .deinit = event_care_exit,
+    .sample = event_care_sample,
 };
-PROFILER_REGISTER(event_lost);
-
+PROFILER_REGISTER(event_care);
 
