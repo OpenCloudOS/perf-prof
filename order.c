@@ -199,15 +199,6 @@ void ordered_events(struct prof_dev *dev)
         dev->order.flush_in_time = true;
 }
 
-void prof_dev_null_ftrace_filter(struct prof_dev *dev)
-{
-    if (dev->prof->ftrace_filter == NULL)
-        return;
-
-    order_base(dev);
-    dev->prof->ftrace_filter = NULL;
-}
-
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
 {
     struct env *env = dev->env;

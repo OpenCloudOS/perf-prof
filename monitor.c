@@ -1824,7 +1824,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         perfeval_sample(dev, event, instance);
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n) {
             if (prof->sample) {
-                if (unlikely(prof->ftrace_filter &&
+                if (unlikely(dev->ftrace_filter &&
                              prof->ftrace_filter(dev, event, instance) <= 0))
                     goto __break;
 

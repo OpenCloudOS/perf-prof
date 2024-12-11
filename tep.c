@@ -1099,11 +1099,10 @@ int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list)
 
                 printf("%s:%s filters '%s' in userspace\n", tp->sys, tp->name, tp->filter);
                 fallback++;
+                if (dev)
+                    dev->ftrace_filter = 1;
             }
         }
-    }
-    if (dev && !fallback) {
-        prof_dev_null_ftrace_filter(dev);
     }
     return fallback;
 

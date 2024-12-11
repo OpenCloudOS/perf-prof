@@ -352,18 +352,12 @@ static int kmemleak_filter(struct prof_dev *dev)
 {
     struct kmemleak_ctx *ctx = dev->private;
     int err;
-    int fallback = 0;
 
-    if ((err = tp_list_apply_filter(NULL, ctx->tp_alloc)) < 0)
+    if ((err = tp_list_apply_filter(dev, ctx->tp_alloc)) < 0)
         return err;
-    fallback += err;
 
-    if ((err = tp_list_apply_filter(NULL, ctx->tp_free)) < 0)
+    if ((err = tp_list_apply_filter(dev, ctx->tp_free)) < 0)
         return err;
-    fallback += err;
-
-    if (!fallback)
-        prof_dev_null_ftrace_filter(dev);
 
     return 0;
 }

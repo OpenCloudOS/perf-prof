@@ -739,17 +739,11 @@ static int multi_trace_filter(struct prof_dev *dev)
 {
     struct multi_trace_ctx *ctx = dev->private;
     int i, err;
-    int fallback = 0;
 
     for (i = 0; i < ctx->nr_list; i++) {
-        if ((err = tp_list_apply_filter(NULL, ctx->tp_list[i])) < 0)
+        if ((err = tp_list_apply_filter(dev, ctx->tp_list[i])) < 0)
             return err;
-        fallback += err;
     }
-
-    if (!fallback)
-        prof_dev_null_ftrace_filter(dev);
-
     return 0;
 }
 

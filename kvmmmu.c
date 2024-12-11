@@ -705,12 +705,7 @@ static void kvm_mmu_interval(struct prof_dev *dev)
 static int kvm_mmu_filter(struct prof_dev *dev)
 {
     struct kvmmmu_ctx *ctx = dev->private;
-    if (ctx->tp_list)
-        return tp_list_apply_filter(dev, ctx->tp_list);
-    else {
-        prof_dev_null_ftrace_filter(dev);
-        return 0;
-    }
+    return tp_list_apply_filter(dev, ctx->tp_list);
 }
 
 static void kvm_mmu_deinit(struct prof_dev *dev)
