@@ -45,6 +45,18 @@ def test_multi_trace_workqueue(runtime, memleak_check):
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)
 
+def test_multi_trace_kprobe(runtime, memleak_check):
+    if not PerfProf.pmu_exists('kprobe'):
+        pytest.skip("'kprobe' does not exist")
+
+    # perf-prof multi-trace -e kprobe:try_to_wake_up -e kretprobe:try_to_wake_up -i 1000
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'kprobe:try_to_wake_up',
+                            '-e', 'kretprobe:try_to_wake_up',
+                            '-i', '1000'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
 def test_multi_trace_softirq_timer(runtime, memleak_check):
     # perf-prof multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000
     multi_trace = PerfProf(["multi-trace",

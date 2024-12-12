@@ -321,6 +321,10 @@ class PerfProf(object):
                     continue
         return fields
 
+    @staticmethod
+    def pmu_exists(pmu):
+        pmu_path = "/sys/bus/event_source/devices/" + pmu
+        return os.path.exists(pmu_path)
 
 class DeadLoop():
     def __init__(self, loop=lambda :True):
