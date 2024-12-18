@@ -88,7 +88,7 @@ u64 perf_mmap__read_head(struct perf_mmap *map)
 	return ring_buffer_read_head(map->base);
 }
 
-static bool perf_mmap__empty(struct perf_mmap *map)
+bool perf_mmap__empty(struct perf_mmap *map)
 {
 	struct perf_event_mmap_page *pc = map->base;
 
@@ -299,6 +299,17 @@ union perf_event *perf_mmap__read_event(struct perf_mmap *map, bool *writable)
 		map->prev = map->start;
 
 	return event;
+}
+
+// before perf_mmap__consume().
+void perf_mmap__unread_event(struct perf_mmap *map, union perf_event *event)
+{
+	if (!refcount_read(&map->refcnt) || !event)
+		return;
+
+	map->start -= event->header.size;
+	if (!map->overwrite)
+		map->prev = map->start;
 }
 
 #if defined(__i386__) || defined(__x86_64__)
