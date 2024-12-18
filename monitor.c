@@ -1053,10 +1053,8 @@ static void print_dev(struct prof_dev *dev, int indent)
         printf(" +%lu\n", dev->env->clock_offset);
     }
     if (using_order(dev)) {
-        dev_printf("order:\n");
-        dev_printf("    events: %u\n", dev->order.oe.nr_events);
-        dev_printf("    unordered: %u\n", dev->order.oe.nr_unordered_events);
-        dev_printf("    alloc_size: %lu\n", dev->order.oe.cur_alloc_size);
+        dev_printf("order: unordered %lu fixed %lu\n", dev->order.nr_unordered_events,
+                    dev->order.nr_fixed_events);
     }
     ptrace_print(dev, indent);
     if (dev->prof->print_dev)
@@ -1873,11 +1871,17 @@ static void perf_event_handle_mmap(struct prof_dev *dev, struct perf_mmap *map)
 {
     union perf_event *event;
     bool writable = false;
-    int idx = perf_mmap__idx(map);
+    int idx;
+
+    if (dev->order.enabled) {
+        order_process(dev, map);
+        return;
+    }
 
     if (perf_mmap__read_init(map) < 0)
         return;
 
+    idx = perf_mmap__idx(map);
     perf_event_convert_read_tsc_conversion(dev, map);
     while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
         /* process event */
@@ -1948,16 +1952,11 @@ static void interval_handle(struct timer *timer)
      *
      * Task-state events are forwarded to multi-trace and cached in order. If a thread of
      * multi_thread_app exits, task-state will close its prof_dev, but its events are still
-     * cached in the order of multi-trace, so prof_dev has not been freed until it is flushed.
+     * cached in the internal of multi-trace, so prof_dev has not been freed until it is flushed.
      *
      *     000000000041bdb6 prof_dev_free+0x0       # free prof_dev
      *     000000000043869b perf_event_put+0x2f
-     *     000000000043ce87 multi_trace_sample+0x295
-     *     0000000000436229 ordered_events__deliver+0x58
-     *     0000000000413606 do_flush+0x88
-     *     00000000004138a8 __ordered_events__flush+0x1a4
-     *     00000000004138fb ordered_events__flush+0x25
-     *     0000000000436386 order_flush+0x6a        # flush order of multi-trace
+     *     0000000000436386 multi_trace_flush+0x6a  # flush internal buffer of multi-trace
      *     000000000041bda8 prof_dev_flush+0x16e
      *     000000000041ba96 prof_dev_close+0x222    # -N 50, close & disable multi-trace
      *     000000000041a068 perf_event_process_record+0x45f # task-state forward to multi-trace
@@ -2029,6 +2028,7 @@ struct prof_dev *prof_dev_open_internal(profiler *prof, struct env *env,
     dev->state = parent && !clone && parent->state <= PROF_DEV_STATE_INACTIVE ?
                  PROF_DEV_STATE_OFF : PROF_DEV_STATE_INACTIVE;
     dev->print_title = true;
+    INIT_LIST_HEAD(&dev->order.heap_event_list);
     INIT_LIST_HEAD(&dev->links.child_list);
     INIT_LIST_HEAD(&dev->links.link_to_parent);
     INIT_LIST_HEAD(&dev->forward.source_list);
@@ -2051,11 +2051,6 @@ struct prof_dev *prof_dev_open_internal(profiler *prof, struct env *env,
         setlinebuf(stdin);
         setlinebuf(stdout);
         setlinebuf(stderr);
-    }
-
-    if (env->order || prof->order) {
-        order(dev);
-        prof = dev->prof;
     }
 
     dev->pages = prof->pages;
@@ -2163,21 +2158,24 @@ reinit:
             fprintf(stderr, "monitor(%s) mmap failed\n", prof->name);
             goto out_close;
         }
+        if (env->order || prof->order)
+            if (order_init(dev) < 0)
+                goto out_munmap;
     }
 
     if (dev->env->interval) {
         dev->max_read_size = perf_evlist__max_read_size(evlist);
         dev->values = zalloc(dev->max_read_size);
         if (!dev->values)
-            goto out_close;
+            goto out_order_deinit;
 
         if (perfeval_init(dev) < 0)
-            goto out_close;
+            goto out_del_timer;
 
         err = timer_init(&dev->timer, 1, interval_handle);
         if (err) {
             fprintf(stderr, "monitor(%s) timer init failed\n", prof->name);
-            goto out_close;
+            goto out_del_timer;
         }
     }
 
@@ -2189,7 +2187,7 @@ reinit:
         /*
          * In prof_dev_list_close(), make sure to close the parent device first. In this way,
          * the reference to the child can be flushed in prof_dev_disable(), if the child is
-         * forwarded to the parent, and the event is cached in the parent's order buffer.
+         * forwarded to the parent, and the event is cached in the parent's internal buffer.
          */
         if (!list_empty(&dev->links.child_list))
             list_add(&dev->dev_link, &prof_dev_list);
@@ -2208,17 +2206,22 @@ reinit:
 
 out_disable:
     list_del(&dev->dev_link);
-
-    if (dev->env->interval)
-        timer_destroy(&dev->timer);
-
-    if (dev->pages) {
+    if (dev->pages)
         perf_evlist_poll__foreach_fd(evlist, __delfn);
-        perf_evlist__munmap(evlist);
+
+out_del_timer:
+    if (dev->env->interval) {
+        timer_destroy(&dev->timer);
+        if (dev->values)
+            free(dev->values);
+        perfeval_free(dev);
     }
+out_order_deinit:
+    order_deinit(dev);
+out_munmap:
+    if (dev->pages)
+        perf_evlist__munmap(evlist);
 out_close:
-    if (dev->values)
-        free(dev->values);
     perf_evlist__close(evlist);
 out_deinit:
     // prof->init() may open child devices.
@@ -2309,10 +2312,7 @@ struct prof_dev *prof_dev_clone(struct prof_dev *parent,
     if (parent->state == PROF_DEV_STATE_EXIT)
         goto put;
 
-    if (parent->prof == &parent->order.order)
-        prof = parent->order.base;
-    else
-        prof = parent->prof;
+    prof = parent->prof;
 
     e = clone_env(parent->env); // free in prof_dev_close()
     if (!e) goto put;
@@ -2480,7 +2480,7 @@ int prof_dev_disable(struct prof_dev *dev)
 
     if (dev->pages) {
         // Flush the ringbuffer and submit the remaining perf events.
-        // Disabled, final flushes other buffers, such as: order.
+        // Disabled, final flushes other buffers, such as: multi-trace timeline.
         prof_dev_flush(dev, PROF_DEV_FLUSH_FINAL);
     }
 
@@ -2501,8 +2501,7 @@ int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
         if (dev->forward.event_dev) {
             dev->forward.target = target;
             list_add_tail(&dev->forward.link_to_target, &target->forward.source_list);
-            if (using_order(target))
-                ordered_events(dev);
+
             /*
              * Like this command:
              *   perf-prof multi-trace -e XX:YYY -e XX:ZZZ,task-state//untraced/ -p 1234 --order \
@@ -2550,7 +2549,7 @@ void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how)
             prof_dev_flush(source, how);
     }
 
-    // Flush prof_dev buffers, such as: order. At the same time, the reference
+    // Flush prof_dev buffers. At the same time, the reference
     // count of the forwarding source is released.
     if (dev->prof->flush)
         dev->prof->flush(dev, how);
@@ -2575,18 +2574,20 @@ static void prof_dev_free(struct prof_dev *dev)
         timer_destroy(&dev->time_ctx.base_timer);
 
     /*
-     * When order is enabled, Order::base profiler handles events and may call
-     * perf_evlist__id_to_evsel, which requires id_hash. But perf_evlist__munmap
-     * will reset id_hash.
-     * However, the order buffer has been flushed, see PROF_DEV_FLUSH_FINAL. Here
-     * deinit() is only used to release memory and no longer handle events.
+     * prof->deinit() may call perf_evlist__id_to_evsel(), which requires id_hash.
+     * Therefore, it is called before perf_evlist__munmap() resets the id_hash.
+     *
+     * However, the prof_dev internal buffer has been flushed, see PROF_DEV_FLUSH_FINAL.
+     * Here deinit() is only used to release memory and no longer handle events.
     **/
     prof->deinit(dev);
     dev->private = NULL;
     perf_event_convert_deinit(dev);
 
-    if (dev->pages)
+    if (dev->pages) {
+        order_deinit(dev);
         perf_evlist__munmap(evlist);
+    }
 
     perf_evlist__close(evlist);
 
@@ -2732,7 +2733,7 @@ void prof_dev_close(struct prof_dev *dev)
      *   prof_dev_put(dev) -> prof_dev_free(dev) -> deinit(dev) ->
      *   prof_dev_at_top(dev) ==> return true (parent = NULL)
      *
-     * When dev is closed, events are still cached in the target's order buffer. When
+     * When dev is closed, events are still cached in the target's internal buffer. When
      * the target is flushed, it will continue to call dev->sample, dev->deinit.
      */
 
@@ -2766,29 +2767,30 @@ void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
 
 static perfclock_t prof_dev_minevtime(struct prof_dev *dev)
 {
-    u64 /* evclock_t */ minevtime = ULLONG_MAX;
+    u64 minevtime = ULLONG_MAX;
 
     /*
-     * The minimum event time is taken from the ringbuffer, order buffer, and profiler.
+     * The minimum event time is taken from the ringbuffer, and profiler.
      */
 
     // profiler
-    if (dev->prof->minevtime)
+    if (dev->prof->minevtime) {
         minevtime = dev->prof->minevtime(dev);
 
-    // order buffer
-    if (using_order(dev))
-        minevtime = min(dev->order.oe.last_flush, minevtime); // maybe 0
+        // ULLONG_MAX and 0 are special values, not evclock_t, and cannot be converted to ns.
+        if (minevtime != ULLONG_MAX && minevtime != 0)
+            minevtime = evclock_to_perfclock(dev, (evclock_t)minevtime);
+    }
 
     // ringbuffer
-    // The minevtime of profiler and order must be smaller than that of ringbuffer.
+    // The minevtime of profiler must be smaller than that of ringbuffer.
     // Therefore, ringbuffer is judged only when minevtime == ULLONG_MAX.
     if (minevtime == ULLONG_MAX &&
+        dev->pos.time_pos >= 0 &&
         dev->pages && !dev->env->overwrite) {
-        struct perf_evlist *evlist = dev->evlist;
         struct perf_mmap *map;
 
-        perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
+        perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite) {
             union perf_event *event;
             bool writable = false;
             int idx = perf_mmap__idx(map);
@@ -2796,22 +2798,18 @@ static perfclock_t prof_dev_minevtime(struct prof_dev *dev)
             if (perf_mmap__read_init(map) < 0)
                 continue;
 
-            perf_event_convert_read_tsc_conversion(dev, map);
             while ((event = perf_mmap__read_event(map, &writable)) != NULL) {
-                /* process event */
-                perf_event_process_record(dev, event, idx, writable, false);
-                perf_mmap__consume(map);
                 if (event->header.type == PERF_RECORD_SAMPLE) {
-                    evclock_t last_evtime;
+                    perfclock_t rb_evtime = *(perfclock_t *)((void *)event->sample.array + dev->pos.time_pos);
 
-                    if (dev->forward.target) // last_evtime is stored on the target prof_dev.
-                        last_evtime = dev->forward.target->time_ctx.last_evtime;
-                    else
-                        last_evtime = dev->time_ctx.last_evtime;
+                    if (rb_evtime < minevtime)
+                        minevtime = rb_evtime;
 
-                    if (last_evtime.clock < minevtime)
-                        minevtime = last_evtime.clock;
+                    perf_mmap__unread_event(map, event);
                     break;
+                } else {
+                    perf_event_process_record(dev, event, idx, writable, false);
+                    perf_mmap__consume(map);
                 }
             }
             if (!event)
@@ -2819,11 +2817,7 @@ static perfclock_t prof_dev_minevtime(struct prof_dev *dev)
         }
     }
 
-    // ULLONG_MAX and 0 are special values, not tsc, and cannot be converted to ns.
-    if (minevtime == ULLONG_MAX || minevtime == 0)
-        return minevtime;
-    else
-        return evclock_to_perfclock(dev, (evclock_t)minevtime);
+    return minevtime;
 }
 
 perfclock_t prof_dev_list_minevtime(void)

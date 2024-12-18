@@ -20,6 +20,7 @@
 #include <linux/zalloc.h>
 #include <linux/time64.h>
 #include <linux/refcount.h>
+#include <linux/min_heap.h>
 #include <linux/ordered-events.h>
 
 /* perf sample has 16 bits size limit */
@@ -283,7 +284,6 @@ enum prof_dev_type {
 enum profdev_flush {
     PROF_DEV_FLUSH_NORMAL,
     PROF_DEV_FLUSH_FINAL,
-    PROF_DEV_FLUSH_ROUND,
 };
 
 enum perfclock_convert_to {
@@ -369,17 +369,16 @@ struct prof_dev {
         char *event_copy; //[PERF_SAMPLE_MAX_SIZE];
     } convert;
     struct order_ctx {
-        profiler *base;
-        profiler order;
-        struct ordered_events oe;
-        bool flush_in_time;
-        u32 nr_unordered_events;
-        u64 max_timestamp;
-        struct lost_record {
-            struct perf_record_lost lost;
-            int ins;
-            u64 lost_start_time;
-        } *lost_records;
+        DEFINE_MIN_HEAP(void *, heapsort) heapsort;
+        struct list_head heap_event_list; // link all heap_event
+        int heap_size, nr_mmaps;
+        void **data; // used in heapsort;
+        void *permap_event; // struct perf_mmap_event
+        u64 heap_popped_time;
+        bool enabled;
+        // stat
+        u64 nr_unordered_events;
+        u64 nr_fixed_events; // Fixed out-of-order events.
     } order;
     struct tty_ctx {
         bool istty;
@@ -559,10 +558,14 @@ perfclock_t prof_dev_list_minevtime(void);
     "PROFILER OPTION:" \
 
 // order.c
-void order(struct prof_dev *dev);
-bool using_order(struct prof_dev *dev);
-void ordered_events(struct prof_dev *dev);
+int order_init(struct prof_dev *dev);
+void order_deinit(struct prof_dev *dev);
+void order_process(struct prof_dev *dev, struct perf_mmap *target_map);
+static inline bool using_order(struct prof_dev *dev) {
+    return dev->order.enabled;
+}
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
+
 
 //help.c
 void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool interval, bool order, bool pages, bool verbose);

@@ -3,146 +3,44 @@
 #include <string.h>
 #include <linux/kernel.h>
 #include <monitor.h>
-#include <linux/ordered-events.h>
+#include <internal/mmap.h>
 
-static int ordered_events__deliver(struct ordered_events *oe,
-					 struct ordered_event *event)
-{
-    struct prof_dev *dev = container_of(oe, struct prof_dev, order.oe);
-    profiler *base = dev->order.base;
 
-    base->sample(dev, event->event, event->instance);
+// heap sort element
+struct heap_event {
+    struct list_head link;
+    struct prof_dev *dev;
+    union perf_event *event;
+    u64 time;
+    int ins;
+    bool writable;
+};
 
-    // The base profiler is responsible for releasing the dup event.
-    if (dev->dup)
-        event->event = NULL;
-    else
-        perf_event_put(event->event);
-
-    return 0;
-}
-
-static void print_nr_unordered_events(struct prof_dev *dev, bool sample)
-{
-    unsigned int nr_events = dev->order.oe.nr_events;
-    u32 nr_unordered_events = dev->order.oe.nr_unordered_events;
-    u64 max_timestamp = dev->order.oe.max_timestamp;
-
-    if (nr_events > 0 && nr_unordered_events != dev->order.nr_unordered_events &&
-        (!sample || max_timestamp != dev->order.max_timestamp)) {
-        dev->order.nr_unordered_events = nr_unordered_events;
-        dev->order.max_timestamp = max_timestamp;
-        print_time(stderr);
-        fprintf(stderr, "%s: Out of order %u, use a larger --order-mem parameter.\n",
-                dev->prof->name, nr_unordered_events);
-    }
-}
-
-static void order_flush(struct prof_dev *dev, enum profdev_flush how)
-{
-    profiler *base = dev->order.base;
-    enum oe_flush oe_how;
-
-    switch (how) {
-        default:
-        case PROF_DEV_FLUSH_NORMAL:
-            return;
-        case PROF_DEV_FLUSH_FINAL:
-            oe_how = OE_FLUSH__FINAL;
-            break;
-        case PROF_DEV_FLUSH_ROUND:
-            oe_how = OE_FLUSH__ROUND;
-            break;
-    }
-
-    print_nr_unordered_events(dev, false);
-    ordered_events__flush(&dev->order.oe, oe_how);
-
-    if (how == PROF_DEV_FLUSH_FINAL) {
-        ordered_events__reinit(&dev->order.oe);
-        ordered_events__set_copy_on_queue(&dev->order.oe, true);
-        if (dev->env->order_mem)
-            ordered_events__set_alloc_size(&dev->order.oe, dev->env->order_mem);
-    }
-
-    if (base->flush)
-        base->flush(dev, how);
-}
-
-static void order_deinit(struct prof_dev *dev)
-{
-    profiler *base = dev->order.base;
-    base->deinit(dev);
-    ordered_events__free(&dev->order.oe);
-    if (base->lost)
-        free(dev->order.lost_records);
-}
-
-static void order_interval(struct prof_dev *dev)
-{
-    profiler *base = dev->order.base;
-    print_nr_unordered_events(dev, false);
-    ordered_events__flush(&dev->order.oe, OE_FLUSH__ROUND);
-    if (base->interval)
-        base->interval(dev);
-}
-
-static void order_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
-{
-    profiler *base = dev->order.base;
-    if (base->lost) {
-        dev->order.lost_records[ins].lost = event->lost;
-        dev->order.lost_records[ins].ins = ins;
-    }
-}
-
-static void order_sample(struct prof_dev *dev, union perf_event *event, int instance)
-{
-    profiler *base = dev->order.base;
-    void *data = (void *)event->sample.array;
-    u64 time = *(u64 *)(data + dev->pos.time_pos);
-
-    if (base->lost) {
-        struct lost_record *lost_rec = &dev->order.lost_records[instance];
-        if (unlikely(lost_rec->lost.lost)) {
-            base->lost(dev, (union perf_event *)&lost_rec->lost, instance,
-                            lost_rec->lost_start_time, time);
-            lost_rec->lost.lost = 0;
-        }
-        lost_rec->lost_start_time = time;
-    }
-    ordered_events__queue(&dev->order.oe, perf_event_get(event), time, instance);
-
-    if (dev->order.flush_in_time)
-        ordered_events__flush_time(&dev->order.oe, time);
-
+struct perf_mmap_event {
+    struct heap_event base;
+    struct perf_mmap *map;
     /*
-     * Use this command:
-     *   perf-prof multi-trace -e XX:YYY -e XX:ZZZ,task-state//untraced/ -p 1234 --order \
-     *             --than 10ms --detail=sametid
-     *
-     * multi-trace uses task-state as an event source, and the events it generates will be
-     * forwarded to mult-trace. And task-state will enable order by default, its
-     * order.flush_in_time = true.
-     *
-     * The task-state events of pid 1234 will be cached inside multi-trace. When printing
-     * events that exceed 10ms from XX:YYY -> XX:ZZZ, the task-state events within these
-     * 10ms are in order. The order_sample() of task-state will be flushed in time.
-     *
-     * The task-state events of the next 10ms and the previous 10ms may not be ordered.
-     * Here, an "Out of order" warning will be printed.
+     * A monotonically increasing timestamp for
+     * each perf_map event.
      */
-    print_nr_unordered_events(dev, true);
+    u64 event_mono_time;
+};
+
+static bool less_than(const void *lhs, const void *rhs, void __maybe_unused *args)
+{
+    struct heap_event *a = *(struct heap_event **)lhs;
+    struct heap_event *b = *(struct heap_event **)rhs;
+    return a->time < b->time;
 }
 
-static int order_init(struct prof_dev *dev)
+int order_init(struct prof_dev *dev)
 {
-    profiler *base = dev->order.base;
-    profiler *order = &dev->order.order;
-    int err;
+    struct perf_mmap *map;
+    int nr_mmaps = 0, heap_size = 0;
+    struct perf_mmap_event *mmap_event;
 
-    err = base->init(dev);
-    if (err) return err;
+    if (dev->order.enabled)
+        return 0;
 
     if (perf_sample_time_init(dev) < 0)
         return -1;
@@ -151,53 +49,237 @@ static int order_init(struct prof_dev *dev)
         return -1;
     }
 
-    *order = *base;
-    order->init = order_init;
-    order->deinit = order_deinit;
-    order->flush = order_flush;
-    order->sample = order_sample;
-    if (base->lost)
-        order->lost = order_lost;
-    order->interval = order_interval;
+    perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite)
+        nr_mmaps++;
+    heap_size += nr_mmaps;
 
-    if (base->lost) {
-        dev->order.lost_records = calloc(prof_dev_nr_ins(dev), sizeof(*dev->order.lost_records));
-        if (!dev->order.lost_records)
-            return -1;
+    dev->order.heap_size = heap_size;
+    dev->order.data = calloc(heap_size, sizeof(*dev->order.data));
+    if (!dev->order.data)
+        return -1;
+    min_heap_init(&dev->order.heapsort, dev->order.data, heap_size);
+
+    dev->order.nr_mmaps = nr_mmaps;
+    dev->order.permap_event = calloc(nr_mmaps, sizeof(struct perf_mmap_event));
+    dev->order.heap_popped_time = 0;
+
+    if (!dev->order.permap_event)
+        goto failed;
+
+    perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite) {
+        int idx = perf_mmap__idx(map);
+
+        mmap_event = (struct perf_mmap_event *)dev->order.permap_event + idx;
+        mmap_event->base.dev = dev;
+        mmap_event->base.ins = idx;
+        mmap_event->map = map;
+
+        list_add(&mmap_event->base.link, &dev->order.heap_event_list);
     }
 
-    ordered_events__init(&dev->order.oe, ordered_events__deliver, NULL);
-    ordered_events__set_copy_on_queue(&dev->order.oe, true);
-    if (dev->env->order_mem)
-        ordered_events__set_alloc_size(&dev->order.oe, dev->env->order_mem);
+    dev->order.enabled = 1;
     return 0;
+
+failed:
+    order_deinit(dev);
+    return -1;
 }
 
-static inline void order_base(struct prof_dev *dev)
+void order_deinit(struct prof_dev *dev)
 {
-    if (dev->prof != &dev->order.order) {
-        dev->order.base = dev->prof;
-        dev->order.order = *dev->prof;
-        dev->prof = &dev->order.order;
+    struct heap_event *heap_event, *tmp;
+    struct perf_mmap_event *mmap_event;
+    int i;
+
+    for (i = 0; i < dev->order.nr_mmaps; i++) {
+        mmap_event = (struct perf_mmap_event *)dev->order.permap_event + i;
+        list_del(&mmap_event->base.link);
+    }
+    list_for_each_entry_safe(heap_event, tmp, &dev->order.heap_event_list, link)
+        list_del(&heap_event->link);
+
+    if (dev->order.data)
+        free(dev->order.data);
+    if (dev->order.permap_event)
+        free(dev->order.permap_event);
+}
+
+static int perf_mmap_event_init(struct heap_event *heap_event)
+{
+    struct perf_mmap_event *mmap_event = (struct perf_mmap_event *)heap_event;
+    struct prof_dev *dev = heap_event->dev;
+    struct perf_mmap *map = mmap_event->map;
+    int ins = heap_event->ins;
+    union perf_event *event;
+    bool writable;
+
+    if (perf_mmap__read_init(map) < 0)
+        return -1;
+
+retry:
+    event = perf_mmap__read_event(map, &writable);
+    if (event) {
+        /* Only the PERF_RECORD_SAMPLE event can sample time. */
+        if (event->header.type != PERF_RECORD_SAMPLE) {
+            perf_event_process_record(dev, event, ins, writable, false);
+            perf_mmap__consume(map);
+            goto retry;
+        }
+
+        heap_event->event = event;
+        heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
+        heap_event->writable = writable;
+
+        return 0;
+    } else
+        perf_mmap__read_done(map);
+
+    return -1;
+}
+
+void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
+{
+    struct perf_mmap *map;
+    union perf_event *event;
+    u64 time;
+    int ins;
+    bool writable;
+    u64 target_end;
+
+    // heap sort
+    struct perf_mmap_event *mmap_event;
+    struct heap_event *heap_event;
+    DEFINE_MIN_HEAP(struct heap_event *, ) *heap;
+    struct min_heap_callbacks funcs = {
+        .less = less_than,
+        .swp = NULL,
+    };
+
+    if (perf_mmap__read_init(target_map) < 0)
+        return;
+    if (perf_mmap__empty(target_map))
+        return;
+
+    /*
+     * Get the latest event of ringbuffer(perf_mmap). According to the causal
+     * relationship, when I see the latest event, events that occurred before
+     * the latest on other ringbuffers must have been written.
+     *
+     * Therefore, if any ringbuffer is empty, there is no need to pay attention
+     * to it until the latest event of `target_map' is processed. `target_map->
+     * end' points to the end of the latest event.
+     */
+    target_end = target_map->end;
+
+    heap = (void *)&dev->order.heapsort;
+    heap->nr = 0;
+
+    list_for_each_entry(heap_event, &dev->order.heap_event_list, link) {
+        if (perf_mmap_event_init(heap_event) == 0) {
+            heap->data[heap->nr++] = heap_event;
+        }
+    }
+
+    // heap sort start
+    min_heapify_all(heap, &funcs, NULL);
+    while (1) {
+        struct heap_event **data = min_heap_peek(heap);
+        bool need_break = 0;
+        union perf_event *tmp = NULL;
+
+        if (!data)
+            break;
+
+        heap_event = data[0];
+        mmap_event = (struct perf_mmap_event *)heap_event;
+
+        dev = heap_event->dev;
+        map = mmap_event->map;
+        event = heap_event->event;
+        time = heap_event->time;
+        ins = heap_event->ins;
+        writable = heap_event->writable;
+
+
+        /* Keep order in perf_mmap. Why do this?
+         *
+         *       sh  99330 .... [036] 341318.491172: sched:sched_process_free
+         *    ffffffff81086437 delayed_put_task_struct+0x87 ([kernel.kallsyms])
+         *    ...
+         *    ffffffff81089a45 irq_exit+0xd5 ([kernel.kallsyms])
+         *    ffffffff81c024f3 smp_apic_timer_interrupt+0x83 ([kernel.kallsyms])
+         *    ffffffff81c01a7f apic_timer_interrupt+0xf ([kernel.kallsyms])
+         *    ffffffff811cfe6b __perf_event_header__init_id+0x9b ([kernel.kallsyms])
+         *    ffffffff811dd5d7 perf_prepare_sample+0x67 ([kernel.kallsyms])
+         *    ffffffff811ddaaf perf_event_output_forward+0x2f ([kernel.kallsyms])
+         *    ffffffff811d1f77 __perf_event_overflow+0x57 ([kernel.kallsyms])
+         *    ffffffff811d2053 perf_swevent_overflow+0x43 ([kernel.kallsyms])
+         *    ffffffff811d212d perf_swevent_event+0x5d ([kernel.kallsyms])
+         *    ffffffff811d2492 perf_tp_event+0xe2 ([kernel.kallsyms])
+         *    ...
+         *
+         * After the time is obtained in __perf_event_header__init_id(), but before
+         * it is output, an interrupt occurs, and the events later in time are output
+         * first.
+         */
+        if (unlikely(time < mmap_event->event_mono_time)) {
+            if (dev->env->verbose)
+                printf("%s: fix out-of-order event %lu < %lu\n", dev->prof->name,
+                                                time, mmap_event->event_mono_time);
+            tmp = memdup(event, event->header.size);
+            time = mmap_event->event_mono_time;
+            *(u64 *)((void *)tmp->sample.array + dev->pos.time_pos) = time;
+            writable = 1;
+            dev->order.nr_fixed_events++;
+        } else
+            mmap_event->event_mono_time = time;
+
+        if (unlikely(time < dev->order.heap_popped_time)) {
+            dev->order.nr_unordered_events++;
+            fprintf(stderr, "%s: out-of-order event %lu %lu %d\n", dev->prof->name, time, dev->order.heap_popped_time, dev->pos.time_pos);
+        } else
+            dev->order.heap_popped_time = time;
+
+
+    process:
+        perf_event_process_record(dev, tmp ?: event, ins, writable, false);
+        perf_mmap__consume(map);
+
+        if (tmp) {
+            free(tmp);
+            tmp = NULL;
+        }
+
+        if (map == target_map && map->start == target_end)
+            need_break = 1;
+
+        event = perf_mmap__read_event(map, &writable);
+        if (event) {
+            if (event->header.type != PERF_RECORD_SAMPLE) {
+                goto process;
+            }
+
+            heap_event->event = event;
+            heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
+            heap_event->writable = writable;
+            min_heap_sift_down(heap, 0, &funcs, NULL);
+        } else {
+            perf_mmap__read_done(map);
+            min_heap_pop(heap, &funcs, NULL);
+        }
+
+        if (need_break)
+            break;
+    }
+
+
+    while (heap->nr) {
+        heap_event = heap->data[--heap->nr];
+        mmap_event = (struct perf_mmap_event *)heap_event;
+        perf_mmap__unread_event(mmap_event->map, heap_event->event);
     }
 }
 
-void order(struct prof_dev *dev)
-{
-    order_base(dev);
-    dev->prof->init = order_init;
-}
-
-bool using_order(struct prof_dev *dev)
-{
-    return dev->prof->init == order_init;
-}
-
-void ordered_events(struct prof_dev *dev)
-{
-    if (using_order(dev))
-        dev->order.flush_in_time = true;
-}
 
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
 {
