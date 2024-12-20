@@ -50,11 +50,6 @@ struct timeline_stat {
     u64 pending_bytes;
 };
 
-struct __dup_stat {
-    u64 nr_samples;
-    u64 nr_free;
-};
-
 struct __backup_stat {
     u64 new;
     u64 delete;
@@ -111,7 +106,6 @@ struct multi_trace_ctx {
 
     /* stat */
     struct timeline_stat tl_stat;
-    struct __dup_stat dup_stat;
     struct __backup_stat backup_stat;
 };
 
@@ -158,7 +152,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
     } else {
         const struct timeline_node *e = new_entry;
         union perf_event *event = e->event;
-        union perf_event *new_event = ctx->dev->dup ? event : memdup(event, event->header.size);
+        union perf_event *new_event = memdup(event, event->header.size);
         struct timeline_node *b = malloc(sizeof(*b));
         if (b && new_event) {
             b->time = e->time;
@@ -172,7 +166,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             b->maybe_unpaired = 0;
             b->ins = e->ins;
             b->seq = e->seq;
-            b->event = ctx->dev->dup ? new_event : perf_event_get(new_event);
+            b->event = perf_event_get(new_event);
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
             INIT_LIST_HEAD(&b->needed);
@@ -241,7 +235,7 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
     struct multi_trace_ctx *ctx = container_of(rlist, struct multi_trace_ctx, timeline);
     const struct timeline_node *e = new_entry;
     union perf_event *event = e->event;
-    union perf_event *new_event = ctx->dev->dup ? event : memdup(event, event->header.size);
+    union perf_event *new_event = memdup(event, event->header.size);
     struct timeline_node *b = malloc(sizeof(*b));
     if (b && new_event) {
         b->time = e->time;
@@ -255,7 +249,7 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         b->maybe_unpaired = 0;
         b->ins = e->ins;
         b->seq = e->seq;
-        b->event = ctx->dev->dup ? new_event : perf_event_get(new_event);
+        b->event = perf_event_get(new_event);
         RB_CLEAR_NODE(&b->timeline_node);
         RB_CLEAR_NODE(&b->key_node);
         INIT_LIST_HEAD(&b->pending);
@@ -638,10 +632,6 @@ static int __multi_trace_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
-    if (using_order(dev)) {
-        dev->dup = true;
-    }
-
     reduce_wakeup_times(dev, &attr);
 
     for (i = 0; i < ctx->nr_list; i++) {
@@ -915,13 +905,6 @@ static void multi_trace_sigusr(struct prof_dev *dev, int signum)
     if (ctx->need_timeline)
         timeline_stat(ctx);
     else {
-        if (dev->dup)
-            printf("DUP STAT:\n"
-                   "  nr_samples = %lu\n"
-                   "  nr_free = %lu\n"
-                   "  nr_unfree = %lu\n",
-                   ctx->dup_stat.nr_samples, ctx->dup_stat.nr_free + ctx->backup_stat.delete,
-                   ctx->dup_stat.nr_samples - ctx->dup_stat.nr_free - ctx->backup_stat.delete);
         printf("BACKUP:\n"
                "  new = %lu\n"
                "  delete = %lu\n"
@@ -1608,9 +1591,6 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
     bool need_find_prev, need_backup, need_remove_from_backup;
     u64 key;
 
-    if (dev->dup)
-        ctx->dup_stat.nr_samples ++;
-
     if (hdr->time > ctx->recent_time)
         ctx->recent_time = hdr->time;
 
@@ -1621,7 +1601,7 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
         evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
     }
     if (!evsel)
-        goto free_dup_event;
+        goto not_found;
 
     for (i = 0; i < ctx->nr_list; i++) {
         tp1 = NULL;
@@ -1637,12 +1617,7 @@ static void multi_trace_sample(struct prof_dev *dev, union perf_event *event, in
         ctx->extra_sample(dev, event, instance);
     }
 
-free_dup_event:
-    if (dev->dup) {
-        perf_event_put(event);
-        free(event);
-        ctx->dup_stat.nr_free ++;
-    }
+not_found:
     return;
 
 found:
@@ -1723,12 +1698,12 @@ found:
 
         if (rblist__empty(&ctx->timeline) && current.unneeded &&
             env->before_event1 == 0 && env->after_event2 == 0)
-            goto free_dup_event;
+            goto not_found;
         else {
             int ret = rblist__add_node(&ctx->timeline, &current);
             if (ret != 0) {
                 multi_trace_print_title(event, tp, ret == -EEXIST ? "ADD:-EEXIST" : "ADD:-ENOMEM");
-                goto free_dup_event;
+                goto not_found;
             }
         }
 
@@ -1758,14 +1733,14 @@ found:
         bool dummy = false;
 
         if (tp->untraced)
-            goto free_dup_event;
+            goto not_found;
 
         multi_trace_event_lost(dev, &current);
 
         // Only handles !untraced events.
         multi_trace_tryto_call_two(dev, &current, &dummy);
         if (multi_trace_tryto_backup(dev, &current, &dummy) < 0)
-            goto free_dup_event;
+            goto not_found;
     }
 }
 
