@@ -20,8 +20,8 @@
 static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
 static int global_comm = 0;
-static int kprobe_type = 0;
-static int uprobe_type = 0;
+int kprobe_type = 0;
+int uprobe_type = 0;
 static char *kprobe_retprobe = NULL;
 static char *uprobe_retprobe = NULL;
 
@@ -251,6 +251,11 @@ int tep__event_size(int id)
     struct tep_event *event;
     struct tep_format_field **fields;
     int size = -1;
+
+    if (id == KPROBE || id == UPROBE)
+        return sizeof(struct kprobe_trace_entry_head);
+    else if (id == KRETPROBE || id == URETPROBE)
+        return sizeof(struct kretprobe_trace_entry_head);
 
     tep__ref();
     event = tep_find_event(tep, id);

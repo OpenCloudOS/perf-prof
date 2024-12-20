@@ -107,6 +107,13 @@ static int perf_sample_max_size(struct perf_evsel *evsel)
         int raw_size = -1;
         if (type == PERF_TYPE_TRACEPOINT)
             raw_size = tep__event_size(attr->config);
+        else if (type == kprobe_type || type == uprobe_type) {
+            if (type == kprobe_type)
+                type = (attr->config & 1/*PERF_PROBE_CONFIG_IS_RETPROBE*/) ? KRETPROBE : KPROBE;
+            if (type == uprobe_type)
+                type = (attr->config & 1/*PERF_PROBE_CONFIG_IS_RETPROBE*/) ? URETPROBE : UPROBE;
+            raw_size = tep__event_size(type);
+        }
         if (raw_size < 0) {
             fprintf(stderr, "%s: Unknown raw_size(type %d)\n", __FUNCTION__, type);
             size += sizeof(u64);

@@ -160,6 +160,8 @@ enum {
     UPROBE,
     URETPROBE,
 };
+extern int kprobe_type;
+extern int uprobe_type;
 
 
 static inline bool tp_is_dev(struct tp *tp)
