@@ -379,6 +379,7 @@ struct prof_dev {
         u64 heap_popped_time; // perfclock_t
         int heap_popped_ins;
         bool enabled;
+        bool inprocess;
         // stat
         u64 nr_unordered_events;
         u64 nr_fixed_events; // Fixed out-of-order events.

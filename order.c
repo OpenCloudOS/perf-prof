@@ -160,6 +160,7 @@ static u64 perf_sample_watermark(struct prof_dev *dev)
 
 int order_init(struct prof_dev *dev)
 {
+    struct prof_dev *source, *tmp;
     struct perf_mmap *map;
     int nr_mmaps = 0, heap_size = 0;
     struct perf_mmap_event *mmap_event;
@@ -172,6 +173,11 @@ int order_init(struct prof_dev *dev)
     if (!(dev->pos.sample_type & PERF_SAMPLE_TIME)) {
         fprintf(stderr, "--order cannot be enabled\n");
         return -1;
+    }
+
+    for_each_source_dev_get(source, tmp, dev) {
+        order_init(source);
+        heap_size += source->order.nr_mmaps;
     }
 
     perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite)
@@ -202,6 +208,9 @@ int order_init(struct prof_dev *dev)
 
         list_add(&mmap_event->base.link, &dev->order.heap_event_list);
     }
+    for_each_source_dev_get(source, tmp, dev) {
+        list_splice_tail_init(&source->order.heap_event_list, &dev->order.heap_event_list);
+    }
 
     dev->order.enabled = 1;
     return 0;
@@ -222,7 +231,7 @@ void order_deinit(struct prof_dev *dev)
         list_del(&mmap_event->base.link);
     }
     list_for_each_entry_safe(heap_event, tmp, &dev->order.heap_event_list, link)
-        list_del(&heap_event->link);
+        list_del_init(&heap_event->link);
 
     if (dev->order.data)
         free(dev->order.data);
@@ -282,11 +291,15 @@ retry:
         heap_event->event = event;
         heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
         heap_event->writable = writable;
+        prof_dev_get(dev);
 
         if (lost.lost) {
-            if (mmap_event->event_mono_time/*lost_start*/ < dev->order.heap_popped_time)
+            struct prof_dev *target = dev->forward.target;
+            struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+
+            if (mmap_event->event_mono_time/*lost_start*/ < main_dev->order.heap_popped_time)
                 fprintf(stderr, "BUG: unsafe lost event %lu < popped %lu\n",
-                                 mmap_event->event_mono_time, dev->order.heap_popped_time);
+                                 mmap_event->event_mono_time, main_dev->order.heap_popped_time);
 
             dev->prof->lost(dev, (union perf_event *)&lost, ins,
                             mmap_event->event_mono_time, heap_event->time);
@@ -300,6 +313,12 @@ retry:
 
 void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 {
+    /*
+     * All ringbuffers of the forwarding source and the forwarding target are
+     * heap-sorted together.
+     */
+    struct prof_dev *target = dev->forward.target;
+    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
     struct perf_mmap *map;
     union perf_event *event;
     u64 time;
@@ -317,11 +336,15 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         .swp = NULL,
     };
 
+
+    if (main_dev->order.inprocess)
+        return;
     if (perf_mmap__read_init(target_map) < 0)
         return;
     if (perf_mmap__empty(target_map))
         return;
 
+    main_dev->order.inprocess = 1;
     /*
      * Get the latest event of ringbuffer(perf_mmap). According to the causal
      * relationship, when I see the latest event, events that occurred before
@@ -333,12 +356,13 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
      */
     target_end = target_map->end;
 
-    heap = (void *)&dev->order.heapsort;
+    heap = (void *)&main_dev->order.heapsort;
     heap->nr = 0;
 
-    list_for_each_entry(heap_event, &dev->order.heap_event_list, link) {
+    list_for_each_entry(heap_event, &main_dev->order.heap_event_list, link) {
         if (perf_mmap_event_init(heap_event) == 0) {
-            heap->data[heap->nr++] = heap_event;
+            if (heap->nr < heap->size)
+                heap->data[heap->nr++] = heap_event;
         }
     }
 
@@ -447,7 +471,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
          * first.
          */
         if (unlikely(time < mmap_event->event_mono_time)) {
-            if (dev->env->verbose)
+            if (main_dev->env->verbose)
                 printf("%s: fix out-of-order event %lu < %lu\n", dev->prof->name,
                                                 time, mmap_event->event_mono_time);
             tmp = memdup(event, event->header.size);
@@ -458,13 +482,16 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         } else
             mmap_event->event_mono_time = time;
 
-        if (unlikely(time < dev->order.heap_popped_time)) {
+        // out of order
+        if (dev != main_dev) dev->order.heap_popped_time = time;
+        if (unlikely(time < main_dev->order.heap_popped_time)) {
             dev->order.nr_unordered_events++;
-            fprintf(stderr, "%s: out-of-order event %lu(%d) %lu(%d)\n", dev->prof->name, time, ins,
-                                dev->order.heap_popped_time, dev->order.heap_popped_ins);
+            fprintf(stderr, "%s: out-of-order event %lu(%d) < %s %lu(%d)\n", dev->prof->name,
+                            time, ins, main_dev->prof->name, main_dev->order.heap_popped_time,
+                            main_dev->order.heap_popped_ins);
         } else {
-            dev->order.heap_popped_time = time;
-            dev->order.heap_popped_ins = ins;
+            main_dev->order.heap_popped_time = time;
+            main_dev->order.heap_popped_ins = ins;
         }
 
 
@@ -503,10 +530,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
             min_heap_sift_down(heap, 0, &funcs, NULL);
 
             if (lost.lost) {
-                if (mmap_event->event_mono_time/*lost_start*/ < dev->order.prev_lost_time)
+                if (mmap_event->event_mono_time/*lost_start*/ < main_dev->order.prev_lost_time)
                     fprintf(stderr, "BUG: unorder lost event\n");
                 else
-                    dev->order.prev_lost_time = mmap_event->event_mono_time;
+                    main_dev->order.prev_lost_time = mmap_event->event_mono_time;
 
                 dev->prof->lost(dev, (union perf_event *)&lost, ins,
                                         mmap_event->event_mono_time, heap_event->time);
@@ -514,6 +541,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         } else {
             perf_mmap__read_done(map);
             min_heap_pop(heap, &funcs, NULL);
+            prof_dev_put(dev);
         }
 
         if (need_break)
@@ -526,7 +554,9 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         mmap_event = (struct perf_mmap_event *)heap_event;
         perf_mmap__unread_event(mmap_event->map, heap_event->event);
         perf_mmap__consume(mmap_event->map);
+        prof_dev_put(heap_event->dev);
     }
+    main_dev->order.inprocess = 0;
 }
 
 
