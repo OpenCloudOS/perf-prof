@@ -609,17 +609,8 @@ void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
         attr->wakeup_events = wakeup_events ? : 1;
     } else {
         if (wakeup_watermark == 0) {
-            u32 order_watermark = UINT_MAX;
             u32 pages_watermark = (dev->pages << 12);
-
-            /*
-             * When order-mem is enabled and perf-prof is woken up, all perf_events must be
-             * read, so order-mem needs enough space to store perf_events.
-             */
-            if (using_order(dev) && env->order_mem)
-                order_watermark = (u32)(env->order_mem / prof_dev_nr_ins(dev));
-
-            wakeup_watermark = min(pages_watermark, order_watermark) * watermark / 100;
+            wakeup_watermark = pages_watermark * watermark / 100;
         }
         attr->watermark = 1;
         attr->wakeup_watermark = wakeup_watermark;

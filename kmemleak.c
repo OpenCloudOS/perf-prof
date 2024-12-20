@@ -874,9 +874,9 @@ static const char *kmemleak_desc[] = PROFILER_DESC("kmemleak",
     "    --alloc specify memory allocation events. --free specify memory free events.",
     "    'alloc' and 'free' events are associated via 'ptr' ATTR.", "",
     "EXAMPLES",
-    "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ --free kmem:kfree//ptr=ptr/ --order --order-mem 64M -m 128 -g",
+    "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ --free kmem:kfree//ptr=ptr/ --order -m 128 -g",
     "    "PROGRAME" kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/,kmem:kmalloc_node//ptr=ptr/size=bytes_alloc/stack/ \\",
-    "                       --free kmem:kfree//ptr=ptr/ --order --order-mem 64M -m 128 -g");
+    "                       --free kmem:kfree//ptr=ptr/ --order -m 128 -g");
 static const char *kmemleak_argv[] = PROFILER_ARGV("kmemleak",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "alloc", "free", "call-graph", "flame-graph");

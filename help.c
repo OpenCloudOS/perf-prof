@@ -18,12 +18,8 @@ void common_help(struct help_ctx *ctx, bool enabled, bool cpus, bool pids, bool 
         printf("-p %s ", env->pids);
     if (interval && env->interval)
         printf("-i %d ", env->interval);
-    if (order && env->order) {
-        if (env->order_mem)
-            printf("--order --order-mem %lu ", env->order_mem);
-        else
-            printf("--order [--order-mem .] ");
-    }
+    if (order && env->order)
+        printf("--order");
     if (pages && env->mmap_pages)
         printf("-m %d ", env->mmap_pages);
     if (verbose && env->verbose)
@@ -38,7 +34,7 @@ can_be_enabled:
     if (interval && !env->interval)
         printf("[-i .] ");
     if (order && !env->order)
-        printf("[--order] [--order-mem .] ");
+        printf("[--order] ");
     if (pages && !env->mmap_pages)
         printf("[-m .] ");
     if (verbose && !env->verbose)

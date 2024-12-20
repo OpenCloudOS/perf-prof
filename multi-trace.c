@@ -1840,9 +1840,9 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
     __help_events(hctx, impl, &has_key);
 
     if (env->key)
-        printf("-k %s --order --order-mem . ", env->key);
+        printf("-k %s --order ", env->key);
     else if (has_key)
-        printf("--order --order-mem . ");
+        printf("--order ");
     if (!impl_default)
         printf("--impl %s ", impl);
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 ||
@@ -1876,7 +1876,7 @@ static void __multi_trece_help(struct help_ctx *hctx, const char *common, const 
     common_help(hctx, true, true, true, true, false, true, true);
 
     if (!env->key && !has_key)
-        printf("[-k . --order --order-mem .] ");
+        printf("[-k . --order] ");
     else if (!env->key)
         printf("[-k .] ");
     if (strcmp(impl, TWO_EVENT_DELAY_IMPL) == 0 ||
@@ -1931,7 +1931,7 @@ static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
     "    "PROGRAME" multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -i 1000 --than 100us --order --detail=-1ms",
     "    "PROGRAME" multi-trace -e 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/' \\",
     "                          -e 'sched:sched_switch//key=next_pid/,profile/-F 200 --watermark 50 -m 16/untraced/' -k pid -m 128 \\",
-    "                          -i 1000 --order --order-mem 128M --than 20ms --detail=samecpu");
+    "                          -i 1000 --order --than 20ms --detail=samecpu");
 static const char *multi_trace_argv[] = PROFILER_ARGV("multi-trace",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,

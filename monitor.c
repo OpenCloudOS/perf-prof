@@ -118,60 +118,11 @@ enum {
     LONG_OPT_than,
     LONG_OPT_only_than,
     LONG_OPT_lower,
-    LONG_OPT_order_mem,
     LONG_OPT_detail,
     LONG_OPT_period,
 };
 
 static int workload_prepare(struct workload *workload, char *argv[]);
-
-/**
- *  Parses a string into a number.  The number stored at @ptr is
- *  potentially suffixed with K, M, G, T, P, E.
- */
-static unsigned long memparse(const char *ptr, char **retptr)
-{
-    char *endptr;   /* local pointer to end of parsed string */
-
-    unsigned long ret = strtoul(ptr, &endptr, 10);
-
-    switch (*endptr) {
-    case 'E':
-    case 'e':
-        ret <<= 10;
-        /* fall through */
-    case 'P':
-    case 'p':
-        ret <<= 10;
-        /* fall through */
-    case 'T':
-    case 't':
-        ret <<= 10;
-        /* fall through */
-    case 'G':
-    case 'g':
-        ret <<= 10;
-        /* fall through */
-    case 'M':
-    case 'm':
-        ret <<= 10;
-        /* fall through */
-    case 'K':
-    case 'k':
-        ret <<= 10;
-        /* fall through */
-    case 'B':
-    case 'b':
-        endptr++;
-    default:
-        break;
-    }
-
-    if (retptr)
-        *retptr = endptr;
-
-    return ret;
-}
 
 /**
  *  Parses a string into ns.  The number stored at @ptr is
@@ -251,9 +202,6 @@ static int parse_arg(int key, char *arg)
         break;
     case LONG_OPT_lower:
         env.lower_than = nsparse(arg, NULL);
-        break;
-    case LONG_OPT_order_mem:
-        env.order_mem = memparse(arg, NULL);
         break;
     case LONG_OPT_detail:
         env.detail = true;
@@ -483,7 +431,6 @@ struct option main_options[] = {
     OPT_INT_NONEG   ('i',    "interval", &env.interval,   "ms",            "Interval, Unit: ms"),
     OPT_STRDUP_NONEG('o',      "output", &env.output,     "file",          "Output file name"),
     OPT_BOOL_NONEG  ( 0 ,       "order", &env.order,                       "Order events by timestamp."),
-    OPT_PARSE_NONEG (LONG_OPT_order_mem, "order-mem", &env.order_mem, "bytes", "Maximum memory used by ordering events. Unit: GB/MB/KB/*B."),
     OPT_INT_NONEG   ('m',  "mmap-pages", &env.mmap_pages, "pages",         "Number of mmap data pages and AUX area tracing mmap pages"),
     OPT_LONG_NONEG  ('N',      "exit-N", &env.exit_n, "N",                 "Exit after N events have been sampled."),
     OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf clock to tsc."),

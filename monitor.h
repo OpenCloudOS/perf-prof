@@ -189,7 +189,6 @@ struct env {
 
     /* order */
     bool order;
-    unsigned long order_mem;
 
     /* help */
     struct monitor *help_monitor;
@@ -338,7 +337,6 @@ struct prof_dev {
     int pages;
     int nr_pollfd;
     bool ftrace_filter;
-    bool dup; // dup event, order
     bool clone; // prof_dev is cloned
     bool silent; // Silent device, no output.
     // | title                        | detail                                                                       |
@@ -553,7 +551,7 @@ perfclock_t prof_dev_list_minevtime(void);
 #define PROFILER_ARGV_OPTION \
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", "watermark", \
-    "interval", "output", "order", "order-mem", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", \
+    "interval", "output", "order", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", \
     "usage-self", "sampling-limit", "perfeval-cpus", "perfeval-pids", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \

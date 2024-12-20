@@ -295,7 +295,7 @@ static const char *llcstat_desc[] = PROFILER_DESC("llcstat",
 static const char *llcstat_argv[] = PROFILER_ARGV("llcstat",
     "OPTION:",
     "cpus",
-    "interval", "output", "order", "order-mem", "mmap-pages", "usage-self",
+    "interval", "output", "usage-self",
     "version", "verbose", "quiet", "help",
     "FILTER OPTION:",
     "exclude-host");

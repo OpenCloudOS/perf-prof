@@ -86,7 +86,7 @@ void sched_event(int level, void *raw, int size, int cpu)
 
 perf-prof multi-trace -e 'sched:sched_wakeup//stack/,sched:sched_wakeup_new,sched:sched_switch/prev_state==0&&prev_pid>0/key=prev_pid/' \
                       -e 'sched:sched_switch//key=next_pid/,sched:sched_migrate_task//untraced/key=pid/' -k pid -m 256 -i 1000 --order  \
-                      --order-mem 64M -o rundelay.log --than 90ms --detail=samekey,-1ms,+1ms
+                      -o rundelay.log --than 90ms --detail=samekey,-1ms,+1ms
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------
 
