@@ -91,6 +91,7 @@ struct task_state_ctx {
             int SD:1;
         };
     };
+    bool dup;
 
     // lost
     struct list_head lost_list; // struct task_lost_node
@@ -100,7 +101,7 @@ struct task_state_ctx {
 
     // stat
     struct __dup_stat {
-        u64 sampled;
+        u64 copied;
         u64 freed;
         u64 mem_bytes;
     } stat;
@@ -323,7 +324,7 @@ static int task_state_init(struct prof_dev *dev)
     }
 
     if (env->greater_than && using_order(dev))
-        dev->dup = true;
+        ctx->dup = true;
 
     /* |    mode       |
      * |      filter   |  event
@@ -744,10 +745,7 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
     struct rb_node *rbn;
     void *raw;
     int size;
-    bool keep = false;
 
-    if (dev->dup)
-        ctx->stat.sampled ++;
     if (data->time > ctx->recent_time)
         ctx->recent_time = data->time;
 
@@ -816,14 +814,15 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
 
                 if (sw->prev_state & ctx->state_dead)
                     rblist__remove_node(&ctx->task_states, rbn);
-                else if (dev->dup) {
+                else if (ctx->dup) {
                     if (task->event) {
                         ctx->stat.mem_bytes -= task->event->header.size;
                         ctx->stat.freed++;
                         free(task->event);
                     }
-                    task->event = event;
-                    keep = true;
+                    task->event = memdup(event, event->header.size);
+                    ctx->stat.mem_bytes += event->header.size;
+                    ctx->stat.copied++;
                 }
             }
         }
@@ -856,7 +855,7 @@ parse_next:
                 task->pid = sw->next_pid;
                 task->state = TASK_RUNNING;
                 task->time = data->time;
-                if (dev->dup) {
+                if (ctx->dup) {
                     if (task->event) {
                         ctx->stat.mem_bytes -= task->event->header.size;
                         ctx->stat.freed++;
@@ -902,24 +901,22 @@ parse_next:
                 task->time = data->time;
             task->pid = wakeup->pid;
             task->state = TASK_RUNNING;
-            if (dev->dup) {
+            if (ctx->dup) {
                 if (task->event) {
                     ctx->stat.mem_bytes -= task->event->header.size;
                     ctx->stat.freed++;
                     free(task->event);
                 }
-                task->event = event;
-                keep = true;
+                task->event = memdup(event, event->header.size);
+                ctx->stat.mem_bytes += event->header.size;
+                ctx->stat.copied++;
             }
         }
     }
 
 free_event:
-    if (keep) ctx->stat.mem_bytes += event->header.size;
-    if (dev->dup && !keep) {
-        ctx->stat.freed++;
-        free(event);
-    }
+    // do nothing
+    return;
 }
 
 static void task_state_sigusr(struct prof_dev *dev, int signum)
@@ -928,11 +925,11 @@ static void task_state_sigusr(struct prof_dev *dev, int signum)
     if (signum == SIGUSR1) {
         print_time(stdout);
         printf("task-state\n");
-        printf("  sampled: %lu\n"
+        printf("  copied: %lu\n"
                "  freed: %lu\n"
                "  mem_bytes: %lu\n"
                "  tasks %d\n",
-               ctx->stat.sampled, ctx->stat.freed, ctx->stat.mem_bytes,
+               ctx->stat.copied, ctx->stat.freed, ctx->stat.mem_bytes,
                rblist__nr_entries(&ctx->task_states));
     }
 }
@@ -949,9 +946,13 @@ static void task_state_print_dev(struct prof_dev *dev, int indent)
         dev_printf("    sched_wakeup: %s\n", ctx->filter_wakeup ?: "");
     if (ctx->sched_wakeup_new)
         dev_printf("    sched_wakeup_new: %s\n", ctx->filter_wakeup ?: "");
+
+    if (!prof_dev_is_final(dev))
+        return;
+
     dev_printf("task_states: %d\n", rblist__nr_entries(&ctx->task_states));
-    if (dev->dup) {
-        dev_printf("sampled: %lu\n", ctx->stat.sampled);
+    if (ctx->dup) {
+        dev_printf("copied: %lu\n", ctx->stat.copied);
         dev_printf("freed: %lu\n", ctx->stat.freed);
         dev_printf("mem_bytes: %lu\n", ctx->stat.mem_bytes);
     }
