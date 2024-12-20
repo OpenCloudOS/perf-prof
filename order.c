@@ -2,9 +2,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <linux/kernel.h>
+#include <linux/circ_buf.h>
+#include <linux/bitops.h>
 #include <monitor.h>
+#include <api/fs/fs.h>
 #include <internal/mmap.h>
+#include <trace_helpers.h>
 
+int perf_event_max_stack = PERF_MAX_STACK_DEPTH;
+int perf_event_max_contexts_per_stack = 0;
+static __ctor void init(void)
+{
+    char path[PATH_MAX];
+    const char *procfs = procfs__mountpoint();
+
+    if (!procfs)
+        return;
+
+    snprintf(path, sizeof(path), "%s/sys/kernel/perf_event_max_stack", procfs);
+    filename__read_int(path, &perf_event_max_stack);
+    snprintf(path, sizeof(path), "%s/sys/kernel/perf_event_max_contexts_per_stack", procfs);
+    filename__read_int(path, &perf_event_max_contexts_per_stack);
+}
 
 // heap sort element
 struct heap_event {
@@ -24,6 +43,13 @@ struct perf_mmap_event {
      * each perf_map event.
      */
     u64 event_mono_time;
+    /*
+     * There may be a lost event at the `map->end'
+     * position, but it is not seen.
+     */
+    u64 maybe_lost_end;
+    u64 pause_start_time;
+    bool lost_pause;
 };
 
 static bool less_than(const void *lhs, const void *rhs, void __maybe_unused *args)
@@ -31,6 +57,105 @@ static bool less_than(const void *lhs, const void *rhs, void __maybe_unused *arg
     struct heap_event *a = *(struct heap_event **)lhs;
     struct heap_event *b = *(struct heap_event **)rhs;
     return a->time < b->time;
+}
+
+static int perf_sample_max_size(struct perf_evsel *evsel)
+{
+    static u64 known_sample_type = PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_IP | PERF_SAMPLE_TID |
+        PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_ID | PERF_SAMPLE_STREAM_ID |
+        PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN |
+        PERF_SAMPLE_RAW | PERF_SAMPLE_REGS_USER | PERF_SAMPLE_WEIGHT | PERF_SAMPLE_DATA_SRC |
+        PERF_SAMPLE_TRANSACTION | PERF_SAMPLE_REGS_INTR | PERF_SAMPLE_PHYS_ADDR;
+    struct perf_event_attr *attr = perf_evsel__attr(evsel);
+    u32 type = attr->type;
+    u64 sample_type = attr->sample_type;
+    int size = 0;
+
+    if (sample_type & ~known_sample_type)
+        fprintf(stderr, "%s: Unknown sample_type %lu\n", __FUNCTION__,
+                        sample_type & ~known_sample_type);
+
+    if (sample_type & PERF_SAMPLE_IDENTIFIER)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_IP)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_TID)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_TIME)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_ADDR)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_ID)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_STREAM_ID)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_CPU)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_PERIOD)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_READ)
+        size += perf_evsel__read_size(evsel);
+    if (sample_type & PERF_SAMPLE_CALLCHAIN) {
+        size += sizeof(u64);
+        if (attr->sample_max_stack)
+            size += sizeof(u64) * attr->sample_max_stack;
+        else
+            size += sizeof(u64) * (perf_event_max_stack +
+                                   perf_event_max_contexts_per_stack);
+    }
+    if (sample_type & PERF_SAMPLE_RAW) {
+        int raw_size = -1;
+        if (type == PERF_TYPE_TRACEPOINT)
+            raw_size = tep__event_size(attr->config);
+        if (raw_size < 0) {
+            fprintf(stderr, "%s: Unknown raw_size(type %d)\n", __FUNCTION__, type);
+            size += sizeof(u64);
+        } else
+            size += round_up(raw_size + sizeof(u32), sizeof(u64));
+    }
+    if (sample_type & PERF_SAMPLE_REGS_USER) {
+        u64 mask = attr->sample_regs_user;
+        size += sizeof(u64) + hweight64(mask) * sizeof(u64);
+    }
+    if (sample_type & PERF_SAMPLE_WEIGHT)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_DATA_SRC)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_TRANSACTION)
+        size += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_REGS_INTR) {
+        u64 mask = attr->sample_regs_intr;
+        size += sizeof(u64) + hweight64(mask) * sizeof(u64);
+    }
+    if (sample_type & PERF_SAMPLE_PHYS_ADDR)
+        size += sizeof(u64);
+
+    return size;
+}
+
+static u64 perf_sample_watermark(struct prof_dev *dev)
+{
+    struct perf_evsel *evsel;
+    struct perf_event_attr *attr;
+    u64 watermark;
+    u64 min_watermark = -1UL;
+
+    perf_evlist__for_each_evsel(dev->evlist, evsel) {
+        attr = perf_evsel__attr(evsel);
+
+        // non-sample event
+        if (attr->sample_period == 0)
+            continue;
+
+        if (attr->watermark)
+            watermark = attr->wakeup_watermark;
+        else
+            watermark = attr->wakeup_events * perf_sample_max_size(evsel);
+
+        if (watermark < min_watermark)
+            min_watermark = watermark;
+    }
+    return min_watermark;
 }
 
 int order_init(struct prof_dev *dev)
@@ -62,6 +187,7 @@ int order_init(struct prof_dev *dev)
     dev->order.nr_mmaps = nr_mmaps;
     dev->order.permap_event = calloc(nr_mmaps, sizeof(struct perf_mmap_event));
     dev->order.heap_popped_time = 0;
+    dev->order.wakeup_watermark = perf_sample_watermark(dev);
 
     if (!dev->order.permap_event)
         goto failed;
@@ -104,6 +230,14 @@ void order_deinit(struct prof_dev *dev)
         free(dev->order.permap_event);
 }
 
+
+static __always_inline bool
+perf_mmap_has_space(struct perf_mmap *map, union perf_event *unconsumed, unsigned long size)
+{
+    u64 start = map->start - (unconsumed ? unconsumed->header.size : 0);
+    return CIRC_SPACE(map->end, start, map->mask+1) >= size;
+}
+
 static int perf_mmap_event_init(struct heap_event *heap_event)
 {
     struct perf_mmap_event *mmap_event = (struct perf_mmap_event *)heap_event;
@@ -112,6 +246,7 @@ static int perf_mmap_event_init(struct heap_event *heap_event)
     int ins = heap_event->ins;
     union perf_event *event;
     bool writable;
+    struct perf_record_lost lost = {.lost = 0};
 
     if (perf_mmap__read_init(map) < 0)
         return -1;
@@ -119,9 +254,27 @@ static int perf_mmap_event_init(struct heap_event *heap_event)
 retry:
     event = perf_mmap__read_event(map, &writable);
     if (event) {
+        /*
+         * Within order_process(), the final lost event will be processed.
+         * Why do I still read the lost event during init()?
+         *
+         * After order_process() returns, there may be a lost event, but it
+         * is not output until a new event occurs. The kernel will pre-output
+         * the lost event and then the new event, see the Linux kernel function
+         * __perf_output_begin().
+         *
+         * However, the lost event will be predicted in order_process(), and
+         * generally it will not be read during init(). A BUG will be checked
+         * here.
+         */
         /* Only the PERF_RECORD_SAMPLE event can sample time. */
         if (event->header.type != PERF_RECORD_SAMPLE) {
-            perf_event_process_record(dev, event, ins, writable, false);
+            if (event->header.type == PERF_RECORD_LOST)
+                dev->order.nr_lost++;
+            if (event->header.type == PERF_RECORD_LOST && dev->prof->lost)
+                lost = event->lost;
+            else
+                perf_event_process_record(dev, event, ins, writable, false);
             perf_mmap__consume(map);
             goto retry;
         }
@@ -130,6 +283,14 @@ retry:
         heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
         heap_event->writable = writable;
 
+        if (lost.lost) {
+            if (mmap_event->event_mono_time/*lost_start*/ < dev->order.heap_popped_time)
+                fprintf(stderr, "BUG: unsafe lost event %lu < popped %lu\n",
+                                 mmap_event->event_mono_time, dev->order.heap_popped_time);
+
+            dev->prof->lost(dev, (union perf_event *)&lost, ins,
+                            mmap_event->event_mono_time, heap_event->time);
+        }
         return 0;
     } else
         perf_mmap__read_done(map);
@@ -144,6 +305,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     u64 time;
     int ins;
     bool writable;
+    u64 wakeup_watermark;
     u64 target_end;
 
     // heap sort
@@ -186,6 +348,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         struct heap_event **data = min_heap_peek(heap);
         bool need_break = 0;
         union perf_event *tmp = NULL;
+        struct perf_record_lost lost = {.lost = 0};
 
         if (!data)
             break;
@@ -199,6 +362,67 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         time = heap_event->time;
         ins = heap_event->ins;
         writable = heap_event->writable;
+        wakeup_watermark = dev->order.wakeup_watermark;
+
+        /*                     lost
+         * perf_mmap A: - -A-|=======|-A- -
+         * perf_mmap B: - -B-|- -B- -|-B- -
+         *                   |   |   `lost_end
+         *                   |   ` B is unsafe to perf_mmap A
+         *                   `lost_start
+         *                   `mmap_event->maybe_lost_end
+         *
+         * If there is an event loss in A, then B's events are also unsafe.
+         * Therefore, events before lost_start can be heap sorted normally, and
+         * events after lost_end can also be sorted normally.
+         *
+         * perf_mmap A: - -A-|=AA====|-A- -
+         *                      ` true_lost_end
+         *
+         * `lost_start' and `lost_end' are the event time before and after
+         * the PERF_RECORD_LOST event respectively. This range will be larger,
+         * but covers `true_lost_end'.
+         *
+         * The kernel function __perf_output_begin() will pre-output the lost
+         * event and then output the lost_end event. Therefore, the last event of
+         * the ringbuffer may be a lost_start event. Only when the lost_end event
+         * occurs, we can sort the events between lost_start->lost_end (e.g. the
+         * perf_mmap B) and confirm that it is unsafe.
+         *
+         * Heap sorting needs to continuously predict possible lost events and
+         * keep the lost_start event in the ringbuffer.
+         *
+         * When processing each event in the ringbuffer, it is judged that there
+         * is not enough safe space, and `maybe_lost_end' is recorded, which may
+         * be a lost_start event. Continue heap sorting and wait for the kernel
+         * to write new events.
+         *    1) If so, the new event may or may not be a lost_end event, it
+         *       doesn't matter. This can enable more heap sorting. And continue
+         *       to decide if there is a safe space.
+         *    2) If not until the `maybe_lost_end', pause and keep the lost_start
+         *       event in the ringbuffer.
+         *
+         * If there is always enough safe space, keep is not needed.
+         */
+        if (map->end != mmap_event->maybe_lost_end) {
+             // Have enough safe space, no need to keep event.
+            if (perf_mmap_has_space(map, event, wakeup_watermark))
+                mmap_event->maybe_lost_end = map->end - 1;
+            else {
+                mmap_event->maybe_lost_end = map->end;
+                dev->order.nr_maybe_lost++;
+            }
+        } else if (perf_mmap__empty(map)) {
+            // Keep the lost_start event in the ringbuffer.
+            dev->order.nr_maybe_lost_pause++;
+            mmap_event->lost_pause = 1;
+            mmap_event->pause_start_time = get_ktime_ns();
+            break;
+        }
+        if (unlikely(mmap_event->lost_pause)) {
+            mmap_event->lost_pause = 0;
+            dev->order.maybe_lost_pause_time += get_ktime_ns() - mmap_event->pause_start_time;
+        }
 
 
         /* Keep order in perf_mmap. Why do this?
@@ -236,14 +460,21 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 
         if (unlikely(time < dev->order.heap_popped_time)) {
             dev->order.nr_unordered_events++;
-            fprintf(stderr, "%s: out-of-order event %lu %lu %d\n", dev->prof->name, time, dev->order.heap_popped_time, dev->pos.time_pos);
-        } else
+            fprintf(stderr, "%s: out-of-order event %lu(%d) %lu(%d)\n", dev->prof->name, time, ins,
+                                dev->order.heap_popped_time, dev->order.heap_popped_ins);
+        } else {
             dev->order.heap_popped_time = time;
+            dev->order.heap_popped_ins = ins;
+        }
 
 
     process:
         perf_event_process_record(dev, tmp ?: event, ins, writable, false);
-        perf_mmap__consume(map);
+    consume:
+        // Not lost. Or lost, fast consuming will result in more losses.
+        if (map->end != mmap_event->maybe_lost_end ||
+            perf_mmap_has_space(map, NULL, wakeup_watermark/2))
+            perf_mmap__consume(map);
 
         if (tmp) {
             free(tmp);
@@ -256,6 +487,13 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         event = perf_mmap__read_event(map, &writable);
         if (event) {
             if (event->header.type != PERF_RECORD_SAMPLE) {
+                if (event->header.type == PERF_RECORD_LOST) {
+                    dev->order.nr_lost++;
+                    if (dev->prof->lost) {
+                        lost = event->lost;
+                        goto consume;
+                    }
+                }
                 goto process;
             }
 
@@ -263,6 +501,16 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
             heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
             heap_event->writable = writable;
             min_heap_sift_down(heap, 0, &funcs, NULL);
+
+            if (lost.lost) {
+                if (mmap_event->event_mono_time/*lost_start*/ < dev->order.prev_lost_time)
+                    fprintf(stderr, "BUG: unorder lost event\n");
+                else
+                    dev->order.prev_lost_time = mmap_event->event_mono_time;
+
+                dev->prof->lost(dev, (union perf_event *)&lost, ins,
+                                        mmap_event->event_mono_time, heap_event->time);
+            }
         } else {
             perf_mmap__read_done(map);
             min_heap_pop(heap, &funcs, NULL);
@@ -277,6 +525,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         heap_event = heap->data[--heap->nr];
         mmap_event = (struct perf_mmap_event *)heap_event;
         perf_mmap__unread_event(mmap_event->map, heap_event->event);
+        perf_mmap__consume(mmap_event->map);
     }
 }
 

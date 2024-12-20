@@ -1053,8 +1053,12 @@ static void print_dev(struct prof_dev *dev, int indent)
         printf(" +%lu\n", dev->env->clock_offset);
     }
     if (using_order(dev)) {
+        dev_printf("wakeup_watermark: %lu\n", dev->order.wakeup_watermark);
         dev_printf("order: unordered %lu fixed %lu\n", dev->order.nr_unordered_events,
                     dev->order.nr_fixed_events);
+        dev_printf("order: lost %lu maybe %lu pause %lu pause_time %lu\n",
+                    dev->order.nr_lost, dev->order.nr_maybe_lost,
+                    dev->order.nr_maybe_lost_pause, dev->order.maybe_lost_pause_time);
     }
     ptrace_print(dev, indent);
     if (dev->prof->print_dev)

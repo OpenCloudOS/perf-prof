@@ -374,11 +374,18 @@ struct prof_dev {
         int heap_size, nr_mmaps;
         void **data; // used in heapsort;
         void *permap_event; // struct perf_mmap_event
-        u64 heap_popped_time;
+        u64 wakeup_watermark;
+        u64 prev_lost_time;
+        u64 heap_popped_time; // perfclock_t
+        int heap_popped_ins;
         bool enabled;
         // stat
         u64 nr_unordered_events;
         u64 nr_fixed_events; // Fixed out-of-order events.
+        u64 nr_lost;
+        u64 nr_maybe_lost;
+        u64 nr_maybe_lost_pause;
+        u64 maybe_lost_pause_time; // ns
     } order;
     struct tty_ctx {
         bool istty;
@@ -562,7 +569,7 @@ int order_init(struct prof_dev *dev);
 void order_deinit(struct prof_dev *dev);
 void order_process(struct prof_dev *dev, struct perf_mmap *target_map);
 static inline bool using_order(struct prof_dev *dev) {
-    return dev->order.enabled;
+    return dev->env->order || dev->prof->order;
 }
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
 
