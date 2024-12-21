@@ -213,41 +213,46 @@ static inline void tcp_ref(void *tcp)
     refcount_inc_not_zero(&header->ref);
 }
 
-static inline void tcp_unref(void *tcp)
+static inline int tcp_unref(void *tcp)
 {
     struct tcp_socket_header *header = tcp;
     if (refcount_dec_and_test(&header->ref)) {
-        if (header->type == ACCEPT_CLIENT)
+        if (header->type == ACCEPT_CLIENT) {
+            struct tcp_client_socket *client = tcp;
+            print_sockaddr("Client hangs up", &client->peer_addr, client->peer_addrlen);
+            list_del(&client->srvlink);
             tcp_unref(header->ops->server);
+        }
+
+        if (header->type == CONNECT_CLIENT) {
+            struct tcp_client_socket *client = tcp;
+            print_sockaddr("Disconnect from", &client->peer_addr, client->peer_addrlen);
+        }
+
+        main_epoll_del(header->fd);
+        // Closing a file descriptor is automatically removed from all epoll set.
+        close(header->fd);
         free(header);
+        return 1;
     }
+    return 0;
 }
 
 static int handle_errhup(int fd, unsigned int revents, void *ptr)
 {
     struct tcp_client_socket *client = ptr;
 
-    if (unlikely(revents & (EPOLLERR | EPOLLHUP)) &&
-        client->header.fd >= 0) {
-        int by_connect = client->header.type == CONNECT_CLIENT;
-        struct tcp_socket_ops *ops = client->header.ops;
-
-        print_sockaddr(by_connect ? "Disconnect from" : "Client hangs up", &client->peer_addr, client->peer_addrlen);
-        main_epoll_del(client->header.fd);
-        // Closing a file descriptor is automatically removed from all epoll set.
-        close(client->header.fd);
-        client->header.fd = -1;
-
-        if (by_connect) {
-            if (ops) {
+    if (unlikely(revents & (EPOLLERR | EPOLLHUP))) {
+        if (client->header.type == CONNECT_CLIENT) {
+            struct tcp_socket_ops *ops = client->header.ops;
+            if (ops && ops->disconnect) {
                 ops->client = NULL;
-                if (ops->disconnect)
-                    ops->disconnect(ops);
-            }
+                ops->disconnect(ops);
+            } else
+                tcp_close(ops->client);
         } else
-            list_del(&client->srvlink);
+            tcp_unref(client);
 
-        tcp_unref(client);
         return 1;
     }
     return 0;
@@ -257,7 +262,7 @@ static void handle_inout(int fd, unsigned int revents, void *ptr)
 {
     struct tcp_client_socket *client = ptr;
     struct tcp_socket_ops *ops = client->header.ops;
-    int (*process_event)(union perf_event *event, struct tcp_socket_ops *ops);
+    int (*process_event)(char *event_buf, int size, struct tcp_socket_ops *ops);
 
     if (handle_errhup(fd, revents, ptr))
         return;
@@ -278,14 +283,16 @@ static void handle_inout(int fd, unsigned int revents, void *ptr)
     }
 
     if (revents & EPOLLIN) {
-        union perf_event *event;
-        int ret;
+        int ret, processed;
 
         process_event = (ops && ops->process_event) ? ops->process_event : NULL;
 
         while (true) {
+            tcp_ref(client);
+
             ret = recv(client->header.fd, client->event_copy+client->read, sizeof(client->event_copy)-client->read, 0);
             if (unlikely(ret <= 0)) {
+                tcp_unref(client);
                 // The return value will be 0 when the peer has performed an orderly shutdown.
                 if (ret == 0) {
                     handle_errhup(client->header.fd, EPOLLHUP, client);
@@ -295,21 +302,19 @@ static void handle_inout(int fd, unsigned int revents, void *ptr)
                     fprintf(stderr, "Unable to recv: %s\n", strerror(errno));
                 break;
             }
-            if (unlikely(!process_event))
+            if (unlikely(!process_event)) {
+                tcp_unref(client);
                 continue;
+            }
 
             client->read += ret;
-            event = (void *)client->event_copy;
-            while (client->read >= sizeof(struct perf_event_header) &&
-                client->read >= event->header.size) {
-                client->read -= event->header.size;
-                if (unlikely(process_event(event, ops) < 0))
-                    return;
-                event = (void *)event + event->header.size;
-            }
-            if (client->read) {
-                memcpy(client->event_copy, event, client->read);
-            }
+            processed = process_event(client->event_copy, client->read, ops);
+            client->read -= processed;
+            if (client->read)
+                memcpy(client->event_copy, client->event_copy + processed, client->read);
+
+            if (tcp_unref(client))
+                return;
         }
     }
 }
@@ -424,7 +429,6 @@ void *tcp_server(const char *node, const char *service, struct tcp_socket_ops *o
     srv->header.fd = sfd;
     srv->header.type = LISTEN_SERVER;
     srv->header.ops = ops;
-    tcp_ref(srv);
     main_epoll_add(sfd, EPOLLIN, srv, handle_accept);
 
     return srv;
@@ -548,7 +552,6 @@ void *tcp_connect(const char *node, const char *service, struct tcp_socket_ops *
     tcp_client_init(conn);
     if (connect(cfd, rp->ai_addr, rp->ai_addrlen) < 0) {
         if (errno == EINPROGRESS) {
-            tcp_ref(conn);
             main_epoll_add(cfd, EPOLLOUT, conn, handle_connect);
         } else
             goto err;
@@ -557,7 +560,6 @@ void *tcp_connect(const char *node, const char *service, struct tcp_socket_ops *
         if (getpeername(cfd, &conn->peer_addr, &conn->peer_addrlen) == 0) {
             print_sockaddr("Connected to", &conn->peer_addr, conn->peer_addrlen);
         }
-        tcp_ref(conn);
         conn->events = EPOLLIN | EPOLLERR | EPOLLHUP;
         main_epoll_add(cfd, conn->events, conn, handle_inout);
     }
@@ -615,27 +617,14 @@ void tcp_close(void *tcp)
 
     switch (header->type) {
         case LISTEN_SERVER:
-            main_epoll_del(header->fd);
-            close(header->fd);
             tcp_unref(tcp);
             break;
         case CONNECT_CLIENT:
-            /*
-             * Calling tcp_close externally prohibits calling the disconnect callback to avoid
-             * repeated execution of the disconnect callback. handle_errhup, tcp_close, and
-             * disconnect callback can only be executed once.
-             * Therefore, the external call to tcp_close also needs to include the disconnect
-             * callback function.
-             */
-            if (header->ops)
-                header->ops->disconnect = NULL;
-            handle_errhup(header->fd, EPOLLHUP, tcp);
+            tcp_unref(tcp);
             break;
         case ACCEPT_CLIENT: /* Can't be closed */
         default:
             return;
     }
-
-    tcp_unref(tcp);
 }
 

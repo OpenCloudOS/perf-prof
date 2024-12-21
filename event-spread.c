@@ -298,11 +298,27 @@ static int block_process_event(struct event_block *block, union perf_event *even
     return 0;
 }
 
-static int tcp_process_event(union perf_event *event, struct tcp_socket_ops *ops)
+static int tcp_process_event(char *event_buf, int size, struct tcp_socket_ops *ops)
 {
     /* Compatible with accept client and connect client. */
     struct event_block *block = container_of(ops->server_ops ?: ops, struct event_block, u.tcp.ops);
-    return block_process_event(block, event);
+    struct prof_dev *dev = block->eb_list->tp->dev;
+    union perf_event *event;
+    int total = size;
+
+    prof_dev_get(dev);
+    event = (void *)event_buf;
+    while (size >= sizeof(struct perf_event_header) &&
+        size >= event->header.size) {
+        size -= event->header.size;
+        if (block_process_event(block, event) < 0) {
+            prof_dev_put(dev);
+            return total;
+        }
+        event = (void *)event + event->header.size;
+    }
+    prof_dev_put(dev);
+    return total - size;
 }
 
 static int tcp_disconnect(struct tcp_socket_ops *ops)

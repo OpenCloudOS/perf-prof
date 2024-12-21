@@ -8,7 +8,7 @@ struct tcp_socket_ops {
     void *client;
     void *server;
     struct tcp_socket_ops *server_ops;
-    int (*process_event)(union perf_event *event, struct tcp_socket_ops *ops);
+    int (*process_event)(char *event_buf, int size, struct tcp_socket_ops *ops);
     int (*disconnect)(struct tcp_socket_ops *ops);
 
     int (*new_client)(struct tcp_socket_ops *ops);
