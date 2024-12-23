@@ -285,9 +285,15 @@ static void handle_inout(int fd, unsigned int revents, void *ptr)
     if (revents & EPOLLIN) {
         int ret, processed;
 
+        if (ops && ops->notify_to_recv) {
+            ops->notify_to_recv(ops);
+            return;
+        }
+
         process_event = (ops && ops->process_event) ? ops->process_event : NULL;
 
         while (true) {
+            // Must tcp_ref(): process_event() may call tcp_close().
             tcp_ref(client);
 
             ret = recv(client->header.fd, client->event_copy+client->read, sizeof(client->event_copy)-client->read, 0);
@@ -477,6 +483,27 @@ int tcp_send(void *cli, const void *buf, size_t len, int flags)
     }
 
     return 0;
+}
+
+int tcp_recv(void *cli, void *buf, size_t len, int flags)
+{
+    struct tcp_client_socket *client = cli;
+    int ret;
+
+    // No need tcp_ref(): no cb to call tcp_close().
+    ret = recv(client->header.fd, buf, len, flags);
+    if (unlikely(ret <= 0)) {
+        // The return value will be 0 when the peer has performed an orderly shutdown.
+        if (ret == 0) {
+            handle_errhup(client->header.fd, EPOLLHUP, client);
+            return 0;
+        }
+        if (errno == EAGAIN)
+            return 0;
+        else
+            fprintf(stderr, "Unable to recv: %s\n", strerror(errno));
+    }
+    return ret;
 }
 
 int tcp_server_broadcast(void *server, const void *buf, size_t len, int flags)
