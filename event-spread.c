@@ -29,7 +29,6 @@ struct cdev_block { // chardev
     int fd;
     bool connected;
     const char *filename;
-    struct list_head wait_link;
 
     // EPOLLOUT
     struct perf_record_lost lost_event;
@@ -466,6 +465,27 @@ err:
     return ret;
 }
 
+static int cdev_read_init(struct event_block *block, void *buf, size_t len)
+{
+    struct cdev_block *cdev = &block->u.cdev;
+    int ret = read(cdev->fd, buf, len);
+    if (unlikely(ret <= 0)) {
+        // The return value will be 0 when the host is disconnected.
+        if (ret == 0)
+            return 0;
+        if (errno == EAGAIN)
+            return 0;
+        else
+            fprintf(stderr, "Unable read from %s: %s\n", cdev->filename, strerror(errno));
+    }
+    return ret;
+}
+
+static union perf_event *cdev_read_event(void *stream, bool init, int *ins, bool *writable, bool *converted)
+{
+    return block_read_event(stream, init, cdev_read_init, ins, writable, converted);
+}
+
 static int cdev_write_header(struct event_block *block)
 {
     struct tp *tp = block->eb_list->tp;
@@ -486,12 +506,17 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
 {
     struct event_block *block = ptr;
     struct cdev_block *cdev = &block->u.cdev;
+    struct event_block_list *eb_list = block->eb_list;
 
     // Handle EPOLLIN first to fully read out the received events, then EPOLLHUP.
     if (revents & EPOLLIN) {
+        struct prof_dev *dev = eb_list->tp->dev;
         union perf_event *event;
         int ret;
 
+        if (!eb_list->broadcast && using_order(dev))
+            order_process(dev, NULL);
+        else
         while (true) {
             ret = read(cdev->fd, cdev->event_copy+cdev->read, BUF_LEN-cdev->read);
             if (unlikely(ret <= 0)) {
@@ -523,7 +548,7 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
         // EPOLLET: Edge Triggered.
         // Avoid EPOLLHUP loops.
         // Wait until the host of virtio-ports is connected and return EPOLLOUT.
-        unsigned int events = (block->eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLET | EPOLLHUP;
+        unsigned int events = (eb_list->broadcast ? EPOLLOUT : EPOLLIN) | EPOLLET | EPOLLHUP;
 
         // reset circ_buf
         cdev->head = 0;
@@ -539,7 +564,7 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
 
             main_epoll_del(cdev->fd);
             close(cdev->fd);
-            cdev->fd = open(cdev->filename, (block->eb_list->broadcast ? O_WRONLY : O_RDONLY) | O_NONBLOCK);
+            cdev->fd = open(cdev->filename, (eb_list->broadcast ? O_WRONLY : O_RDONLY) | O_NONBLOCK);
             if (cdev->fd < 0 ||
                 main_epoll_add(cdev->fd, events, block, handle_cdev_event) < 0)
                 block_free(block);
@@ -686,18 +711,20 @@ static int block_new(struct event_block_list *eb_list, char *value)
             block->u.cdev.fd = fd;
             block->u.cdev.connected = 0;
             block->u.cdev.filename = port;
-            INIT_LIST_HEAD(&block->u.cdev.wait_link);
             block->u.cdev.head = 0;
             block->u.cdev.tail = 0;
             memset(&block->u.cdev.lost_event, 0, sizeof(struct perf_record_lost));
-            block->u.cdev.buf = malloc(BUF_LEN);
+            block->u.cdev.buf = event_buf_alloc();
             block->u.cdev.event_copy = block->u.cdev.buf;
             block->u.cdev.read = 0;
             block->type = TYPE_CDEV;
-            if (block->u.cdev.buf) {
+            block->event_buf = block->u.cdev.buf;
+            if (block->u.cdev.buf && (eb_list->broadcast ||
+                !using_order(dev) || order_register(dev, cdev_read_event, block) == 0)) {
                 printf("Open cdev %s\n", block->u.cdev.filename);
                 return 0;
             } else {
+                free(block->u.cdev.buf);
                 main_epoll_del(fd);
                 close(fd);
                 goto failed;
@@ -748,8 +775,8 @@ static void block_free(struct event_block *block)
             }
             break;
         case TYPE_CDEV:
-            if (!list_empty(&block->u.cdev.wait_link))
-                list_del(&block->u.cdev.wait_link);
+            if (!eb_list->broadcast && using_order(dev))
+                order_unregister(dev, block);
             if (block->u.cdev.fd >= 0) {
                 main_epoll_del(block->u.cdev.fd);
                 close(block->u.cdev.fd);
