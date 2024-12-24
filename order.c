@@ -521,6 +521,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     if (target_map && perf_mmap__empty(target_map))
         return;
 
+    prof_dev_get(main_dev);
     main_dev->order.inprocess = 1;
     /*
      * Get the latest event of ringbuffer(perf_mmap). According to the causal
@@ -759,6 +760,7 @@ stream_stop:
         prof_dev_put(heap_event->dev);
     }
     main_dev->order.inprocess = 0;
+    prof_dev_put(main_dev);
 }
 
 
