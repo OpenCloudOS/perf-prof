@@ -63,6 +63,9 @@ struct event_block {
             int notifyfd;
         } file;
     } u;
+    // order
+    char *event_buf, *event;
+    int size;
     // receive
     int remote_id;
     int pid_pos;
@@ -298,6 +301,88 @@ static int block_process_event(struct event_block *block, union perf_event *even
     return 0;
 }
 
+static __always_inline char *event_buf_alloc(void)
+{
+    return malloc(BUF_LEN);
+}
+
+static union perf_event *block_read_event(void *stream, bool init,
+                int (*read_init)(struct event_block *block, void *buf, size_t len),
+                int *ins, bool *writable, bool *converted)
+{
+    struct event_block *block = stream;
+    struct prof_dev *dev = block->eb_list->tp->dev;
+    union perf_event *event = (void *)block->event;
+    int ret;
+
+tcp_retry:
+    // consume
+    if (block->size > sizeof(struct perf_event_header) &&
+        block->size >= event->header.size) {
+        block->size -= event->header.size;
+        block->event += event->header.size;
+        event = (void *)block->event;
+    }
+
+    if (init && (block->size <= sizeof(struct perf_event_header) ||
+                 block->size < event->header.size)) {
+        if (block->size && block->event_buf != block->event)
+            memcpy(block->event_buf, block->event, block->size);
+
+        ret = read_init(block, block->event_buf+block->size, BUF_LEN-block->size);
+        if (ret < 0)
+            return NULL;
+        block->size += ret;
+        block->event = block->event_buf;
+        event = (void *)block->event;
+    }
+
+    // read event
+    if (block->size > sizeof(struct perf_event_header) &&
+        block->size >= event->header.size) {
+        if (event->header.type >= PERF_RECORD_TP) {
+            block_process_event(block, event);
+            goto tcp_retry;
+        }
+
+        /*
+         * -e sched:sched_switch//pull=9900/vm=$uuid/ --kvmclock $uuid
+         * --kvmclock, when waiting for pvclock update, do not process the pulled events in advance.
+         */
+        if (!prof_dev_enabled(dev))
+            goto tcp_retry;
+
+        // converted
+        *ins = block_event_convert(block, event);
+        if (*ins < 0)
+            goto tcp_retry;
+
+        *writable = 1;
+        *converted = 1;
+        return event;
+    }
+
+    return NULL;
+}
+
+static int tcp_read_init(struct event_block *block, void *buf, size_t len)
+{
+    return tcp_recv(block->u.tcp.tcp, buf, len, 0);
+}
+
+static union perf_event *tcp_read_event(void *stream, bool init, int *ins, bool *writable, bool *converted)
+{
+    return block_read_event(stream, init, tcp_read_init, ins, writable, converted);
+}
+
+static void tcp_notify(struct tcp_socket_ops *ops)
+{
+    /* Compatible with accept client and connect client. */
+    struct event_block *block = container_of(ops->server_ops ?: ops, struct event_block, u.tcp.ops);
+    struct prof_dev *dev = block->eb_list->tp->dev;
+    order_process(dev, NULL);
+}
+
 static int tcp_process_event(char *event_buf, int size, struct tcp_socket_ops *ops)
 {
     /* Compatible with accept client and connect client. */
@@ -308,7 +393,7 @@ static int tcp_process_event(char *event_buf, int size, struct tcp_socket_ops *o
 
     prof_dev_get(dev);
     event = (void *)event_buf;
-    while (size >= sizeof(struct perf_event_header) &&
+    while (size > sizeof(struct perf_event_header) &&
         size >= event->header.size) {
         size -= event->header.size;
         if (block_process_event(block, event) < 0) {
@@ -536,6 +621,7 @@ err:
 
 static int block_new(struct event_block_list *eb_list, char *value)
 {
+    struct prof_dev *dev = eb_list->tp->dev;
     struct event_block *block = NULL;
     char *ip = NULL;
     char *port;
@@ -574,6 +660,15 @@ static int block_new(struct event_block_list *eb_list, char *value)
     block->u.tcp.tcp = (eb_list->broadcast ? tcp_server : tcp_connect)(ip, port, &block->u.tcp.ops);
     if (block->u.tcp.tcp) {
         block->type = TYPE_TCP;
+        if (!eb_list->broadcast && using_order(dev)) {
+            block->u.tcp.ops.notify_to_recv = tcp_notify;
+            block->event_buf = event_buf_alloc();
+            if (!block->event_buf ||
+                order_register(dev, tcp_read_event, block) < 0) {
+                free(block->event_buf);
+                goto failed;
+            }
+        }
         return 0;
     }
 
@@ -642,10 +737,15 @@ err_return:
 static void block_free(struct event_block *block)
 {
     struct event_block_list *eb_list = block->eb_list;
+    struct prof_dev *dev = eb_list->tp->dev;
 
     switch (block->type) {
         case TYPE_TCP:
             tcp_close(block->u.tcp.tcp);
+            if (!eb_list->broadcast && using_order(dev)) {
+                order_unregister(dev, block);
+                free(block->event_buf);
+            }
             break;
         case TYPE_CDEV:
             if (!list_empty(&block->u.cdev.wait_link))
