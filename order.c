@@ -25,7 +25,10 @@ static __ctor void init(void)
     filename__read_int(path, &perf_event_max_contexts_per_stack);
 }
 
-// heap sort element
+#define PERF_MMAP_EVENT 0
+#define STREAM_EVENT 1
+
+// heap sort element: represents an ordered event queue.
 struct heap_event {
     struct list_head link;
     struct prof_dev *dev;
@@ -33,8 +36,12 @@ struct heap_event {
     u64 time;
     int ins;
     bool writable;
+    bool converted;
+    bool unconsumed; // event is unconsumed.
+    char type; // 0: perf_mmap_event; 1: stream_event;
 };
 
+// perf ringbuffer event: ordered by default.
 struct perf_mmap_event {
     struct heap_event base;
     struct perf_mmap *map;
@@ -50,6 +57,21 @@ struct perf_mmap_event {
     u64 maybe_lost_end;
     u64 pause_start_time;
     bool lost_pause;
+};
+
+/*
+ * stream event: read from tcp, character devices, files, etc.
+ * (event-spread: Ensure that broadcast events are time-ordered.)
+ *
+ * Use read_event() to read each ordered event, and each read will
+ * consume the previous event.
+ */
+struct stream_event {
+    struct heap_event base;
+    read_event *read_event;
+    void *stream;
+    u64 pause_start_time;
+    bool empty_pause;
 };
 
 static bool less_than(const void *lhs, const void *rhs, void __maybe_unused *args)
@@ -190,6 +212,7 @@ int order_init(struct prof_dev *dev)
     perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite)
         nr_mmaps++;
     heap_size += nr_mmaps;
+    heap_size += dev->order.nr_streams;
 
     dev->order.heap_size = heap_size;
     dev->order.data = calloc(heap_size, sizeof(*dev->order.data));
@@ -211,9 +234,11 @@ int order_init(struct prof_dev *dev)
         mmap_event = (struct perf_mmap_event *)dev->order.permap_event + idx;
         mmap_event->base.dev = dev;
         mmap_event->base.ins = idx;
+        mmap_event->base.converted = false;
+        mmap_event->base.type = PERF_MMAP_EVENT;
         mmap_event->map = map;
 
-        list_add(&mmap_event->base.link, &dev->order.heap_event_list);
+        list_add_tail(&mmap_event->base.link, &dev->order.heap_event_list);
     }
     for_each_source_dev_get(source, tmp, dev) {
         list_splice_tail_init(&source->order.heap_event_list, &dev->order.heap_event_list);
@@ -237,8 +262,11 @@ void order_deinit(struct prof_dev *dev)
         mmap_event = (struct perf_mmap_event *)dev->order.permap_event + i;
         list_del(&mmap_event->base.link);
     }
-    list_for_each_entry_safe(heap_event, tmp, &dev->order.heap_event_list, link)
+    list_for_each_entry_safe(heap_event, tmp, &dev->order.heap_event_list, link) {
         list_del_init(&heap_event->link);
+        if (heap_event->type == STREAM_EVENT)
+            free(heap_event);
+    }
 
     if (dev->order.data)
         free(dev->order.data);
@@ -246,6 +274,58 @@ void order_deinit(struct prof_dev *dev)
         free(dev->order.permap_event);
 }
 
+int order_register(struct prof_dev *dev, read_event *read_event, void *stream)
+{
+    struct prof_dev *target = dev->forward.target;
+    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+    struct stream_event *stream_event = malloc(sizeof(*stream_event));
+
+    if (!stream_event)
+        return -1;
+
+    memset(stream_event, 0, sizeof(*stream_event));
+    stream_event->base.dev = dev;
+    stream_event->base.type = STREAM_EVENT;
+    stream_event->read_event = read_event;
+    stream_event->stream = stream;
+
+    if (main_dev->order.enabled) {
+        int heap_size = main_dev->order.heap_size + 1;
+        void **data = calloc(heap_size, sizeof(*dev->order.data));
+        if (!data)
+            goto failed;
+
+        free(main_dev->order.data);
+        main_dev->order.heap_size = heap_size;
+        main_dev->order.data = data;
+        min_heap_init(&main_dev->order.heapsort, data, heap_size);
+    }
+    main_dev->order.nr_streams++;
+    list_add(&stream_event->base.link, &main_dev->order.heap_event_list);
+    return 0;
+
+failed:
+    free(stream_event);
+    return -1;
+}
+
+void order_unregister(struct prof_dev *dev, void *stream)
+{
+    struct prof_dev *target = dev->forward.target;
+    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+    struct heap_event *heap_event, *tmp;
+    struct stream_event *stream_event;
+
+    list_for_each_entry_safe(heap_event, tmp, &main_dev->order.heap_event_list, link) {
+        stream_event = (struct stream_event *)heap_event;
+        if (heap_event->type == STREAM_EVENT && stream_event->stream == stream) {
+            list_del(&heap_event->link);
+            main_dev->order.nr_streams--;
+            free(stream_event);
+            return;
+        }
+    }
+}
 
 static __always_inline bool
 perf_mmap_has_space(struct perf_mmap *map, union perf_event *unconsumed, unsigned long size)
@@ -298,7 +378,6 @@ retry:
         heap_event->event = event;
         heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
         heap_event->writable = writable;
-        prof_dev_get(dev);
 
         if (lost.lost) {
             struct prof_dev *target = dev->forward.target;
@@ -316,6 +395,97 @@ retry:
         perf_mmap__read_done(map);
 
     return -1;
+}
+
+static int stream_event_init(struct heap_event *heap_event, bool init)
+{
+    struct stream_event *stream_event = (struct stream_event *)heap_event;
+    struct prof_dev *dev = heap_event->dev;
+    union perf_event *event;
+    int ins;
+    bool writable;
+    bool converted;
+
+    if (heap_event->unconsumed) {
+        heap_event->unconsumed = 0;
+        return 0;
+    }
+
+    /*
+     * Key points to fix out-of-order.
+     *
+     * 1) Initialize stream_event first, then perf_mmap_event.
+     *    perf_mmap events are real-time, but stream events are cached, so the events
+     *    read are earlier than perf_mmap. When I see the latest event of the stream,
+     *    I can assume that other perf_mmap events have occurred before this latest
+     *    event.
+     *    stream_event is all at the head of `dev->order.heap_event_list'.
+     *
+     * 2) Stream events become empty, breaking heap sort.
+     *    Because 1) it is guaranteed that the stream event occurs early in time. The
+     *    remaining events of perf_mmap occur later.
+     *
+     * 3) All stream_events are initialized, start heap sort.
+     *    An uninitialized stream_event does not know whether its event is empty or
+     *    occurred earlier.
+     *
+     * 4) Only when `init=true', a batch of stream events can be read.
+     *    If after processing this batch of events, new events can be read every time,
+     *    it will cause perf_mmap events to be out of order.
+     */
+retry:
+    event = stream_event->read_event(stream_event->stream, init, &ins, &writable, &converted);
+    if (event) {
+        if (event->header.type != PERF_RECORD_SAMPLE) {
+            perf_event_process_record(dev, event, ins, writable, converted);
+            goto retry;
+        }
+        heap_event->event = event;
+        heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
+        heap_event->ins = ins;
+        heap_event->writable = writable;
+        heap_event->converted = converted;
+        return 0;
+    }
+    return -1;
+}
+
+static int stream_event_process(struct prof_dev *main_dev, struct heap_event *heap_event)
+{
+    struct stream_event *stream_event = (struct stream_event *)heap_event;
+    struct prof_dev *dev = heap_event->dev;
+    union perf_event *event = heap_event->event;
+    u64 time = heap_event->time;
+    int ins = heap_event->ins;
+    bool writable = heap_event->writable;
+    bool converted = heap_event->converted;
+
+    // out of order
+    if (dev != main_dev) dev->order.heap_popped_time = time;
+    if (unlikely(time < main_dev->order.heap_popped_time)) {
+        dev->order.nr_unordered_events++;
+        fprintf(stderr, "%s: out-of-order stream event %lu(%d) < %s %lu(%d)\n", dev->prof->name,
+                        time, ins, main_dev->prof->name, main_dev->order.heap_popped_time,
+                        main_dev->order.heap_popped_ins);
+    } else {
+        main_dev->order.heap_popped_time = time;
+        main_dev->order.heap_popped_ins = ins;
+    }
+
+    perf_event_process_record(dev, event, ins, writable, converted);
+
+    if (stream_event_init(heap_event, false) == 0) {
+        if (stream_event->empty_pause) {
+            stream_event->empty_pause = 0;
+            dev->order.stream_pause_time += get_ktime_ns() - stream_event->pause_start_time;
+        }
+        return 0;
+    } else {
+        stream_event->empty_pause = 1;
+        stream_event->pause_start_time = get_ktime_ns();
+        dev->order.nr_stream_pause++;
+        return -1;
+    }
 }
 
 void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
@@ -346,9 +516,9 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 
     if (main_dev->order.inprocess)
         return;
-    if (perf_mmap__read_init(target_map) < 0)
+    if (target_map && perf_mmap__read_init(target_map) < 0)
         return;
-    if (perf_mmap__empty(target_map))
+    if (target_map && perf_mmap__empty(target_map))
         return;
 
     main_dev->order.inprocess = 1;
@@ -361,17 +531,25 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
      * to it until the latest event of `target_map' is processed. `target_map->
      * end' points to the end of the latest event.
      */
-    target_end = target_map->end;
+    target_end = target_map ? target_map->end : 0;
 
     heap = (void *)&main_dev->order.heapsort;
     heap->nr = 0;
 
     list_for_each_entry(heap_event, &main_dev->order.heap_event_list, link) {
-        if (perf_mmap_event_init(heap_event) == 0) {
-            if (heap->nr < heap->size)
-                heap->data[heap->nr++] = heap_event;
+        if (heap_event->type == PERF_MMAP_EVENT) {
+            if (perf_mmap_event_init(heap_event) < 0)
+                continue;
+        } else if (heap_event->type == STREAM_EVENT) {
+            if (stream_event_init(heap_event, true) < 0)
+                goto stream_stop;
+        }
+        if (heap->nr < heap->size) {
+            heap->data[heap->nr++] = heap_event;
+            prof_dev_get(heap_event->dev);
         }
     }
+
 
     // heap sort start
     min_heapify_all(heap, &funcs, NULL);
@@ -385,6 +563,18 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
             break;
 
         heap_event = data[0];
+
+        if (unlikely(heap_event->type == STREAM_EVENT)) {
+            if (stream_event_process(main_dev, heap_event) == 0) {
+                min_heap_sift_down(heap, 0, &funcs, NULL);
+                continue;
+            } else {
+                min_heap_pop(heap, &funcs, NULL);
+                prof_dev_put(heap_event->dev);
+                break;
+            }
+        }
+
         mmap_event = (struct perf_mmap_event *)heap_event;
 
         dev = heap_event->dev;
@@ -556,11 +746,16 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     }
 
 
+stream_stop:
     while (heap->nr) {
         heap_event = heap->data[--heap->nr];
-        mmap_event = (struct perf_mmap_event *)heap_event;
-        perf_mmap__unread_event(mmap_event->map, heap_event->event);
-        perf_mmap__consume(mmap_event->map);
+        if (heap_event->type == PERF_MMAP_EVENT) {
+            mmap_event = (struct perf_mmap_event *)heap_event;
+            perf_mmap__unread_event(mmap_event->map, heap_event->event);
+            perf_mmap__consume(mmap_event->map);
+        } else if (heap_event->type == STREAM_EVENT)
+            heap_event->unconsumed = 1;
+
         prof_dev_put(heap_event->dev);
     }
     main_dev->order.inprocess = 0;

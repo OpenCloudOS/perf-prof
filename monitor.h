@@ -21,7 +21,6 @@
 #include <linux/time64.h>
 #include <linux/refcount.h>
 #include <linux/min_heap.h>
-#include <linux/ordered-events.h>
 
 /* perf sample has 16 bits size limit */
 #define PERF_SAMPLE_MAX_SIZE (1 << 16)
@@ -369,7 +368,7 @@ struct prof_dev {
     struct order_ctx {
         DEFINE_MIN_HEAP(void *, heapsort) heapsort;
         struct list_head heap_event_list; // link all heap_event
-        int heap_size, nr_mmaps;
+        int heap_size, nr_mmaps, nr_streams;
         void **data; // used in heapsort;
         void *permap_event; // struct perf_mmap_event
         u64 wakeup_watermark;
@@ -385,6 +384,8 @@ struct prof_dev {
         u64 nr_maybe_lost;
         u64 nr_maybe_lost_pause;
         u64 maybe_lost_pause_time; // ns
+        u64 nr_stream_pause;
+        u64 stream_pause_time;
     } order;
     struct tty_ctx {
         bool istty;
@@ -566,6 +567,9 @@ perfclock_t prof_dev_list_minevtime(void);
 // order.c
 int order_init(struct prof_dev *dev);
 void order_deinit(struct prof_dev *dev);
+typedef union perf_event *read_event(void *stream, bool init, int *ins, bool *writable, bool *converted);
+int order_register(struct prof_dev *dev, read_event *read_event, void *stream);
+void order_unregister(struct prof_dev *dev, void *stream);
 void order_process(struct prof_dev *dev, struct perf_mmap *target_map);
 static inline bool using_order(struct prof_dev *dev) {
     return dev->env->order || dev->prof->order;
