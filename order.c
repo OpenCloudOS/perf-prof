@@ -230,6 +230,8 @@ int order_init(struct prof_dev *dev)
 
     perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite) {
         int idx = perf_mmap__idx(map);
+        if (idx == 0)
+            perf_event_convert_read_tsc_conversion(dev, map);
 
         mmap_event = (struct perf_mmap_event *)dev->order.permap_event + idx;
         mmap_event->base.dev = dev;
@@ -334,7 +336,7 @@ perf_mmap_has_space(struct perf_mmap *map, union perf_event *unconsumed, unsigne
     return CIRC_SPACE(map->end, start, map->mask+1) >= size;
 }
 
-static int perf_mmap_event_init(struct heap_event *heap_event)
+static int perf_mmap_event_init(struct heap_event *heap_event, struct prof_dev *main_dev)
 {
     struct perf_mmap_event *mmap_event = (struct perf_mmap_event *)heap_event;
     struct prof_dev *dev = heap_event->dev;
@@ -377,6 +379,8 @@ retry:
 
         heap_event->event = event;
         heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
+        if (main_dev->order.nr_streams)
+            heap_event->time = perfclock_to_evclock(main_dev, heap_event->time).clock;
         heap_event->writable = writable;
 
         if (lost.lost) {
@@ -539,7 +543,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 
     list_for_each_entry(heap_event, &main_dev->order.heap_event_list, link) {
         if (heap_event->type == PERF_MMAP_EVENT) {
-            if (perf_mmap_event_init(heap_event) < 0)
+            if (perf_mmap_event_init(heap_event, main_dev) < 0)
                 continue;
         } else if (heap_event->type == STREAM_EVENT) {
             if (stream_event_init(heap_event, true) < 0)
@@ -724,6 +728,8 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 
             heap_event->event = event;
             heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
+            if (main_dev->order.nr_streams)
+                heap_event->time = perfclock_to_evclock(main_dev, heap_event->time).clock;
             heap_event->writable = writable;
             min_heap_sift_down(heap, 0, &funcs, NULL);
 

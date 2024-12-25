@@ -850,8 +850,6 @@ int perf_timespec_init(struct prof_dev *dev)
     if (dev->silent)
         return 0;
 
-    current_clocksource();
-
     perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
         int err = 0;
         perf_event_convert_read_tsc_conversion(dev, map);
