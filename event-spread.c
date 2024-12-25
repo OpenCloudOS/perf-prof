@@ -896,6 +896,14 @@ static int block_list_new(struct tp *tp, char *s, bool broadcast)
     }
     if (block_new(eb_list, s) < 0) goto err;
 
+    /*
+     * Broadcast events, heap sorting is enabled by default.
+     * See the comments in order.c.
+     * Just set it to 1, order_init() is called later.
+     */
+    if (broadcast)
+        tp->dev->env->order = 1;
+
     return 0;
 
 err:
