@@ -237,6 +237,7 @@ typedef struct monitor {
     /* PERF_RECORD_* */
 
     //PERF_RECORD_LOST          = 2,
+    // lost_start: evclock_t, lost_end: evclock_t.
     void (*lost)(struct prof_dev *dev, union perf_event *event, int instance, u64 lost_start, u64 lost_end);
 
     //PERF_RECORD_COMM          = 3,
@@ -294,6 +295,7 @@ enum perfclock_convert_to {
 typedef u64 perfclock_t; // The clock used when the kernel samples events. PERF_SAMPLE_TIME.
 typedef u64 tsc_t; // convert perfclock to tsc
 typedef u64 kvmclock_t; // convert perfclock to kvmclock
+typedef u64 heapclock_t; // heap sort time
 typedef union {
     u64 clock;
     perfclock_t perfclock; // ns
@@ -372,8 +374,8 @@ struct prof_dev {
         void **data; // used in heapsort;
         void *permap_event; // struct perf_mmap_event
         u64 wakeup_watermark;
-        u64 prev_lost_time;
-        u64 heap_popped_time; // perfclock_t
+        heapclock_t prev_lost_time;
+        heapclock_t heap_popped_time;
         int heap_popped_ins;
         bool enabled;
         bool inprocess;
@@ -574,6 +576,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map);
 static inline bool using_order(struct prof_dev *dev) {
     return dev->env->order || dev->prof->order;
 }
+u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time);
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
 
 

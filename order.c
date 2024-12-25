@@ -34,7 +34,7 @@ struct heap_event {
     struct list_head link;
     struct prof_dev *dev;
     union perf_event *event;
-    u64 time;
+    heapclock_t time;
     int ins;
     bool writable;
     bool converted;
@@ -50,13 +50,13 @@ struct perf_mmap_event {
      * A monotonically increasing timestamp for
      * each perf_map event.
      */
-    u64 event_mono_time;
+    heapclock_t event_mono_time;
     /*
      * There may be a lost event at the `map->end'
      * position, but it is not seen.
      */
     u64 maybe_lost_end;
-    u64 pause_start_time;
+    u64 pause_start_time; // ns
     bool lost_pause;
 } __attribute__((aligned(ALIGN_SIZE)));
 
@@ -71,7 +71,7 @@ struct stream_event {
     struct heap_event base;
     read_event *read_event;
     void *stream;
-    u64 pause_start_time;
+    u64 pause_start_time; // ns
     bool empty_pause;
 } __attribute__((aligned(ALIGN_SIZE)));
 
@@ -338,6 +338,50 @@ void order_unregister(struct prof_dev *dev, void *stream)
     }
 }
 
+static __always_inline heapclock_t heapclock(struct prof_dev *main_dev, perfclock_t time)
+{
+    /*
+     * Only for perf_mmap events.
+     * stream_event  need_conv  Which clock does heap sort use?
+     *           NO         NO  perfclock_t
+     *           NO        YES  perfclock_t
+     *          YES         NO  perfclock_t  # Unable to convert, out of order.
+     *          YES        YES  evclock_t    # Convert, not out of order.
+     */
+    if (unlikely(main_dev->order.nr_streams && main_dev->convert.need_conv))
+        return perfclock_to_evclock(main_dev, time).clock;
+    else
+        return time;
+}
+
+static __always_inline u64 heapclock_to_evclock(struct prof_dev *main_dev, heapclock_t time)
+{
+    /*
+     * Only for perf_mmap events.
+     * stream_event  need_conv  What is evclock?
+     *           NO         NO  perfclock_t
+     *           NO        YES  evclock_t
+     *          YES         NO  perfclock_t
+     *          YES        YES  evclock_t   # heapclock_t is evclock_t, which has been converted.
+     */
+    if (likely(!main_dev->convert.need_conv) ||
+        unlikely(main_dev->order.nr_streams))
+        return time;
+    else
+        return perfclock_to_evclock(main_dev, time).clock;
+}
+
+u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time)
+{
+    struct prof_dev *target = dev->forward.target;
+    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+
+    if (unlikely(main_dev->order.nr_streams && main_dev->convert.need_conv))
+        return evclock_to_perfclock(main_dev, (evclock_t)time);
+    else
+        return time;
+}
+
 static __always_inline bool
 perf_mmap_has_space(struct perf_mmap *map, unsigned long size)
 {
@@ -388,9 +432,7 @@ retry:
         }
 
         heap_event->event = event;
-        heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
-        if (main_dev->order.nr_streams)
-            heap_event->time = perfclock_to_evclock(main_dev, heap_event->time).clock;
+        heap_event->time = heapclock(main_dev, *(u64 *)((void *)event->sample.array + dev->pos.time_pos));
         heap_event->writable = writable;
 
         if (unlikely(lost.lost)) {
@@ -402,7 +444,8 @@ retry:
                                  mmap_event->event_mono_time, main_dev->order.heap_popped_time);
 
             dev->prof->lost(dev, (union perf_event *)&lost, ins,
-                            mmap_event->event_mono_time, heap_event->time);
+                            heapclock_to_evclock(main_dev, mmap_event->event_mono_time),
+                            heapclock_to_evclock(main_dev, heap_event->time));
         }
         return 0;
     } else
@@ -512,9 +555,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
     struct perf_mmap *map;
     union perf_event *event;
-    u64 time;
+    heapclock_t time;
     int ins;
     bool writable;
+    bool converted;
     u64 wakeup_watermark;
     u64 target_end;
 
@@ -598,6 +642,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         time = heap_event->time;
         ins = heap_event->ins;
         writable = heap_event->writable;
+        converted = 0;
         wakeup_watermark = dev->order.wakeup_watermark;
 
         /*                     lost
@@ -688,8 +733,9 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
                                                 time, mmap_event->event_mono_time);
             tmp = memdup(event, event->header.size);
             time = mmap_event->event_mono_time;
-            *(u64 *)((void *)tmp->sample.array + dev->pos.time_pos) = time;
+            *(u64 *)((void *)tmp->sample.array + dev->pos.time_pos) = heapclock_to_evclock(main_dev, time);
             writable = 1;
+            converted = 1;
             dev->order.nr_fixed_events++;
         } else
             mmap_event->event_mono_time = time;
@@ -708,7 +754,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 
 
     process:
-        perf_event_process_record(dev, tmp ?: event, ins, writable, false);
+        perf_event_process_record(dev, tmp ?: event, ins, writable, converted);
     consume:
         // Not lost. Or lost, fast consuming will result in more losses.
         if (map->end != mmap_event->maybe_lost_end ||
@@ -738,9 +784,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
             }
 
             heap_event->event = event;
-            heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
-            if (main_dev->order.nr_streams)
-                heap_event->time = perfclock_to_evclock(main_dev, heap_event->time).clock;
+            heap_event->time = heapclock(main_dev, *(u64 *)((void *)event->sample.array + dev->pos.time_pos));
             heap_event->writable = writable;
             min_heap_sift_down(heap, 0, &funcs, NULL);
 
@@ -751,7 +795,8 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
                     main_dev->order.prev_lost_time = mmap_event->event_mono_time;
 
                 dev->prof->lost(dev, (union perf_event *)&lost, ins,
-                                        mmap_event->event_mono_time, heap_event->time);
+                                heapclock_to_evclock(main_dev, mmap_event->event_mono_time),
+                                heapclock_to_evclock(main_dev, heap_event->time));
             }
         } else {
             perf_mmap__read_done(map);
