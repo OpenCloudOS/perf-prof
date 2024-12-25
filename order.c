@@ -28,6 +28,7 @@ static __ctor void init(void)
 #define PERF_MMAP_EVENT 0
 #define STREAM_EVENT 1
 
+#define ALIGN_SIZE 64
 // heap sort element: represents an ordered event queue.
 struct heap_event {
     struct list_head link;
@@ -57,7 +58,7 @@ struct perf_mmap_event {
     u64 maybe_lost_end;
     u64 pause_start_time;
     bool lost_pause;
-};
+} __attribute__((aligned(ALIGN_SIZE)));
 
 /*
  * stream event: read from tcp, character devices, files, etc.
@@ -72,13 +73,19 @@ struct stream_event {
     void *stream;
     u64 pause_start_time;
     bool empty_pause;
-};
+} __attribute__((aligned(ALIGN_SIZE)));
 
-static bool less_than(const void *lhs, const void *rhs, void __maybe_unused *args)
+static __always_inline bool less_than(const void *lhs, const void *rhs, void __maybe_unused *args)
 {
     struct heap_event *a = *(struct heap_event **)lhs;
     struct heap_event *b = *(struct heap_event **)rhs;
     return a->time < b->time;
+}
+static __always_inline void swap_ptr(void *lhs, void *rhs, void __maybe_unused *args)
+{
+    struct heap_event *a = *(struct heap_event **)lhs;
+    *(struct heap_event **)lhs = *(struct heap_event **)rhs;
+    *(struct heap_event **)rhs = a;
 }
 
 static int perf_sample_max_size(struct perf_evsel *evsel)
@@ -94,7 +101,7 @@ static int perf_sample_max_size(struct perf_evsel *evsel)
     int size = 0;
 
     if (sample_type & ~known_sample_type)
-        fprintf(stderr, "%s: Unknown sample_type %lu\n", __FUNCTION__,
+        fprintf(stderr, "%s: Unknown sample_type %lu\n", __func__,
                         sample_type & ~known_sample_type);
 
     if (sample_type & PERF_SAMPLE_IDENTIFIER)
@@ -137,7 +144,7 @@ static int perf_sample_max_size(struct perf_evsel *evsel)
             raw_size = tep__event_size(type);
         }
         if (raw_size < 0) {
-            fprintf(stderr, "%s: Unknown raw_size(type %d)\n", __FUNCTION__, type);
+            fprintf(stderr, "%s: Unknown raw_size(type %d)\n", __func__, type);
             size += sizeof(u64);
         } else
             size += round_up(raw_size + sizeof(u32), sizeof(u64));
@@ -221,13 +228,14 @@ int order_init(struct prof_dev *dev)
     min_heap_init(&dev->order.heapsort, dev->order.data, heap_size);
 
     dev->order.nr_mmaps = nr_mmaps;
-    dev->order.permap_event = calloc(nr_mmaps, sizeof(struct perf_mmap_event));
+    posix_memalign(&dev->order.permap_event, ALIGN_SIZE, nr_mmaps * sizeof(struct perf_mmap_event));
     dev->order.heap_popped_time = 0;
     dev->order.wakeup_watermark = perf_sample_watermark(dev);
 
     if (!dev->order.permap_event)
         goto failed;
 
+    memset(dev->order.permap_event, 0, nr_mmaps * sizeof(struct perf_mmap_event));
     perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite) {
         int idx = perf_mmap__idx(map);
         if (idx == 0)
@@ -280,8 +288,9 @@ int order_register(struct prof_dev *dev, read_event *read_event, void *stream)
 {
     struct prof_dev *target = dev->forward.target;
     struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
-    struct stream_event *stream_event = malloc(sizeof(*stream_event));
+    struct stream_event *stream_event = NULL;
 
+    posix_memalign((void **)&stream_event, ALIGN_SIZE, sizeof(*stream_event));
     if (!stream_event)
         return -1;
 
@@ -330,10 +339,9 @@ void order_unregister(struct prof_dev *dev, void *stream)
 }
 
 static __always_inline bool
-perf_mmap_has_space(struct perf_mmap *map, union perf_event *unconsumed, unsigned long size)
+perf_mmap_has_space(struct perf_mmap *map, unsigned long size)
 {
-    u64 start = map->start - (unconsumed ? unconsumed->header.size : 0);
-    return CIRC_SPACE(map->end, start, map->mask+1) >= size;
+    return CIRC_SPACE(map->end, map->start, map->mask+1) >= size;
 }
 
 static int perf_mmap_event_init(struct heap_event *heap_event, struct prof_dev *main_dev)
@@ -344,11 +352,12 @@ static int perf_mmap_event_init(struct heap_event *heap_event, struct prof_dev *
     int ins = heap_event->ins;
     union perf_event *event;
     bool writable;
-    struct perf_record_lost lost = {.lost = 0};
+    struct perf_record_lost lost;
 
     if (perf_mmap__read_init(map) < 0)
         return -1;
 
+    lost.lost = 0;
 retry:
     event = perf_mmap__read_event(map, &writable);
     if (event) {
@@ -366,12 +375,13 @@ retry:
          * here.
          */
         /* Only the PERF_RECORD_SAMPLE event can sample time. */
-        if (event->header.type != PERF_RECORD_SAMPLE) {
+        if (unlikely(event->header.type != PERF_RECORD_SAMPLE)) {
             if (event->header.type == PERF_RECORD_LOST)
                 dev->order.nr_lost++;
-            if (event->header.type == PERF_RECORD_LOST && dev->prof->lost)
-                lost = event->lost;
-            else
+            if (event->header.type == PERF_RECORD_LOST && dev->prof->lost) {
+                lost.id = event->lost.id;
+                lost.lost = event->lost.lost;
+            } else
                 perf_event_process_record(dev, event, ins, writable, false);
             perf_mmap__consume(map);
             goto retry;
@@ -383,7 +393,7 @@ retry:
             heap_event->time = perfclock_to_evclock(main_dev, heap_event->time).clock;
         heap_event->writable = writable;
 
-        if (lost.lost) {
+        if (unlikely(lost.lost)) {
             struct prof_dev *target = dev->forward.target;
             struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
 
@@ -440,7 +450,7 @@ static int stream_event_init(struct heap_event *heap_event, bool init)
 retry:
     event = stream_event->read_event(stream_event->stream, init, &ins, &writable, &converted);
     if (event) {
-        if (event->header.type != PERF_RECORD_SAMPLE) {
+        if (unlikely(event->header.type != PERF_RECORD_SAMPLE)) {
             perf_event_process_record(dev, event, ins, writable, converted);
             goto retry;
         }
@@ -514,7 +524,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     DEFINE_MIN_HEAP(struct heap_event *, ) *heap;
     struct min_heap_callbacks funcs = {
         .less = less_than,
-        .swp = NULL,
+        .swp = swap_ptr,
     };
 
 
@@ -562,11 +572,11 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         struct heap_event **data = min_heap_peek(heap);
         bool need_break = 0;
         union perf_event *tmp = NULL;
-        struct perf_record_lost lost = {.lost = 0};
+        struct perf_record_lost lost;
 
         if (!data)
             break;
-
+        lost.lost = 0;
         heap_event = data[0];
 
         if (unlikely(heap_event->type == STREAM_EVENT)) {
@@ -630,9 +640,9 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
          *
          * If there is always enough safe space, keep is not needed.
          */
-        if (map->end != mmap_event->maybe_lost_end) {
+        if (likely(map->end != mmap_event->maybe_lost_end)) {
              // Have enough safe space, no need to keep event.
-            if (perf_mmap_has_space(map, event, wakeup_watermark))
+            if (perf_mmap_has_space(map, wakeup_watermark+event->header.size))
                 mmap_event->maybe_lost_end = map->end - 1;
             else {
                 mmap_event->maybe_lost_end = map->end;
@@ -702,7 +712,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     consume:
         // Not lost. Or lost, fast consuming will result in more losses.
         if (map->end != mmap_event->maybe_lost_end ||
-            perf_mmap_has_space(map, NULL, wakeup_watermark/2))
+            perf_mmap_has_space(map, wakeup_watermark/2))
             perf_mmap__consume(map);
 
         if (tmp) {
@@ -715,11 +725,12 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
 
         event = perf_mmap__read_event(map, &writable);
         if (event) {
-            if (event->header.type != PERF_RECORD_SAMPLE) {
+            if (unlikely(event->header.type != PERF_RECORD_SAMPLE)) {
                 if (event->header.type == PERF_RECORD_LOST) {
                     dev->order.nr_lost++;
                     if (dev->prof->lost) {
-                        lost = event->lost;
+                        lost.id = event->lost.id;
+                        lost.lost = event->lost.lost;
                         goto consume;
                     }
                 }
@@ -733,7 +744,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
             heap_event->writable = writable;
             min_heap_sift_down(heap, 0, &funcs, NULL);
 
-            if (lost.lost) {
+            if (unlikely(lost.lost)) {
                 if (mmap_event->event_mono_time/*lost_start*/ < main_dev->order.prev_lost_time)
                     fprintf(stderr, "BUG: unorder lost event\n");
                 else
