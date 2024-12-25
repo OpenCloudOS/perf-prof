@@ -2724,7 +2724,7 @@ static perfclock_t prof_dev_minevtime(struct prof_dev *dev)
     u64 minevtime = ULLONG_MAX;
 
     /*
-     * The minimum event time is taken from the ringbuffer, and profiler.
+     * The minimum event time is taken from the ringbuffer, order, and profiler.
      */
 
     // profiler
@@ -2734,6 +2734,11 @@ static perfclock_t prof_dev_minevtime(struct prof_dev *dev)
         // ULLONG_MAX and 0 are special values, not evclock_t, and cannot be converted to ns.
         if (minevtime != ULLONG_MAX && minevtime != 0)
             minevtime = evclock_to_perfclock(dev, (evclock_t)minevtime);
+    }
+
+    if (using_order(dev) && dev->order.heap_popped_time) {
+        u64 heap_popped_time = heapclock_to_perfclock(dev, dev->order.heap_popped_time);
+        minevtime = min(heap_popped_time, minevtime);
     }
 
     // ringbuffer
