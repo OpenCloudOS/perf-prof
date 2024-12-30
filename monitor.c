@@ -1828,7 +1828,7 @@ static void perf_event_handle_mmap(struct prof_dev *dev, struct perf_mmap *map)
     int idx;
 
     if (dev->order.enabled) {
-        order_process(dev, map);
+        order_mmap(dev, map);
         return;
     }
 

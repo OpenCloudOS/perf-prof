@@ -379,7 +379,7 @@ static void tcp_notify(struct tcp_socket_ops *ops)
     /* Compatible with accept client and connect client. */
     struct event_block *block = container_of(ops->server_ops ?: ops, struct event_block, u.tcp.ops);
     struct prof_dev *dev = block->eb_list->tp->dev;
-    order_process(dev, NULL);
+    order_stream(dev);
 }
 
 static int tcp_process_event(char *event_buf, int size, struct tcp_socket_ops *ops)
@@ -515,7 +515,7 @@ static void handle_cdev_event(int fd, unsigned int revents, void *ptr)
         int ret;
 
         if (!eb_list->broadcast && using_order(dev))
-            order_process(dev, NULL);
+            order_stream(dev);
         else
         while (true) {
             ret = read(cdev->fd, cdev->event_copy+cdev->read, BUF_LEN-cdev->read);

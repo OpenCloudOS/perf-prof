@@ -572,7 +572,10 @@ void order_deinit(struct prof_dev *dev);
 typedef union perf_event *read_event(void *stream, bool init, int *ins, bool *writable, bool *converted);
 int order_register(struct prof_dev *dev, read_event *read_event, void *stream);
 void order_unregister(struct prof_dev *dev, void *stream);
-void order_process(struct prof_dev *dev, struct perf_mmap *target_map);
+void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock_t target_tm);
+static inline void order_mmap(struct prof_dev *dev, struct perf_mmap *map) { order_process(dev, map, 0); }
+static inline void order_stream(struct prof_dev *dev) { order_process(dev, NULL, 0); }
+static inline void order_to(struct prof_dev *dev, perfclock_t time) { order_process(dev, NULL, time); }
 static inline struct prof_dev *order_main_dev(struct prof_dev *dev) {
     /*
      * All perf_mmap and stream events will be gathered into main_dev and

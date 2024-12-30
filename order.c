@@ -539,7 +539,7 @@ static int stream_event_process(struct prof_dev *main_dev, struct heap_event *he
     }
 }
 
-void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
+void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock_t target_tm)
 {
     /*
      * All ringbuffers of the forwarding source and the forwarding target are
@@ -554,6 +554,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
     bool converted;
     u64 wakeup_watermark;
     u64 target_end;
+    heapclock_t target_time;
 
     // heap sort
     struct perf_mmap_event *mmap_event;
@@ -584,6 +585,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
      * end' points to the end of the latest event.
      */
     target_end = target_map ? target_map->end : 0;
+    target_time = target_tm ? heapclock(main_dev, target_tm) : -1UL;
 
     heap = (void *)&main_dev->order.heapsort;
     heap->nr = 0;
@@ -637,6 +639,9 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
         writable = heap_event->writable;
         converted = 0;
         wakeup_watermark = dev->order.wakeup_watermark;
+
+        if (time > target_time)
+            break;
 
         /*                     lost
          * perf_mmap A: - -A-|=======|-A- -
