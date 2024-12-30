@@ -286,8 +286,7 @@ void order_deinit(struct prof_dev *dev)
 
 int order_register(struct prof_dev *dev, read_event *read_event, void *stream)
 {
-    struct prof_dev *target = dev->forward.target;
-    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+    struct prof_dev *main_dev = order_main_dev(dev);
     struct stream_event *stream_event = NULL;
 
     posix_memalign((void **)&stream_event, ALIGN_SIZE, sizeof(*stream_event));
@@ -322,8 +321,7 @@ failed:
 
 void order_unregister(struct prof_dev *dev, void *stream)
 {
-    struct prof_dev *target = dev->forward.target;
-    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+    struct prof_dev *main_dev = order_main_dev(dev);
     struct heap_event *heap_event, *tmp;
     struct stream_event *stream_event;
 
@@ -373,8 +371,7 @@ static __always_inline u64 heapclock_to_evclock(struct prof_dev *main_dev, heapc
 
 u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time)
 {
-    struct prof_dev *target = dev->forward.target;
-    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+    struct prof_dev *main_dev = order_main_dev(dev);
 
     if (unlikely(main_dev->order.nr_streams && main_dev->convert.need_conv))
         return evclock_to_perfclock(main_dev, (evclock_t)time);
@@ -436,9 +433,6 @@ retry:
         heap_event->writable = writable;
 
         if (unlikely(lost.lost)) {
-            struct prof_dev *target = dev->forward.target;
-            struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
-
             if (mmap_event->event_mono_time/*lost_start*/ < main_dev->order.heap_popped_time)
                 fprintf(stderr, "BUG: unsafe lost event %lu < popped %lu\n",
                                  mmap_event->event_mono_time, main_dev->order.heap_popped_time);
@@ -551,8 +545,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map)
      * All ringbuffers of the forwarding source and the forwarding target are
      * heap-sorted together.
      */
-    struct prof_dev *target = dev->forward.target;
-    struct prof_dev *main_dev = (target && target->order.enabled) ? target : dev;
+    struct prof_dev *main_dev = order_main_dev(dev);
     struct perf_mmap *map;
     union perf_event *event;
     heapclock_t time;

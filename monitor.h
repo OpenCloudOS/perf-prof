@@ -573,6 +573,14 @@ typedef union perf_event *read_event(void *stream, bool init, int *ins, bool *wr
 int order_register(struct prof_dev *dev, read_event *read_event, void *stream);
 void order_unregister(struct prof_dev *dev, void *stream);
 void order_process(struct prof_dev *dev, struct perf_mmap *target_map);
+static inline struct prof_dev *order_main_dev(struct prof_dev *dev) {
+    /*
+     * All perf_mmap and stream events will be gathered into main_dev and
+     * heap-sorted together.
+     */
+    struct prof_dev *target = dev->forward.target;
+    return (target && target->order.enabled) ? target : dev;
+}
 static inline bool using_order(struct prof_dev *dev) {
     return dev->env->order || dev->prof->order;
 }
