@@ -377,6 +377,7 @@ struct prof_dev {
         heapclock_t prev_lost_time;
         heapclock_t heap_popped_time;
         int heap_popped_ins;
+        u8 break_reason; // enum order_break_reason
         bool enabled;
         bool inprocess;
         // stat
@@ -587,6 +588,14 @@ static inline struct prof_dev *order_main_dev(struct prof_dev *dev) {
 static inline bool using_order(struct prof_dev *dev) {
     return dev->env->order || dev->prof->order;
 }
+enum order_break_reason {
+    ORDER_BREAK_NONE,
+    ORDER_BREAK_EMPTY,
+    ORDER_BREAK_LOST_WAIT,
+    ORDER_BREAK_TARGET_MAP,
+    ORDER_BREAK_TARGET_TIME,
+    ORDER_BREAK_STREAM_STOP,
+};
 u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time);
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
 

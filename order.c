@@ -595,8 +595,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
             if (perf_mmap_event_init(heap_event, main_dev) < 0)
                 continue;
         } else if (heap_event->type == STREAM_EVENT) {
-            if (stream_event_init(heap_event, true) < 0)
+            if (stream_event_init(heap_event, true) < 0) {
+                main_dev->order.break_reason = ORDER_BREAK_STREAM_STOP;
                 goto stream_stop;
+            }
         }
         if (heap->nr < heap->size) {
             heap->data[heap->nr++] = heap_event;
@@ -613,8 +615,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
         union perf_event *tmp = NULL;
         struct perf_record_lost lost;
 
-        if (!data)
+        if (!data) {
+            main_dev->order.break_reason = ORDER_BREAK_EMPTY;
             break;
+        }
         lost.lost = 0;
         heap_event = data[0];
 
@@ -625,6 +629,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
             } else {
                 min_heap_pop(heap, &funcs, NULL);
                 prof_dev_put(heap_event->dev);
+                main_dev->order.break_reason = ORDER_BREAK_STREAM_STOP;
                 break;
             }
         }
@@ -640,8 +645,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
         converted = 0;
         wakeup_watermark = dev->order.wakeup_watermark;
 
-        if (time > target_time)
+        if (time > target_time) {
+            main_dev->order.break_reason = ORDER_BREAK_TARGET_TIME;
             break;
+        }
 
         /*                     lost
          * perf_mmap A: - -A-|=======|-A- -
@@ -693,9 +700,12 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
             }
         } else if (perf_mmap__empty(map)) {
             // Keep the lost_start event in the ringbuffer.
+            if (mmap_event->lost_pause == 1)
+                break;
             dev->order.nr_maybe_lost_pause++;
             mmap_event->lost_pause = 1;
             mmap_event->pause_start_time = get_ktime_ns();
+            main_dev->order.break_reason = ORDER_BREAK_LOST_WAIT;
             break;
         }
         if (unlikely(mmap_event->lost_pause)) {
@@ -764,8 +774,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
             tmp = NULL;
         }
 
-        if (map == target_map && map->start == target_end)
+        if (map == target_map && map->start == target_end) {
+            main_dev->order.break_reason = ORDER_BREAK_TARGET_MAP;
             need_break = 1;
+        }
 
         event = perf_mmap__read_event(map, &writable);
         if (event) {
