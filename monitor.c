@@ -1811,6 +1811,8 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         else
             print_context_switch_cpu_fn(dev, event, instance);
         break;
+    case PERF_RECORD_ORDER_TIME:
+        break;
     default:
         if (likely(!env->exit_n) || ++dev->sampled_events <= env->exit_n)
             fprintf(stderr, "unknown perf sample type %d\n", event->header.type);

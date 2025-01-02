@@ -487,12 +487,15 @@ static int stream_event_init(struct heap_event *heap_event, bool init)
 retry:
     event = stream_event->read_event(stream_event->stream, init, &ins, &writable, &converted);
     if (event) {
-        if (unlikely(event->header.type != PERF_RECORD_SAMPLE)) {
+        if (unlikely(event->header.type != PERF_RECORD_SAMPLE &&
+                     event->header.type != PERF_RECORD_ORDER_TIME)) {
             perf_event_process_record(dev, event, ins, writable, converted);
             goto retry;
         }
         heap_event->event = event;
-        heap_event->time = *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
+        heap_event->time = event->header.type == PERF_RECORD_ORDER_TIME ?
+                           ((struct perf_record_order_time *)event)->order_time :
+                           *(u64 *)((void *)event->sample.array + dev->pos.time_pos);
         heap_event->ins = ins;
         heap_event->writable = writable;
         heap_event->converted = converted;

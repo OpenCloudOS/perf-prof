@@ -339,7 +339,6 @@ static union perf_event *block_read_event(void *stream, bool init,
                 int *ins, bool *writable, bool *converted)
 {
     struct event_block *block = stream;
-    struct prof_dev *dev = block->eb_list->tp->dev;
     union perf_event *event = (void *)block->event;
     int ret;
 
@@ -368,8 +367,9 @@ tcp_retry:
     // read event
     if (block->size > sizeof(struct perf_event_header) &&
         block->size >= event->header.size) {
-        if (event->header.type >= PERF_RECORD_TP) {
-            block_process_event(block, event);
+        if (unlikely(event->header.type == PERF_RECORD_TP)) {
+            if (block_process_event(block, event) < 0)
+                return NULL;
             goto tcp_retry;
         }
 
@@ -377,13 +377,16 @@ tcp_retry:
          * -e sched:sched_switch//pull=9900/vm=$uuid/ --kvmclock $uuid
          * --kvmclock, when waiting for pvclock update, do not process the pulled events in advance.
          */
-        if (!prof_dev_enabled(dev))
+        if (!prof_dev_enabled(block->eb_list->tp->dev))
             goto tcp_retry;
 
         // converted
-        *ins = block_event_convert(block, event);
-        if (*ins < 0)
-            goto tcp_retry;
+        if (event->header.type == PERF_RECORD_SAMPLE) {
+            *ins = block_event_convert(block, event);
+            if (*ins < 0)
+                goto tcp_retry;
+        } else
+            *ins = 0;
 
         *writable = 1;
         *converted = 1;
