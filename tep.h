@@ -146,9 +146,15 @@ struct perf_record_dev {
     union perf_event event;
 };
 
+struct perf_record_order_time {
+    struct perf_event_header header;
+    u64 order_time;
+};
+
 enum tp_event_type {
     PERF_RECORD_TP = PERF_RECORD_HEADER_MAX + 1,
     PERF_RECORD_DEV,
+    PERF_RECORD_ORDER_TIME,
 };
 
 #define TRACE_EVENT_TYPE_MAX \

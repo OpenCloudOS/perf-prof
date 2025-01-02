@@ -13,9 +13,33 @@
 #include <linux/kernel.h>
 #include <linux/circ_buf.h>
 #include <linux/list.h>
+#include <linux/thread_map.h>
 #include <monitor.h>
 #include <tep.h>
 #include <net.h>
+
+static struct prof_dev *perf_clock_dev = NULL;
+static profiler perf_clock;
+
+static int perf_clock_ref(void)
+{
+    if (!perf_clock_dev) {
+        struct env *env = zalloc(sizeof(*env));
+        if (!env) return -1;
+        perf_clock_dev = prof_dev_open(&perf_clock, env);
+        if (!perf_clock_dev) return -1;
+    }
+    prof_dev_use(perf_clock_dev);
+    return 0;
+}
+
+static void perf_clock_unref(void)
+{
+    if (!perf_clock_dev) return;
+    if (prof_dev_unuse(perf_clock_dev))
+        perf_clock_dev = NULL;
+}
+
 
 #define BUF_LEN (1 << 16)
 
@@ -75,12 +99,17 @@ struct event_block {
 };
 
 struct event_block_list {
+    struct list_head link_to; // broadcast_block_list
     struct list_head block_list;
     struct tp *tp;
+    u64 last_event_time;
+    int time_pos;
     bool broadcast;
     bool freeing;
     bool ins_oncpu;
 };
+
+struct list_head broadcast_block_list = LIST_HEAD_INIT(broadcast_block_list);
 
 static inline void block_free(struct event_block *block);
 static inline void block_broadcast(struct event_block *block, const void *buf, size_t len, int flags);
@@ -864,6 +893,10 @@ static void block_list_free(struct tp *tp, bool broadcast)
     list_for_each_entry_safe(block, next, &eb_list->block_list, link) {
         block_free(block);
     }
+    if (!list_empty(&eb_list->link_to)) {
+        perf_clock_unref();
+        list_del(&eb_list->link_to);
+    }
     free(eb_list);
 
     if (broadcast) tp->broadcast = NULL;
@@ -879,8 +912,10 @@ static int block_list_new(struct tp *tp, char *s, bool broadcast)
         if (!(eb_list = malloc(sizeof(*eb_list)))) return -1;
         memset(eb_list, 0, sizeof(*eb_list));
 
+        INIT_LIST_HEAD(&eb_list->link_to);
         INIT_LIST_HEAD(&eb_list->block_list);
         eb_list->tp = tp;
+        eb_list->time_pos = -1;
         eb_list->broadcast = broadcast;
         eb_list->freeing = 0;
         eb_list->ins_oncpu = prof_dev_ins_oncpu(tp->dev);
@@ -901,8 +936,11 @@ static int block_list_new(struct tp *tp, char *s, bool broadcast)
      * See the comments in order.c.
      * Just set it to 1, order_init() is called later.
      */
-    if (broadcast)
+    if (broadcast) {
         tp->dev->env->order = 1;
+        if (perf_clock_ref() == 0)
+            list_add_tail(&eb_list->link_to, &broadcast_block_list);
+    }
 
     return 0;
 
@@ -930,6 +968,12 @@ int tp_broadcast_event(struct tp *tp, union perf_event *event)
     if (!eb_list)
         return 0;
 
+    if (event->header.type == PERF_RECORD_SAMPLE) {
+        if (unlikely(eb_list->time_pos == -1))
+            eb_list->time_pos = eb_list->tp->dev->pos.time_pos;
+        eb_list->last_event_time = *(u64 *)((void *)event->sample.array + eb_list->time_pos);
+    }
+
     list_for_each_entry(block, &eb_list->block_list, link) {
         block_broadcast(block, event, event->header.size, 0);
     }
@@ -945,4 +989,118 @@ void tp_receive_free(struct tp *tp)
 {
     block_list_free(tp, false);
 }
+
+
+static struct timer push_timer;
+static void perf_clock_timer(struct timer *t)
+{
+    /*
+     * By default, 4 signals are ignored: SIGCHLD, SIGCONT, SIGURG, SIGWINCH.
+     * Among them, SIGCHLD and SIGWINCH will be blocked by perf-prof and will
+     * no be ignored in the kernel. SIGCONT will disrupt ptrace and cannot be
+     * used. Only SIGURG.
+     */
+    kill(getpid(), SIGURG);
+}
+
+static void perf_clock_deinit(struct prof_dev *dev)
+{
+    timer_destroy(&push_timer);
+}
+
+static int perf_clock_init(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_event_attr attr = {
+        .type          = PERF_TYPE_TRACEPOINT,
+        .config        = 0,
+        .size          = sizeof(struct perf_event_attr),
+        .sample_period = 1,
+        .sample_type   = PERF_SAMPLE_TIME,
+        .pinned        = 1,
+        .disabled      = 1,
+        .watermark     = 0,
+        .wakeup_events = 1,
+    };
+    struct perf_evsel *evsel;
+    int id = tep__event_id("signal", "signal_generate");
+
+    if (id < 0) goto failed;
+
+    if (timer_init(&push_timer, 1, perf_clock_timer) < 0)
+        goto failed;
+
+    dev->type = PROF_DEV_TYPE_SERVICE;
+    dev->silent = true;
+    perf_cpu_map__put(dev->cpus);
+    perf_thread_map__put(dev->threads);
+    dev->cpus = perf_cpu_map__dummy_new();
+    dev->threads = thread_map__new_by_tid(getpid());
+
+    attr.config = id;
+    evsel = perf_evsel__new(&attr);
+    if (!evsel)  goto del_timer;
+    perf_evlist__add(evlist, evsel);
+
+    timer_start(&push_timer, 10*NSEC_PER_MSEC, false);
+    return 0;
+
+del_timer:
+    timer_destroy(&push_timer);
+failed:
+    return -1;
+}
+
+static void perf_clock_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct prof_dev *main_dev;
+    struct event_block_list *eb_list;
+    struct perf_record_order_time order_time;
+    // PERF_SAMPLE_TIME
+    struct sample_type_header {
+        __u64   time;
+    } *timer = (void *)event->sample.array;
+
+    order_time.header.size = sizeof(order_time);
+    order_time.header.type = PERF_RECORD_ORDER_TIME;
+    order_time.header.misc = 0;
+
+    /*
+     * For the push ATTR event, its frequency of occurrence will affect the heap
+     * sorting on the pull side. Therefore, a periodic timer is used to flush the
+     * perf_mmap event and notify the pull side of the flush time.
+     *
+     * The PERF_RECORD_ORDER_TIME event is used for notification, but it is not a
+     * kernel event.
+     */
+restart:
+    list_for_each_entry(eb_list, &broadcast_block_list, link_to) {
+        dev = eb_list->tp->dev;
+
+        prof_dev_get(dev);
+        if (heapclock_to_perfclock(dev, dev->order.heap_popped_time) < timer->time)
+            order_to(dev, timer->time);
+        if (prof_dev_put(dev))
+            goto restart;
+
+        main_dev = order_main_dev(dev);
+        // If the order_to() ends early due to lost, there may be events that have
+        // not been flushed before the timer->time timestamp.
+        if (main_dev->order.break_reason != ORDER_BREAK_LOST_WAIT &&
+            main_dev->order.break_reason != ORDER_BREAK_STREAM_STOP &&
+            eb_list->last_event_time < timer->time) {
+            // Everything passed to the profiler uses the evclock_t clock.
+            order_time.order_time = perfclock_to_evclock(dev, timer->time).clock;
+            tp_broadcast_event(eb_list->tp, (void *)&order_time);
+        }
+    }
+}
+
+static profiler perf_clock = {
+    .name = "perf-clock",
+    .pages = 1,
+    .init = perf_clock_init,
+    .deinit = perf_clock_deinit,
+    .sample = perf_clock_sample,
+};
 

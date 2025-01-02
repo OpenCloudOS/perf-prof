@@ -439,13 +439,15 @@ static inline bool prof_dev_use(struct prof_dev *dev)
     dev->dev_users ++;
     return true;
 }
-static inline void prof_dev_unuse(struct prof_dev *dev)
+static inline bool prof_dev_unuse(struct prof_dev *dev)
 {
-    if (dev->dev_users > 0) {
-        dev->dev_users --;
-        if (dev->dev_users == 0 && !prof_dev_put(dev))
+    if (dev->dev_users > 0 &&
+      --dev->dev_users == 0) {
+        if (!prof_dev_put(dev))
             prof_dev_close(dev);
+        return true;
     }
+    return false;
 }
 
 /**
