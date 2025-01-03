@@ -8,7 +8,7 @@ def test_kmemleak_kmalloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
                 '--alloc', 'kmem:kmalloc//ptr=ptr/size=bytes_req/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/',
                 '--free', 'kmem:kfree//ptr=ptr/',
-                '-m', '256', '--order', '--order-mem', '64M', '-g'])
+                '-m', '256', '--order', '-g'])
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
@@ -16,7 +16,7 @@ def test_kmemleak_userspace_ftrace_filter(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
                 '--alloc', 'kmem:kmalloc/bytes_req==bytes_alloc/ptr=ptr/size=bytes_req/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/',
                 '--free', 'kmem:kfree//ptr=ptr/',
-                '-m', '256', '--order', '--order-mem', '64M', '-g'])
+                '-m', '256', '--order', '-g'])
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
@@ -24,7 +24,7 @@ def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
                 '--alloc', 'kmem:kmem_cache_alloc//ptr=ptr/size=bytes_req/stack/,kmem:kmem_cache_alloc_node//ptr=ptr/size=bytes_req/stack/',
                 '--free', 'kmem:kmem_cache_free//ptr=ptr/',
-                '-m', '256', '--order', '--order-mem', '64M'])
+                '-m', '256', '--order'])
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
@@ -52,7 +52,7 @@ def test_kmemleak_mm_page_alloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
                 '--alloc', 'kmem:mm_page_alloc//ptr={ptr}/size=4096<<order/key={ptr}/stack/'.format(ptr=alloc_ptr),
                 '--free', 'kmem:mm_page_free//ptr={ptr}/key={ptr}/stack/'.format(ptr=free_ptr),
-                '-m', '256', '--order', '--order-mem', '64M'])
+                '-m', '256', '--order'])
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
@@ -65,6 +65,6 @@ def test_kmemprof_percpu_alloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
                 '--alloc', 'percpu:percpu_alloc_percpu//ptr=ptr/size=size/stack/',
                 '--free', 'percpu:percpu_free_percpu//ptr=ptr/stack/',
-                '-m', '256', '--order', '--order-mem', '64M'])
+                '-m', '256', '--order'])
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
