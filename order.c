@@ -379,6 +379,33 @@ u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time)
         return time;
 }
 
+static union perf_event *
+perf_mmap_fix_out_of_order(struct prof_dev *main_dev, struct prof_dev *dev,
+                           struct heap_event *heap_event, heapclock_t popped_time)
+{
+    union perf_event *event = heap_event->event;
+
+    if (unlikely(main_dev->env->verbose))
+        printf("%s: fix out-of-order event %lu < %lu\n", dev->prof->name,
+                    heap_event->time, popped_time);
+
+    if (!heap_event->writable) {
+        struct perf_mmap *map = ((struct perf_mmap_event *)heap_event)->map;
+        memcpy(map->event_copy, event, event->header.size);
+        event = (union perf_event *)map->event_copy;
+    }
+
+    *(u64 *)((void *)event->sample.array + dev->pos.time_pos) =
+                heapclock_to_perfclock(main_dev, popped_time);
+
+    heap_event->event = event;
+    heap_event->time = popped_time;
+    heap_event->writable = 1;
+    dev->order.nr_fixed_events++;
+
+    return event;
+}
+
 static __always_inline bool
 perf_mmap_has_space(struct perf_mmap *map, unsigned long size)
 {
@@ -431,6 +458,47 @@ retry:
         heap_event->event = event;
         heap_event->time = heapclock(main_dev, *(u64 *)((void *)event->sample.array + dev->pos.time_pos));
         heap_event->writable = writable;
+
+        /* Keep order at init. Why do this?
+         *
+         * When the kernel outputs an event, it first obtains the event time and starts
+         * outputting. The event cannot be seen in the ringbuffer until the output ends.
+         * This takes some time from start to end, nanosecond granularity, very short.
+         * However, interrupts will cause output delays. Therefore, between multiple
+         * ringbuffers, out of order may occur.
+         *
+         * order_process() will only process to a known time, and its target_end or
+         * target_time is this known time, which is already known at the beginning of
+         * order_process(). This is very critical, no matter how fast the heap sort is
+         * processed, future events will not be touched.
+         *
+         * At this known-time moment, all events in the ringbuffer before this time can
+         * either be seen or are being output (cannot be seen yet, output delay, which
+         * will lead to out-of-order). Events after this known-time will not cause
+         * out-of-order. For a perf_mmap, there is and only 1 event being output.
+         *
+         * In order_process(), perf_mmap becomes empty and pops up. When order_process()
+         * returns, heap_popped_time is the known-time, which is the last event timestamp
+         * from one of the perf_mmaps. For the popped perf_mmap, it may generate new
+         * events before heap_popped_time, but the output is delayed, and we will see
+         * out-of-order at the next order_process(), that is in init().
+         *
+         * For an event being output, its timestamp can be any time from the start to the
+         * end of output.
+         *
+         *             heap_popped_time
+         * MAP: A ------|-----
+         * MAP: B -|   |~|----
+         *         |   | `output end
+         *         |   `output start(being output)
+         *         | `empty, no events
+         *         `be seen
+         *
+         * In summary, it is okay for us to fix the out-of-order event during init() and
+         * adjust the time to heap_popped_time.
+         */
+        if (unlikely(heap_event->time < main_dev->order.heap_popped_time))
+            perf_mmap_fix_out_of_order(main_dev, dev, heap_event, main_dev->order.heap_popped_time);
 
         if (unlikely(lost.lost)) {
             if (mmap_event->event_mono_time/*lost_start*/ < main_dev->order.heap_popped_time)
@@ -554,7 +622,6 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
     heapclock_t time;
     int ins;
     bool writable;
-    bool converted;
     u64 wakeup_watermark;
     u64 target_end;
     heapclock_t target_time;
@@ -615,7 +682,6 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
     while (1) {
         struct heap_event **data = min_heap_peek(heap);
         bool need_break = 0;
-        union perf_event *tmp = NULL;
         struct perf_record_lost lost;
 
         if (!data) {
@@ -645,7 +711,6 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
         time = heap_event->time;
         ins = heap_event->ins;
         writable = heap_event->writable;
-        converted = 0;
         wakeup_watermark = dev->order.wakeup_watermark;
 
         if (time > target_time) {
@@ -735,19 +800,13 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
          *    ...
          *
          * After the time is obtained in __perf_event_header__init_id(), but before
-         * it is output, an interrupt occurs, and the events later in time are output
-         * first.
+         * it is output begin, an interrupt occurs, and the events later in time are
+         * output first.
          */
         if (unlikely(time < mmap_event->event_mono_time)) {
-            if (main_dev->env->verbose)
-                printf("%s: fix out-of-order event %lu < %lu\n", dev->prof->name,
-                                                time, mmap_event->event_mono_time);
-            tmp = memdup(event, event->header.size);
+            event = perf_mmap_fix_out_of_order(main_dev, dev, heap_event, mmap_event->event_mono_time);
             time = mmap_event->event_mono_time;
-            *(u64 *)((void *)tmp->sample.array + dev->pos.time_pos) = heapclock_to_evclock(main_dev, time);
             writable = 1;
-            converted = 1;
-            dev->order.nr_fixed_events++;
         } else
             mmap_event->event_mono_time = time;
 
@@ -765,17 +824,12 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
 
 
     process:
-        perf_event_process_record(dev, tmp ?: event, ins, writable, converted);
+        perf_event_process_record(dev, event, ins, writable, false);
     consume:
         // Not lost. Or lost, fast consuming will result in more losses.
         if (map->end != mmap_event->maybe_lost_end ||
             perf_mmap_has_space(map, wakeup_watermark/2))
             perf_mmap__consume(map);
-
-        if (tmp) {
-            free(tmp);
-            tmp = NULL;
-        }
 
         if (map == target_map && map->start == target_end) {
             main_dev->order.break_reason = ORDER_BREAK_TARGET_MAP;
