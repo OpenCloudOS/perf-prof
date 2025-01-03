@@ -18,7 +18,6 @@ OPTION:
   -i, --interval=ms          Interval, Unit: ms
   -m, --mmap-pages=pages     Number of mmap data pages and AUX area tracing mmap pages
       --order                Order events by timestamp.
-      --order-mem=Bytes      Maximum memory used by ordering events. Unit: GB/MB/KB/*B.
   -p, --pids=PID,...         Attach to processes
   -t, --tids=TID,...         Attach to thread
   -v, --verbose              Verbose debug output

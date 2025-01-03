@@ -307,7 +307,7 @@ FILTER OPTION:
 ```
 $ perf-prof trace -e 'sched:sched_stat_runtime help
 
-perf-prof trace -e "sched:sched_stat_runtime/./[stack/]" [-g] [--flame-graph .] [-C .] [-p .] [-i .] [--order] [--order-mem .] [-m .] 
+perf-prof trace -e "sched:sched_stat_runtime/./[stack/]" [-g] [--flame-graph .] [-C .] [-p .] [-i .] [--order] [-m .]
 
 sched:sched_stat_runtime
 name: sched_stat_runtime

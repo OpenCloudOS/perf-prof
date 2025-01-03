@@ -42,7 +42,6 @@ OPTION:
   -i, --interval <ms>           Interval, Unit: ms
   -o, --output <file>           Output file name
       --order                   Order events by timestamp.
-      --order-mem <Bytes>       Maximum memory used by ordering events. Unit: GB/MB/KB/*B.
   -m, --mmap-pages <pages>      Number of mmap data pages and AUX area tracing mmap pages
   -V, --version                 Version info
   -v, --verbose                 be more verbose

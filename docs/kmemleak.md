@@ -38,7 +38,6 @@ Event selector. use 'perf list tracepoint' to list available tp events.
   -i, --interval=ms          Interval, Unit: ms
   -m, --mmap-pages=pages     Number of mmap data pages and AUX area tracing mmap pages
       --order                Order events by timestamp.
-      --order-mem=Bytes      Maximum memory used by ordering events. Unit: GB/MB/KB/*B.
   -p, --pids=PID,...         Attach to processes
   -t, --tids=TID,...         Attach to thread
   -v, --verbose              Verbose debug output
@@ -55,7 +54,7 @@ Event selector. use 'perf list tracepoint' to list available tp events.
 ## 1.1 kmalloc
 
 ```
-perf-prof kmemleak --alloc "kmem:kmalloc,kmem:kmalloc_node" --free kmem:kfree -m 64 -g --order --order-mem 4M
+perf-prof kmemleak --alloc "kmem:kmalloc,kmem:kmalloc_node" --free kmem:kfree -m 64 -g --order
 ```
 
 --alloc，监控`kmem:kmalloc, kmem:kmalloc_node`2个分配入口。
@@ -67,7 +66,7 @@ perf-prof kmemleak --alloc "kmem:kmalloc,kmem:kmalloc_node" --free kmem:kfree -m
 ## 1.2 kmem_cache_alloc
 
 ```
-perf-prof kmemleak --alloc "kmem:kmem_cache_alloc/bytes_alloc>256/,kmem:kmem_cache_alloc_node/bytes_alloc>256/" --free "kmem:kmem_cache_free" -m 64 -g --order --order-mem 8M
+perf-prof kmemleak --alloc "kmem:kmem_cache_alloc/bytes_alloc>256/,kmem:kmem_cache_alloc_node/bytes_alloc>256/" --free "kmem:kmem_cache_free" -m 64 -g --order
 ```
 
 --alloc，监控`kmem:kmem_cache_alloc, kmem:kmem_cache_alloc_node`2个分配入口。并过滤`bytes_alloc>256`的内存分配请求。
@@ -79,7 +78,7 @@ perf-prof kmemleak --alloc "kmem:kmem_cache_alloc/bytes_alloc>256/,kmem:kmem_cac
 ```
 echo 'r:alloc_percpu pcpu_alloc ptr=$retval' >> /sys/kernel/debug/tracing/kprobe_events #ptr指向分配的内存地址
 echo 'p:free_percpu free_percpu ptr=%di' >> /sys/kernel/debug/tracing/kprobe_events
-perf-prof kmemleak --alloc kprobes:alloc_percpu --free kprobes:free_percpu -m 8 -g --order --order-mem 8M
+perf-prof kmemleak --alloc kprobes:alloc_percpu --free kprobes:free_percpu -m 8 -g --order
 ```
 
 alloc_percpu，增加pcpu_alloc return kprobe点，使用ptr参数接收返回的指针。
