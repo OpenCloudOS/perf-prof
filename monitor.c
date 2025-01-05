@@ -2308,6 +2308,16 @@ static int prof_dev_atomic_enable(struct prof_dev *dev, u64 enable_cost)
     if (!(dev->pos.sample_type & PERF_SAMPLE_TIME))
         return -1;
 
+    /*
+     * Stream events and perf_mmap events use different clocks.
+     * When time conversion is not enabled, setting `enabled_after'
+     * may filter out all stream events.
+     */
+    if (using_order(dev) &&
+        dev->order.nr_streams && // stream event(e.g. pull ATTR)
+        !dev->convert.need_conv) // convert
+        return -1;
+
     perf_evlist__for_each_mmap(evlist, map, dev->env->overwrite) {
         if (perf_mmap__read_init(map) < 0)
             continue;
