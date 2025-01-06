@@ -381,13 +381,12 @@ u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time)
 
 static union perf_event *
 perf_mmap_fix_out_of_order(struct prof_dev *main_dev, struct prof_dev *dev,
-                           struct heap_event *heap_event, heapclock_t popped_time)
+                           struct heap_event *heap_event, heapclock_t popped_time, int popped_ins)
 {
     union perf_event *event = heap_event->event;
 
-    if (unlikely(main_dev->env->verbose))
-        printf("%s: fix out-of-order event %lu < %lu\n", dev->prof->name,
-                    heap_event->time, popped_time);
+    printf("%s: fix out-of-order event %lu(%d) < %lu(%d)\n", dev->prof->name,
+                    heap_event->time, heap_event->ins, popped_time, popped_ins);
 
     if (!heap_event->writable) {
         struct perf_mmap *map = ((struct perf_mmap_event *)heap_event)->map;
@@ -498,7 +497,8 @@ retry:
          * adjust the time to heap_popped_time.
          */
         if (unlikely(heap_event->time < main_dev->order.heap_popped_time))
-            perf_mmap_fix_out_of_order(main_dev, dev, heap_event, main_dev->order.heap_popped_time);
+            perf_mmap_fix_out_of_order(main_dev, dev, heap_event, main_dev->order.heap_popped_time,
+                                       main_dev->order.heap_popped_ins);
 
         if (unlikely(lost.lost)) {
             if (mmap_event->event_mono_time/*lost_start*/ < main_dev->order.heap_popped_time)
@@ -804,7 +804,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
          * output first.
          */
         if (unlikely(time < mmap_event->event_mono_time)) {
-            event = perf_mmap_fix_out_of_order(main_dev, dev, heap_event, mmap_event->event_mono_time);
+            event = perf_mmap_fix_out_of_order(main_dev, dev, heap_event, mmap_event->event_mono_time, ins);
             time = mmap_event->event_mono_time;
             writable = 1;
         } else
