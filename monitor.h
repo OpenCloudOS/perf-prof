@@ -580,12 +580,16 @@ static inline void order_mmap(struct prof_dev *dev, struct perf_mmap *map) { ord
 static inline void order_stream(struct prof_dev *dev) { order_process(dev, NULL, 0); }
 static inline void order_to(struct prof_dev *dev, perfclock_t time) { order_process(dev, NULL, time); }
 static inline struct prof_dev *order_main_dev(struct prof_dev *dev) {
+    struct prof_dev *main_dev;
     /*
      * All perf_mmap and stream events will be gathered into main_dev and
      * heap-sorted together.
      */
-    struct prof_dev *target = dev->forward.target;
-    return (target && target->order.enabled) ? target : dev;
+    do {
+        main_dev = dev;
+        dev = dev->links.parent;
+    } while(dev && dev->order.enabled);
+    return main_dev;
 }
 static inline bool using_order(struct prof_dev *dev) {
     return dev->env->order || dev->prof->order;

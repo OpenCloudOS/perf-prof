@@ -610,6 +610,55 @@ static int stream_event_process(struct prof_dev *main_dev, struct heap_event *he
     }
 }
 
+static int order_heap_init(struct prof_dev *main_dev, struct prof_dev *dev)
+{
+    DEFINE_MIN_HEAP(struct heap_event *, ) *heap;
+    struct heap_event *heap_event;
+    struct prof_dev *child, *tmp;
+
+    heap = (void *)&main_dev->order.heapsort;
+
+    list_for_each_entry(heap_event, &dev->order.heap_event_list, link) {
+        if (heap_event->type == PERF_MMAP_EVENT) {
+            if (perf_mmap_event_init(heap_event, main_dev) < 0)
+                continue;
+        } else if (heap_event->type == STREAM_EVENT) {
+            if (stream_event_init(heap_event, true) < 0) {
+                main_dev->order.break_reason = ORDER_BREAK_STREAM_STOP;
+                return 1;
+            }
+        }
+
+        if (heap->nr == heap->size) {
+            // expand
+            int heap_size = heap->size + dev->order.heap_size;
+            void *data = realloc(heap->data, heap_size * sizeof(*heap->data));
+            if (!data)
+                return -1;
+            heap->size = heap_size;
+            heap->data = data;
+            main_dev->order.heap_size = heap_size;
+            main_dev->order.data = data;
+        }
+        heap->data[heap->nr++] = heap_event;
+        prof_dev_get(heap_event->dev);
+    }
+
+    /*
+     * Make all order-enabled child devices perform heap sort together.
+     * Includes: cloned child, forwarding source.
+     * Sorting together only adjusts the order of event processing and
+     * does not affect the forwarding and close of the device.
+     */
+    for_each_child_dev_get(child, tmp, dev) {
+        int ret = order_heap_init(main_dev, child);
+        if (ret)
+            return ret;
+    }
+
+    return 0;
+}
+
 void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock_t target_tm)
 {
     /*
@@ -625,6 +674,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
     u64 wakeup_watermark;
     u64 target_end;
     heapclock_t target_time;
+    struct perf_record_lost lost;
 
     // heap sort
     struct perf_mmap_event *mmap_event;
@@ -657,24 +707,12 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
     target_end = target_map ? target_map->end : 0;
     target_time = target_tm ? heapclock(main_dev, target_tm) : -1UL;
 
+    lost.lost = 0;
     heap = (void *)&main_dev->order.heapsort;
     heap->nr = 0;
 
-    list_for_each_entry(heap_event, &main_dev->order.heap_event_list, link) {
-        if (heap_event->type == PERF_MMAP_EVENT) {
-            if (perf_mmap_event_init(heap_event, main_dev) < 0)
-                continue;
-        } else if (heap_event->type == STREAM_EVENT) {
-            if (stream_event_init(heap_event, true) < 0) {
-                main_dev->order.break_reason = ORDER_BREAK_STREAM_STOP;
-                goto stream_stop;
-            }
-        }
-        if (heap->nr < heap->size) {
-            heap->data[heap->nr++] = heap_event;
-            prof_dev_get(heap_event->dev);
-        }
-    }
+    if (order_heap_init(main_dev, main_dev) != 0)
+        goto stream_stop;
 
 
     // heap sort start
@@ -682,13 +720,12 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
     while (1) {
         struct heap_event **data = min_heap_peek(heap);
         bool need_break = 0;
-        struct perf_record_lost lost;
 
         if (!data) {
             main_dev->order.break_reason = ORDER_BREAK_EMPTY;
             break;
         }
-        lost.lost = 0;
+
         heap_event = data[0];
 
         if (unlikely(heap_event->type == STREAM_EVENT)) {
@@ -864,6 +901,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
                 dev->prof->lost(dev, (union perf_event *)&lost, ins,
                                 heapclock_to_evclock(main_dev, mmap_event->event_mono_time),
                                 heapclock_to_evclock(main_dev, heap_event->time));
+                lost.lost = 0;
             }
         } else {
             perf_mmap__read_done(map);
