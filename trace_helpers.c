@@ -15,9 +15,11 @@
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <time.h>
+#include <sched.h>
 #include <linux/refcount.h>
 #include <linux/rblist.h>
 #include <linux/time64.h>
+#include <linux/hashtable.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <limits.h>
@@ -185,6 +187,94 @@ const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
     return NULL;
 }
 
+static DEFINE_HASHTABLE(mntns_ino_fds, 6);
+static unsigned long default_mntns_ino = 0;
+static int default_mntns_fd = 0;
+struct mntns {
+    struct hlist_node node;
+    unsigned long mntns_ino; // /proc/self/ns/mnt -> mnt:[4026531840]
+    int mntns_fd;
+    int refcnt;
+};
+/*
+ * Get the symbol table of the process under the non-init mount namespace.
+ * Typically used in container scenarios.
+ *
+ * When we need to read symbols of non-default mntns, enter the corresponding
+ * mount namespace through setns(), and return to the default mount namespace
+ * after reading the symbols.
+ */
+static __ctor void __mntns_init(void)
+{
+    const char *mntns_path = "/proc/self/ns/mnt";
+    char buf[128];
+    if (readlink(mntns_path, buf, sizeof(buf)) > 5) {
+        default_mntns_ino = atol(buf + 5 /* mnt:[ */);
+        default_mntns_fd = open(mntns_path, O_RDONLY);
+    }
+}
+
+static struct mntns *get_mntns(int pid)
+{
+    char path[128];
+    char buf[128];
+    unsigned long mntns_ino;
+    int mntns_fd;
+    struct mntns *mnt;
+
+    snprintf(path, sizeof(buf), "/proc/%d/ns/mnt", pid);
+    if (readlink(path, buf, sizeof(buf)) > 5)
+        mntns_ino = atol(buf + 5 /* mnt:[ */);
+    else
+        return NULL;
+
+    if (mntns_ino == default_mntns_ino)
+        return NULL;
+
+    hash_for_each_possible(mntns_ino_fds, mnt, node, mntns_ino) {
+        if (mnt->mntns_ino == mntns_ino) {
+            mnt->refcnt++;
+            return mnt;
+        }
+    }
+
+    mntns_fd = open(path, O_RDONLY);
+    if (mntns_fd == -1)
+        return NULL;
+
+    mnt = zalloc(sizeof(*mnt));
+    if (mnt) {
+        mnt->mntns_ino = mntns_ino;
+        mnt->mntns_fd = mntns_fd;
+        mnt->refcnt = 1;
+        hash_add(mntns_ino_fds, &mnt->node, mntns_ino);
+    } else
+        close(mntns_fd);
+
+    return mnt;
+}
+
+static void put_mntns(struct mntns *mnt)
+{
+    if (mnt && --mnt->refcnt == 0) {
+        hash_del(&mnt->node);
+        close(mnt->mntns_fd);
+        free(mnt);
+    }
+}
+
+static void enter_mntns(struct mntns *mnt)
+{
+    if (mnt)
+        setns(mnt->mntns_fd, CLONE_NEWNS);
+}
+
+static void exit_mntns(struct mntns *mnt)
+{
+    if (mnt)
+        setns(default_mntns_fd, CLONE_NEWNS);
+}
+
 /*
  * syms_cache --> syms --> dso --> object --> sym
  *            pid      maps    file       sym
@@ -207,7 +297,9 @@ enum elf_type {
 struct object {
     struct rb_node rbnode;
     refcount_t refcnt;
+    struct mntns *mnt;
     char *name;
+    char *name_atmnt;
     /* Dyn's first text section virtual addr at execution */
     uint64_t sh_addr;
     /* Dyn's first text section file offset */
@@ -324,26 +416,39 @@ err_out:
     return err;
 }
 
+struct tmp_object {
+    struct mntns *mnt;
+    const char *name;
+};
+
 static int object_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct object *obj = container_of(rbn, struct object, rbnode);
-    const char *name = entry;
+    struct tmp_object *tmp = (void *)entry;
 
-    return strcmp(obj->name, name);
+    if (likely(obj->mnt == tmp->mnt))
+        return strcmp(obj->name, tmp->name);
+    else
+        return (int)((s64)obj->mnt - (s64)tmp->mnt);
 }
 
 static struct rb_node *object_node_new(struct rblist *rlist, const void *new_entry)
 {
-    const char *name = new_entry;
+    struct tmp_object *tmp = (void *)new_entry;
+    const char *name = tmp->name;
     struct object *obj = malloc(sizeof(*obj));
     int type;
 
     if (obj) {
         memset(obj, 0, sizeof(*obj));
         RB_CLEAR_NODE(&obj->rbnode);
+        obj->mnt = tmp->mnt;
         obj->name = strdup(name);
+        if (obj->mnt)
+            asprintf(&obj->name_atmnt, "%s @mnt:[%lu]", name, obj->mnt->mntns_ino);
         refcount_set(&obj->refcnt, 0);
 
+        enter_mntns(obj->mnt);
         type = get_elf_type(name);
         if (type == ET_EXEC) {
             obj->type = EXEC;
@@ -360,6 +465,7 @@ static struct rb_node *object_node_new(struct rblist *rlist, const void *new_ent
         } else {
             obj->type = UNKNOWN;
         }
+        exit_mntns(obj->mnt);
         return &obj->rbnode;
     } else
         return NULL;
@@ -369,7 +475,9 @@ static void object_node_delete(struct rblist *rblist, struct rb_node *rbn)
 {
     struct object *obj = container_of(rbn, struct object, rbnode);
 
+    put_mntns(obj->mnt);
     free(obj->name);
+    if (obj->name_atmnt) free(obj->name_atmnt);
     free(obj->syms);
     free(obj->strs);
     free(obj);
@@ -383,18 +491,23 @@ static struct rblist objects = {
     .node_delete = object_node_delete,
 };
 
-static struct object *obj__get(const char *name)
+static struct object *obj__get(const char *name, pid_t tgid)
 {
     struct rb_node *rbnode;
     struct object *obj = NULL;
+    struct tmp_object tmp;
 
-    rbnode = rblist__findnew(&objects, name);
+    tmp.mnt = tgid ? get_mntns(tgid) : NULL;
+    tmp.name = name;
+    rbnode = rblist__findnew(&objects, &tmp);
     if (rbnode) {
         obj = container_of(rbnode, struct object, rbnode);
         if (refcount_read(&obj->refcnt) == 0)
             refcount_set(&obj->refcnt, 1);
-        else
+        else {
             refcount_inc(&obj->refcnt);
+            put_mntns(tmp.mnt);
+        }
     }
     return obj;
 }
@@ -423,11 +536,11 @@ void obj__stat(FILE *fp)
         used = obj->syms_sz * sizeof(*obj->syms) + obj->strs_sz;
         size = obj->syms_cap * sizeof(*obj->syms) + obj->strs_cap;
         fprintf(fp, "%-4u %-8s %-8d %-12ld %-12ld %s\n", refcount_read(&obj->refcnt),
-                str_type[obj->type], obj->syms_sz, used, size, obj->name);
+                str_type[obj->type], obj->syms_sz, used, size, obj->name_atmnt ? : obj->name);
     }
 }
 
-static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
+static int syms__add_dso(struct syms *syms, struct map *map, const char *name, pid_t tgid)
 {
     struct dso *dso = NULL;
     int i;
@@ -449,7 +562,7 @@ static int syms__add_dso(struct syms *syms, struct map *map, const char *name)
         dso = &syms->dsos[syms->dso_sz++];
         memset(dso, 0, sizeof(*dso));
 
-        dso->obj = obj__get(name);
+        dso->obj = obj__get(name, tgid);
         if (!dso->obj)
             return -1;
     }
@@ -940,15 +1053,18 @@ static int obj__load_sym_table_from_vdso_image(struct object *obj)
 
 static int obj__load_sym_table(struct object *obj)
 {
+    int err = -1;
     if (obj->type == UNKNOWN)
         return -1;
+    enter_mntns(obj->mnt);
     if (obj->type == PERF_MAP)
-        return obj__load_sym_table_from_perf_map(obj);
+        err = obj__load_sym_table_from_perf_map(obj);
     if (obj->type == EXEC || obj->type == DYN)
-        return obj__load_sym_table_from_elf(obj, 0);
+        err = obj__load_sym_table_from_elf(obj, 0);
     if (obj->type == VDSO)
-        return obj__load_sym_table_from_vdso_image(obj);
-    return -1;
+        err = obj__load_sym_table_from_vdso_image(obj);
+    exit_mntns(obj->mnt);
+    return err;
 }
 
 static const struct sym *obj__find_name(struct object *obj, const char *name)
@@ -1005,7 +1121,7 @@ const struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 
 const char *dso__name(struct dso *dso)
 {
-    return dso ? dso->obj->name : NULL;
+    return dso ? (dso->obj->name_atmnt ? : dso->obj->name) : NULL;
 }
 
 static struct syms *__syms__load_file(FILE *f, char *line, int size, pid_t tgid)
@@ -1051,7 +1167,7 @@ static struct syms *__syms__load_file(FILE *f, char *line, int size, pid_t tgid)
             strncmp(name + strlen(name) - 10, " (deleted)", 10) == 0)
             name = deleted;
 
-        if (syms__add_dso(syms, &map, name))
+        if (syms__add_dso(syms, &map, name, tgid))
             goto err_out;
     }
 
@@ -1124,7 +1240,7 @@ void syms__convert(FILE *fin, FILE *fout, char *binpath)
     int ret;
     unsigned long addr;
 
-    obj = obj__get(binpath);
+    obj = obj__get(binpath, 0);
     if (!obj)
         return;
 
@@ -1174,7 +1290,7 @@ unsigned long syms__file_offset(const char *binpath, const char *func)
     struct object *obj;
     const struct sym *sym;
 
-    obj = obj__get(binpath);
+    obj = obj__get(binpath, 0);
     if (obj) {
         sym = obj__find_name(obj, func);
         if (sym)
