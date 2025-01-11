@@ -443,13 +443,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
                 nr_pull += env->detail ? 1 : !tp->untraced;
             else
                 nr_real_nonpull_tp += env->detail ? 1 : !tp->untraced;
-            if (tp->untraced) {
-                if ((env->samekey || env->samepid || env->sametid) &&
-                    !tp_kernel(tp) && !tp->vcpu)
-                    fprintf(stderr, "The event %s:%s needs the vm attr to convert the fields of the Guest events.\n",
-                            tp->sys, tp->name);
-                continue;
-            }
             if (env->key && !tp->key) {
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
                 if (!tep_find_any_field(event, env->key)) {
@@ -461,6 +454,12 @@ static int monitor_ctx_init(struct prof_dev *dev)
             }
             if (tp->key && !keyname)
                 keyname = tp->key;
+            if (tp->untraced) {
+                if ((env->samekey || env->samepid || env->sametid) &&
+                    !tp_kernel(tp) && !tp->vcpu)
+                    fprintf(stderr, "The event %s:%s needs the vm attr to convert the fields of the Guest events.\n",
+                            tp->sys, tp->name);
+            }
         }
     }
 
