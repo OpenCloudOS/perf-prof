@@ -156,6 +156,48 @@
 	_ER(EXIT_AVIC_UNACCELERATED_ACCESS,	0x402)	\
 	_ER(EXIT_ERR,		-1)
 
+#define ARM_EXIT_REASONS 				\
+	_ER(ESR_ELx_EC_UNKNOWN,	0x00)		\
+	_ER(ESR_ELx_EC_WFx,	0x01)			\
+	_ER(ESR_ELx_EC_CP15_32,	0x03)		\
+	_ER(ESR_ELx_EC_CP15_64,	0x04)		\
+	_ER(ESR_ELx_EC_CP14_MR,	0x05)		\
+	_ER(ESR_ELx_EC_CP14_LS,	0x06)		\
+	_ER(ESR_ELx_EC_FP_ASIMD, 0x07)		\
+	_ER(ESR_ELx_EC_CP10_ID, 0x08)		\
+	_ER(ESR_ELx_EC_PAC, 0x09)			\
+	_ER(ESR_ELx_EC_CP14_64, 0x0C)		\
+	_ER(ESR_ELx_EC_ILL, 0x0E)			\
+	_ER(ESR_ELx_EC_SVC32, 0x11)			\
+	_ER(ESR_ELx_EC_HVC32, 0x12)			\
+	_ER(ESR_ELx_EC_SMC32, 0x13)			\
+	_ER(ESR_ELx_EC_SVC64, 0x15)			\
+	_ER(ESR_ELx_EC_HVC64, 0x16)			\
+	_ER(ESR_ELx_EC_SMC64, 0x17)			\
+	_ER(ESR_ELx_EC_SYS64, 0x18)			\
+	_ER(ESR_ELx_EC_SVE, 0x19)			\
+	_ER(ESR_ELx_EC_ERET, 0x1a)			\
+	_ER(ESR_ELx_EC_IMP_DEF, 0x1f)		\
+	_ER(ESR_ELx_EC_IABT_LOW, 0x20)		\
+	_ER(ESR_ELx_EC_IABT_CUR, 0x21)		\
+	_ER(ESR_ELx_EC_PC_ALIGN, 0x22)		\
+	_ER(ESR_ELx_EC_DABT_LOW, 0x24)		\
+	_ER(ESR_ELx_EC_DABT_CUR, 0x25)		\
+	_ER(ESR_ELx_EC_SP_ALIGN, 0x26)		\
+	_ER(ESR_ELx_EC_FP_EXC32, 0x28)		\
+	_ER(ESR_ELx_EC_FP_EXC64, 0x2C)		\
+	_ER(ESR_ELx_EC_SERROR, 0x2F)		\
+	_ER(ESR_ELx_EC_BREAKPT_LOW, 0x30)	\
+	_ER(ESR_ELx_EC_BREAKPT_CUR, 0x31)	\
+	_ER(ESR_ELx_EC_SOFTSTP_LOW, 0x32)	\
+	_ER(ESR_ELx_EC_SOFTSTP_CUR, 0x33)	\
+	_ER(ESR_ELx_EC_WATCHPT_LOW, 0x34)	\
+	_ER(ESR_ELx_EC_WATCHPT_CUR, 0x35)	\
+	_ER(ESR_ELx_EC_BKPT32, 0x38)		\
+	_ER(ESR_ELx_EC_VECTOR32, 0x3A)		\
+	_ER(ESR_ELx_EC_BRK64, 0x3C)			\
+	_ER(ESR_ELx_EC_MAX, 0x3F)
+
 #define _ER(reason, val)	{ #reason, val },
 struct str_values {
 	const char	*str;
@@ -172,12 +214,18 @@ static struct str_values svm_exit_reasons[] = {
 	{ NULL, -1}
 };
 
+static struct str_values arm_exit_reasons[] = {
+	ARM_EXIT_REASONS
+	{ NULL, -1}
+};
+
 static struct isa_exit_reasons {
 	unsigned int isa;
 	struct str_values *strings;
 } isa_exit_reasons[] = {
 	{ .isa = KVM_ISA_VMX, .strings = vmx_exit_reasons },
 	{ .isa = KVM_ISA_SVM, .strings = svm_exit_reasons },
+	{ .isa = KVM_ISA_ARM, .strings = arm_exit_reasons },
 	{ }
 };
 

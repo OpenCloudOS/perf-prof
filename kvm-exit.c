@@ -19,8 +19,10 @@
 
 #define KVM_ISA_VMX   1
 #define KVM_ISA_SVM   2
+#define KVM_ISA_ARM   3
 #define EXIT_REASON_HLT                 12
 #define SVM_EXIT_HLT           0x078
+#define ARM_EXIT_HLT           0x01
 
 #include "kvm_exit_reason.c"
 
@@ -38,6 +40,30 @@ struct kvmexit_ctx {
     bool ins_oncpu;
 };
 
+#if defined(__aarch64__)
+struct trace_kvm_exit_armv8 {
+    unsigned short common_type;//	offset:0;	size:2;	signed:0;
+	unsigned char common_flags;//	offset:2;	size:1;	signed:0;
+	unsigned char common_preempt_count;//	offset:3;	size:1;	signed:0;
+	int common_pid;//	offset:4;	size:4;	signed:1;
+
+	int ret;//	offset:8;	size:4;	signed:1;
+	unsigned int esr_ec;//	offset:12;	size:4;	signed:0;
+	unsigned long vcpu_pc;//	offset:16;	size:8;	signed:0;
+};
+union trace_kvm_exit {
+    struct trace_kvm_exit_armv8 e1;
+};
+
+struct trace_kvm_entry {
+    unsigned short common_type;//      offset:0;       size:2; signed:0;
+    unsigned char common_flags;//      offset:2;       size:1; signed:0;
+    unsigned char common_preempt_count;//      offset:3;       size:1; signed:0;
+    int common_pid;//  offset:4;       size:4; signed:1;
+
+    unsigned long vcpu_id;//    offset:8;       size:8; signed:0;
+};
+#else
 struct trace_kvm_exit1 {
     unsigned short common_type;//	offset:0;	size:2;	signed:0;
 	unsigned char common_flags;//	offset:2;	size:1;	signed:0;
@@ -88,6 +114,7 @@ struct trace_kvm_entry {
     unsigned int vcpu_id;//    offset:8;       size:4; signed:0;
 };
 
+#endif
 // in linux/perf_event.h
 // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
 struct sample_type_raw {
@@ -301,6 +328,13 @@ static inline int __exit_reason(struct kvmexit_ctx *ctx, struct sample_type_raw 
 
     if (common_type == ctx->kvm_exit) {
         switch (raw->raw.size) {
+#if defined(__aarch64__)
+        case ALIGN(sizeof(struct trace_kvm_exit_armv8)+sizeof(u32), sizeof(u64)) - sizeof(u32):
+            *exit_reason = raw->raw.kvm_exit.e1.esr_ec;
+            *isa = KVM_ISA_ARM;
+            *guest_rip = raw->raw.kvm_exit.e1.vcpu_pc;
+            break;
+#else
         case ALIGN(sizeof(struct trace_kvm_exit1)+sizeof(u32), sizeof(u64)) - sizeof(u32):
             *exit_reason = raw->raw.kvm_exit.e1.exit_reason;
             *isa = KVM_ISA_VMX;
@@ -316,6 +350,7 @@ static inline int __exit_reason(struct kvmexit_ctx *ctx, struct sample_type_raw 
             *isa = raw->raw.kvm_exit.e3.isa;
             *guest_rip = raw->raw.kvm_exit.e3.guest_rip;
             break;
+#endif
         default:
             return -1;
         }
@@ -336,7 +371,11 @@ static void __process_fast(struct prof_dev *dev, struct sample_type_raw *rkvm_ex
     struct env *env = dev->env;
     struct kvmexit_ctx *ctx = dev->private;
     unsigned int exit_reason = -1, hlt = EXIT_REASON_HLT;
+#if defined(__aarch64__)
+    u32 isa = KVM_ISA_ARM;
+#else
     u32 isa = KVM_ISA_VMX;
+#endif
     unsigned long guest_rip = 0;
     __u64 delta = rkvm_entry->time - rkvm_exit->time;
     u64 key = 0;
@@ -346,6 +385,9 @@ static void __process_fast(struct prof_dev *dev, struct sample_type_raw *rkvm_ex
         return;
     if (isa == KVM_ISA_SVM) {
         hlt = SVM_EXIT_HLT;
+    }
+    if (isa == KVM_ISA_ARM) {
+        hlt = ARM_EXIT_HLT;
     }
 
     key = ((u64)isa<<32)|exit_reason;
