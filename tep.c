@@ -1033,7 +1033,8 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
         attr->kprobe_func = 0;
         attr->probe_offset = 0;
     } else {
-        if (!(attr->sample_type & (PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_ID |
+        if (attr->sample_period != 0 &&
+            !(attr->sample_type & (PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_ID |
                                    PERF_SAMPLE_STREAM_ID))) {
             fprintf(stderr, "kprobe, uprobe: PERF_SAMPLE_ID is required.\n");
             return NULL;
