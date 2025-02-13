@@ -308,7 +308,7 @@ static int oncpu_init(struct prof_dev *dev)
         }
     }
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     if (ctx->tid_to_cpumap)
         attr.config = tep__event_id("sched", "sched_stat_runtime");

@@ -115,8 +115,8 @@ static int trace_init(struct prof_dev *dev)
         attr.write_backward = 1;
         attr.watermark      = 1;
         attr.wakeup_watermark = dev->pages << 12;
-    } else
-        reduce_wakeup_times(dev, &attr);
+    }
+    prof_dev_env2attr(dev, &attr);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
         if (!env->callchain) {

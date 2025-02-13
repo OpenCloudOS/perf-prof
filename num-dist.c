@@ -169,7 +169,7 @@ static int num_dist_init(struct prof_dev *dev)
     ctx = dev->private;
 
     attr.wakeup_watermark = (dev->pages << 12) / 3;
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
         struct perf_evsel *evsel;

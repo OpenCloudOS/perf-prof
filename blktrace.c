@@ -317,7 +317,7 @@ static struct perf_evsel *add_tp_event(struct prof_dev *dev, const char *sys, co
     if (id < 0)
         return NULL;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     attr.config = id;
     evsel = perf_evsel__new(&attr);
@@ -593,7 +593,7 @@ static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
     "    "PROGRAME" blktrace -d /dev/sda -i 1000 --than 10ms");
 static const char *blktrace_argv[] = PROFILER_ARGV("blktrace",
     "OPTION:", "watermark",
-    "interval", "output", "order", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset",
+    "interval", "output", "order", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", "monotonic",
     "usage-self", "sampling-limit", "perfeval-cpus", "perfeval-pids", "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER, "device", "than");
 static profiler blktrace = {

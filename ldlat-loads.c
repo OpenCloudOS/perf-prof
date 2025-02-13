@@ -71,7 +71,7 @@ static int ldlat_loads_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -489,7 +489,7 @@ static int ldlat_stores_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {

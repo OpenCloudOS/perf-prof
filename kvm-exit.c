@@ -206,7 +206,7 @@ static int kvm_exit_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     id = tep__event_id("kvm", "kvm_exit");
     if (id < 0)

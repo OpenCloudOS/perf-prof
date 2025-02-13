@@ -583,7 +583,7 @@ static int kvm_mmu_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     // kvmmmu:kvm_mmu_get_page
     id = tep__event_id("kvmmmu", "kvm_mmu_get_page");

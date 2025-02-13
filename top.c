@@ -353,7 +353,7 @@ static int top_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
         evsel = tp_evsel_new(tp, &attr);

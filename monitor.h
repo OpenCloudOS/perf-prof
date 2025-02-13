@@ -168,6 +168,7 @@ struct env {
     unsigned long sample_period;
     bool only_comm;
     bool cycle;
+    bool monotonic;
     bool tsc;
     char *kvmclock;
     u64  clock_offset;
@@ -557,7 +558,7 @@ perfclock_t prof_dev_list_minevtime(void);
 #define PROFILER_ARGV_OPTION \
     "OPTION:", \
     "cpus", "pids", "tids", "cgroups", "watermark", \
-    "interval", "output", "order", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", \
+    "interval", "output", "order", "mmap-pages", "exit-N", "tsc", "kvmclock", "clock-offset", "monotonic", \
     "usage-self", "sampling-limit", "perfeval-cpus", "perfeval-pids", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
@@ -604,6 +605,7 @@ enum order_break_reason {
 };
 u64 heapclock_to_perfclock(struct prof_dev *dev, heapclock_t time);
 void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr);
+void prof_dev_env2attr(struct prof_dev *dev, struct perf_event_attr *attr);
 
 
 //help.c

@@ -121,7 +121,7 @@ static int split_lock_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {

@@ -152,7 +152,7 @@ static int profile_init(struct prof_dev *dev)
         printf("tsc_khz = %d\n", ctx->tsc_khz);
     }
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     evsel = perf_evsel__new(&attr);
     if (!evsel)

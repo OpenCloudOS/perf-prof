@@ -436,6 +436,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,         "tsc", &env.tsc,                         "Convert perf clock to tsc."),
     OPT_STRDUP_NONEG( 0 ,    "kvmclock", &env.kvmclock,    "uuid",         "Convert perf clock to Guest's kvmclock."),
     OPT_U64_NONEG   ( 0 ,"clock-offset", &env.clock_offset, NULL,          "Sum with clock-offset to get the final clock."),
+    OPT_BOOL_NONEG  ( 0 ,   "monotonic", &env.monotonic,                   "Use CLOCK_MONOTONIC as perf clock."),
     OPT_INT_NONEG   ( 0 ,  "usage-self", &env.usage_self,  "ms",           "Periodically output the CPU usage of perf-prof itself, Unit: ms"),
     OPT_INT_NONEG   ( 0 ,"sampling-limit", &env.sampling_limit, "N",       "Limit the number of samples per second per instance."),
     OPT_STRDUP_NONEG( 0 , "perfeval-cpus", &env.perfeval_cpus, "cpu",      "Performance evaluation cpu list."),

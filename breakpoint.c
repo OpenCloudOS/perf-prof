@@ -188,7 +188,7 @@ static int breakpoint_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     if (!attr.watermark)
         ctx->ip_sym = 1;

@@ -103,7 +103,7 @@ static int event_care_init(struct prof_dev *dev)
     ctx = dev->private;
     tp_list = ctx->tp_list;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     for_each_real_tp(tp_list, tp, i) {
         tp->private = calloc(prof_dev_nr_ins(dev), sizeof(unsigned long));

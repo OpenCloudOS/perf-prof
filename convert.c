@@ -620,7 +620,8 @@ void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mm
                  dev->convert.need_conv == CONVERT_TO_KVMCLOCK)) {
         if (perf_mmap__read_tsc_conversion(map, &dev->convert.tsc_conv) == -EOPNOTSUPP ||
             !current_clocksource_is_tsc) {
-            fprintf(stderr, "TSC conversion is not supported.\n");
+            fprintf(stderr, (!dev->env->monotonic) ? "TSC conversion is not supported.\n" :
+                              "TSC conversion does not support the --monotonic option.\n");
             dev->env->tsc = false;
             dev->env->clock_offset = 0;
             dev->convert.need_conv = CONVERT_NONE;

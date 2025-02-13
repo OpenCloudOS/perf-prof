@@ -631,7 +631,7 @@ static int __multi_trace_init(struct prof_dev *dev)
     if (monitor_ctx_init(dev) < 0)
         return -1;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     for (i = 0; i < ctx->nr_list; i++) {
         struct tp *tp;
@@ -2051,7 +2051,7 @@ static int syscalls_init(struct prof_dev *dev)
     if (multi_trace_init(dev) < 0)
         return -1;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     sched_process_free = tep__event_id("sched", "sched_process_free");
     if (sched_process_free < 0)

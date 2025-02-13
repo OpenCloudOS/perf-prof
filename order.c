@@ -982,3 +982,19 @@ void reduce_wakeup_times(struct prof_dev *dev, struct perf_event_attr *attr)
     }
 }
 
+void prof_dev_env2attr(struct prof_dev *dev, struct perf_event_attr *attr)
+{
+    struct env *env = dev->env;
+
+    // Only for public options within PROFILER_ARGV_OPTION.
+
+    // --watermark
+    reduce_wakeup_times(dev, attr);
+
+    // --monotonic
+    if (env->monotonic) {
+        attr->use_clockid = 1;
+        attr->clockid = CLOCK_MONOTONIC;
+    }
+}
+

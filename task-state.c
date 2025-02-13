@@ -298,7 +298,7 @@ static int task_state_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     /**
      * sched:sched_switch and sched:sched_wakeup are not suitable for binding to threads

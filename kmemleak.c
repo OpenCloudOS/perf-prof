@@ -275,7 +275,7 @@ static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callc
     struct tp *tp;
     int i;
 
-    reduce_wakeup_times(dev, &attr);
+    prof_dev_env2attr(dev, &attr);
 
     for_each_real_tp(tp_list, tp, i) {
 
