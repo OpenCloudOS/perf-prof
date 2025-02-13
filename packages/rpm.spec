@@ -43,12 +43,13 @@ strip -g %{name}
 
 %install
 rm -rf %{buildroot}
-mkdir -p %{buildroot}/usr/bin/ %{buildroot}%{PLUGINS_DIR} %{buildroot}/etc/bash_completion.d/
+mkdir -p %{buildroot}/usr/bin/ %{buildroot}%{PLUGINS_DIR} %{buildroot}/etc/bash_completion.d/ %{buildroot}/usr/share/doc/%{name}
 install -m 0755 -o root -g root %{name} %{buildroot}/usr/bin/
 install -m 0755 -o root -g root flamegraph.pl %{buildroot}/usr/bin/
 install -m 0755 -o root -g root trace2heatmap.pl %{buildroot}/usr/bin/
 install -m 0755 -o root -g root lib/traceevent/plugins/*.so %{buildroot}%{PLUGINS_DIR}
 cp packages/%{name} %{buildroot}/etc/bash_completion.d/
+cp 'docs/perf-prof User Guide.pdf' %{buildroot}/usr/share/doc/%{name}
 
 %files
 /usr/bin/%{name}
@@ -57,6 +58,7 @@ cp packages/%{name} %{buildroot}/etc/bash_completion.d/
 %{TRACEEVENT_DIR}
 %{PLUGINS_DIR}
 /etc/bash_completion.d/%{name}
+/usr/share/doc/%{name}
 
 
 %changelog
