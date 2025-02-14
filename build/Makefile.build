@@ -35,6 +35,7 @@ endif
 
 # Generic definitions
 include $(build-dir)/Build.include
+include $(srctree)/scripts/Makefile.include
 
 # do not force detected configuration
 -include $(OUTPUT).config-detected
@@ -78,17 +79,28 @@ quiet_cmd_cpp_i_c = CPP     $@
 quiet_cmd_cc_s_c = AS      $@
       cmd_cc_s_c = $(CC) $(c_flags) -S -o $@ $<
 
+quiet_cmd_bpf_o_c = BPF     $@
+      cmd_bpf_o_c = $(CLANG) $(filter-out -Wstrict-aliasing=% -Wstrict-prototypes -Werror,$(c_flags)) \
+                    -target bpf -D__TARGET_ARCH_$(SRCARCH) -c -o $@ $< \
+                    && $(LLVM_STRIP) -g $@
+
+quiet_cmd_bpf_skel_h = GEN-SKL $@
+      cmd_bpf_skel_h = $(BPFTOOL) gen skeleton $< > $@
+
+quiet_cmd_vmlinux_h = VMLINUX $@
+      cmd_vmlinux_h = $(BPFTOOL) btf dump file $< format c > $@
+
 quiet_cmd_gen = GEN     $@
 
 # Link agregate command
 # If there's nothing to link, create empty $@ object.
 quiet_cmd_ld_multi = LD      $@
-      cmd_ld_multi = $(if $(strip $(obj-y)),\
-                     $(LD) -r -o $@  $(filter $(obj-y),$^),rm -f $@; $(AR) rcs $@)
+      cmd_ld_multi = $(if $(strip $(filter %.o,$(obj-y))),\
+                     $(LD) -r -o $@  $(filter $(filter %.o,$(obj-y)),$^),rm -f $@; $(AR) rcs $@)
 
 quiet_cmd_host_ld_multi = HOSTLD  $@
-      cmd_host_ld_multi = $(if $(strip $(obj-y)),\
-                          $(HOSTLD) -r -o $@  $(filter $(obj-y),$^),rm -f $@; $(HOSTAR) rcs $@)
+      cmd_host_ld_multi = $(if $(strip $(filter %.o,$(obj-y))),\
+                          $(HOSTLD) -r -o $@  $(filter $(filter %.o,$(obj-y)),$^),rm -f $@; $(HOSTAR) rcs $@)
 
 ifneq ($(filter $(obj),$(hostprogs)),)
   host = host_
@@ -119,6 +131,18 @@ $(OUTPUT)%.s: %.c FORCE
 	$(call rule_mkdir)
 	$(call if_changed_dep,cc_s_c)
 
+$(OUTPUT)%.bpf.o: %.bpf.c $(dir)/vmlinux.h FORCE
+	$(call rule_mkdir)
+	$(call if_changed_dep,bpf_o_c)
+
+$(OUTPUT)%.skel.h: %.bpf.o FORCE
+	$(call rule_mkdir)
+	$(call if_changed,bpf_skel_h)
+
+$(dir)/vmlinux.h: /sys/kernel/btf/vmlinux FORCE
+	$(call rule_mkdir)
+	$(call if_changed,vmlinux_h)
+
 # Gather build data:
 #   obj-y        - list of build objects
 #   subdir-y     - list of directories to nest
@@ -135,6 +159,11 @@ subdir-obj-y := $(addprefix $(objprefix),$(subdir-obj-y))
 
 # Final '$(obj)-in.o' object
 in-target := $(objprefix)$(obj)-in.o
+bpf-target := $(patsubst %.skel.h, %.bpf.o, $(filter %.skel.h,$(obj-y)))
+vmlinux-target := $(if $(bpf-target), $(dir)/vmlinux.h)
+
+# $(bpf-target) and $(vmlinux-target) are not intermediate file
+.PRECIOUS: $(bpf-target) $(vmlinux-target)
 
 PHONY += $(subdir-y)
 
@@ -155,14 +184,14 @@ $(subdir-clean-y):
 	$(Q)$(MAKE) -f $(build-dir)/Makefile.build dir=$(dir)/$(patsubst %-clean,%,$(notdir $@)) obj=$(obj) clean
 
 clean: $(subdir-clean-y)
-	$(call _clean,clean,$(in-target) $(obj-y) $(objprefix)*.o $(objprefix).*.cmd $(objprefix).*.d)
+	$(call _clean,clean,$(in-target) $(bpf-target) $(vmlinux-target) $(obj-y) $(objprefix)*.o $(objprefix).*.cmd $(objprefix).*.d)
 
 PHONY += FORCE
 FORCE:
 
 # Include all cmd files to get all the dependency rules
 # for all objects included
-targets   := $(wildcard $(sort $(obj-y) $(in-target) $(MAKECMDGOALS)))
+targets   := $(wildcard $(sort $(obj-y) $(in-target) $(bpf-target) $(vmlinux-target) $(MAKECMDGOALS)))
 cmd_files := $(wildcard $(foreach f,$(targets),$(dir $(f)).$(notdir $(f)).cmd))
 
 ifneq ($(cmd_files),)

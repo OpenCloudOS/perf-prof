@@ -12,10 +12,10 @@ endif
 endif
 
 # check that the output directory actually exists
-ifneq ($(OUTPUT),)
-OUTDIR := $(shell cd $(OUTPUT) && pwd)
-$(if $(OUTDIR),, $(error output directory "$(OUTPUT)" does not exist))
-endif
+#ifneq ($(OUTPUT),)
+#OUTDIR := $(shell cd $(OUTPUT) && pwd)
+#$(if $(OUTDIR),, $(error output directory "$(OUTPUT)" does not exist))
+#endif
 
 #
 # Include saner warnings here, which can catch bugs:
@@ -84,6 +84,7 @@ LLC		?= llc
 LLVM_CONFIG	?= llvm-config
 LLVM_OBJCOPY	?= llvm-objcopy
 LLVM_STRIP	?= llvm-strip
+BPFTOOL		?= bpftool
 
 ifeq ($(CC_NO_CLANG), 1)
 EXTRA_WARNINGS += -Wstrict-aliasing=3
