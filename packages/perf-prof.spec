@@ -26,7 +26,7 @@ Requires:       xz-libs
 BuildRequires:  elfutils-libelf-devel
 BuildRequires:  xz-devel
 %if %{has_btf}
-BuildRequires:  llvm
+BuildRequires:  llvm, clang
 BuildRequires:  bpftool
 %endif
 
