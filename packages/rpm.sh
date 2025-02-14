@@ -8,6 +8,5 @@ then
   exit 0
 fi
 
-rpmbuild -bb rpm.spec \
-    --define "name perf-prof" \
+rpmbuild -bb perf-prof.spec \
     --define "version $tag"

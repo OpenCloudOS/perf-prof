@@ -1,12 +1,13 @@
 %define release 1%{?dist}
 %define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
+%define has_btf %(test -f /sys/kernel/btf/vmlinux && echo 1 || echo 0)
 
 %undefine _disable_source_fetch
 %define debug_package %{nil}
 
 
-Name:           %{name}
+Name:           perf-prof
 Version:        %{version}
 Release:        %{release}
 License:        GPL2
@@ -24,21 +25,27 @@ Requires:       xz-libs
 
 BuildRequires:  elfutils-libelf-devel
 BuildRequires:  xz-devel
+%if %{has_btf}
+BuildRequires:  llvm
+BuildRequires:  bpftool
+%endif
 
 # source files
 Source:         https://github.com/OpenCloudOS/perf-prof/archive/refs/tags/%{version}.tar.gz
 
 
 %description
-Profiling based on perf_event: split-lock, irq-off, profile,
-task-state, watchdog, kmemleak, kvm-exit, mpdelay.
-
+Kernel profiler based on perf_event and ebpf
 
 %prep
 %setup -q
 
 %build
-make
+if [ -f /sys/kernel/btf/vmlinux ]; then
+    make CONFIG_LIBBPF=y
+else
+    make
+fi
 strip -g %{name}
 
 %install
@@ -62,10 +69,3 @@ cp 'docs/perf-prof User Guide.pdf' %{buildroot}/usr/share/doc/%{name}
 
 
 %changelog
-* Sun Feb  6 2022 Duanery <corcpp@foxmail.com>
-- Supports multiple types of stack processing and flame graph.
-
-* Sun Jan 23 2022 Builder <corcpp@foxmail.com>
-- first version
-- split-lock, irq-off, profile, task-state, watchdog, kmemleak, kvm-exit, mpdelay.
-- Kernel stack support, user stack support
