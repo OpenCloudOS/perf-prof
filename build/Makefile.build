@@ -54,6 +54,7 @@ build-file := $(dir)/Build
 
 quiet_cmd_flex  = FLEX    $@
 quiet_cmd_bison = BISON   $@
+quiet_cmd_test  = TEST    $@
 
 # Create directory unless it exists
 quiet_cmd_mkdir = MKDIR   $(dir $@)
@@ -80,8 +81,8 @@ quiet_cmd_cc_s_c = AS      $@
       cmd_cc_s_c = $(CC) $(c_flags) -S -o $@ $<
 
 quiet_cmd_bpf_o_c = BPF     $@
-      cmd_bpf_o_c = $(CLANG) $(filter-out -Wstrict-aliasing=% -Wstrict-prototypes -Werror,$(c_flags)) \
-                    -target bpf -D__TARGET_ARCH_$(SRCARCH) -c -o $@ $< \
+      cmd_bpf_o_c = $(CLANG) -Wp,-MD,$(depfile) -Wp,-MT,$@ $(INCLUDES) \
+                    -g -O2 -target bpf -D__TARGET_ARCH_$(SRCARCH) -c -o $@ $< \
                     && $(LLVM_STRIP) -g $@
 
 quiet_cmd_bpf_skel_h = GEN-SKL $@
@@ -130,6 +131,16 @@ $(OUTPUT)%.s: %.S FORCE
 $(OUTPUT)%.s: %.c FORCE
 	$(call rule_mkdir)
 	$(call if_changed_dep,cc_s_c)
+
+# bison and flex files are generated in the OUTPUT directory
+# so it needs a separate rule to depend on them properly
+$(OUTPUT)%-bison.o: $(OUTPUT)%-bison.c FORCE
+	$(call rule_mkdir)
+	$(call if_changed_dep,$(host)cc_o_c)
+
+$(OUTPUT)%-flex.o: $(OUTPUT)%-flex.c FORCE
+	$(call rule_mkdir)
+	$(call if_changed_dep,$(host)cc_o_c)
 
 $(OUTPUT)%.bpf.o: %.bpf.c $(dir)/vmlinux.h FORCE
 	$(call rule_mkdir)
