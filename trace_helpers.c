@@ -444,8 +444,9 @@ static struct rb_node *object_node_new(struct rblist *rlist, const void *new_ent
         RB_CLEAR_NODE(&obj->rbnode);
         obj->mnt = tmp->mnt;
         obj->name = strdup(name);
-        if (obj->mnt)
-            asprintf(&obj->name_atmnt, "%s @mnt:[%lu]", name, obj->mnt->mntns_ino);
+        if (obj->mnt &&
+            asprintf(&obj->name_atmnt, "%s @mnt:[%lu]", name, obj->mnt->mntns_ino) < 0)
+            obj->name_atmnt = NULL;
         refcount_set(&obj->refcnt, 0);
 
         enter_mntns(obj->mnt);
