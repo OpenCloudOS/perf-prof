@@ -1,2 +1,5 @@
+ifdef CONFIG_LIBBPF
+perf-prof-y += perf_event.skel.h
+endif
 perf-prof-y += bpf_filter.o
 perf-prof-y += tp_filter.o
