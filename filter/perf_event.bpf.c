@@ -24,6 +24,15 @@ const volatile bool irqs_disabled = false;
 #define X86_EFLAGS_IF_BIT   9
 #define EFLAGS_IF_BIT   X86_EFLAGS_IF_BIT
 #define EFLAGS flags
+#elif defined(__TARGET_ARCH_arm)
+#define ARM_cpsr   uregs[16]
+#define PSR_I_BIT  0x00000080 // bit 7
+#define EFLAGS_IF_BIT   7
+#define EFLAGS ARM_cpsr
+#elif defined(__TARGET_ARCH_arm64)
+#define PSR_I_BIT  0x00000080 // bit 7
+#define EFLAGS_IF_BIT   7
+#define EFLAGS pstate
 #endif
 
 
@@ -59,7 +68,7 @@ const volatile u32  exclude_pid = 0;
 // nr_running
 //   nr_running is greater than `nr_running_min', less than `nr_running_max', continue.
 //
-// if (nr_running_min < nr_running < nr_running_max)
+// if (nr_running_min <= nr_running <= nr_running_max)
 //     continue;
 // else
 //     break;
