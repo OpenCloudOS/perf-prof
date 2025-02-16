@@ -33,7 +33,7 @@ int bpf_filter_open(struct bpf_filter *filter)
         return -1;
     }
 
-    bpf_program__set_perf_event(obj->progs.perf_event_do_filter);
+    bpf_program__set_type(obj->progs.perf_event_do_filter, BPF_PROG_TYPE_PERF_EVENT);
 
     #define ASSIGN(a) obj->rodata->a = filter->a
     ASSIGN(filter_irqs_disabled);

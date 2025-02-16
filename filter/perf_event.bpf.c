@@ -76,7 +76,7 @@ const volatile bool filter_nr_running = false;
 const volatile u32 nr_running_min = 0;
 const volatile u32 nr_running_max = 0xffffffff;
 
-
+SEC("perf_event")
 int perf_event_do_filter(struct bpf_perf_event_data *ctx)
 {
     struct task_struct *task;
