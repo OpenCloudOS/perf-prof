@@ -1058,15 +1058,18 @@ static void perf_clock_sample(struct prof_dev *dev, union perf_event *event, int
 {
     struct prof_dev *main_dev;
     struct event_block_list *eb_list;
-    struct perf_record_order_time order_time;
+    union {
+        union perf_event event;
+        struct perf_record_order_time o;
+    } order_time;
     // PERF_SAMPLE_TIME
     struct sample_type_header {
         __u64   time;
     } *timer = (void *)event->sample.array;
 
-    order_time.header.size = sizeof(order_time);
-    order_time.header.type = PERF_RECORD_ORDER_TIME;
-    order_time.header.misc = 0;
+    order_time.o.header.size = sizeof(order_time);
+    order_time.o.header.type = PERF_RECORD_ORDER_TIME;
+    order_time.o.header.misc = 0;
 
     /*
      * For the push ATTR event, its frequency of occurrence will affect the heap
@@ -1093,7 +1096,7 @@ restart:
             main_dev->order.break_reason != ORDER_BREAK_STREAM_STOP &&
             eb_list->last_event_time < timer->time) {
             // Everything passed to the profiler uses the evclock_t clock.
-            order_time.order_time = perfclock_to_evclock(dev, timer->time).clock;
+            order_time.o.order_time = perfclock_to_evclock(dev, timer->time).clock;
             tp_broadcast_event(eb_list->tp, (void *)&order_time);
         }
     }
