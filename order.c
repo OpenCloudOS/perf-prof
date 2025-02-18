@@ -200,6 +200,7 @@ int order_init(struct prof_dev *dev)
     struct perf_mmap *map;
     int nr_mmaps = 0, heap_size = 0;
     struct perf_mmap_event *mmap_event;
+    int ret;
 
     if (dev->order.enabled)
         return 0;
@@ -228,11 +229,11 @@ int order_init(struct prof_dev *dev)
     min_heap_init(&dev->order.heapsort, dev->order.data, heap_size);
 
     dev->order.nr_mmaps = nr_mmaps;
-    posix_memalign(&dev->order.permap_event, ALIGN_SIZE, nr_mmaps * sizeof(struct perf_mmap_event));
+    ret = posix_memalign(&dev->order.permap_event, ALIGN_SIZE, nr_mmaps * sizeof(struct perf_mmap_event));
     dev->order.heap_popped_time = 0;
     dev->order.wakeup_watermark = perf_sample_watermark(dev);
 
-    if (!dev->order.permap_event)
+    if (ret != 0 || !dev->order.permap_event)
         goto failed;
 
     memset(dev->order.permap_event, 0, nr_mmaps * sizeof(struct perf_mmap_event));
@@ -288,9 +289,10 @@ int order_register(struct prof_dev *dev, read_event *read_event, void *stream)
 {
     struct prof_dev *main_dev = order_main_dev(dev);
     struct stream_event *stream_event = NULL;
+    int ret;
 
-    posix_memalign((void **)&stream_event, ALIGN_SIZE, sizeof(*stream_event));
-    if (!stream_event)
+    ret = posix_memalign((void **)&stream_event, ALIGN_SIZE, sizeof(*stream_event));
+    if (ret != 0 && !stream_event)
         return -1;
 
     memset(stream_event, 0, sizeof(*stream_event));
