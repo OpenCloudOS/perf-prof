@@ -407,6 +407,7 @@ static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
 #define OPT_ULONG_NONEG(s, l, v, a, h)   { .type = OPTION_ULONG, .short_name = (s), .long_name = (l), .value = check_vtype(v, unsigned long *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_U64_NONEG(s, l, v, a, h)     { .type = OPTION_U64, .short_name = (s), .long_name = (l), .value = check_vtype(v, u64 *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_STRDUP_NONEG(s, l, v, a, h)  { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, char **), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG | PARSE_OPT_NOEMPTY }
+#define OPT_STRDUP_EMPTY(s, l, v, a, h)  { .type = OPTION_STRING,  .short_name = (s), .long_name = (l), .value = check_vtype(v, char **), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_PARSE_NONEG(s, l, v, a, h) \
     { .type = OPTION_CALLBACK, .short_name = (BUILD_BUG_ON_ZERO(s==0) + s), .long_name = (l), .value = (v), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG, .callback = (parse_arg_cb), .compgen = (compgen_arg) }
 #define OPT_PARSE_NOARG(s, l, v, a, h) \
@@ -513,7 +514,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,        "syscalls", &env.syscalls,                     "Trace syscalls"),
     OPT_BOOL_NONEG  ( 0 ,          "perins", &env.perins,                       "Print per instance stat"),
     OPT_BOOL_NONEG  ('g',      "call-graph", &env.callchain,                    "Enable call-graph recording"),
-    OPT_STRDUP_NONEG( 0 ,     "flame-graph", &env.flame_graph,         "file",  "Specify the folded stack file."),
+    OPT_STRDUP_EMPTY( 0 ,     "flame-graph", &env.flame_graph,         "file",  "Specify the folded stack file."),
     OPT_STRDUP_NONEG( 0 ,         "heatmap", &env.heatmap,             "file",  "Specify the output latency file."),
     OPT_PARSE_OPTARG( LONG_OPT_detail, "detail", NULL, "-N,+N,hide<N,same*",
                                                        "More detailed information output.\n"

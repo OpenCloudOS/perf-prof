@@ -23,6 +23,7 @@ struct profile_ctx {
     int in_guest;
     int tsc_khz;
     int vendor;
+    bool only_flame_graph;
 };
 
 static void monitor_ctx_exit(struct prof_dev *dev);
@@ -58,6 +59,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
         else {
             ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
             if (env->interval) {
+                ctx->only_flame_graph = (env->flame_graph[0] == '\0');
                 profile_interval(dev);
             }
         }
@@ -256,10 +258,12 @@ static void profile_sample(struct prof_dev *dev, union perf_event *event, int in
     }
 
     if (print) {
-        if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
-        tep__update_comm(NULL, data->tid_entry.tid);
-        printf("%16s %6u [%03d] %llu.%06llu: profile: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
-                        data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
+        if (!ctx->only_flame_graph) {
+            if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
+            tep__update_comm(NULL, data->tid_entry.tid);
+            printf("%16s %6u [%03d] %llu.%06llu: profile: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+                            data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
+        }
         if (dev->env->callchain) {
             if (!dev->env->flame_graph)
                 print_callchain_common(ctx->cc, &data->callchain, data->tid_entry.pid);
@@ -278,8 +282,10 @@ static void profile_interval(struct prof_dev *dev)
     struct profile_ctx *ctx = dev->private;
 
     if (ctx->flame) {
-        ctx->time = time(NULL);
-        strftime(ctx->time_str, sizeof(ctx->time_str), "%Y-%m-%d;%H:%M:%S", localtime(&ctx->time));
+        if (!ctx->only_flame_graph) {
+            ctx->time = time(NULL);
+            strftime(ctx->time_str, sizeof(ctx->time_str), "%Y-%m-%d;%H:%M:%S", localtime(&ctx->time));
+        }
         flame_graph_output(ctx->flame);
         flame_graph_reset(ctx->flame);
     }

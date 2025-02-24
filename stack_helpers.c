@@ -787,7 +787,8 @@ struct flame_graph *flame_graph_new(int flags, FILE *fout)
         return NULL;
     }
 
-    if (fstat(fileno(fout), &buf) == 0 &&
+    if (fout != stdout && fout != stderr &&
+        fstat(fileno(fout), &buf) == 0 &&
         special_file(buf.st_mode)) {
         fg->special = true;
 
@@ -815,6 +816,7 @@ struct flame_graph *flame_graph_new(int flags, FILE *fout)
 
     fg->cc = cc;
     fg->kv_pairs = kv_pairs;
+    fg->filename = NULL;
     return fg;
 }
 
@@ -934,6 +936,9 @@ struct flame_graph *flame_graph_open(int flags, const char *path)
     if (!path)
         return NULL;
 
+    if (path[0] == '\0')
+        return flame_graph_new(flags, stdout);
+
     if (stat(path, &buf) == 0 &&
         special_file(buf.st_mode)) {
         special = true;
@@ -965,15 +970,17 @@ void flame_graph_close(struct flame_graph *fg)
     if (!fg)
         return ;
 
-    if (!fg->special && !keyvalue_pairs_empty(fg->kv_pairs)) {
+    fp = fg->cc->fout;
+    if (!fg->special && fp != stdout && !keyvalue_pairs_empty(fg->kv_pairs)) {
         printf("To generate the flame graph, running THIS shell command:\n");
         printf("\n  flamegraph.pl %s.folded > %s.svg\n\n", fg->filename, fg->filename);
     }
 
-    fp = fg->cc->fout;
-    free(fg->filename);
+    if (fg->filename)
+        free(fg->filename);
     flame_graph_free(fg);
-    fclose(fp);
+    if (fp != stdout)
+        fclose(fp);
 }
 
 void flame_graph_reset(struct flame_graph *fg)
