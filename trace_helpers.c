@@ -23,7 +23,6 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <limits.h>
-#include <lzma.h>
 #include <monitor.h>
 #include "trace_helpers.h"
 #include "uprobe_helpers.h"
@@ -720,6 +719,8 @@ static void obj__free_fields(struct object *obj)
     obj->syms_cap = 0;
 }
 
+#ifdef HAVE_LZMA_SUPPORT
+#include <lzma.h>
 #define MAGIC		"\xFD" "7zXZ\0" /* XZ file format.  */
 #define MAGIC2		"\x5d\0"	/* Raw LZMA format.  */
 static int unlzma(void *input, size_t input_size, void **output, size_t *output_size)
@@ -778,6 +779,12 @@ static int unlzma(void *input, size_t input_size, void **output, size_t *output_
     free(buffer);
     return -1;
 }
+#else
+static int unlzma(void *input, size_t input_size, void **output, size_t *output_size)
+{
+    return -1;
+}
+#endif
 
 static int elf__load_sym_table(struct object *obj, Elf *e)
 {
