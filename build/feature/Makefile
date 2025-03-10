@@ -379,6 +379,9 @@ $(OUTPUT)test-file-handle.bin:
 $(OUTPUT)test-libpfm4.bin:
 	$(BUILD) -lpfm
 
+$(OUTPUT)test-btf-vmlinux.bin: /sys/kernel/btf/vmlinux
+	@:
+
 ###############################
 
 clean:

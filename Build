@@ -37,10 +37,17 @@ perf-prof-y += tlbstat.o
 perf-prof-y += list.o
 
 bin-y += perf-prof
-perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a
-ifdef CONFIG_LIBBPF
-    perf-prof-libs += lib/bpf/libbpf.a
-    LDFLAGS_perf-prof += -lz
-endif
-LDFLAGS_perf-prof += -lpthread -ldl -lelf -llzma -lm -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list
 
+LIBS_perf-prof-$(CONFIG_LIBELF)     += -lelf
+LIBS_perf-prof-$(CONFIG_LZMA)       += -llzma
+LIBS_perf-prof-$(CONFIG_LIBBPF)     += -lz
+perf-prof-libs-$(CONFIG_LIBBPF)     += lib/bpf/libbpf.a
+
+perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a $(perf-prof-libs-y)
+LDFLAGS_perf-prof += -lpthread -ldl -lm -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list $(LIBS_perf-prof-y)
+
+ifeq ($(CONFIG_LIBBPF), y)
+    ifneq ($(CONFIG_ZLIB), y)
+        $(error No libz found, please install zlib)
+    endif
+endif

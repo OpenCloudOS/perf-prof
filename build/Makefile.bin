@@ -26,6 +26,8 @@ build-dir := $(srctree)/build
 include $(build-dir)/Build.include
 include $(srctree)/scripts/Makefile.include
 
+# do not force detected configuration
+-include $(OUTPUT).config-detected
 
 # Init all relevant variables used in build files so
 # 1) they have correct type
