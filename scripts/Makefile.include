@@ -137,7 +137,7 @@ else
 NO_SUBDIR = :
 endif
 
-ifneq ($(findstring s,$(filter-out --%,$(MAKEFLAGS))),)
+ifneq ($(findstring s,$(firstword $(MAKEFLAGS))),)
   silent=1
 endif
 
