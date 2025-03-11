@@ -42,6 +42,7 @@ override CFLAGS += $(EXTRA_WARNINGS) $(EXTRA_CFLAGS)
 override CFLAGS += -Werror -Wall -Wno-shadow
 override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
+override CXXFLAGS += $(EXTRA_CFLAGS) $(INCLUDES)
 
 export srctree OUTPUT CFLAGS CXXFLAGS V EXTRA_CFLAGS SRCARCH INCLUDES
 
@@ -49,7 +50,11 @@ ifeq ($(filter clean,$(MAKECMDGOALS)),)
 include $(srctree)/Makefile.config
 endif
 
-__build clean:
-	$(Q)$(MAKE) -f $(srctree)/build/Makefile.bin dir=. $@
+bin = $(Q)$(MAKE) -f $(srctree)/build/Makefile.bin dir=. $@
+
+__build:
+	$(bin)
 
 clean: fixdep-clean
+	$(Q)rm -f $(OUTPUT)FEATURE-DUMP $(OUTPUT).config-detected
+	$(bin)
