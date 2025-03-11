@@ -27,7 +27,7 @@ endif
 build-dir := $(srctree)/build
 
 # Define $(fixdep) for dep-cmd function
-ifeq ($(OUTPUT),)
+ifeq ($(wildcard $(OUTPUT)/fixdep),)
   fixdep := $(build-dir)/fixdep
 else
   fixdep := $(OUTPUT)/fixdep
