@@ -20,7 +20,7 @@ const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
 				     const char *name);
 
 struct sym {
-	const char *name;
+	const char *name, *demangled;
 	unsigned long start;
 	unsigned long size;
 };
@@ -38,6 +38,7 @@ struct dso *syms__find_dso(const struct syms *syms, unsigned long addr,
 				  uint64_t *offset);
 const struct sym *dso__find_sym(struct dso *dso, uint64_t offset);
 const char *dso__name(struct dso *dso);
+static inline const char *sym__name(const struct sym *sym) { return sym->demangled ?: sym->name; }
 void syms__convert(FILE *fin, FILE *fout, char *binpath);
 unsigned long syms__file_offset(const char *binpath, const char *func);
 

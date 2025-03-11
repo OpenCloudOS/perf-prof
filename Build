@@ -42,6 +42,8 @@ LIBS_perf-prof-$(CONFIG_LIBELF)     += -lelf
 LIBS_perf-prof-$(CONFIG_LZMA)       += -llzma
 LIBS_perf-prof-$(CONFIG_LIBBPF)     += -lz
 perf-prof-libs-$(CONFIG_LIBBPF)     += lib/bpf/libbpf.a
+LIBS_perf-prof-$(CONFIG_CPLUS_DEMANGLE) += -liberty
+LIBS_perf-prof-$(CONFIG_CXX_DEMANGLE)   += -lstdc++
 
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a $(perf-prof-libs-y)
 LDFLAGS_perf-prof += -lpthread -ldl -lm -Wl,--dynamic-list=$(OUTPUT)lib/traceevent/plugins/libtraceevent-dynamic-list $(LIBS_perf-prof-y)

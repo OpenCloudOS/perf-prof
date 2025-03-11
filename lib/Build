@@ -1,3 +1,7 @@
 perf-prof-y += vsprintf.o rbtree.o rblist.o ctype.o string.o strlist.o thread_map.o
 perf-prof-y += argv_split.o hweight.o
 perf-prof-y += cgroup.o epoll.o tdigest.o
+
+perf-prof-y += demangle-cxx.o
+perf-prof-y += demangle-java.o
+perf-prof-y += demangle-rust.o

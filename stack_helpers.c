@@ -235,7 +235,7 @@ static void __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, 
         if (dso) {
             sym = dso__find_sym(dso, offset);
             if (sym) {
-                symbol = sym->name;
+                symbol = sym__name(sym);
                 offset = offset - sym->start;
                 dso_name = dso__name(dso)?:"Unknown";
             }
@@ -397,7 +397,7 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
                 dso = syms__find_dso(syms, ip, &offset);
             if (dso) {
                 const struct sym *sym = dso__find_sym(dso, offset);
-                fprintf(cc->fout, "    %016llx %s+0x%lx (%s)\n", ip, sym ? sym->name : "Unknown",
+                fprintf(cc->fout, "    %016llx %s+0x%lx (%s)\n", ip, sym ? sym__name(sym) : "Unknown",
                                 sym ? offset - sym->start : 0L, dso__name(dso)?:"Unknown");
             } else
                 fprintf(cc->fout, "    %016llx Unknown\n", ip);
@@ -474,7 +474,7 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
                 if (dso) {
                     const struct sym *sym = dso__find_sym(dso, offset);
                     if (sym) {
-                        symbol = sym->name;
+                        symbol = sym__name(sym);
                         offset = offset - sym->start;
                         dso_name = dso__name(dso)?:"Unknown";
                     }

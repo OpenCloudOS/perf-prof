@@ -23,6 +23,9 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <limits.h>
+#include <demangle-cxx.h>
+#include <demangle-java.h>
+#include <demangle-rust.h>
 #include <monitor.h>
 #include "trace_helpers.h"
 #include "uprobe_helpers.h"
@@ -312,6 +315,9 @@ struct object {
     char *strs;
     int strs_sz;
     int strs_cap;
+
+    char *demangled;
+    int demangled_sz; // demangled_cap = strs_cap;
 };
 
 struct dso {
@@ -480,6 +486,7 @@ static void object_node_delete(struct rblist *rblist, struct rb_node *rbn)
     if (obj->name_atmnt) free(obj->name_atmnt);
     free(obj->syms);
     free(obj->strs);
+    if (obj->demangled) free(obj->demangled);
     free(obj);
 }
 
@@ -533,8 +540,8 @@ void obj__stat(FILE *fp)
     for (node = rb_first_cached(&objects.entries); node;
          node = rb_next(node)) {
         obj = container_of(node, struct object, rbnode);
-        used = obj->syms_sz * sizeof(*obj->syms) + obj->strs_sz;
-        size = obj->syms_cap * sizeof(*obj->syms) + obj->strs_cap;
+        used = obj->syms_sz * sizeof(*obj->syms) + obj->strs_sz + obj->demangled_sz;
+        size = obj->syms_cap * sizeof(*obj->syms) + obj->strs_cap + (obj->demangled ? obj->strs_cap : 0);
         fprintf(fp, "%-4u %-8s %-8d %-12ld %-12ld %s\n", refcount_read(&obj->refcnt),
                 str_type[obj->type], obj->syms_sz, used, size, obj->name_atmnt ? : obj->name);
     }
@@ -656,6 +663,7 @@ static int obj__add_sym(struct object *obj, const char *name, uint64_t start,
     sym = &obj->syms[obj->syms_sz++];
     /* while constructing, re-use pointer as just a plain offset */
     sym->name = (void *)(unsigned long)obj->strs_sz;
+    sym->demangled = NULL;
     sym->start = start;
     sym->size = size;
 
@@ -1075,6 +1083,45 @@ static int obj__load_sym_table(struct object *obj)
     return err;
 }
 
+static const struct sym *obj__demangle_sym(struct object *obj, struct sym *sym)
+{
+    char *demangled = NULL;
+    int sym_len;
+
+    if (sym->demangled)
+        return sym;
+
+    demangled = cxx_demangle_sym(sym->name, 0, 0);
+    if (demangled == NULL)
+        demangled = java_demangle_sym(sym->name, JAVA_DEMANGLE_NORET);
+    else if (rust_is_mangled(demangled))
+        /*
+         * Input to Rust demangling is the BFD-demangled
+         * name which it Rust-demangles in place.
+         */
+        rust_demangle_sym(demangled);
+
+    if (demangled == NULL)
+        sym->demangled = sym->name;
+    else {
+        sym_len = strlen(demangled) + 1;
+
+        if (unlikely(!obj->demangled))
+            obj->demangled = calloc(1, obj->strs_cap);
+
+        if (obj->demangled &&
+            obj->demangled_sz + sym_len <= obj->strs_cap) {
+            sym->demangled = obj->demangled + obj->demangled_sz;
+            memcpy((char *)sym->demangled, demangled, sym_len);
+            obj->demangled_sz += sym_len;
+        } else
+            sym->demangled = sym->name;
+
+        free(demangled);
+    }
+    return sym;
+}
+
 static const struct sym *obj__find_name(struct object *obj, const char *name)
 {
     int i;
@@ -1086,7 +1133,7 @@ static const struct sym *obj__find_name(struct object *obj, const char *name)
 
     for (i = 0; i < obj->syms_sz; i++) {
         if (strcmp(obj->syms[i].name, name) == 0)
-            return &obj->syms[i];
+            return obj__demangle_sym(obj, &obj->syms[i]);
     }
     return NULL;
 }
@@ -1118,7 +1165,7 @@ static const struct sym *obj__find_offset(struct object *obj, uint64_t offset)
     if (start == end &&
         obj->syms[start].start <= offset &&
         obj->syms[start].start + obj->syms[start].size >= offset)
-        return &obj->syms[start];
+        return obj__demangle_sym(obj, &obj->syms[start]);
     return NULL;
 }
 
@@ -1265,7 +1312,7 @@ void syms__convert(FILE *fin, FILE *fout, char *binpath)
             if (dso) {
                 const struct sym *sym = dso__find_sym(dso, offset);
                 if (sym) {
-                    fprintf(fout, "%s+0x%lx\n", sym->name, offset - sym->start);
+                    fprintf(fout, "%s+0x%lx\n", sym__name(sym), offset - sym->start);
                     goto next_line;
                 }
             }
