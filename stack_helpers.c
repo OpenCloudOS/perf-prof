@@ -473,11 +473,12 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
                 dso = syms__find_dso(syms, ip, &offset);
                 if (dso) {
                     const struct sym *sym = dso__find_sym(dso, offset);
+                    dso_name = dso__name(dso)?:"Unknown";
                     if (sym) {
                         symbol = sym__name(sym);
                         offset = offset - sym->start;
-                        dso_name = dso__name(dso)?:"Unknown";
-                    }
+                    } else
+                        symbol = dso_name;
                 }
             }
             len = 0;
