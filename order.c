@@ -387,7 +387,8 @@ perf_mmap_fix_out_of_order(struct prof_dev *main_dev, struct prof_dev *dev,
 {
     union perf_event *event = heap_event->event;
 
-    if (heap_event->ins != popped_ins || main_dev->env->verbose)
+    // Currently, All 2 fixes are explainable.
+    if (main_dev->env->verbose)
         printf("%s: fix out-of-order event %lu(%d) < %lu(%d)\n", dev->prof->name,
                     heap_event->time, heap_event->ins, popped_time, popped_ins);
 
@@ -424,7 +425,8 @@ static int perf_mmap_event_init(struct heap_event *heap_event, struct prof_dev *
     bool writable;
     struct perf_record_lost lost;
 
-    if (perf_mmap__read_init(map) < 0)
+    if (perf_mmap__empty(map) ||
+        perf_mmap__read_init(map) < 0)
         return -1;
 
     lost.lost = 0;
