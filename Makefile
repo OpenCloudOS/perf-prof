@@ -56,5 +56,5 @@ __build:
 	$(bin)
 
 clean: fixdep-clean
-	$(Q)rm -f $(OUTPUT)FEATURE-DUMP $(OUTPUT).config-detected
 	$(bin)
+	$(Q)rm -f $(OUTPUT)FEATURE-DUMP $(OUTPUT).config-detected
