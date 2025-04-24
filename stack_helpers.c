@@ -881,7 +881,7 @@ void flame_graph_add_callchain_at_time(struct flame_graph *fg, struct callchain 
         print_callchain_common(&debug, callchain, pid);
     }
 
-    if (fg->cc->user && fg->cc->print2string_user) {
+    if ((fg->cc->user && fg->cc->print2string_user) || comm) {
         /*
          * There is no user-mode stack in callchain, add PERF_CONTEXT_USER isolates
          * the user-mode and kernel-mode stacks.
