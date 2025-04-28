@@ -530,21 +530,24 @@ void obj__stat(FILE *fp)
     static const char *str_type[] = {"EXEC", "DYN", "PERF_MAP", "VDSO", "UNKNOWN"};
     struct rb_node *node;
     struct object *obj;
-    long used, size;
+    long used, size, total_used = 0, total_size = 0;
 
     if (rblist__nr_entries(&objects) == 0)
         return;
 
-    fprintf(fp, "OBJECTS %u\n", rblist__nr_entries(&objects));
+    fprintf(fp, "OBJECT STAT:\n");
     fprintf(fp, "%-4s %-8s %-8s %-12s %-12s %s\n", "REF", "TYPE", "SYMS", "USED", "MEMS", "OBJECT");
     for (node = rb_first_cached(&objects.entries); node;
          node = rb_next(node)) {
         obj = container_of(node, struct object, rbnode);
         used = obj->syms_sz * sizeof(*obj->syms) + obj->strs_sz + obj->demangled_sz;
         size = obj->syms_cap * sizeof(*obj->syms) + obj->strs_cap + (obj->demangled ? obj->strs_cap : 0);
+        total_used += used;
+        total_size += size;
         fprintf(fp, "%-4u %-8s %-8d %-12ld %-12ld %s\n", refcount_read(&obj->refcnt),
                 str_type[obj->type], obj->syms_sz, used, size, obj->name_atmnt ? : obj->name);
     }
+    fprintf(fp, "OBJECTS %u USED %ld MEMS %ld\n", rblist__nr_entries(&objects), total_used, total_size);
 }
 
 static int syms__add_dso(struct syms *syms, struct map *map, const char *name, pid_t tgid)

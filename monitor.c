@@ -1265,6 +1265,8 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
         case SIGUSR2:
             sigusr2_handler(SIGUSR2);
             print_devtree();
+            unique_string_stat(stdout);
+            obj__stat(stdout);
             break;
         case SIGWINCH:
             prof_dev_winsize(NULL);

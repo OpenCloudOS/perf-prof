@@ -754,7 +754,7 @@ void unique_string_stat(FILE *fp)
         pos = next;
         next = rb_next(pos);
         s = container_of(pos, struct unique_string, rbnode);
-        str_len += s->len * s->n;
+        str_len += s->len;
         node_len += sizeof(*s);
     }
     fprintf(fp, "UNIQUE STRING STAT: strlen %lu, nodelen %lu\n", str_len, node_len);
