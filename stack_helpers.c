@@ -694,24 +694,30 @@ struct unique_string {
     unsigned int n, len;
     char str[0];
 };
+struct unique_string_tmp {
+    const char *str;
+    int len;
+};
 
 static int unique_string_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct unique_string *s = container_of(rbn, struct unique_string, rbnode);
-    const char *str = entry;
+    struct unique_string_tmp *tmp = (void *)entry;
 
-    return strcmp(s->str, str);
+    if (s->len == tmp->len)
+        return strcmp(s->str, tmp->str);
+    else
+        return s->len - tmp->len;
 }
 static struct rb_node *unique_string_node_new(struct rblist *rlist, const void *new_entry)
 {
-    const char *str = new_entry;
-    unsigned int len = strlen(str) + 1;
-    struct unique_string *s = malloc(sizeof(struct unique_string) + len);
+    struct unique_string_tmp *tmp = (void *)new_entry;
+    struct unique_string *s = malloc(sizeof(struct unique_string) + tmp->len + 1);
     if (s) {
         RB_CLEAR_NODE(&s->rbnode);
         s->n = 0;
-        s->len = len;
-        strcpy(s->str, str);
+        s->len = tmp->len;
+        strcpy(s->str, tmp->str);
         return &s->rbnode;
     } else
         return NULL;
@@ -734,8 +740,11 @@ const char *unique_string(const char *str)
 {
     struct rb_node *rbn;
     struct unique_string *s = NULL;
+    struct unique_string_tmp tmp;
 
-    rbn = rblist__findnew(&unique_strings, str);
+    tmp.str = str;
+    tmp.len = strlen(str);
+    rbn = rblist__findnew(&unique_strings, &tmp);
     if (rbn) {
         s = container_of(rbn, struct unique_string, rbnode);
         s->n ++;
@@ -754,7 +763,7 @@ void unique_string_stat(FILE *fp)
         pos = next;
         next = rb_next(pos);
         s = container_of(pos, struct unique_string, rbnode);
-        str_len += s->len;
+        str_len += s->len + 1;
         node_len += sizeof(*s);
     }
     fprintf(fp, "UNIQUE STRING STAT: strlen %lu, nodelen %lu\n", str_len, node_len);
