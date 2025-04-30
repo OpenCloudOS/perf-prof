@@ -553,6 +553,7 @@ void obj__stat(FILE *fp)
 static int syms__add_dso(struct syms *syms, struct map *map, const char *name, pid_t tgid)
 {
     struct dso *dso = NULL;
+    struct object *obj = NULL;
     int i;
     void *tmp;
 
@@ -564,29 +565,35 @@ static int syms__add_dso(struct syms *syms, struct map *map, const char *name, p
     }
 
     if (!dso) {
+        obj = obj__get(name, tgid);
+        if (!obj)
+            goto err_out;
+
         tmp = realloc(syms->dsos, (syms->dso_sz + 1) *
                   sizeof(*syms->dsos));
         if (!tmp)
-            return -1;
+            goto err_out;
         syms->dsos = tmp;
         dso = &syms->dsos[syms->dso_sz++];
         memset(dso, 0, sizeof(*dso));
-
-        dso->obj = obj__get(name, tgid);
-        if (!dso->obj)
-            return -1;
+        dso->obj = obj;
+        obj = NULL;
     }
 
     tmp = realloc(dso->ranges, (dso->range_sz + 1) * sizeof(*dso->ranges));
     if (!tmp)
-        return -1;
+        goto err_out;
     dso->ranges = tmp;
     dso->ranges[dso->range_sz].start = map->start_addr;
     dso->ranges[dso->range_sz].end = map->end_addr;
     dso->ranges[dso->range_sz].file_off = map->file_off;
     dso->range_sz++;
-
     return 0;
+
+err_out:
+    if (obj)
+        obj__put(obj);
+    return -1;
 }
 
 static void dso__free_fields(struct dso *dso)
@@ -1185,19 +1192,19 @@ const char *dso__name(struct dso *dso)
 static struct syms *__syms__load_file(FILE *f, char *line, int size, pid_t tgid)
 {
     char buf[PATH_MAX], perm[5];
-    char deleted[128];
+    char proc_pid_exe[128];
+    char deleted_bin[PATH_MAX];
+    bool got = 0;
     struct syms *syms;
     struct map map;
     char *s;
     char *name;
     int ret;
+    int nr_dso = 0;
 
     syms = calloc(1, sizeof(*syms));
     if (!syms)
         goto err_out;
-
-    if (tgid)
-        snprintf(deleted, sizeof(deleted), "/proc/%ld/exe", (long)tgid);
 
     while (true) {
         s = fgets(line, size, f);
@@ -1221,12 +1228,35 @@ static struct syms *__syms__load_file(FILE *f, char *line, int size, pid_t tgid)
         if (!is_file_backed(name))
             continue;
 
-        if (tgid &&
-            strncmp(name + strlen(name) - 10, " (deleted)", 10) == 0)
-            name = deleted;
+        ret = strlen(name);
+        if (tgid && ret > 10 &&
+            strncmp(name + ret - 10, " (deleted)", 10) == 0) {
+            if (!got) {
+                if (snprintf(proc_pid_exe, sizeof(proc_pid_exe), "/proc/%d/exe", tgid) >=
+                    sizeof(proc_pid_exe))
+                    continue;
+                ret = readlink(proc_pid_exe, deleted_bin, sizeof(deleted_bin));
+                if (ret < 0)
+                    continue;
+                deleted_bin[ret] = '\0';
+                got = 1;
+            }
+            /*
+             * The files deleted may be binary or library files.
+             * Only binary files are supported.
+             */
+            if (strcmp(name, deleted_bin) == 0)
+                name = proc_pid_exe;
+            else
+                continue;
+        }
 
-        if (syms__add_dso(syms, &map, name, tgid))
+        // nr_dso == 0, avoids repeatedly loading tgid's syms, but always fails.
+        if (syms__add_dso(syms, &map, name, tgid) < 0 &&
+            nr_dso == 0)
             goto err_out;
+
+        nr_dso++;
     }
 
     return syms;
