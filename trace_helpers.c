@@ -302,6 +302,19 @@ struct object {
     struct mntns *mnt;
     char *name;
     char *name_atmnt;
+
+    char *buildid;
+    int buildid_sz;
+    /*
+     * Points to the buildid object, which is also the object
+     * that actually stores the symbols. Why the pointer?
+     * Copied binaries have the same buildid, the common
+     * buildid_obj can reduce memory.
+     * If buildid_obj is not equal to itself, get its `refcnt'.
+    **/
+    struct object *buildid_obj;
+    struct rb_node buildid_rbnode;
+
     /* Dyn's first text section virtual addr at execution */
     uint64_t sh_addr;
     /* Dyn's first text section file offset */
@@ -366,43 +379,28 @@ static bool is_vdso(const char *path)
     return !strcmp(path, "[vdso]");
 }
 
-static int get_elf_type(const char *path)
+static int get_elf_type(Elf *e)
 {
     GElf_Ehdr hdr;
     void *res;
-    Elf *e;
-    int fd;
 
-    if (is_vdso(path))
-        return -1;
-    e = open_elf(path, &fd);
-    if (!e)
-        return -1;
     res = gelf_getehdr(e, &hdr);
-    close_elf(e, fd);
     if (!res)
         return -1;
     return hdr.e_type;
 }
 
-static int get_elf_text_scn_info(const char *path, uint64_t *addr,
+static int get_elf_text_scn_info(Elf *e, uint64_t *addr,
                  uint64_t *offset)
 {
     Elf_Scn *section = NULL;
-    int fd = -1, err = -1;
     GElf_Shdr header;
     size_t stridx;
-    Elf *e = NULL;
     char *name;
 
-    e = open_elf(path, &fd);
-    if (!e)
-        goto err_out;
-    err = elf_getshdrstrndx(e, &stridx);
-    if (err < 0)
-        goto err_out;
+    if (elf_getshdrstrndx(e, &stridx) < 0)
+        return -1;
 
-    err = -1;
     while ((section = elf_nextscn(e, section)) != 0) {
         if (!gelf_getshdr(section, &header))
             continue;
@@ -411,21 +409,129 @@ static int get_elf_text_scn_info(const char *path, uint64_t *addr,
         if (name && !strcmp(name, ".text")) {
             *addr = (uint64_t)header.sh_addr;
             *offset = (uint64_t)header.sh_offset;
-            err = 0;
-            break;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int get_elf_build_id(Elf *e, char **buildid)
+{
+    Elf_Scn *section = NULL;
+    GElf_Shdr header;
+    Elf_Data *rawdata;
+    int note_offs;
+    int ret = 0;
+
+    while ((section = elf_nextscn(e, section)) != 0) {
+        if (!gelf_getshdr(section, &header))
+            continue;
+        if (header.sh_type != SHT_NOTE)
+            continue;
+
+        rawdata = elf_rawdata(section, NULL);
+        note_offs = 0;
+
+        while (note_offs < header.sh_size) {
+            GElf_Nhdr *note = rawdata->d_buf + note_offs;
+            const char *name = note->n_namesz == 0 ? NULL : (const char *)(note + 1);
+
+            if (note->n_type == NT_GNU_BUILD_ID &&
+                note->n_namesz == 4 &&
+                strncmp (name, ELF_NOTE_GNU, 4) == 0 &&
+                note->n_descsz > 0) {
+                if (buildid) {
+                    const char *desc = name + ALIGN(note->n_namesz, 4);
+                    *buildid = memdup(desc, note->n_descsz);
+                }
+                WARN_ON_ONCE(note->n_descsz != 20);
+                ret = note->n_descsz;
+                goto out;
+            }
+
+            note_offs += sizeof(*note) + ALIGN(note->n_namesz, 4) +
+                         ALIGN(note->n_descsz, 4);
         }
     }
 
-err_out:
+out:
+    return ret;
+}
+
+static int obj_get_elf_info(struct object *obj)
+{
+    const char *name = obj->name;
+    Elf *e;
+    int fd, type, err = -1;
+
+    if (is_perf_map(name)) {
+        obj->type = PERF_MAP;
+        return 0;
+    } else if (is_vdso(name)) {
+        obj->type = VDSO;
+        return 0;
+    }
+
+    e = open_elf(name, &fd);
+    if (!e)
+        return -1;
+
+    type = get_elf_type(e);
+    if (type == ET_EXEC) {
+        obj->type = EXEC;
+        if (get_elf_text_scn_info(e, &obj->sh_addr, &obj->sh_offset) < 0)
+            goto err;
+        obj->buildid_sz = get_elf_build_id(e, &obj->buildid);
+    } else if (type == ET_DYN) {
+        obj->type = DYN;
+        if (get_elf_text_scn_info(e, &obj->sh_addr, &obj->sh_offset) < 0)
+            goto err;
+        obj->buildid_sz = get_elf_build_id(e, &obj->buildid);
+    } else
+        obj->type = UNKNOWN;
+
+    err = 0;
+err:
     close_elf(e, fd);
     return err;
 }
+
+
+static int buildid_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct object *obj = container_of(rbn, struct object, buildid_rbnode);
+    struct object *tmp = (void *)entry;
+
+    if (likely(obj->mnt == tmp->mnt))
+        return memcmp(obj->buildid, tmp->buildid, tmp->buildid_sz);
+    else
+        return (int)((s64)obj->mnt - (s64)tmp->mnt);
+}
+
+static struct rb_node *buildid_node_new(struct rblist *rlist, const void *new_entry)
+{
+    struct object *obj = (void *)new_entry;
+    return &obj->buildid_rbnode;
+}
+
+static void buildid_node_delete(struct rblist *rblist, struct rb_node *rbn)
+{
+    // empty
+}
+
+static struct rblist buildid_objects = {
+    .entries = RB_ROOT_CACHED,
+    .nr_entries = 0,
+    .node_cmp = buildid_node_cmp,
+    .node_new = buildid_node_new,
+    .node_delete = buildid_node_delete,
+};
 
 struct tmp_object {
     struct mntns *mnt;
     const char *name;
 };
-
+static void obj__put(struct object *obj);
 static int object_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct object *obj = container_of(rbn, struct object, rbnode);
@@ -442,36 +548,43 @@ static struct rb_node *object_node_new(struct rblist *rlist, const void *new_ent
     struct tmp_object *tmp = (void *)new_entry;
     const char *name = tmp->name;
     struct object *obj = malloc(sizeof(*obj));
-    int type;
+    int err = 0;
 
     if (obj) {
         memset(obj, 0, sizeof(*obj));
         RB_CLEAR_NODE(&obj->rbnode);
+        refcount_set(&obj->refcnt, 0);
         obj->mnt = tmp->mnt;
         obj->name = strdup(name);
         if (obj->mnt &&
             asprintf(&obj->name_atmnt, "%s @mnt:[%lu]", name, obj->mnt->mntns_ino) < 0)
             obj->name_atmnt = NULL;
-        refcount_set(&obj->refcnt, 0);
+
+        obj->buildid_obj = obj;
+        RB_CLEAR_NODE(&obj->buildid_rbnode);
 
         enter_mntns(obj->mnt);
-        type = get_elf_type(name);
-        if (type == ET_EXEC) {
-            obj->type = EXEC;
-            if (get_elf_text_scn_info(name, &obj->sh_addr, &obj->sh_offset) < 0)
-                return NULL;
-        } else if (type == ET_DYN) {
-            obj->type = DYN;
-            if (get_elf_text_scn_info(name, &obj->sh_addr, &obj->sh_offset) < 0)
-                return NULL;
-        } else if (is_perf_map(name)) {
-            obj->type = PERF_MAP;
-        } else if (is_vdso(name)) {
-            obj->type = VDSO;
-        } else {
-            obj->type = UNKNOWN;
-        }
+        err = obj_get_elf_info(obj);
         exit_mntns(obj->mnt);
+
+        if (err < 0) {
+            free(obj->name);
+            if (obj->name_atmnt) free(obj->name_atmnt);
+            if (obj->buildid) free(obj->buildid);
+            free (obj);
+            return NULL;
+        }
+
+        if (obj->buildid_sz) {
+            struct rb_node *buildid_node = rblist__findnew(&buildid_objects, obj);
+            struct object *buildid_obj = rb_entry(buildid_node, struct object, buildid_rbnode);
+            // rblist__findnew() will always succeed and buildid_obj will not be NULL.
+            if (buildid_obj != obj) {
+                refcount_inc(&buildid_obj->refcnt);
+                obj->buildid_obj = buildid_obj;
+            }
+        }
+        tmp->mnt = NULL;
         return &obj->rbnode;
     } else
         return NULL;
@@ -481,11 +594,20 @@ static void object_node_delete(struct rblist *rblist, struct rb_node *rbn)
 {
     struct object *obj = container_of(rbn, struct object, rbnode);
 
+    if (obj->buildid_sz) {
+        struct object *buildid_obj = obj->buildid_obj;
+        if (buildid_obj != obj)
+            obj__put(buildid_obj);
+        else
+            rblist__remove_node(&buildid_objects, &obj->buildid_rbnode);
+    }
+
     put_mntns(obj->mnt);
     free(obj->name);
     if (obj->name_atmnt) free(obj->name_atmnt);
-    free(obj->syms);
-    free(obj->strs);
+    if (obj->buildid) free(obj->buildid);
+    if (obj->syms) free(obj->syms);
+    if (obj->strs) free(obj->strs);
     if (obj->demangled) free(obj->demangled);
     free(obj);
 }
@@ -508,14 +630,15 @@ static struct object *obj__get(const char *name, pid_t tgid)
     tmp.name = name;
     rbnode = rblist__findnew(&objects, &tmp);
     if (rbnode) {
-        obj = container_of(rbnode, struct object, rbnode);
+        obj = rb_entry(rbnode, struct object, rbnode);
         if (refcount_read(&obj->refcnt) == 0)
             refcount_set(&obj->refcnt, 1);
-        else {
+        else
             refcount_inc(&obj->refcnt);
-            put_mntns(tmp.mnt);
-        }
     }
+
+    if (tmp.mnt)
+        put_mntns(tmp.mnt);
     return obj;
 }
 
@@ -544,8 +667,17 @@ void obj__stat(FILE *fp)
         size = obj->syms_cap * sizeof(*obj->syms) + obj->strs_cap + (obj->demangled ? obj->strs_cap : 0);
         total_used += used;
         total_size += size;
-        fprintf(fp, "%-4u %-8s %-8d %-12ld %-12ld %s\n", refcount_read(&obj->refcnt),
-                str_type[obj->type], obj->syms_sz, used, size, obj->name_atmnt ? : obj->name);
+        fprintf(fp, "%-4u %-8s %-8d %-12ld %-12ld %s%s", refcount_read(&obj->refcnt),
+                str_type[obj->type], obj->syms_sz, used, size, obj->name_atmnt ? : obj->name,
+                obj->buildid ? "    " : "\n");
+        if (obj->buildid) {
+            if (obj->buildid_obj == obj)
+                fprintf(fp, "BuildID: %02x%02x%02x%02x..\n", (u8)obj->buildid[0], (u8)obj->buildid[1],
+                    (u8)obj->buildid[2], (u8)obj->buildid[3]);
+            else
+                fprintf(fp, "-> BuildObj: %s%s", obj->buildid_obj->name_atmnt ? : obj->buildid_obj->name,
+                    (obj->syms || obj->strs || obj->demangled) ? "  Error\n" : "\n");
+        }
     }
     fprintf(fp, "OBJECTS %u USED %ld MEMS %ld\n", rblist__nr_entries(&objects), total_used, total_size);
 }
@@ -859,15 +991,6 @@ err_out:
     return -1;
 }
 
-typedef struct
-{
-  uint32_t namesz;
-  uint32_t descsz;
-  uint32_t type;
-  char name[1];
-} b_elf_note;
-
-#define NT_GNU_BUILD_ID 3
 #define SYSTEM_BUILD_ID_DIR "/usr/lib/debug/.build-id/"
 
 /*
@@ -876,7 +999,7 @@ typedef struct
  * when the build ID is known is in /usr/lib/debug/.build-id.
  * https://sourceware.org/gdb/onlinedocs/gdb/Separate-Debug-Files.html
  */
-static Elf *open_elf_debugfile_by_buildid(Elf *e, int *debug_fd)
+static Elf *open_elf_debugfile_by_buildid(struct object *obj, int *debug_fd)
 {
     const char * const prefix = SYSTEM_BUILD_ID_DIR;
     const size_t prefix_len = strlen (prefix);
@@ -885,47 +1008,12 @@ static Elf *open_elf_debugfile_by_buildid(Elf *e, int *debug_fd)
     size_t len;
     char *bd_filename, *t;
     size_t i;
-
-    const char *buildid_data = NULL;
-    uint32_t buildid_size;
-    Elf_Scn *section = NULL;
-    size_t shstrndx;
     Elf *debug = NULL;
 
-    if (elf_getshdrstrndx(e, &shstrndx) < 0)
+    if (!obj->buildid_sz)
         return NULL;
 
-    while ((section = elf_nextscn(e, section)) != 0) {
-        GElf_Shdr header;
-        const char *name;
-
-        if (!gelf_getshdr(section, &header))
-            continue;
-
-        name = elf_strptr(e, shstrndx, header.sh_name);
-        if (name == NULL)
-            continue;
-
-        if (!strcmp (name, ".note.gnu.build-id")) {
-            const b_elf_note *note;
-            Elf_Data *rawdata = elf_rawdata(section, NULL);
-
-            note = (const b_elf_note *)rawdata->d_buf;
-            if (note->type == NT_GNU_BUILD_ID &&
-                note->namesz == 4 &&
-                strncmp (note->name, "GNU", 4) == 0 &&
-                header.sh_size <= 12 + ((note->namesz + 3) & ~3) + note->descsz)
-            {
-                buildid_data = &note->name[0] + ((note->namesz + 3) & ~3);
-                buildid_size = note->descsz;
-                goto found;
-            }
-        }
-    }
-    return NULL;
-
-found:
-    len = prefix_len + buildid_size * 2 + suffix_len + 2;
+    len = prefix_len + obj->buildid_sz * 2 + suffix_len + 2;
     bd_filename = malloc(len);
     if (bd_filename == NULL)
         return NULL;
@@ -933,11 +1021,11 @@ found:
     t = bd_filename;
     memcpy(t, prefix, prefix_len);
     t += prefix_len;
-    for (i = 0; i < buildid_size; i++) {
+    for (i = 0; i < obj->buildid_sz; i++) {
         unsigned char b;
         unsigned char nib;
 
-        b = (unsigned char) buildid_data[i];
+        b = (unsigned char) obj->buildid[i];
         nib = (b & 0xf0) >> 4;
         *t++ = nib < 10 ? '0' + nib : 'a' + nib - 10;
         nib = b & 0x0f;
@@ -964,7 +1052,7 @@ static int obj__load_sym_table_from_elf(struct object *obj, int fd)
     if (!e)
         return err;
 
-    debug = open_elf_debugfile_by_buildid(e, &debug_fd);
+    debug = open_elf_debugfile_by_buildid(obj, &debug_fd);
 
     if (!debug || elf__load_sym_table(obj, debug) < 0) {
         if (elf__load_sym_table(obj, e) < 0)
@@ -1138,6 +1226,9 @@ static const struct sym *obj__find_name(struct object *obj, const char *name)
 
     if (!obj)
         return NULL;
+
+    // get the object that actually stores the symbols
+    obj = obj->buildid_obj;
     if (!obj->syms && obj__load_sym_table(obj))
         return NULL;
 
@@ -1155,6 +1246,9 @@ static const struct sym *obj__find_offset(struct object *obj, uint64_t offset)
 
     if (!obj)
         return NULL;
+
+    // get the object that actually stores the symbols
+    obj = obj->buildid_obj;
     if (!obj->syms && obj__load_sym_table(obj))
         return NULL;
 
