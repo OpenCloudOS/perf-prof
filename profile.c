@@ -71,8 +71,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     }
 
     ctx->in_guest = in_guest();
-    ctx->tsc_khz = ctx->in_guest ? 0 : get_tsc_khz();
     ctx->vendor = get_cpu_vendor();
+    if (!ctx->in_guest && ctx->vendor == X86_VENDOR_INTEL)
+        ctx->tsc_khz = get_tsc_khz();
 
     return 0;
 
@@ -136,16 +137,17 @@ static int profile_init(struct prof_dev *dev)
         return -1;
     ctx = dev->private;
 
-    if (ctx->tsc_khz > 0 && env->freq > 0) {
-        attr.freq = 0;
-        attr.sample_period = ctx->tsc_khz * 1000ULL / env->freq;
-    }
     if (ctx->in_guest) {
         attr.type = PERF_TYPE_SOFTWARE;
         attr.config = PERF_COUNT_SW_CPU_CLOCK;
         attr.exclude_idle = 1;
-    } else if (ctx->vendor == X86_VENDOR_INTEL)
-        attr.config = PERF_COUNT_HW_REF_CPU_CYCLES;
+    } else if (ctx->vendor == X86_VENDOR_INTEL) {
+        if (ctx->tsc_khz > 0 && env->freq > 0) {
+            attr.config = PERF_COUNT_HW_REF_CPU_CYCLES;
+            attr.freq = 0;
+            attr.sample_period = ctx->tsc_khz * 1000ULL / env->freq;
+        }
+    }
 
     if (env->callchain)
         dev->pages *= 2;
@@ -204,7 +206,7 @@ static int profile_read(struct prof_dev *dev, struct perf_evsel *evsel, struct p
         mode = (dev->env->exclude_user << 1) | dev->env->exclude_kernel;
         print_time(stdout);
         oncpu = prof_dev_ins_oncpu(dev);
-        if (ctx->tsc_khz > 0 && ctx->vendor == X86_VENDOR_INTEL)
+        if (ctx->vendor == X86_VENDOR_INTEL && ctx->tsc_khz > 0)
             printf("%s %d [%s] %.2f%% [%s] %lu cycles\n", oncpu ? "cpu" : "thread",
                     oncpu ? prof_dev_ins_cpu(dev, instance) : prof_dev_ins_thread(dev, instance),
                     str_in[in],
