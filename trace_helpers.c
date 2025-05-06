@@ -501,11 +501,7 @@ static int buildid_node_cmp(struct rb_node *rbn, const void *entry)
 {
     struct object *obj = container_of(rbn, struct object, buildid_rbnode);
     struct object *tmp = (void *)entry;
-
-    if (likely(obj->mnt == tmp->mnt))
-        return memcmp(obj->buildid, tmp->buildid, tmp->buildid_sz);
-    else
-        return (int)((s64)obj->mnt - (s64)tmp->mnt);
+    return memcmp(obj->buildid, tmp->buildid, tmp->buildid_sz);
 }
 
 static struct rb_node *buildid_node_new(struct rblist *rlist, const void *new_entry)
