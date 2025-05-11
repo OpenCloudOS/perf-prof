@@ -35,6 +35,7 @@ perf-prof-y += expr.o
 perf-prof-y += breakpoint.o
 perf-prof-y += tlbstat.o
 perf-prof-y += list.o
+perf-prof-y += kcore.o
 
 bin-y += perf-prof
 

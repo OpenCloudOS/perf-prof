@@ -399,6 +399,7 @@ static int compgen_arg(const struct option *opt, const char *arg, int comp_type)
     return 0;
 }
 
+#define OPT_BIT_NONEG(s, l, v, h, b)      { .type = OPTION_BIT, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .help = (h), .defval = (b), .flags = PARSE_OPT_NONEG }
 #define OPT_BOOL_NONEG(s, l, v, h)       { .type = OPTION_BOOLEAN, .short_name = (s), .long_name = (l), .value = check_vtype(v, bool *), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_INT_NONEG(s, l, v, a, h)     { .type = OPTION_INTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
 #define OPT_INT_NONEG_SET(s, l, v, os, a, h) { .type = OPTION_INTEGER, .short_name = (s), .long_name = (l), .value = check_vtype(v, int *), .set = check_vtype(os, bool *), .argh = (a), .help = (h), .flags = PARSE_OPT_NONEG }
@@ -538,6 +539,11 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,       "only-comm", &env.only_comm,                    "top: only show comm but not key"),
     OPT_BOOL_NONEG  ( 0 ,           "cycle", &env.cycle,                        "multi-trace: event cycle, from the last one back to the first."),
     OPT_BOOL_NONEG  ( 0 ,          "ptrace", &env.using_ptrace,                 "Use ptrace to track newly created threads."),
+    OPT_BOOL_NONEG  ( 0 ,          "string", &env.string,                       "Output a printable string."),
+    OPT_BIT_NONEG   ( 0 ,               "8", &env.bytes,                        "Display output in 8-bit values", 1),
+    OPT_BIT_NONEG   ( 0 ,              "16", &env.bytes,                        "Display output in 16-bit values", 2),
+    OPT_BIT_NONEG   ( 0 ,              "32", &env.bytes,                        "Display output in 32-bit values", 4),
+    OPT_BIT_NONEG   ( 0 ,              "64", &env.bytes,                        "Display output in 64-bit values", 8),
 
     OPT_END()
 };

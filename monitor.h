@@ -175,6 +175,10 @@ struct env {
     int usage_self;
     bool using_ptrace;
 
+    /* kcore profiler */
+    bool string;
+    int bytes;
+
     /* performance evaluation */
     int sampling_limit;
     char *perfeval_cpus;
@@ -676,6 +680,12 @@ static inline bool ptraced_dev(struct prof_dev *dev) {
 }
 
 #define d_printf(__fmt, __args...) // printf(__fmt, ##__args)
+
+
+//kcore.c
+void kcore_ref(void);
+void kcore_unref(void);
+ssize_t kcore_read(unsigned long kaddr, void *buf, size_t count);
 
 
 #endif
