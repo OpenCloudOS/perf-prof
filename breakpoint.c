@@ -452,6 +452,10 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         case 0x21: // AND Ev,Gv
         case 0x30: // XOR Eb,Gb
         case 0x31: // XOR Ev,Gv
+
+        // INC, DEC
+        case 0xFE: // INC Eb; DEC Eb;
+        case 0xFF: // INC Ev; DEC Ev;
             return decode_modrm(insn, regs_intr);
 
         default:
@@ -518,6 +522,16 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         case 0x30: /* XOR Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto XOR;
         case 0x31: /* XOR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto XOR;
         XOR: data = old ^ data;
+            break;
+
+        // INC, DEC
+        case 0xFE: // INC Eb; DEC Eb;
+        case 0xFF: // INC Ev; DEC Ev;
+            if (op == 0xFE) bytes = 1;
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            if (opext == 0) data = old + 1; // INC
+            else if (opext == 1) data = old - 1; // DEC
+            else goto default_label;
             break;
 
         default_label:
@@ -607,6 +621,17 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
         case 0x09: // OR Ev,Gv
         case 0x21: // AND Ev,Gv
         case 0x31: // XOR Ev,Gv
+            break;
+
+        // INC, DEC
+        case 0xFE: // Grp4 (1A) Eb
+        case 0xFF: // Grp5 (1A) Ev
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 0:INC, 1:DEC;
+            if (opext != 0 && opext != 1)
+                return false;
+            if (op == 0xFE && bp->len != 1) // Eb
+                return false;
             break;
 
         default:
