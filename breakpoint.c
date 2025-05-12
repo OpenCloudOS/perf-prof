@@ -41,6 +41,12 @@ struct insn_decode_ctxt {
     struct hw_breakpoint *bp;
     u64 addr;
     u64 data;
+    /*
+     * Data is safe: all write instructions are decoded.
+     * MOV: Safe.
+     * ADD: Unsafe, unless a safe instruction occurs before ADD.
+     */
+    bool safety;
 };
 
 static struct hw_breakpoint hwbp[HBP_NUM];
@@ -68,6 +74,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
         if (ctx->hwbp[i].type == HW_BREAKPOINT_W) {
             ctx->kcore = 1;
             ctx->ctxt[i].bp = &ctx->hwbp[i];
+            /*
+             * We need to ensure the order of write instructions
+             * so that we can safely obtain all written values.
+             */
+            env->order = 1;
         }
     }
 
@@ -413,6 +424,7 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
 {
     switch (insn->opcode.bytes[0])
     {
+        // MOV
         case 0x88: // MOV Eb,Gb
         case 0x89: // MOV Ev,Gv
         case 0xC6: // Grp11 Eb,Ib (1A)
@@ -421,29 +433,70 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         case 0xA2: // MOV Ob,AL
         case 0xA3: // MOV Ov,rAX
             return decode_mem_abs(insn);
+
+        // ADD
+        case 0x00: // ADD Eb,Gb         Add r8 to r/m8
+        case 0x01: // ADD Ev,Gv         Add r64 to r/m64
+        case 0x80: // Grp1 Eb,Ib (1A)   Add imm8 to r/m8.
+        case 0x81: // Grp1 Ev,Iz (1A)   Add imm32 to r/m32.
+        case 0x83: // Grp1 Ev,Ib (1A)   Add sign-extended imm8 to r/m64
+            return decode_modrm(insn, regs_intr);
+
         default:
             return 0UL;
     }
 }
 
-static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr)
+static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u64 old)
 {
     int op = insn->opcode.bytes[0];
+    u64 data;
+    int bytes = insn->opnd_bytes;
+
     switch (op)
     {
+        // MOV
         case 0x88: /* MOV Eb,Gb  */ return decode_opsrc_reg(insn, regs_intr, 1);
         case 0x89: /* MOV Ev,Gv  */ return decode_opsrc_reg(insn, regs_intr, 0);
         case 0xA2: /* MOV Ob,AL  */ return decode_opsrc_Acc(insn, regs_intr, 1);
         case 0xA3: /* MOV Ov,rAX */ return decode_opsrc_Acc(insn, regs_intr, 0);
         case 0xC6: /* Grp11 Eb,Ib (1A) */ return decode_opsrc_Imm(insn, 1, 1);
         case 0xC7: /* Grp11 Ev,Iz (1A) */ return decode_opsrc_Imm(insn, 0, 1);
+
+        // ADD
+        case 0x00: /* ADD Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto ADD;
+        case 0x01: /* ADD Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto ADD;
+        case 0x80: /* Grp1 Eb,Ib (1A) */ data = decode_opsrc_Imm(insn, 1, 1); bytes = 1; goto ADD;
+        case 0x81: /* Grp1 Ev,Iz (1A) */ data = decode_opsrc_Imm(insn, 0, 1);            goto ADD;
+        case 0x83: /* Grp1 Ev,Ib (1A) */ data = decode_opsrc_Imm(insn, 1, 1); bytes = 1; goto ADD;
+        ADD:
+            data = old + data;
+            return bytes == 8 ? data : (data & byte_mask(bytes));
+
         default: return 0UL;
+    }
+}
+
+static bool safety(struct insn *insn)
+{
+    switch (insn->opcode.bytes[0])
+    {
+        case 0x88: // MOV Eb,Gb
+        case 0x89: // MOV Ev,Gv
+        case 0xA2: // MOV Ob,AL
+        case 0xA3: // MOV Ov,rAX
+        case 0xC6: // Grp11 Eb,Ib (1A)
+        case 0xC7: // Grp11 Ev,Iz (1A)
+            return true;
+        default:
+            return false;
     }
 }
 
 static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
 {
     struct hw_breakpoint *bp = ctxt->bp;
+    int op, opext;
 
     if (bp->type != HW_BREAKPOINT_W)
         return false;
@@ -453,8 +506,13 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
         return false;
     if (insn->opcode.nbytes != 1) // only one-byte opcode
         return false;
-    switch (insn->opcode.bytes[0])
+    if (!insn->modrm.got || !insn->modrm.nbytes)
+        return false;
+
+    op = insn->opcode.bytes[0];
+    switch (op)
     {
+        // MOV
         case 0x88: // MOV Eb,Gb.        Move r8 to r/m8.
         case 0xA2: // MOV Ob,AL.        Move AL to (seg:offset)
             if (bp->len != 1) return false;
@@ -463,19 +521,34 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             break;
         case 0xC6: // Grp11 Eb,Ib (1A). Move imm8 to r/m8
         case 0xC7: // Grp11 Ev,Iz (1A). Move imm32 to r/m32
-            if (insn->modrm.got) {
-                int opext = X86_MODRM_REG(insn->modrm.bytes[0]);
-                if (opext == 0) { // MOV
-                    if (insn->opcode.bytes[0] == 0xC6 && bp->len != 1)
-                        return false;
-                    break;
-                }
-            }
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            if (opext != 0) // ! MOV
+                return false;
+            if (op == 0xC6 && bp->len != 1) // Eb
+                return false;
+            break;
+
+        // ADD
+        case 0x00: // ADD Eb,Gb         Add r8 to r/m8
+            if (bp->len != 1) return false;
+        case 0x01: // ADD Ev,Gv         Add r64 to r/m64
+            break;
+        case 0x80: // Grp1 Eb,Ib (1A)   Add imm8 to r/m8.
+        case 0x81: // Grp1 Ev,Iz (1A)   Add imm32 to r/m32.
+        case 0x83: // Grp1 Ev,Ib (1A)   Add sign-extended imm8 to r/m64
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            if (opext != 0) // ! ADD
+                return false;
+            if (op == 0x80 && bp->len != 1) // Eb
+                return false;
+            break;
+
         default:
             return false;
     }
-    if (!insn->modrm.got || !insn->modrm.nbytes)
+    if (!safety(insn) && !ctxt->safety)
         return false;
+
     return true;
 }
 
@@ -486,6 +559,7 @@ static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample
     struct insn insn;
     enum insn_mode mode;
     int i;
+    bool safety = 0;
 
     if (regs_intr->abi == PERF_SAMPLE_REGS_ABI_NONE)
         return;
@@ -510,7 +584,8 @@ static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample
             continue;
 
         // Decode the data of the source operand.
-        ctxt->data = decode_data(&insn, regs_intr);
+        ctxt->data = decode_data(&insn, regs_intr, ctxt->data);
+        safety = 1;
 
         printf("      INSN: ");
         for (; i < in_len; i++)
@@ -518,6 +593,8 @@ static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample
         printf(" ADDR: %lx  DATA: %lx\n", ctxt->addr, ctxt->data);
         break;
     }
+
+    ctxt->safety = safety;
 }
 
 #endif
