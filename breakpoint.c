@@ -444,6 +444,14 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         // SUB
         case 0x28: // SUB Eb,Gb
         case 0x29: // SUB Ev,Gv
+
+        // OR, AND, XOR
+        case 0x08: // OR Eb,Gb
+        case 0x09: // OR Ev,Gv
+        case 0x20: // AND Eb,Gb
+        case 0x21: // AND Ev,Gv
+        case 0x30: // XOR Eb,Gb
+        case 0x31: // XOR Ev,Gv
             return decode_modrm(insn, regs_intr);
 
         default:
@@ -460,7 +468,10 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
     static const void * const grp1_tbl[8] = {
         [0 ... 7] = && default_label,
         [0] = &&ADD,
+        [1] = &&OR,
+        [4] = &&AND,
         [5] = &&SUB,
+        [6] = &&XOR,
     };
 
     switch (op)
@@ -476,6 +487,10 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         // ADD
         case 0x00: /* ADD Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto ADD;
         case 0x01: /* ADD Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto ADD;
+        ADD: data = old + data;
+            break;
+
+        // Grp1
         case 0x80: /* Grp1 Eb,Ib (1A) */
         case 0x81: /* Grp1 Ev,Iz (1A) */
         case 0x83: /* Grp1 Ev,Ib (1A) */
@@ -483,16 +498,26 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
                 bytes = 1;
             data = decode_opsrc_Imm(insn, bytes == 1, 1);
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
-            goto *grp1_tbl[opext];
-        ADD:
-            data = old + data;
-            break;
+            goto *grp1_tbl[opext]; // 0:ADD, 1:OR, 2:ADC, 3:SBB, 4:AND, 5:SUB, 6:XOR, 7:CMP;
 
         // SUB
         case 0x28: /* SUB Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto SUB;
         case 0x29: /* SUB Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto SUB;
-        SUB:
-            data = old - data;
+        SUB: data = old - data;
+            break;
+
+        // OR, AND, XOR
+        case 0x08: /* OR Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto OR;
+        case 0x09: /* OR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto OR;
+        OR: data = old | data;
+            break;
+        case 0x20: /* AND Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto AND;
+        case 0x21: /* AND Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto AND;
+        AND: data = old & data;
+            break;
+        case 0x30: /* XOR Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto XOR;
+        case 0x31: /* XOR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto XOR;
+        XOR: data = old ^ data;
             break;
 
         default_label:
@@ -562,7 +587,7 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
         case 0x83: // Grp1 Ev,Ib (1A)   Add/Sub/.. sign-extended imm8 to r/m64
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             // 0:ADD, 1:OR, 2:ADC, 3:SBB, 4:AND, 5:SUB, 6:XOR, 7:CMP;
-            if (opext != 0 && opext != 5) // ! ADD SUB
+            if (opext == 2 || opext == 3 || opext == 7) // ! ADC SBB CMP
                 return false;
             if (op == 0x80 && bp->len != 1) // Eb
                 return false;
@@ -572,6 +597,16 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
         case 0x28: // SUB Eb,Gb
             if (bp->len != 1) return false;
         case 0x29: // SUB Ev,Gv
+            break;
+
+        // OR, AND, XOR
+        case 0x08: // OR Eb,Gb
+        case 0x20: // AND Eb,Gb
+        case 0x30: // XOR Eb,Gb
+            if (bp->len != 1) return false;
+        case 0x09: // OR Ev,Gv
+        case 0x21: // AND Ev,Gv
+        case 0x31: // XOR Ev,Gv
             break;
 
         default:
