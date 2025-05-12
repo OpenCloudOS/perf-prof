@@ -456,6 +456,9 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         // INC, DEC
         case 0xFE: // INC Eb; DEC Eb;
         case 0xFF: // INC Ev; DEC Ev;
+        // NOT, NEG
+        case 0xF6: // NOT Eb; NEG Eb;
+        case 0xF7: // NOT Ev; NEG Ev;
             return decode_modrm(insn, regs_intr);
 
         default:
@@ -531,6 +534,16 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             if (opext == 0) data = old + 1; // INC
             else if (opext == 1) data = old - 1; // DEC
+            else goto default_label;
+            break;
+
+        // NOT, NEG
+        case 0xF6: // NOT Eb; NEG Eb;
+        case 0xF7: // NOT Ev; NEG Ev;
+            if (op == 0xF6) bytes = 1;
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            if (opext == 2) data = ~old; // NOT
+            else if (opext == 3) data = -old; // NEG
             else goto default_label;
             break;
 
@@ -631,6 +644,17 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             if (opext != 0 && opext != 1)
                 return false;
             if (op == 0xFE && bp->len != 1) // Eb
+                return false;
+            break;
+
+        // NOT, NEG
+        case 0xF6: // Grp3 Eb (1A)
+        case 0xF7: // Grp3 Ev (1A)
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 2:NOT, 3:NEG;
+            if (opext != 2 && opext != 3)
+                return false;
+            if (op == 0xF6 && bp->len != 1) // Eb
                 return false;
             break;
 
