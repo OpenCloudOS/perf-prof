@@ -417,7 +417,7 @@ static u64 decode_opsrc_Imm(struct insn *insn, bool byteop, bool sign_extension)
     if (!sign_extension)
         data = data & byte_mask(size);
 
-    return data;
+    return bytes == 8 ? data : (data & byte_mask(bytes));
 }
 
 static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
@@ -472,6 +472,7 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
     int opext = 0;
     u64 data;
     int bytes = insn->opnd_bytes;
+    bool byteop;
     static const void * const grp1_tbl[8] = {
         [0 ... 7] = && default_label,
         [0] = &&ADD,
@@ -481,19 +482,20 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         [6] = &&XOR,
     };
 
+    byteop = !(op & 1); // Intel SDM Volume 2, B.1.4.3
     switch (op)
     {
         // MOV
-        case 0x88: /* MOV Eb,Gb  */ return decode_opsrc_reg(insn, regs_intr, 1);
-        case 0x89: /* MOV Ev,Gv  */ return decode_opsrc_reg(insn, regs_intr, 0);
-        case 0xA2: /* MOV Ob,AL  */ return decode_opsrc_Acc(insn, regs_intr, 1);
-        case 0xA3: /* MOV Ov,rAX */ return decode_opsrc_Acc(insn, regs_intr, 0);
-        case 0xC6: /* Grp11 Eb,Ib (1A) */ return decode_opsrc_Imm(insn, 1, 1);
-        case 0xC7: /* Grp11 Ev,Iz (1A) */ return decode_opsrc_Imm(insn, 0, 1);
+        case 0x88: /* MOV Eb,Gb  */
+        case 0x89: /* MOV Ev,Gv  */ return decode_opsrc_reg(insn, regs_intr, byteop);
+        case 0xA2: /* MOV Ob,AL  */
+        case 0xA3: /* MOV Ov,rAX */ return decode_opsrc_Acc(insn, regs_intr, byteop);
+        case 0xC6: /* Grp11 Eb,Ib (1A) */
+        case 0xC7: /* Grp11 Ev,Iz (1A) */ return decode_opsrc_Imm(insn, byteop, 1);
 
         // ADD
-        case 0x00: /* ADD Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto ADD;
-        case 0x01: /* ADD Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto ADD;
+        case 0x00: /* ADD Eb,Gb */
+        case 0x01: /* ADD Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, byteop);
         ADD: data = old + data;
             break;
 
@@ -501,36 +503,33 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         case 0x80: /* Grp1 Eb,Ib (1A) */
         case 0x81: /* Grp1 Ev,Iz (1A) */
         case 0x83: /* Grp1 Ev,Ib (1A) */
-            if (op == 0x80 || op == 0x83)
-                bytes = 1;
-            data = decode_opsrc_Imm(insn, bytes == 1, 1);
+            data = decode_opsrc_Imm(insn, byteop, 1);
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             goto *grp1_tbl[opext]; // 0:ADD, 1:OR, 2:ADC, 3:SBB, 4:AND, 5:SUB, 6:XOR, 7:CMP;
 
         // SUB
-        case 0x28: /* SUB Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto SUB;
-        case 0x29: /* SUB Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto SUB;
+        case 0x28: /* SUB Eb,Gb */
+        case 0x29: /* SUB Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, byteop);
         SUB: data = old - data;
             break;
 
         // OR, AND, XOR
-        case 0x08: /* OR Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto OR;
-        case 0x09: /* OR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto OR;
+        case 0x08: /* OR Eb,Gb */
+        case 0x09: /* OR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, byteop);
         OR: data = old | data;
             break;
-        case 0x20: /* AND Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto AND;
-        case 0x21: /* AND Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto AND;
+        case 0x20: /* AND Eb,Gb */
+        case 0x21: /* AND Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, byteop);
         AND: data = old & data;
             break;
-        case 0x30: /* XOR Eb,Gb */ data = decode_opsrc_reg(insn, regs_intr, 1); bytes = 1; goto XOR;
-        case 0x31: /* XOR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, 0);            goto XOR;
+        case 0x30: /* XOR Eb,Gb */
+        case 0x31: /* XOR Ev,Gv */ data = decode_opsrc_reg(insn, regs_intr, byteop);
         XOR: data = old ^ data;
             break;
 
         // INC, DEC
         case 0xFE: // INC Eb; DEC Eb;
         case 0xFF: // INC Ev; DEC Ev;
-            if (op == 0xFE) bytes = 1;
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             if (opext == 0) data = old + 1; // INC
             else if (opext == 1) data = old - 1; // DEC
@@ -540,7 +539,6 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         // NOT, NEG
         case 0xF6: // NOT Eb; NEG Eb;
         case 0xF7: // NOT Ev; NEG Ev;
-            if (op == 0xF6) bytes = 1;
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             if (opext == 2) data = ~old; // NOT
             else if (opext == 3) data = -old; // NEG
@@ -550,6 +548,8 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         default_label:
         default: return 0UL;
     }
+
+    if (byteop) bytes = 1;
     return bytes == 8 ? data : (data & byte_mask(bytes));
 }
 
@@ -573,6 +573,7 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
 {
     struct hw_breakpoint *bp = ctxt->bp;
     int op, opext;
+    bool byteop;
 
     if (bp->type != HW_BREAKPOINT_W)
         return false;
@@ -590,9 +591,8 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
     {
         // MOV
         case 0x88: // MOV Eb,Gb.        Move r8 to r/m8.
-        case 0xA2: // MOV Ob,AL.        Move AL to (seg:offset)
-            if (bp->len != 1) return false;
         case 0x89: // MOV Ev,Gv.        Move r64 to r/m64.
+        case 0xA2: // MOV Ob,AL.        Move AL to (seg:offset)
         case 0xA3: // MOV Ov,rAX.       Move RAX to (offset)
             break;
         case 0xC6: // Grp11 Eb,Ib (1A). Move imm8 to r/m8
@@ -600,15 +600,14 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             if (opext != 0) // ! MOV
                 return false;
-            if (op == 0xC6 && bp->len != 1) // Eb
-                return false;
             break;
 
         // ADD
         case 0x00: // ADD Eb,Gb         Add r8 to r/m8
-            if (bp->len != 1) return false;
         case 0x01: // ADD Ev,Gv         Add r64 to r/m64
             break;
+
+        // Grp1
         case 0x80: // Grp1 Eb,Ib (1A)   Add/Sub/.. imm8 to r/m8.
         case 0x81: // Grp1 Ev,Iz (1A)   Add/Sub/.. imm32 to r/m32.
         case 0x83: // Grp1 Ev,Ib (1A)   Add/Sub/.. sign-extended imm8 to r/m64
@@ -616,23 +615,19 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             // 0:ADD, 1:OR, 2:ADC, 3:SBB, 4:AND, 5:SUB, 6:XOR, 7:CMP;
             if (opext == 2 || opext == 3 || opext == 7) // ! ADC SBB CMP
                 return false;
-            if (op == 0x80 && bp->len != 1) // Eb
-                return false;
             break;
 
         // SUB
         case 0x28: // SUB Eb,Gb
-            if (bp->len != 1) return false;
         case 0x29: // SUB Ev,Gv
             break;
 
         // OR, AND, XOR
         case 0x08: // OR Eb,Gb
-        case 0x20: // AND Eb,Gb
-        case 0x30: // XOR Eb,Gb
-            if (bp->len != 1) return false;
         case 0x09: // OR Ev,Gv
+        case 0x20: // AND Eb,Gb
         case 0x21: // AND Ev,Gv
+        case 0x30: // XOR Eb,Gb
         case 0x31: // XOR Ev,Gv
             break;
 
@@ -643,8 +638,6 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             // 0:INC, 1:DEC;
             if (opext != 0 && opext != 1)
                 return false;
-            if (op == 0xFE && bp->len != 1) // Eb
-                return false;
             break;
 
         // NOT, NEG
@@ -654,13 +647,16 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             // 2:NOT, 3:NEG;
             if (opext != 2 && opext != 3)
                 return false;
-            if (op == 0xF6 && bp->len != 1) // Eb
-                return false;
             break;
 
         default:
             return false;
     }
+
+    byteop = !(op & 1); // Intel SDM Volume 2, B.1.4.3
+    if (byteop && bp->len != 1)
+        return false;
+
     if (!safety(insn) && !ctxt->safety)
         return false;
 
