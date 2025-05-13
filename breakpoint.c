@@ -420,6 +420,11 @@ static u64 decode_opsrc_Imm(struct insn *insn, bool byteop, bool sign_extension)
     return bytes == 8 ? data : (data & byte_mask(bytes));
 }
 
+static u64 decode_opsrc_CL(struct insn *insn, struct sample_regs_intr *regs_intr)
+{
+    return reg_read(regs_intr, 1) /* CL/rCX */  & 0xff;
+}
+
 static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
 {
     switch (insn->opcode.bytes[0])
@@ -459,6 +464,14 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         // NOT, NEG
         case 0xF6: // NOT Eb; NEG Eb;
         case 0xF7: // NOT Ev; NEG Ev;
+
+        // SAL/SAR/SHL/SHR, ROL/ROR
+        case 0xC0: // Grp2 Eb,Ib (1A)
+        case 0xC1: // Grp2 Ev,Ib (1A)
+        case 0xD0: // Grp2 Eb,1 (1A)
+        case 0xD1: // Grp2 Ev,1 (1A)
+        case 0xD2: // Grp2 Eb,CL (1A)
+        case 0xD3: // Grp2 Ev,CL (1A)
             return decode_modrm(insn, regs_intr);
 
         default:
@@ -473,6 +486,7 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
     u64 data;
     int bytes = insn->opnd_bytes;
     bool byteop;
+    u8 shift;
     static const void * const grp1_tbl[8] = {
         [0 ... 7] = && default_label,
         [0] = &&ADD,
@@ -483,6 +497,7 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
     };
 
     byteop = !(op & 1); // Intel SDM Volume 2, B.1.4.3
+    if (byteop) bytes = 1;
     switch (op)
     {
         // MOV
@@ -545,11 +560,55 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
             else goto default_label;
             break;
 
+        // SAL/SAR/SHL/SHR, ROL/ROR
+        case 0xC0: // Grp2 Eb,Ib (1A)
+        case 0xC1: /* Grp2 Ev,Ib (1A) */ shift = decode_opsrc_Imm(insn, 1, 1); goto Grp2;
+        case 0xD0: // Grp2 Eb,1 (1A)
+        case 0xD1: /* Grp2 Ev,1 (1A) */ shift = 1; goto Grp2;
+        case 0xD2: // Grp2 Eb,CL (1A)
+        case 0xD3: /* Grp2 Ev,CL (1A) */ shift = decode_opsrc_CL(insn, regs_intr); goto Grp2;
+        Grp2:
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 0:ROL 1:ROR 2:RCL 3:RCR 4:SHL/SAL 5:SHR 7:SAR
+            data = old;
+            switch (opext) {
+            case 0: switch (bytes) {
+                    case 1: asm("rolb %b1, %b0": "+r" (data) : "c" (shift)); break;
+                    case 2: asm("rolw %b1, %w0": "+r" (data) : "c" (shift)); break;
+                    case 4: asm("roll %b1, %k0": "+r" (data) : "c" (shift)); break;
+                    case 8: asm("rolq %b1, %q0": "+r" (data) : "c" (shift)); break;
+                    default: goto default_label;
+                    } break;
+            case 1: switch (bytes) {
+                    case 1: asm("rorb %b1, %b0": "+r" (data) : "c" (shift)); break;
+                    case 2: asm("rorw %b1, %w0": "+r" (data) : "c" (shift)); break;
+                    case 4: asm("rorl %b1, %k0": "+r" (data) : "c" (shift)); break;
+                    case 8: asm("rorq %b1, %q0": "+r" (data) : "c" (shift)); break;
+                    default: goto default_label;
+                    } break;
+            case 4: data = data << shift; break;
+            case 5: switch (bytes) {
+                    case 1: data = (u8)data >> shift; break;
+                    case 2: data = (u16)data >> shift; break;
+                    case 4: data = (u32)data >> shift; break;
+                    case 8: data = (u64)data >> shift; break;
+                    default: goto default_label;
+                    } break;
+            case 7: switch (bytes) {
+                    case 1: data = (s8)data >> shift; break;
+                    case 2: data = (s16)data >> shift; break;
+                    case 4: data = (s32)data >> shift; break;
+                    case 8: data = (s64)data >> shift; break;
+                    default: goto default_label;
+                    } break;
+            default: goto default_label;
+            }
+            break;
+
         default_label:
         default: return 0UL;
     }
 
-    if (byteop) bytes = 1;
     return bytes == 8 ? data : (data & byte_mask(bytes));
 }
 
@@ -646,6 +705,19 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             // 2:NOT, 3:NEG;
             if (opext != 2 && opext != 3)
+                return false;
+            break;
+
+        // SAL/SAR/SHL/SHR, ROL/ROR
+        case 0xC0: // Grp2 Eb,Ib (1A)
+        case 0xC1: // Grp2 Ev,Ib (1A)
+        case 0xD0: // Grp2 Eb,1 (1A)
+        case 0xD1: // Grp2 Ev,1 (1A)
+        case 0xD2: // Grp2 Eb,CL (1A)
+        case 0xD3: // Grp2 Ev,CL (1A)
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 0:ROL 1:ROR 2:RCL 3:RCR 4:SHL/SAL 5:SHR 7:SAR
+            if (opext == 2 || opext == 3 || opext == 6)
                 return false;
             break;
 
