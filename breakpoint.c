@@ -40,7 +40,14 @@ struct hw_breakpoint {
 struct insn_decode_ctxt {
     struct hw_breakpoint *bp;
     u64 addr;
-    u64 data;
+    union {
+        struct {
+            u64 pad1;
+            u64 data;
+            u64 pad2;
+        };
+        u8  bytes[24];
+    };
     /*
      * Data is safe: all write instructions are decoded.
      * MOV: Safe.
@@ -673,7 +680,6 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
 {
     struct hw_breakpoint *bp = ctxt->bp;
     int op, opext;
-    int bytes = insn->opnd_bytes;
 
     if (bp->type != HW_BREAKPOINT_W)
         return false;
@@ -773,10 +779,6 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             return false;
     }
 
-    if (is_byteop(insn)) bytes = 1;
-    if (bp->len != bytes)
-        return false;
-
     if (!safety(insn) && !ctxt->safety)
         return false;
 
@@ -785,11 +787,15 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
 
 static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample_regs_intr *regs_intr)
 {
+    struct hw_breakpoint *bp = ctxt->bp;
     unsigned char in[15];
     int in_len = sizeof(in);
     struct insn insn;
     enum insn_mode mode;
-    int i;
+    int i, min_i = in_len;
+    int bytes;
+    u64 data;
+    void *mem;
     bool safety = 0;
 
     if (regs_intr->abi == PERF_SAMPLE_REGS_ABI_NONE)
@@ -804,24 +810,73 @@ static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample
             continue;
         if (insn.length != in_len - i)
             continue;
+        min_i = i;
+    }
+
+    for (i = min_i; i < in_len; i++) {
+        if (insn_decode(&insn, in + i, in_len - i, mode) < 0)
+            continue;
+        if (insn.length != in_len - i)
+            continue;
 
         // Only supports destination memory operand.
         if (!supported(ctxt, &insn))
             continue;
 
+        bytes = is_byteop(&insn) ? 1 : insn.opnd_bytes;
+
         // Decode the memory address of the destination operand.
         ctxt->addr = decode_addr(&insn, regs_intr);
-        if (ctxt->addr != ctxt->bp->address)
+        if (ctxt->addr + bytes < bp->address ||
+            ctxt->addr >= bp->address + bp->len)
             continue;
 
+        /*
+         * Intel SDM Volume3 19.2.5 Breakpoint Field Recognition
+         * A data breakpoint for reading or writing data is triggered if any of
+         * the bytes participating in an access is within the range defined by
+         * a breakpoint address register and its LENn field.
+         *
+         *           bp_addr
+         *    |        |  LENn  |        |
+         *           ++++      ++++
+         *              ++++   +
+         *              ++++++++
+         *   + Write range and bytes.
+         *
+         * Therefore, it is necessary to track the writing of data before and
+         * after LENn and read the data at bp_addr.
+         */
+        mem = &ctxt->bytes[sizeof(u64) + ctxt->addr - bp->address];
+        switch (bytes) {
+            case 1: data = *(u8 *)mem; break;
+            case 2: data = *(u16 *)mem; break;
+            case 4: data = *(u32 *)mem; break;
+            default: data = *(u64 *)mem; break;
+        }
+
         // Decode the data of the source operand.
-        ctxt->data = decode_data(&insn, regs_intr, ctxt->data);
+        data = decode_data(&insn, regs_intr, data);
+        // writeback
+        switch (bytes) {
+            case 1: *(u8 *)mem = (u8)data; break;
+            case 2: *(u16 *)mem = (u16)data; break;
+            case 4: *(u32 *)mem = (u32)data; break;
+            default: *(u64 *)mem = (u64)data; break;
+        }
+
         safety = 1;
 
+        switch(bp->len) {
+            case 1: data = (u8)ctxt->data; break;
+            case 2: data = (u16)ctxt->data; break;
+            case 4: data = (u32)ctxt->data; break;
+            default: data = (u64)ctxt->data; break;
+        }
         printf("      INSN: ");
         for (; i < in_len; i++)
             printf("%02x ", in[i]);
-        printf(" ADDR: %lx  DATA: %lx\n", ctxt->addr, ctxt->data);
+        printf(" ADDR: %lx  DATA: %lx\n", ctxt->addr, data);
         break;
     }
 
