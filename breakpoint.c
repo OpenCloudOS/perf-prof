@@ -293,6 +293,8 @@ static void print_regs_intr(struct sample_regs_intr *regs_intr, u64 unused)
 #if defined(__i386__) || defined(__x86_64__)
 
 #define byte_mask(n) ((1UL << 8*(n))-1)
+#define RIP    16
+#define RFLAGS 17
 
 static u64 reg_read(struct sample_regs_intr *regs_intr, int reg)
 {
@@ -314,13 +316,25 @@ static u64 reg_read(struct sample_regs_intr *regs_intr, int reg)
         case 13: return regs_intr->regs[PERF_REG_X86_R13-REG_NOSUPPORT_N];
         case 14: return regs_intr->regs[PERF_REG_X86_R14-REG_NOSUPPORT_N];
         case 15: return regs_intr->regs[PERF_REG_X86_R15-REG_NOSUPPORT_N];
-        default: return regs_intr->regs[PERF_REG_X86_IP];
+        case RIP: return regs_intr->regs[PERF_REG_X86_IP];
+        case RFLAGS: return regs_intr->regs[PERF_REG_X86_FLAGS];
+        default: return 0UL;
     }
 }
 
 static s32 disp(struct insn *insn)
 {
     return insn->displacement.got ? insn->displacement.value : 0;
+}
+
+static bool is_byteop(struct insn *insn)
+{
+    /*
+     * Intel SDM Volume 2, B.1.4.3
+     * All opcodes selected by support() satisfy B.1.4.3.
+     */
+    insn_byte_t last_byte = insn->opcode.bytes[insn->opcode.nbytes-1];
+    return !(last_byte & 1);
 }
 
 static u64 decode_modrm(struct insn *insn, struct sample_regs_intr *regs_intr)
@@ -357,7 +371,7 @@ static u64 decode_modrm(struct insn *insn, struct sample_regs_intr *regs_intr)
     } else if ((modrm_rm & 7) == 5 && modrm_mod == 0) {
         addr += disp(insn);
         if (insn->x86_64) // RIP-Relative Addressing
-            addr += reg_read(regs_intr, 16 /* rIP */);
+            addr += reg_read(regs_intr, RIP /* rIP */);
     } else {
         base_reg = modrm_rm;
         addr += reg_read(regs_intr, base_reg);
@@ -427,7 +441,7 @@ static u64 decode_opsrc_CL(struct insn *insn, struct sample_regs_intr *regs_intr
 
 static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
 {
-    switch (insn->opcode.bytes[0])
+    switch (insn->opcode.value)
     {
         // MOV
         case 0x88: // MOV Eb,Gb
@@ -442,6 +456,9 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         // XCHG
         case 0x86: // XCHG Eb,Gb
         case 0x87: // XCHG Ev,Gv
+        // CMPXCHG
+        case 0xB00F: // CMPXCHG Eb,Gb
+        case 0xB10F: // CMPXCHG Ev,Gv
 
         // ADD
         case 0x00: // ADD Eb,Gb         Add r8 to r/m8
@@ -485,7 +502,7 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
 
 static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u64 old)
 {
-    int op = insn->opcode.bytes[0];
+    int op = insn->opcode.value;
     int opext = 0;
     u64 data;
     int bytes = insn->opnd_bytes;
@@ -500,7 +517,7 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         [6] = &&XOR,
     };
 
-    byteop = !(op & 1); // Intel SDM Volume 2, B.1.4.3
+    byteop = is_byteop(insn); // Intel SDM Volume 2, B.1.4.3
     if (byteop) bytes = 1;
     switch (op)
     {
@@ -515,6 +532,18 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         //XCHG
         case 0x86: // XCHG Eb,Gb
         case 0x87: /* XCHG Ev,Gv */ return decode_opsrc_reg(insn, regs_intr, byteop);
+        // CMPXCHG
+        case 0xB00F: // CMPXCHG Eb,Gb
+        case 0xB10F: { // CMPXCHG Ev,Gv
+            u64 rflags = reg_read(regs_intr, RFLAGS);
+            // Compare RAX with r/m64.
+            // If equal, ZF is set and r64 is loaded into r/m64.
+            // Else, clear ZF and load r/m64 into RAX.
+            if (test_bit(6 /*ZF*/, &rflags))
+                return decode_opsrc_reg(insn, regs_intr, byteop);
+            else
+                return decode_opsrc_Acc(insn, regs_intr, byteop);
+        }   break;
 
         // ADD
         case 0x00: /* ADD Eb,Gb */
@@ -622,7 +651,7 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
 
 static bool safety(struct insn *insn)
 {
-    switch (insn->opcode.bytes[0])
+    switch (insn->opcode.value)
     {
         case 0x88: // MOV Eb,Gb
         case 0x89: // MOV Ev,Gv
@@ -632,6 +661,8 @@ static bool safety(struct insn *insn)
         case 0xC7: // Grp11 Ev,Iz (1A)
         case 0x86: // XCHG Eb,Gb
         case 0x87: // XCHG Ev,Gv
+        case 0xB00F: // CMPXCHG Eb,Gb
+        case 0xB10F: // CMPXCHG Ev,Gv
             return true;
         default:
             return false;
@@ -642,20 +673,18 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
 {
     struct hw_breakpoint *bp = ctxt->bp;
     int op, opext;
-    bool byteop;
+    int bytes = insn->opnd_bytes;
 
     if (bp->type != HW_BREAKPOINT_W)
         return false;
-    if (bp->len != 1 && insn->opnd_bytes != bp->len)
-        return false;
     if (!insn->opcode.got)
         return false;
-    if (insn->opcode.nbytes != 1) // only one-byte opcode
+    if (insn->opcode.nbytes > 2) // only one-byte/two-byte opcode
         return false;
     if (!insn->modrm.got || !insn->modrm.nbytes)
         return false;
 
-    op = insn->opcode.bytes[0];
+    op = insn->opcode.value;
     switch (op)
     {
         // MOV
@@ -674,6 +703,10 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
         // XCHG
         case 0x86: // XCHG Eb,Gb        Exchange r8 with byte from r/m8
         case 0x87: // XCHG Ev,Gv        Exchange r64 with quadword from r/m64
+            break;
+        // CMPXCHG
+        case 0xB00F: // CMPXCHG Eb,Gb
+        case 0xB10F: // CMPXCHG Ev,Gv
             break;
 
         // ADD
@@ -740,8 +773,8 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             return false;
     }
 
-    byteop = !(op & 1); // Intel SDM Volume 2, B.1.4.3
-    if (byteop && bp->len != 1)
+    if (is_byteop(insn)) bytes = 1;
+    if (bp->len != bytes)
         return false;
 
     if (!safety(insn) && !ctxt->safety)
