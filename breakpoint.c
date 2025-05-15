@@ -338,10 +338,13 @@ static bool is_byteop(struct insn *insn)
 {
     /*
      * Intel SDM Volume 2, B.1.4.3
-     * All opcodes selected by support() satisfy B.1.4.3.
+     * All opcodes selected by support() satisfy B.1.4.3, except 0xBA0F.
      */
     insn_byte_t last_byte = insn->opcode.bytes[insn->opcode.nbytes-1];
-    return !(last_byte & 1);
+    switch (insn->opcode.value) {
+        case 0xBA0F: return 0; // Grp8 Ev,Ib (1A)
+        default: return !(last_byte & 1);
+    }
 }
 
 static u64 decode_modrm(struct insn *insn, struct sample_regs_intr *regs_intr)
@@ -502,6 +505,39 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         case 0xD3: // Grp2 Ev,CL (1A)
             return decode_modrm(insn, regs_intr);
 
+        // Bit Test and Set/Reset/Complement
+        case 0xAB0F: // BTS Ev,Gv
+        case 0xB30F: // BTR Ev,Gv
+        case 0xBB0F: // BTC Ev,Gv
+        case 0xBA0F: { // Grp8 Ev,Ib (1A)
+            u64 addr = decode_modrm(insn, regs_intr);
+            s64 bitoffset, mask = ~((s64)insn->opnd_bytes * 8 - 1);
+
+            if (insn->opcode.value == 0xBA0F)
+                bitoffset = decode_opsrc_Imm(insn, 1, 1);
+            else
+                bitoffset = decode_opsrc_reg(insn, regs_intr, 0);
+
+            /*
+             * Align to opnd_bytes boundary, ensuring the decoded address
+             * overlaps breakpoint range, in x86_decode_insn(). Otherwise,
+             * the breakpoint is triggered but the data cannot be decoded.
+             *
+             *    |  LENn  |            # LENn=2, 2-byte breakpoint.
+             *    |             +   |   # opnd_bytes=4
+             *                  ` Returns this address. Check failed.
+             *    ` Return this address. Check passed.
+             */
+            if (insn->opnd_bytes == 2)
+                bitoffset = (s16)bitoffset & (s16)mask;
+            else if (insn->opnd_bytes == 4)
+                bitoffset = (s32)bitoffset & (s32)mask;
+            else
+                bitoffset = (s64)bitoffset & (s64)mask;
+
+            return addr + (bitoffset >> 3);
+        }
+
         default:
             return 0UL;
     }
@@ -515,6 +551,7 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
     int bytes = insn->opnd_bytes;
     bool byteop;
     u8 shift;
+    u64 bitoffset;
     static const void * const grp1_tbl[8] = {
         [0 ... 7] = && default_label,
         [0] = &&ADD,
@@ -649,6 +686,27 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
             }
             break;
 
+        // Bit Test and Set/Reset/Complement
+        case 0xAB0F: /* BTS Ev,Gv */ opext = 5; goto BTSRC;
+        case 0xB30F: /* BTR Ev,Gv */ opext = 6; goto BTSRC;
+        case 0xBB0F: /* BTC Ev,Gv */ opext = 7; goto BTSRC;
+        case 0xBA0F: { // Grp8 Ev,Ib (1A)
+        BTSRC:
+            if (insn->opcode.value == 0xBA0F) {
+                bitoffset = decode_opsrc_Imm(insn, 1, 1) & (bytes * 8 - 1);
+                opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            } else
+                bitoffset = decode_opsrc_reg(insn, regs_intr, 0) & (bytes * 8 - 1);
+
+            data = old;
+            switch (opext) { // 4:BT 5:BTS 6:BTR 7:BTC
+                case 5: asm("bts %1, %0": "+r" (data) : "r" (bitoffset)); break;
+                case 6: asm("btr %1, %0": "+r" (data) : "r" (bitoffset)); break;
+                case 7: asm("btc %1, %0": "+r" (data) : "r" (bitoffset)); break;
+                default: goto default_label;
+            }
+        } break;
+
         default_label:
         default: return 0UL;
     }
@@ -772,6 +830,18 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
             opext = X86_MODRM_REG(insn->modrm.bytes[0]);
             // 0:ROL 1:ROR 2:RCL 3:RCR 4:SHL/SAL 5:SHR 7:SAR
             if (opext == 2 || opext == 3 || opext == 6)
+                return false;
+            break;
+
+        // Bit Test and Set/Reset/Complement
+        case 0xAB0F: // BTS Ev,Gv
+        case 0xB30F: // BTR Ev,Gv
+        case 0xBB0F: // BTC Ev,Gv
+            break;
+        case 0xBA0F: // Grp8 Ev,Ib (1A)
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 4:BT 5:BTS 6:BTR 7:BTC
+            if (opext <= 4)
                 return false;
             break;
 
