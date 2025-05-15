@@ -3,6 +3,7 @@
 #include <linux/bitops.h>
 #include <asm/perf_regs.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/hashtable.h>
 #include <monitor.h>
 #include <stack_helpers.h>
 #include <trace_helpers.h>
@@ -56,16 +57,34 @@ struct insn_decode_ctxt {
     bool safety;
 };
 
+struct insn_decode_node {
+    struct hlist_node node;
+    u64 insn_ip;
+    u8  insn_buff[15];
+    int insn_pos;
+};
+#define INSN_HASHTABLE_BITS 6
+
 static struct hw_breakpoint hwbp[HBP_NUM];
 struct breakpoint_ctx {
     struct hw_breakpoint hwbp[HBP_NUM];
     struct insn_decode_ctxt ctxt[HBP_NUM];
+    DECLARE_HASHTABLE(insn_hashmap, INSN_HASHTABLE_BITS);
     struct callchain_ctx *cc;
     struct flame_graph *flame;
     bool print_ip;
     bool ip_sym;
     bool kcore;
 };
+
+#define insn_node_add(hashtable, obj, key) \
+        obj->insn_ip = (key); \
+        hlist_add_head(&obj->node, &hashtable[hash_min((key), INSN_HASHTABLE_BITS)])
+
+#define insn_node_find(hashtable, obj, key) \
+        hlist_for_each_entry(obj, &hashtable[hash_min((key), INSN_HASHTABLE_BITS)], node) \
+            if (obj->insn_ip == (key))
+
 
 static int monitor_ctx_init(struct prof_dev *dev)
 {
@@ -104,8 +123,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
         callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
     }
 
-    if (ctx->kcore)
+    if (ctx->kcore) {
         kcore_ref();
+        hash_init(ctx->insn_hashmap);
+    }
 
     tep__ref();
     return 0;
@@ -115,8 +136,15 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct breakpoint_ctx *ctx = dev->private;
     tep__unref();
-    if (ctx->kcore)
+    if (ctx->kcore) {
+        struct insn_decode_node *obj;
+        struct hlist_node *tmp;
+        int bkt;
+        hash_for_each_safe(ctx->insn_hashmap, bkt, tmp, obj, node)
+            free(obj);
+
         kcore_unref();
+    }
     callchain_ctx_free(ctx->cc);
     flame_graph_output(ctx->flame);
     flame_graph_close(ctx->flame);
@@ -855,14 +883,16 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
     return true;
 }
 
-static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample_regs_intr *regs_intr)
+static void x86_decode_insn(struct breakpoint_ctx *bpctx, struct insn_decode_ctxt *ctxt, u64 ip, struct sample_regs_intr *regs_intr)
 {
     struct hw_breakpoint *bp = ctxt->bp;
-    unsigned char in[15];
-    int in_len = sizeof(in);
+    struct insn_decode_node *node;
+    unsigned char insn_buff[15];
+    unsigned char *in = insn_buff;
+    int in_len = sizeof(insn_buff);
     struct insn insn;
     enum insn_mode mode;
-    int i, min_i = in_len;
+    int i, insn_pos = in_len;
     int bytes;
     u64 data;
     void *mem;
@@ -871,19 +901,34 @@ static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample
     if (regs_intr->abi == PERF_SAMPLE_REGS_ABI_NONE)
         return;
 
+    mode = regs_intr->abi == PERF_SAMPLE_REGS_ABI_64 ? INSN_MODE_64 : INSN_MODE_32;
+
+    insn_node_find(bpctx->insn_hashmap, node, ip) {
+        in = node->insn_buff;
+        insn_pos = node->insn_pos;
+        goto decode;
+    }
+
     if (kcore_read(ip - in_len /* Trap */, in, in_len) != in_len)
         return;
 
-    mode = regs_intr->abi == PERF_SAMPLE_REGS_ABI_64 ? INSN_MODE_64 : INSN_MODE_32;
     for (i = in_len - 1; i >= 0; i--) {
         if (insn_decode(&insn, in + i, in_len - i, mode) < 0)
             continue;
         if (insn.length != in_len - i)
             continue;
-        min_i = i;
+        insn_pos = i;
     }
 
-    for (i = min_i; i < in_len; i++) {
+    node = calloc(1, sizeof(*node));
+    if (!node)
+        return;
+    memcpy(node->insn_buff, in, in_len);
+    node->insn_pos = insn_pos;
+    insn_node_add(bpctx->insn_hashmap, node, ip);
+
+decode:
+    for (i = insn_pos; i < in_len; i++) {
         if (insn_decode(&insn, in + i, in_len - i, mode) < 0)
             continue;
         if (insn.length != in_len - i)
@@ -935,6 +980,7 @@ static void x86_decode_insn(struct insn_decode_ctxt *ctxt, u64 ip, struct sample
             default: *(u64 *)mem = (u64)data; break;
         }
 
+        node->insn_pos = i;
         safety = 1;
 
         switch(bp->len) {
@@ -1017,7 +1063,7 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
              */
             // Instruction breakpoint, Exception Class: Fault.
             // Data write breakpoint,  Exception Class: Trap.
-            x86_decode_insn(&ctx->ctxt[i], data->ip, regs_intr);
+            x86_decode_insn(ctx, &ctx->ctxt[i], data->ip, regs_intr);
             #endif
         }
 
