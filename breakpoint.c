@@ -62,6 +62,7 @@ struct insn_decode_node {
     u64 insn_ip;
     u8  insn_buff[15];
     int insn_pos;
+    char *insn_str;
 };
 #define INSN_HASHTABLE_BITS 6
 
@@ -140,8 +141,11 @@ static void monitor_ctx_exit(struct prof_dev *dev)
         struct insn_decode_node *obj;
         struct hlist_node *tmp;
         int bkt;
-        hash_for_each_safe(ctx->insn_hashmap, bkt, tmp, obj, node)
+        hash_for_each_safe(ctx->insn_hashmap, bkt, tmp, obj, node) {
+            if (obj->insn_str)
+                free(obj->insn_str);
             free(obj);
+        }
 
         kcore_unref();
     }
@@ -331,6 +335,27 @@ static void print_regs_intr(struct sample_regs_intr *regs_intr, u64 unused)
 #define RIP    16
 #define RFLAGS 17
 
+#define OpNone             0
+#define OpReg              1  /* Register */
+#define OpMem              2  /* Memory */
+#define OpMemAbs           3  /* Memory Offset */
+#define OpAcc              4  /* Accumulator: AL/AX/EAX/RAX */
+#define OpCL               5  /* CL register (for shifts) */
+#define OpImm              6  /* Sign extended up to 32-bit immediate */
+#define OpImmByte          7  /* 8-bit sign extended immediate */
+#define OpOne              8  /* Implied 1 */
+
+static char *str_add(char *a, const char *fmt, ...)
+{
+    va_list ap;
+    char *ptr;
+
+    va_start(ap, fmt);
+    ptr = straddv(a, free, fmt, ap);
+    va_end(ap);
+    return ptr;
+}
+
 static u64 reg_read(struct sample_regs_intr *regs_intr, int reg)
 {
     switch (reg)
@@ -373,6 +398,79 @@ static bool is_byteop(struct insn *insn)
         case 0xBA0F: return 0; // Grp8 Ev,Ib (1A)
         default: return !(last_byte & 1);
     }
+}
+
+static const char *reg_name(struct insn *insn, int reg, bool mem)
+{
+    static const char *gp64[16] = {"rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi",
+                                   "r8","r9","r10","r11","r12","r13","r14","r15"};
+    static const char *gp32[16] = {"eax","ecx","edx","ebx","esp","ebp","esi","edi",
+                                   "r8d","r9d","r10d","r11d","r12d","r13d","r14d","r15d"};
+    static const char *gp16[16] = {"ax","cx","dx","bx","sp","bp","si","di",
+                                   "r8w","r9w","r10w","r11w","r12w","r13w","r14w","r15w"};
+    static const char *gp8[16] = {"al","cl","dl","bl","ah","ch","dh","bh",
+                                  "r8b","r9b","r10b","r11b","r12b","r13b","r14b","r15b"};
+    static const char **gp[4] = {gp8, gp16, gp32, gp64};
+    if (mem)
+        return gp64[reg];
+    else {
+        int bytes = is_byteop(insn) ? 1 : insn->opnd_bytes;
+        int o = fls(bytes) - 1;
+        return gp[o][reg];
+    }
+}
+
+static char *decode_modrm_str(struct insn *insn, char *opstr)
+{
+    u8 rex_prefix = insn->rex_prefix.got ? insn->rex_prefix.bytes[0] : 0;
+    int index_reg, base_reg, scale;
+    int modrm_mod, modrm_rm;
+    char *str = NULL;
+
+    index_reg = (rex_prefix << 2) & 8; /* REX.X */
+    base_reg = (rex_prefix << 3) & 8; /* REX.B */
+
+    modrm_mod = X86_MODRM_MOD(insn->modrm.bytes[0]);
+    modrm_rm = base_reg | X86_MODRM_RM(insn->modrm.bytes[0]);
+    if (modrm_mod == 3)
+        return str_add(opstr, "%%%s", reg_name(insn, modrm_rm, 0));
+
+    if (insn->displacement.nbytes) {
+        if (insn->displacement.value < 0)
+            str = str_add(str, "-0x%x", -insn->displacement.value);
+        else
+            str = str_add(str, "0x%x", insn->displacement.value);
+    }
+
+    /* 32/64-bit ModR/M decode. */
+    if ((modrm_rm & 7) == 4) {
+        u8 sib = insn->sib.bytes[0];
+        index_reg |= (sib >> 3) & 7;
+        base_reg |= sib & 7;
+        scale = sib >> 6;
+
+        if ((base_reg & 7) == 5 && modrm_mod == 0) {
+            if (index_reg == 4) goto addr32;
+        } else
+            str = str_add(str, "(%%%s", reg_name(insn, base_reg, 1));
+
+        if (index_reg != 4)
+            str = str_add(str, ",%%%s,%d)", reg_name(insn, index_reg, 1), 1<<scale);
+    } else if ((modrm_rm & 7) == 5 && modrm_mod == 0) {
+        if (insn->x86_64) // RIP-Relative Addressing
+            str = str_add(str, "(%%rip)");
+        else
+            goto addr32;
+    } else
+        str = str_add(str, "(%%%s)", reg_name(insn, modrm_rm, 1));
+
+    opstr = str_add(opstr, str);
+    if (str) free(str);
+    return opstr;
+
+addr32:
+    if (str) free(str);
+    return str_add(opstr, "0x%x(none)", insn->displacement.value);
 }
 
 static u64 decode_modrm(struct insn *insn, struct sample_regs_intr *regs_intr)
@@ -742,6 +840,51 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
     return bytes == 8 ? data : (data & byte_mask(bytes));
 }
 
+static char *decode_opstr(struct insn *insn, const char *op, int opsrc, int opdst)
+{
+    int bytes = is_byteop(insn) ? 1 : insn->opnd_bytes;
+    u8 rex_prefix = insn->rex_prefix.got ? insn->rex_prefix.bytes[0] : 0;
+    int modrm_reg;
+    static char opw[4] = {'b', 'w', 'l', 'q'};
+    int w = fls(bytes) - 1;
+    char *src = NULL;
+
+    switch (opsrc) {
+        case OpNone:
+            src = str_add(src, "%s%c ", op, opw[w]);
+            break;
+        case OpReg:
+            modrm_reg = ((rex_prefix << 1) & 8); /* REX.R */
+            modrm_reg = modrm_reg | X86_MODRM_REG(insn->modrm.bytes[0]);
+            src = str_add(src, "%s %%%s,", op, reg_name(insn, modrm_reg, 0));
+            break;
+        case OpImm:
+            src = str_add(src, "%s%c $0x%lx,", op, opw[w], decode_opsrc_Imm(insn, bytes == 1, 1));
+            break;
+        case OpAcc:
+            src = str_add(src, "%s %%%s,", op, reg_name(insn, 0, 0));
+            break;
+        case OpCL:
+            src = str_add(src, "%s%c %%cl,", op, opw[w]);
+            break;
+        case OpOne:
+            src = str_add(src, "%s%c $0x1,", op, opw[w]);
+            break;
+        default: return NULL;
+    }
+
+    switch (opdst) {
+        case OpMem:
+            return decode_modrm_str(insn, src);
+        case OpMemAbs:
+            return str_add(src, "0x%lx", decode_mem_abs(insn));
+        default: break;
+    }
+
+    if (src) free(src);
+    return NULL;
+}
+
 static bool safety(struct insn *insn)
 {
     switch (insn->opcode.value)
@@ -883,6 +1026,121 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
     return true;
 }
 
+static char *disassemble(struct insn *insn)
+{
+    int opext;
+    int opsrc;
+    switch (insn->opcode.value)
+    {
+        // MOV
+        case 0x88: // MOV Eb,Gb.        Move r8 to r/m8.
+        case 0x89: // MOV Ev,Gv.        Move r64 to r/m64.
+            return decode_opstr(insn, "mov", OpReg, OpMem);
+        case 0xA2: // MOV Ob,AL.        Move AL to (seg:offset)
+        case 0xA3: // MOV Ov,rAX.       Move RAX to (offset)
+            return decode_opstr(insn, "movabs", OpAcc, OpMemAbs);
+        case 0xC6: // Grp11 Eb,Ib (1A). Move imm8 to r/m8
+        case 0xC7: // Grp11 Ev,Iz (1A). Move imm32 to r/m32
+            return decode_opstr(insn, "mov", OpImm, OpMem);
+
+        // XCHG
+        case 0x86: // XCHG Eb,Gb        Exchange r8 with byte from r/m8
+        case 0x87: // XCHG Ev,Gv        Exchange r64 with quadword from r/m64
+            return decode_opstr(insn, "xchg", OpReg, OpMem);
+        // CMPXCHG
+        case 0xB00F: // CMPXCHG Eb,Gb
+        case 0xB10F: // CMPXCHG Ev,Gv
+            return decode_opstr(insn, "cmpxchg", OpReg, OpMem);
+
+        // ADD
+        case 0x00: // ADD Eb,Gb         Add r8 to r/m8
+        case 0x01: // ADD Ev,Gv         Add r64 to r/m64
+            return decode_opstr(insn, "add", OpReg, OpMem);
+
+        // Grp1
+        case 0x80: // Grp1 Eb,Ib (1A)   Add/Sub/.. imm8 to r/m8.
+        case 0x81: // Grp1 Ev,Iz (1A)   Add/Sub/.. imm32 to r/m32.
+        case 0x83: // Grp1 Ev,Ib (1A)   Add/Sub/.. sign-extended imm8 to r/m64
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 0:ADD, 1:OR, 2:ADC, 3:SBB, 4:AND, 5:SUB, 6:XOR, 7:CMP;
+            switch (opext) {
+                case 0: return decode_opstr(insn, "add", OpImm, OpMem);
+                case 1: return decode_opstr(insn, "or", OpImm, OpMem);
+                case 4: return decode_opstr(insn, "and", OpImm, OpMem);
+                case 5: return decode_opstr(insn, "sub", OpImm, OpMem);
+                case 6: return decode_opstr(insn, "xor", OpImm, OpMem);
+                default: break;
+            } break;
+
+        // SUB
+        case 0x28: // SUB Eb,Gb
+        case 0x29: // SUB Ev,Gv
+            return decode_opstr(insn, "sub", OpReg, OpMem);
+
+        // OR, AND, XOR
+        case 0x08: // OR Eb,Gb
+        case 0x09: // OR Ev,Gv
+            return decode_opstr(insn, "or", OpReg, OpMem);
+        case 0x20: // AND Eb,Gb
+        case 0x21: // AND Ev,Gv
+            return decode_opstr(insn, "and", OpReg, OpMem);
+        case 0x30: // XOR Eb,Gb
+        case 0x31: // XOR Ev,Gv
+            return decode_opstr(insn, "xor", OpReg, OpMem);
+
+        // INC, DEC
+        case 0xFE: // Grp4 (1A) Eb
+        case 0xFF: // Grp5 (1A) Ev
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 0:INC, 1:DEC;
+            return decode_opstr(insn, opext == 0 ? "inc" : "dec", OpNone, OpMem);
+
+        // NOT, NEG
+        case 0xF6: // Grp3 Eb (1A)
+        case 0xF7: // Grp3 Ev (1A)
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 2:NOT, 3:NEG;
+            return decode_opstr(insn, opext == 2 ? "not" : "neg", OpNone, OpMem);
+
+        // SAL/SAR/SHL/SHR, ROL/ROR
+        case 0xC0: // Grp2 Eb,Ib (1A)
+        case 0xC1: /* Grp2 Ev,Ib (1A) */ opsrc = OpImm; goto SSSRR;
+        case 0xD0: // Grp2 Eb,1 (1A)
+        case 0xD1: /* Grp2 Ev,1 (1A) */ opsrc = OpOne; goto SSSRR;
+        case 0xD2: // Grp2 Eb,CL (1A)
+        case 0xD3: /* Grp2 Ev,CL (1A) */ opsrc = OpCL;
+        SSSRR:
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 0:ROL 1:ROR 2:RCL 3:RCR 4:SHL/SAL 5:SHR 7:SAR
+            switch (opext) {
+                case 0: return decode_opstr(insn, "rol", opsrc, OpMem);
+                case 1: return decode_opstr(insn, "ror", opsrc, OpMem);
+                case 4: return decode_opstr(insn, "shl", opsrc, OpMem);
+                case 5: return decode_opstr(insn, "shr", opsrc, OpMem);
+                case 7: return decode_opstr(insn, "sar", opsrc, OpMem);
+                default: break;
+            } break;
+
+        // Bit Test and Set/Reset/Complement
+        case 0xAB0F: opsrc = OpReg; goto BTS; // BTS Ev,Gv
+        case 0xB30F: opsrc = OpReg; goto BTR; // BTR Ev,Gv
+        case 0xBB0F: opsrc = OpReg; goto BTC; // BTC Ev,Gv
+        case 0xBA0F: // Grp8 Ev,Ib (1A)
+            opext = X86_MODRM_REG(insn->modrm.bytes[0]);
+            // 4:BT 5:BTS 6:BTR 7:BTC
+            opsrc = OpImm;
+            switch (opext) {
+                case 5: BTS: return decode_opstr(insn, "bts", opsrc, OpMem);
+                case 6: BTR: return decode_opstr(insn, "btr", opsrc, OpMem);
+                case 7: BTC: return decode_opstr(insn, "btc", opsrc, OpMem);
+                default: break;
+            } break;
+
+        default: break;
+    }
+    return NULL;
+}
+
 static void x86_decode_insn(struct breakpoint_ctx *bpctx, struct insn_decode_ctxt *ctxt, u64 ip, struct sample_regs_intr *regs_intr)
 {
     struct hw_breakpoint *bp = ctxt->bp;
@@ -981,6 +1239,8 @@ decode:
         }
 
         node->insn_pos = i;
+        if (!node->insn_str)
+            node->insn_str = disassemble(&insn);
         safety = 1;
 
         switch(bp->len) {
@@ -992,7 +1252,7 @@ decode:
         printf("      INSN: ");
         for (; i < in_len; i++)
             printf("%02x ", in[i]);
-        printf(" ADDR: %lx  DATA: %lx\n", ctxt->addr, data);
+        printf(" %s ADDR: %lx  DATA: %lx\n", node->insn_str, ctxt->addr, data);
         break;
     }
 
