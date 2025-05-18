@@ -81,15 +81,15 @@ enum {
 };
 
 // opcodes
-enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,
-       OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
+enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ,
+       OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR, ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu,
        PRTF, KSYM, NTHL, NTHS, STRNCMP, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
-#define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ," \
-             "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ," \
+#define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
+             "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
              "PRTF,KSYM,NTHL,NTHS,SCMP,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
@@ -321,12 +321,12 @@ static void expr(int lev)
         else if (tk == And) { next(); *++e = PSH; expr(Eq);  *++e = AND; ty = INT; }
         else if (tk == Eq)  { next(); *++e = PSH; expr(Lt);  *++e = EQ;  ty = INT; }
         else if (tk == Ne)  { next(); *++e = PSH; expr(Lt);  *++e = NE;  ty = INT; }
-        else if (tk == Lt)  { next(); *++e = PSH; expr(Shl); *++e = LT;  ty = INT; }
-        else if (tk == Gt)  { next(); *++e = PSH; expr(Shl); *++e = GT;  ty = INT; }
-        else if (tk == Le)  { next(); *++e = PSH; expr(Shl); *++e = LE;  ty = INT; }
-        else if (tk == Ge)  { next(); *++e = PSH; expr(Shl); *++e = GE;  ty = INT; }
+        else if (tk == Lt)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?LTu:LT;  ty = INT; }
+        else if (tk == Gt)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?GTu:GT;  ty = INT; }
+        else if (tk == Le)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?LEu:LE;  ty = INT; }
+        else if (tk == Ge)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?GEu:GE;  ty = INT; }
         else if (tk == Shl) { next(); *++e = PSH; expr(Add); *++e = SHL; ty = INT; }
-        else if (tk == Shr) { next(); *++e = PSH; expr(Add); *++e = SHR; ty = INT; }
+        else if (tk == Shr) { next(); *++e = PSH; expr(Add); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?SHR:SAR; ty = INT; }
         else if (tk == Add) {
             next(); *++e = PSH; expr(Mul);
             if ((ty = t) > PTR) { *++e = PSH; *++e = IMM; *++e = typeop(Add); *++e = MUL;  }
@@ -339,8 +339,8 @@ static void expr(int lev)
             else *++e = SUB;
         }
         else if (tk == Mul) { next(); *++e = PSH; expr(Inc); *++e = MUL; ty = INT; }
-        else if (tk == Div) { next(); *++e = PSH; expr(Inc); *++e = DIV; ty = INT; }
-        else if (tk == Mod) { next(); *++e = PSH; expr(Inc); *++e = MOD; ty = INT; }
+        else if (tk == Div) { next(); *++e = PSH; expr(Inc); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?DIVu:DIV; ty = INT; }
+        else if (tk == Mod) { next(); *++e = PSH; expr(Inc); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?MODu:MOD; ty = INT; }
         else if (tk == Inc || tk == Dec) {
             if (*(e-1) == LI) { *(e-1) = PSH; ++e; *e = *(e-1); *(e-1) = LI; }
             else { synerr("bad lvalue in post-increment"); }
@@ -562,13 +562,20 @@ long expr_run(struct expr_prog *prog)
             case GT:  a = *sp++ >  a; break;
             case LE:  a = *sp++ <= a; break;
             case GE:  a = *sp++ >= a; break;
+            case LTu: a = (unsigned long)(*sp++) <  (unsigned long)a; break;
+            case GTu: a = (unsigned long)(*sp++) >  (unsigned long)a; break;
+            case LEu: a = (unsigned long)(*sp++) <= (unsigned long)a; break;
+            case GEu: a = (unsigned long)(*sp++) >= (unsigned long)a; break;
             case SHL: a = *sp++ << a; break;
-            case SHR: a = *sp++ >> a; break;
+            case SHR: a = (unsigned long)(*sp++) >> (unsigned long)a; break;
+            case SAR: a = *sp++ >> a; break;
             case ADD: a = *sp++ +  a; break;
             case SUB: a = *sp++ -  a; break;
             case MUL: a = *sp++ *  a; break;
             case DIV: a = *sp++ /  a; break;
+            case DIVu:a = (unsigned long)(*sp++) /  (unsigned long)a; break;
             case MOD: a = *sp++ %  a; break;
+            case MODu:a = (unsigned long)(*sp++) %  (unsigned long)a; break;
 
             case PRTF: t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]); break;
             case KSYM: a = (long)(void *)ksymbol(*sp); break;
