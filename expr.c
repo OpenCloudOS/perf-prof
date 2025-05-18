@@ -17,8 +17,8 @@
  * BNZ imm64   BNZ imm64          #case BNZ: pc = a ? (long *)*pc : pc + 1; break;                       // branch if not zero
  * ENT imm64   ENT imm64          #case ENT: { *--sp = (long)bp; bp = sp; sp = sp - *pc++; } break;      // enter subroutine
  * ADJ imm64   ADJ imm64          #case ADJ: sp = sp + *pc++; break;                                     // stack adjust
- * LI  imm64   LI  imm64          #case LI:  switch(*pc++) { case sizeof(char): a = *(char *)a; ...}     // load int
- * SI  imm64   SI  imm64          #case SI:  switch(*pc++) { case sizeof(char): *(char *)*sp++ = a; ...} // store int
+ * LI  imm64   LI  imm64          #case LI:  switch(*pc++) { case CHAR: a = *(char *)a; ...}     // load int
+ * SI  imm64   SI  imm64          #case SI:  switch(*pc++) { case CHAR: *(char *)*sp++ = a; ...} // store int
  * LEV         LEV                #case LEV: { sp = bp; bp = (long *)*sp++; pc = (long *)*sp++; } break; // leave subroutine
  * PSH         PSH a              #case PSH: *--sp = a; break;                                           // push
  *                                #
@@ -86,7 +86,7 @@ enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,
        PRTF, KSYM, NTHL, NTHS, STRNCMP, EXIT };
 
 // types
-enum { CHAR, SHORT, INT, LONG, ARRAY, PTR = 0x8 };
+enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ," \
@@ -106,6 +106,23 @@ static void synerr(const char *s)
     printf("%s\n", lp);
     printf("%*s%s\n", (int)(p-lp+1), "^ ", s);
     longjmp(synerr_jmp, -1);
+}
+
+static int typeop(int op)
+{
+    switch (op) {
+        case Sizeof: return (ty >= PTR) ? sizeof(void *) : (1 << (ty & ~UNSIGNED));
+        case Assign: return (ty >= PTR) ? PTR : ty;
+        case Inc:
+        case Dec:
+            return (ty>=PTR+PTR) ? sizeof(void *) : (ty>=PTR ? (1<<((ty-PTR) & ~UNSIGNED)) : 1);
+        case Add:
+        case Sub:
+        case Brak:
+            return (ty>=PTR+PTR) ? sizeof(void *) : (1<<((ty-PTR) & ~UNSIGNED));
+        default: synerr("bad typeop");
+    }
+    return -1;
 }
 
 static void next(void)
@@ -205,10 +222,11 @@ static void expr(int lev)
     }
     else if (tk == Sizeof) {
         next(); if (tk == '(') next(); else { synerr("open paren expected in sizeof"); }
-        if (tk == Int) { ty = id->type; next(); } else { synerr("wrong type"); }
+        if (tk == Int) { ty = id->type; if (ty == UNSIGNED) ty |= INT; next(); } else { synerr("wrong type"); }
+        if (tk == Int) { ty = (ty&UNSIGNED) | id->type; next(); }
         while (tk == Mul) { next(); ty = ty + PTR; }
         if (tk == ')') next(); else { synerr("close paren expected in sizeof"); }
-        *++e = IMM; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty);
+        *++e = IMM; *++e = typeop(Sizeof);
         ty = INT;
     }
     else if (tk == Id) {
@@ -232,17 +250,19 @@ static void expr(int lev)
             else { synerr("undefined variable"); }
             ty = s->type;
             if (ty & ARRAY) { ty &= ~ARRAY; ty |= PTR; }
-            else { *++e = LI; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty); }
+            else { *++e = LI; *++e = typeop(Assign); }
         }
     }
     else if (tk == '(') {
         next();
         if (tk == Int) {
-            t = id->type; next();
+            t = id->type; if (t == UNSIGNED) t |= INT; next();
+            if (tk == Int) { t = (t&UNSIGNED) | id->type; next(); }
             while (tk == Mul) { next(); t = t + PTR; }
             if (tk == ')') next(); else { synerr("bad cast"); }
             expr(Inc);
             ty = t;
+            if (*(e-1) == LI) *e = typeop(Assign);
         }
         else {
             expr(Assign);
@@ -252,7 +272,7 @@ static void expr(int lev)
     else if (tk == Mul) {
         next(); expr(Inc);
         if (ty >= PTR) ty = ty - PTR; else { synerr("bad dereference"); }
-        *++e = LI; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty);
+        *++e = LI; *++e = typeop(Assign);
     }
     else if (tk == And) {
         next(); expr(Inc);
@@ -272,9 +292,9 @@ static void expr(int lev)
         if (*(e-1) == LI) { *(e-1) = PSH; ++e; *e = *(e-1); *(e-1) = LI; }
         else { synerr("bad lvalue in pre-increment"); }
         *++e = PSH;
-        *++e = IMM; *++e = (ty>=PTR+PTR) ? sizeof(void *) : (ty>=PTR?(1<<(ty-PTR)):1);
+        *++e = IMM; *++e = typeop(t);
         *++e = (t == Inc) ? ADD : SUB;
-        *++e = SI; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty);
+        *++e = SI; *++e = typeop(Assign);
     }
     else { synerr("bad expression"); }
 
@@ -283,7 +303,7 @@ static void expr(int lev)
         if (tk == Assign) {
             next();
             if (*(e-1) == LI) *--e = PSH; else { synerr("bad lvalue in assignment"); }
-            expr(Assign); ty = t; *++e = SI; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty);
+            expr(Assign); ty = t; *++e = SI; *++e = typeop(Assign);
         }
         else if (tk == Cond) {
             next();
@@ -309,13 +329,13 @@ static void expr(int lev)
         else if (tk == Shr) { next(); *++e = PSH; expr(Add); *++e = SHR; ty = INT; }
         else if (tk == Add) {
             next(); *++e = PSH; expr(Mul);
-            if ((ty = t) > PTR) { *++e = PSH; *++e = IMM; *++e = (ty>=PTR+PTR)?sizeof(void *):(1<<(ty-PTR)); *++e = MUL;  }
+            if ((ty = t) > PTR) { *++e = PSH; *++e = IMM; *++e = typeop(Add); *++e = MUL;  }
             *++e = ADD;
         }
         else if (tk == Sub) {
             next(); *++e = PSH; expr(Mul);
-            if (t > PTR && t == ty) { *++e = SUB; *++e = PSH; *++e = IMM; *++e = (ty>=PTR+PTR)?sizeof(void *):(1<<(ty-PTR)); *++e = DIV; ty = INT; }
-            else if ((ty = t) > PTR) { *++e = PSH; *++e = IMM; *++e = (ty>=PTR+PTR)?sizeof(void *):(1<<(ty-PTR)); *++e = MUL; *++e = SUB; }
+            if (t > PTR && t == ty) { *++e = SUB; *++e = PSH; *++e = IMM; *++e = typeop(Sub); *++e = DIV; ty = INT; }
+            else if ((ty = t) > PTR) { *++e = PSH; *++e = IMM; *++e = typeop(Sub); *++e = MUL; *++e = SUB; }
             else *++e = SUB;
         }
         else if (tk == Mul) { next(); *++e = PSH; expr(Inc); *++e = MUL; ty = INT; }
@@ -325,22 +345,22 @@ static void expr(int lev)
             if (*(e-1) == LI) { *(e-1) = PSH; ++e; *e = *(e-1); *(e-1) = LI; }
             else { synerr("bad lvalue in post-increment"); }
             *++e = PSH;
-            *++e = IMM; *++e = (ty>=PTR+PTR) ? sizeof(void *) : (ty>=PTR?(1<<(ty-PTR)):1);//*++e = (ty > PTR) ? sizeof(long) : sizeof(char);
+            *++e = IMM; *++e = typeop(tk); //*++e = (ty > PTR) ? sizeof(long) : sizeof(char);
             *++e = (tk == Inc) ? ADD : SUB;
-            *++e = SI; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty);
+            *++e = SI; *++e = typeop(Assign);
             *++e = PSH;
-            *++e = IMM; *++e = (ty>=PTR+PTR) ? sizeof(void *) : (ty>=PTR?(1<<(ty-PTR)):1);//(ty > PTR) ? sizeof(long) : sizeof(char);
+            *++e = IMM; *++e = typeop(tk); //(ty > PTR) ? sizeof(long) : sizeof(char);
             *++e = (tk == Inc) ? SUB : ADD;
             next();
         }
         else if (tk == Brak) {
             next(); *++e = PSH; expr(Assign);
             if (tk == ']') next(); else { synerr("close bracket expected"); }
-            if (t > PTR) { *++e = PSH; *++e = IMM; *++e = (t>=PTR+PTR)?sizeof(void *):(1<<(t-PTR)); *++e = MUL;  }
+            if (t > PTR) { *++e = PSH; *++e = IMM; ty = t; *++e = typeop(Brak); *++e = MUL;  }
             else if (t < PTR) { synerr("pointer type expected"); }
             *++e = ADD;
             ty = t - PTR;
-            *++e = LI; *++e = (ty >= PTR) ? sizeof(void *) : (1 << ty);
+            *++e = LI; *++e = typeop(Assign);
         }
         else { synerr("compiler error"); }
     }
@@ -378,6 +398,7 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_KEY("short", Int, SHORT);
     ADD_KEY("int", Int, INT);
     ADD_KEY("long", Int, LONG);
+    ADD_KEY("unsigned", Int, UNSIGNED);
     ADD_KEY("sizeof", Sizeof, INT);
 
     // add library to symbol table
@@ -416,6 +437,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
             }
             if (declare->size != declare->elementsize)
                 id->type |= ARRAY;
+            if (declare->is_unsigned)
+                id->type |= UNSIGNED;
             id->nr_elm = declare->size / declare->elementsize;
             id->value = (long)data + declare->offset;
             if (declare->offset + declare->size > max_offset)
@@ -503,17 +526,27 @@ long expr_run(struct expr_prog *prog)
             case ENT: { *--sp = (long)bp; bp = sp; sp = sp - *pc++; } break;      // enter subroutine
             case ADJ: sp = sp + *pc++; break;                                     // stack adjust
             case LI:  switch(*pc++) {                                             // load int
-                          case sizeof(char): a = *(char *)a; break;
-                          case sizeof(short): a = *(short *)a; break;
-                          case sizeof(int): a = *(int *)a; break;
-                          case sizeof(long): a = *(long *)a; break;
+                          case CHAR: a = *(char *)a; break;
+                          case UNSIGNED|CHAR: a = *(unsigned char *)a; break;
+                          case SHORT: a = *(short *)a; break;
+                          case UNSIGNED|SHORT: a = *(unsigned short *)a; break;
+                          case INT: a = *(int *)a; break;
+                          case UNSIGNED|INT: a = *(unsigned int *)a; break;
+                          case LONG: a = *(long *)a; break;
+                          case UNSIGNED|LONG: a = *(unsigned long *)a; break;
+                          case PTR: a = *(unsigned long *)a; break;
                           default: printf("wrong instruction\n"); return -1;
                       } break;
             case SI:  switch(*pc++) {                                             // store int
-                          case sizeof(char): *(char *)*sp++ = a; break;
-                          case sizeof(short): *(short *)*sp++ = a; break;
-                          case sizeof(int): *(int *)*sp++ = a; break;
-                          case sizeof(long): *(long *)*sp++ = a; break;
+                          case CHAR: *(char *)*sp++ = a; break;
+                          case UNSIGNED|CHAR: *(unsigned char *)*sp++ = a; break;
+                          case SHORT: *(short *)*sp++ = a; break;
+                          case UNSIGNED|SHORT: *(unsigned short *)*sp++ = a; break;
+                          case INT: *(int *)*sp++ = a; break;
+                          case UNSIGNED|INT: *(unsigned int *)*sp++ = a; break;
+                          case LONG: *(long *)*sp++ = a; break;
+                          case UNSIGNED|LONG: *(unsigned long *)*sp++ = a; break;
+                          case PTR: *(unsigned long *)*sp++ = a; break;
                           default: printf("wrong instruction\n"); return -1;
                       } break;
 
@@ -559,9 +592,13 @@ int expr_load_glo(struct expr_prog *prog, const char *name, long value)
         if (s->token == Id && s->class == Glo && !memcmp(s->name, name, LEN(s->hash))) {
             switch (s->type) {
                 case CHAR: *(char *)s->value = (char)value; break;
+                case UNSIGNED|CHAR: *(unsigned char *)s->value = (unsigned char)value; break;
                 case SHORT: *(short *)s->value = (short)value; break;
+                case UNSIGNED|SHORT: *(unsigned short *)s->value = (unsigned short)value; break;
                 case INT: *(int *)s->value = (int)value; break;
+                case UNSIGNED|INT: *(unsigned int *)s->value = (unsigned int)value; break;
                 case LONG: *(long *)s->value = (long)value; break;
+                case UNSIGNED|LONG: *(unsigned long *)s->value = (unsigned long)value; break;
                 default: return -1;
             }
             return 0;
@@ -617,6 +654,7 @@ void expr_dump(struct expr_prog *prog)
             struct symbol_table *s = &prog->symtab[i];
             if (s->token == Id && s->class == Glo) {
                 printf("    %16p", (void *)s->value);
+                if (s->type & UNSIGNED) printf(" unsigned");
                 switch (s->type & 0x3) {
                     case CHAR: printf(" char"); break;
                     case SHORT: printf(" short"); break;
@@ -819,7 +857,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "    which come from tracepoint fields.",
     "",
     "SYNTAX",
-    "    Supports 4 integer types: char, short, int, long. and pointer types.",
+    "    Supported types: char, short, int, long, unsigned, and pointer types.",
     "    Most operators are supported. See Operators.",
     "    Supports 4 built-in functions. See Built-in Functions.",
     "",

@@ -28,6 +28,7 @@ struct global_var_declare {
     int offset;
     int size;
     int elementsize;
+    bool is_unsigned;
 };
 
 struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare);
