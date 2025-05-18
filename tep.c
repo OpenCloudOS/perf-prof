@@ -292,21 +292,22 @@ static event_fields *kprobe_uprobe_event_fields(int id)
     ef = calloc(1, (nr_fields+1) * sizeof(*ef));
     if (!ef) return NULL;
 
-    #define EF(i, _name, _size) \
+    #define EF(i, _name, _size, _unsigned) \
         ef[i].name = _name; \
         ef[i].offset = offset; \
         ef[i].size = ef[i].elementsize = _size; \
+        ef[i].is_unsigned = _unsigned; \
         offset += _size;
 
-    EF(0, "common_type", sizeof(entry.common_type));
-    EF(1, "common_flags", sizeof(entry.common_flags));
-    EF(2, "common_preempt_count", sizeof(entry.common_preempt_count));
-    EF(3, "common_pid", sizeof(entry.common_pid));
+    EF(0, "common_type", sizeof(entry.common_type), 1);
+    EF(1, "common_flags", sizeof(entry.common_flags), 1);
+    EF(2, "common_preempt_count", sizeof(entry.common_preempt_count), 1);
+    EF(3, "common_pid", sizeof(entry.common_pid), 0);
     if (id == KPROBE || id == UPROBE) {
-        EF(4, FIELD_STRING_IP, sizeof(unsigned long));
+        EF(4, FIELD_STRING_IP, sizeof(unsigned long), 1);
     } else if (id == KRETPROBE || id == URETPROBE) {
-        EF(4, FIELD_STRING_FUNC, sizeof(unsigned long));
-        EF(5, FIELD_STRING_RETIP, sizeof(unsigned long));
+        EF(4, FIELD_STRING_FUNC, sizeof(unsigned long), 1);
+        EF(5, FIELD_STRING_RETIP, sizeof(unsigned long), 1);
     }
     return ef;
 }
@@ -355,6 +356,7 @@ event_fields *tep__event_fields(int id)
         ef[i].offset = common_fields[f]->offset;
         ef[i].size = common_fields[f]->size;
         ef[i].elementsize = common_fields[f]->elementsize;
+        ef[i].is_unsigned = !(common_fields[f]->flags & TEP_FIELD_IS_SIGNED);
         i++;
         f++;
     }
@@ -366,6 +368,7 @@ event_fields *tep__event_fields(int id)
             ef[i].offset = fields[f]->offset;
             ef[i].size = 2;
             ef[i].elementsize = 2;
+            ef[i].is_unsigned = 1;
             i++;
 
             ef[i].name = extra;
@@ -373,11 +376,13 @@ event_fields *tep__event_fields(int id)
             ef[i].offset = fields[f]->offset + 2;
             ef[i].size = 2;
             ef[i].elementsize = 2;
+            ef[i].is_unsigned = 1;
         } else {
             ef[i].name = fields[f]->name;
             ef[i].offset = fields[f]->offset;
             ef[i].size = fields[f]->size;
             ef[i].elementsize = fields[f]->elementsize;
+            ef[i].is_unsigned = !(fields[f]->flags & TEP_FIELD_IS_SIGNED);
         }
         i++;
         f++;
