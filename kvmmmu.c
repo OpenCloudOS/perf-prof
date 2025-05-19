@@ -798,7 +798,7 @@ static const char *kvmmmu_desc[] = PROFILER_DESC("kvmmmu",
     "    "PROGRAME" kvmmmu -p 2347 -i 5000 --spte --mmio --detail");
 static const char *kvmmmu_argv[] = PROFILER_ARGV("kvmmmu",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "spte", "mmio", "detail", "event");
+    PROFILER_ARGV_PROFILER, "spte", "mmio", "detail\nPrint detailed kvm_mmu page tables", "event");
 struct monitor kvm_mmu = {
     .name = "kvmmmu",
     .desc = kvmmmu_desc,

@@ -302,7 +302,7 @@ static const char *profile_desc[] = PROFILER_DESC("profile",
 static const char *profile_argv[] = PROFILER_ARGV("profile",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_FILTER,
-    PROFILER_ARGV_PROFILER, "freq", "call-graph", "flame-graph", "than");
+    PROFILER_ARGV_PROFILER, "freq", "call-graph", "flame-graph", "than\nPercentage, at the frequency specified by --freq.");
 struct monitor profile = {
     .name = "profile",
     .desc = profile_desc,

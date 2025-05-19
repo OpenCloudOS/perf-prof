@@ -619,7 +619,7 @@ static const char *oncpu_desc[] = PROFILER_DESC("oncpu",
     "    "PROGRAME" oncpu -C 0-3");
 static const char *oncpu_argv[] = PROFILER_ARGV("oncpu",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "detail", "filter", "only-comm");
+    PROFILER_ARGV_PROFILER, "detail\nMore detailed information output", "filter", "only-comm");
 static profiler oncpu = {
     .name = "oncpu",
     .desc = oncpu_desc,

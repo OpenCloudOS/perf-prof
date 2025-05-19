@@ -312,7 +312,7 @@ static const char *sched_migrate_desc[] = PROFILER_DESC("sched-migrate",
 static const char *sched_migrate_argv[] = PROFILER_ARGV("sched-migrate",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "detail", "filter", "call-graph", "flame-graph");
+    PROFILER_ARGV_PROFILER, "detail\nMore detailed information output", "filter", "call-graph", "flame-graph");
 static profiler sched_migrate = {
     .name = "sched-migrate",
     .desc = sched_migrate_desc,

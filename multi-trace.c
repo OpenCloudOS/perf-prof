@@ -2418,7 +2418,7 @@ static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
 static const char *rundelay_argv[] = PROFILER_ARGV("rundelay",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "event", "key", "than", "detail", "perins", "heatmap", "filter");
+    PROFILER_ARGV_PROFILER, "event", "key", "than", "detail", "perins", "heatmap", "filter\nFilter process comm");
 static profiler rundelay = {
     .name = "rundelay",
     .desc = rundelay_desc,

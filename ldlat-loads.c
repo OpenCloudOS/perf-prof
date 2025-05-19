@@ -446,7 +446,7 @@ static const char *ldlat_loads_argv[] = PROFILER_ARGV("ldlat-loads",
     PROFILER_ARGV_OPTION,
     "FILTER OPTION:",
     "exclude-host", "exclude-guest",
-    PROFILER_ARGV_PROFILER, "ldlat", "trigger", "perins", "than");
+    PROFILER_ARGV_PROFILER, "ldlat", "trigger", "perins", "than\nGreater than specified cycles");
 
 //PEBS
 //18.3.4.4.2 Load Latency Performance Monitoring Facility
@@ -514,7 +514,7 @@ static const char *ldlat_stores_argv[] = PROFILER_ARGV("ldlat-stores",
     PROFILER_ARGV_OPTION,
     "FILTER OPTION:",
     "exclude-host", "exclude-guest",
-    PROFILER_ARGV_PROFILER, "trigger", "perins", "than");
+    PROFILER_ARGV_PROFILER, "trigger", "perins", "than\nGreater than specified cycles");
 static profiler ldlat_stores = {
     .name = "ldlat-stores",
     .desc = ldlat_stores_desc,

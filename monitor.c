@@ -496,7 +496,7 @@ struct option main_options[] = {
                                                                 ),
     OPT_INT_NONEG   ('F',            "freq", &env.freq,                  NULL,  "Profile at this frequency, No profile: 0"),
     OPT_STRDUP_NONEG('k',             "key", &env.key,                  "str",  "Key for series events"),
-    OPT_STRDUP_NONEG( 0 ,          "filter", &env.filter,            "filter",  "Event filter/comm filter"),
+    OPT_STRDUP_NONEG( 0 ,          "filter", &env.filter,            "filter",  "Event filter, See TRACEPOINT"),
     OPT_PARSE_NONEG (LONG_OPT_period, "period", &env.sample_period,      "ns",   "Sample period, Unit: s/ms/us/*ns"),
     OPT_STRDUP_NONEG(0, "impl", &env.impl,    "impl",       "Implementation of two-event analysis class. Dflt: delay.\n"
                                                                 "    delay: latency distribution between two events\n"
@@ -507,7 +507,7 @@ struct option main_options[] = {
                                                                 "    call-delay: call + delay, only for nested-trace."),
     OPT_BOOLEAN_SET ('S',   "interruptible", &env.interruptible, &env.interruptible_set, "TASK_INTERRUPTIBLE, no- prefix to exclude"),
     OPT_BOOL_NONEG  ('D', "uninterruptible", &env.uninterruptible,              "TASK_UNINTERRUPTIBLE"),
-    OPT_PARSE_NONEG ( LONG_OPT_than, "than", &env.greater_than,          "ns",  "Greater than specified time, Unit: s/ms/us/*ns/percent"),
+    OPT_PARSE_NONEG ( LONG_OPT_than, "than", &env.greater_than,          "n",   "Greater than specified time, Unit: s/ms/us/*ns"),
     OPT_PARSE_NONEG ( LONG_OPT_only_than, "only-than", &env.greater_than,"ns",  "Only print those that are greater than the specified time."),
     OPT_PARSE_NONEG ( LONG_OPT_lower, "lower", &env.lower_than,          "ns",  "Lower than specified time, Unit: s/ms/us/*ns"),
     OPT_STRDUP_NONEG( 0 ,           "alloc", &env.tp_alloc,           "EVENT",  "Memory alloc tracepoint/kprobe/uprobe"),
@@ -707,7 +707,7 @@ static void flush_main_options(profiler *p)
                 opts->short_name < 256 && isalnum(opts->short_name) && /* isshort */
                 p->argv[i][0] == opts->short_name)
                 goto enable;
-            if (opts->long_name && strcmp(opts->long_name, p->argv[i]) == 0)
+            if (opts->long_name && strstarts(p->argv[i], opts->long_name))
                 goto enable;
             if (opts->type == OPTION_GROUP && strcmp(opts->help, p->argv[i]) == 0)
                 goto enable;
@@ -715,6 +715,17 @@ static void flush_main_options(profiler *p)
         continue;
     enable:
         opts->flags &= (~PARSE_OPT_DISABLED);
+        if (opts->long_name) {
+            int len = strlen(opts->long_name);
+            if (p->argv[i][len] != '\0') {
+                opts->help = p->argv[i] + len;
+                while (opts->help[0] == '\n' || opts->help[0] == ' ' || opts->help[0] == ':')
+                    opts->help++;
+                if (opts->flags & PARSE_OPT_OPTARG)
+                    opts->argh = NULL;
+                p->argv[i] = opts->long_name;
+            }
+        }
     }
 }
 
