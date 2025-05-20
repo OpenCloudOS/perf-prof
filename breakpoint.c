@@ -241,7 +241,7 @@ static int breakpoint_init(struct prof_dev *dev)
         .size        = sizeof(struct perf_event_attr),
         .sample_period = 1,
         .sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU |
-                       (env->callchain ? PERF_SAMPLE_CALLCHAIN | PERF_SAMPLE_REGS_INTR : 0),
+                       (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0) | PERF_SAMPLE_REGS_INTR,
         .read_format = 0,
         .sample_regs_intr = PERF_REGS_MASK,
         .pinned        = 1,
@@ -1286,12 +1286,31 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
         __u64 ips[2];
     } callchain;
     struct sample_regs_intr *regs_intr;
+    u64 rip;
     int i;
 
     for (i = 0; i < HBP_NUM; i++) {
         if (ctx->hwbp[i].address == data->addr)
             break;
     }
+
+    if (dev->env->callchain)
+        regs_intr = (struct sample_regs_intr *)&data->callchain.ips[data->callchain.nr];
+    else
+        regs_intr = (struct sample_regs_intr *)&data->callchain;
+
+#if defined(__i386__) || defined(__x86_64__)
+    /*
+     * In the kernel, the PERF_SAMPLE_IP function perf_instruction_pointer() may
+     * return the guest ip. In fact, in kvm virtualization, EXTERNAL_INTERRUPT vmexit,
+     * and breakpoints triggered inside the external-interrupt, the guest ip will be
+     * obtained strangely.
+     * The correct host rip is within the sampled regs.
+     */
+    rip = reg_read(regs_intr, RIP);
+#elif defined(__aarch64__)
+    rip = data->ip;
+#endif
 
     if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
     tep__update_comm(NULL, data->tid_entry.tid);
@@ -1300,38 +1319,37 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
             data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, ctx->print_ip?" ip ":"\n");
 
     if (ctx->print_ip) {
-        if (ctx->ip_sym || data->ip >= START_OF_KERNEL) {
+        if (ctx->ip_sym || rip >= START_OF_KERNEL) {
             callchain.nr = 2;
-            callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
-            callchain.ips[1] = data->ip;
+            callchain.ips[0] = rip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+            callchain.ips[1] = rip;
             print_callchain(ctx->cc, (struct callchain *)&callchain, data->tid_entry.pid);
         } else
-            printf("%016llx\n", data->ip);
+            printf("%016lx\n", rip);
+    }
+
+    if (ctx->kcore && ctx->hwbp[i].type == HW_BREAKPOINT_W) {
+        #if defined(__i386__) || defined(__x86_64__)
+        /*
+         * Decode the instruction and get the value written to data->addr.
+         *
+         * You cannot directly use kcore_read to read the value of data->addr
+         * because it may change. Currently, kcore_read() reads instructions,
+         * which generally do not change, and decode the source operands.
+         */
+        // Instruction breakpoint, Exception Class: Fault.
+        // Data write breakpoint,  Exception Class: Trap.
+        x86_decode_insn(ctx, &ctx->ctxt[i], rip, regs_intr);
+        #endif
     }
 
     if (dev->env->callchain) {
-        regs_intr = (struct sample_regs_intr *)&data->callchain.ips[data->callchain.nr];
-
-        if (ctx->kcore && ctx->hwbp[i].type == HW_BREAKPOINT_W) {
-            #if defined(__i386__) || defined(__x86_64__)
-            /*
-             * Decode the instruction and get the value written to data->addr.
-             *
-             * You cannot directly use kcore_read to read the value of data->addr
-             * because it may change. Currently, kcore_read() reads instructions,
-             * which generally do not change, and decode the source operands.
-             */
-            // Instruction breakpoint, Exception Class: Fault.
-            // Data write breakpoint,  Exception Class: Trap.
-            x86_decode_insn(ctx, &ctx->ctxt[i], data->ip, regs_intr);
-            #endif
-        }
-
         if (!dev->env->flame_graph)
             print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid, (callchain_cbs)print_regs_intr, NULL, regs_intr);
         else
             flame_graph_add_callchain(ctx->flame, &data->callchain, data->tid_entry.pid, NULL);
-    }
+    } else
+        print_regs_intr(regs_intr, 0);
 }
 
 static const char *breakpoint_desc[] = PROFILER_DESC("breakpoint",
