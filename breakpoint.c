@@ -26,6 +26,7 @@
 #define PERF_REGS_MASK ((1ULL << PERF_REG_ARM64_MAX) - 1)
 #endif
 
+#define FILTER_VAR_NAME "data"
 
 #define HBP_NUM 4
 
@@ -71,6 +72,7 @@ struct breakpoint_ctx {
     struct hw_breakpoint hwbp[HBP_NUM];
     struct insn_decode_ctxt ctxt[HBP_NUM];
     DECLARE_HASHTABLE(insn_hashmap, INSN_HASHTABLE_BITS);
+    struct expr_prog *data_filter;
     struct callchain_ctx *cc;
     struct flame_graph *flame;
     bool print_ip;
@@ -109,6 +111,19 @@ static int monitor_ctx_init(struct prof_dev *dev)
         }
     }
 
+    if (ctx->kcore) {
+        if (env->filter) {
+            struct global_var_declare data_var[2] = {{FILTER_VAR_NAME, 0, sizeof(u64), sizeof(u64), 1}, {NULL}};
+            ctx->data_filter = expr_compile(env->filter, data_var);
+            if (!ctx->data_filter) {
+                fprintf(stderr, "Please use the 'data' variable. E.g. \"data > 0\"\n");
+                goto failed;
+            }
+        }
+        kcore_ref();
+        hash_init(ctx->insn_hashmap);
+    }
+
     ctx->print_ip = 1;
     if (env->callchain) {
         if (!env->flame_graph) {
@@ -124,13 +139,12 @@ static int monitor_ctx_init(struct prof_dev *dev)
         callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
     }
 
-    if (ctx->kcore) {
-        kcore_ref();
-        hash_init(ctx->insn_hashmap);
-    }
-
     tep__ref();
     return 0;
+
+failed:
+    free(ctx);
+    return -1;
 }
 
 static void monitor_ctx_exit(struct prof_dev *dev)
@@ -148,6 +162,7 @@ static void monitor_ctx_exit(struct prof_dev *dev)
         }
 
         kcore_unref();
+        expr_destroy(ctx->data_filter);
     }
     callchain_ctx_free(ctx->cc);
     flame_graph_output(ctx->flame);
@@ -1340,6 +1355,26 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
         // Instruction breakpoint, Exception Class: Fault.
         // Data write breakpoint,  Exception Class: Trap.
         x86_decode_insn(ctx, &ctx->ctxt[i], rip, regs_intr);
+
+        if (ctx->data_filter) {
+            struct insn_decode_ctxt *ctxt = &ctx->ctxt[i];
+            u64 mem_data;
+
+            if (!ctxt->safety)
+                return;
+
+            switch(ctx->hwbp[i].len) {
+                case 1: mem_data = (u8)ctxt->data; break;
+                case 2: mem_data = (u16)ctxt->data; break;
+                case 4: mem_data = (u32)ctxt->data; break;
+                default: mem_data = (u64)ctxt->data; break;
+            }
+            if (expr_load_glo(ctx->data_filter, FILTER_VAR_NAME, mem_data) < 0)
+                return;
+            // Filter conditions not met
+            if (expr_run(ctx->data_filter) == 0)
+                return;
+        }
         #endif
     }
 
@@ -1364,11 +1399,12 @@ static const char *breakpoint_desc[] = PROFILER_DESC("breakpoint",
     "",
     "EXAMPLES",
     "    "PROGRAME" breakpoint 0x7ffd8c7dae28 -g",
-    "    "PROGRAME" breakpoint 0x7ffd8c7dae28/8:w");
+    "    "PROGRAME" breakpoint 0x7ffd8c7dae28/8:w",
+    "    "PROGRAME" breakpoint 0x7ffd8c7dae28/8:w -g --filter 'data>0'");
 static const char *breakpoint_argv[] = PROFILER_ARGV("breakpoint",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER, "exclude-user", "exclude-kernel",
-    PROFILER_ARGV_PROFILER, "call-graph", "flame-graph");
+    PROFILER_ARGV_PROFILER, "call-graph", "flame-graph", "filter\nEXPR, Filter 'data' for write breakpoints");
 static profiler breakpoint = {
     .name = "breakpoint",
     .desc = breakpoint_desc,
