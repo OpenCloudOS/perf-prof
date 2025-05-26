@@ -688,5 +688,8 @@ void kcore_ref(void);
 void kcore_unref(void);
 ssize_t kcore_read(unsigned long kaddr, void *buf, size_t count);
 
+//kvm_exit_reason.c
+const char *find_exit_reason(unsigned int isa, unsigned int val);
+
 
 #endif

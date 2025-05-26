@@ -13,16 +13,9 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 #include <latency_helpers.h>
-
+#include <bpf-skel/kvm_exit.h>
 
 #define ALIGN(x, a)  __ALIGN_KERNEL((x), (a))
-
-#define KVM_ISA_VMX   1
-#define KVM_ISA_SVM   2
-#define KVM_ISA_ARM   3
-#define EXIT_REASON_HLT                 12
-#define SVM_EXIT_HLT           0x078
-#define ARM_EXIT_HLT           0x01
 
 #include "kvm_exit_reason.c"
 
@@ -330,7 +323,10 @@ static inline int __exit_reason(struct kvmexit_ctx *ctx, struct sample_type_raw 
         switch (raw->raw.size) {
 #if defined(__aarch64__)
         case ALIGN(sizeof(struct trace_kvm_exit_armv8)+sizeof(u32), sizeof(u64)) - sizeof(u32):
-            *exit_reason = raw->raw.kvm_exit.e1.esr_ec;
+            if (raw->raw.kvm_exit.e1.ret == ARM_EXCEPTION_TRAP)
+                *exit_reason = raw->raw.kvm_exit.e1.esr_ec;
+            else
+                *exit_reason = ARM_EXCEPTION_REASON(raw->raw.kvm_exit.e1.ret);
             *isa = KVM_ISA_ARM;
             *guest_rip = raw->raw.kvm_exit.e1.vcpu_pc;
             break;

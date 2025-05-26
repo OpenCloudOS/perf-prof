@@ -156,6 +156,7 @@
 	_ER(EXIT_AVIC_UNACCELERATED_ACCESS,	0x402)	\
 	_ER(EXIT_ERR,		-1)
 
+#if defined(__aarch64__) || defined(__TARGET_ARCH_arm64)
 #define ARM_EXIT_REASONS 				\
 	_ER(ESR_ELx_EC_UNKNOWN,	0x00)		\
 	_ER(ESR_ELx_EC_WFx,	0x01)			\
@@ -196,7 +197,15 @@
 	_ER(ESR_ELx_EC_BKPT32, 0x38)		\
 	_ER(ESR_ELx_EC_VECTOR32, 0x3A)		\
 	_ER(ESR_ELx_EC_BRK64, 0x3C)			\
-	_ER(ESR_ELx_EC_MAX, 0x3F)
+	_ER(ESR_ELx_EC_MAX, 0x3F)			\
+	_ER(ARM_EXCEPTION_IRQ, ARM_EXCEPTION_REASON(ARM_EXCEPTION_IRQ))	\
+	_ER(ARM_EXCEPTION_EL1_SERROR, ARM_EXCEPTION_REASON(ARM_EXCEPTION_EL1_SERROR))\
+	_ER(ARM_EXCEPTION_IL, ARM_EXCEPTION_REASON(ARM_EXCEPTION_IL))	\
+	_ER(ARM_EXCEPTION_HYP_GONE, ARM_EXCEPTION_REASON(ARM_EXCEPTION_HYP_GONE))
+#else
+#define ARM_EXIT_REASONS
+#endif
+
 
 #define _ER(reason, val)	{ #reason, val },
 struct str_values {
@@ -229,7 +238,7 @@ static struct isa_exit_reasons {
 	{ }
 };
 
-static const char *find_exit_reason(unsigned int isa, unsigned int val)
+const char *find_exit_reason(unsigned int isa, unsigned int val)
 {
 	struct str_values *strings = NULL;
 	int i;

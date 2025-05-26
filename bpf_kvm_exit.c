@@ -14,7 +14,6 @@
 #include <internal/xyarray.h>
 #include <internal/evsel.h>
 
-#include "kvm_exit_reason.c"
 
 struct kvmexit_ctx {
     struct kvm_exit_bpf *obj;
