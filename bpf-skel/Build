@@ -1,0 +1,1 @@
+perf-prof-$(CONFIG_LIBBPF) += kvm_exit.skel.h

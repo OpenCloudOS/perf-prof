@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -7,7 +8,6 @@
 #include <pthread.h>
 #include <signal.h>
 #include <ctype.h>
-#define _GNU_SOURCE
 #include <unistd.h>
 #include <dirent.h>
 #include <linux/perf_event.h>
@@ -118,6 +118,7 @@ enum {
     LONG_OPT_than,
     LONG_OPT_only_than,
     LONG_OPT_lower,
+    LONG_OPT_threshold,
     LONG_OPT_detail,
     LONG_OPT_period,
 };
@@ -202,6 +203,9 @@ static int parse_arg(int key, char *arg)
         break;
     case LONG_OPT_lower:
         env.lower_than = nsparse(arg, NULL);
+        break;
+    case LONG_OPT_threshold:
+        env.threshold = nsparse(arg, NULL);
         break;
     case LONG_OPT_detail:
         env.detail = true;
@@ -510,6 +514,7 @@ struct option main_options[] = {
     OPT_PARSE_NONEG ( LONG_OPT_than, "than", &env.greater_than,          "n",   "Greater than specified time, Unit: s/ms/us/*ns"),
     OPT_PARSE_NONEG ( LONG_OPT_only_than, "only-than", &env.greater_than,"ns",  "Only print those that are greater than the specified time."),
     OPT_PARSE_NONEG ( LONG_OPT_lower, "lower", &env.lower_than,          "ns",  "Lower than specified time, Unit: s/ms/us/*ns"),
+    OPT_PARSE_NONEG ( LONG_OPT_threshold, "threshold", &env.threshold,   "ns",  "Threshold for BPF output events, Unit: s/ms/us/*ns"),
     OPT_STRDUP_NONEG( 0 ,           "alloc", &env.tp_alloc,           "EVENT",  "Memory alloc tracepoint/kprobe/uprobe"),
     OPT_STRDUP_NONEG( 0 ,            "free", &env.tp_free,            "EVENT",  "Memory free tracepoint/kprobe/uprobe"),
     OPT_BOOL_NONEG  ( 0 ,        "syscalls", &env.syscalls,                     "Trace syscalls"),
