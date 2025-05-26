@@ -4,7 +4,6 @@
 #include <bpf/bpf_tracing.h>
 
 #include "kvm_exit.h"
-#include "maps.bpf.h"
 #include "perf_output.bpf.h"
 
 #define MAX_CPUS 4096
