@@ -667,14 +667,28 @@ void help(void)
         usagestr++;
     }
 
-    fprintf(stderr, "\n Available Profilers:\n");
+#ifdef CONFIG_LIBBPF
+    fprintf(stderr, "\n Available eBPF Profilers:\n");
     while((m = monitor_next(m))) {
+        if (!strcasestr(m->name, "bpf")) continue;
         fprintf(stderr, "   %-20s", m->name);
         if (m->desc && m->desc[2] && m->desc[2][0])
             fprintf(stderr, " %s\n", m->desc[2]);
         else
             fprintf(stderr, "\n");
     }
+#endif
+
+    fprintf(stderr, "\n Available Profilers:\n");
+    while((m = monitor_next(m))) {
+        if (strcasestr(m->name, "bpf")) continue;
+        fprintf(stderr, "   %-20s", m->name);
+        if (m->desc && m->desc[2] && m->desc[2][0])
+            fprintf(stderr, " %s\n", m->desc[2]);
+        else
+            fprintf(stderr, "\n");
+    }
+
     fprintf(stderr, "\n See '%s profiler -h' for more information on a specific profiler.\n\n", PROGRAME);
     exit(129);
 }
