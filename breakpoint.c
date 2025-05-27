@@ -466,11 +466,14 @@ static char *decode_modrm_str(struct insn *insn, char *opstr)
 
         if ((base_reg & 7) == 5 && modrm_mod == 0) {
             if (index_reg == 4) goto addr32;
+            str = str_add(str, "(");
         } else
             str = str_add(str, "(%%%s", reg_name(insn, base_reg, 1));
 
         if (index_reg != 4)
             str = str_add(str, ",%%%s,%d)", reg_name(insn, index_reg, 1), 1<<scale);
+        else
+            str = str_add(str, ")");
     } else if ((modrm_rm & 7) == 5 && modrm_mod == 0) {
         if (insn->x86_64) // RIP-Relative Addressing
             str = str_add(str, "(%%rip)");
