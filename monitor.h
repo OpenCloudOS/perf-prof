@@ -494,6 +494,7 @@ int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
 void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how);
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp);
+int prof_dev_reopen_output(struct prof_dev *dev);
 
 /*
  * The final prof_dev refers to the device that finally handles the event and will no

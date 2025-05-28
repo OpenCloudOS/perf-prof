@@ -2041,14 +2041,8 @@ struct prof_dev *prof_dev_open_internal(profiler *prof, struct env *env,
     // workload output to stdout & stderr
     // perf-prof output to env.output file
     // TODO per prof_dev output
-    if (env->output) {
-        if (!freopen(env->output, "a", stdout))
-            goto out_free;
-        dup2(STDOUT_FILENO, STDERR_FILENO);
-        setlinebuf(stdin);
-        setlinebuf(stdout);
-        setlinebuf(stderr);
-    }
+    if (prof_dev_reopen_output(dev) < 0)
+        goto out_free;
 
     dev->pages = prof->pages;
     if (env->mmap_pages)
@@ -2770,6 +2764,21 @@ void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
     result = localtime(&tv.tv_sec);
     strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", result);
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
+}
+
+int prof_dev_reopen_output(struct prof_dev *dev)
+{
+    if (!dev->env->output)
+        return 0;
+
+    if (freopen(dev->env->output, "a", stdout)) {
+        dup2(STDOUT_FILENO, STDERR_FILENO);
+        setlinebuf(stdin);
+        setlinebuf(stdout);
+        setlinebuf(stderr);
+        return 0;
+    }
+    return -1;
 }
 
 static perfclock_t prof_dev_minevtime(struct prof_dev *dev)

@@ -337,6 +337,17 @@ static void bpf_kvm_exit_print_dev(struct prof_dev *dev, int indent)
     }
 }
 
+static void bpf_kvm_exit_sigusr(struct prof_dev *dev, int signum)
+{
+    struct kvmexit_ctx *ctx = dev->private;
+
+    if (signum == SIGUSR1) {
+        prof_dev_reopen_output(dev);
+        if (ctx->output2)
+            ctx->output2 = freopen(dev->env->output2, "a", ctx->output2);
+    }
+}
+
 static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm-exit",
     "[OPTION...] [--perins] [--than ns]",
     "Generate bpf:kvm-exit event.", "",
@@ -364,6 +375,7 @@ struct monitor bpf_kvm_exit = {
     .interval = bpf_kvm_exit_interval,
     .sample = bpf_kvm_exit_sample,
     .print_dev = bpf_kvm_exit_print_dev,
+    .sigusr = bpf_kvm_exit_sigusr,
 };
 MONITOR_REGISTER(bpf_kvm_exit)
 
