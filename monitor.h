@@ -120,6 +120,7 @@ struct env {
     char *key;
     char *impl;
     char *output;
+    char *output2;
     int watermark;
     bool watermark_set;
     bool inherit;
