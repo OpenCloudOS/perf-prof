@@ -1,4 +1,4 @@
-%define release 1%{?dist}
+%define release 1.virt
 %define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
 %define has_btf %(test -f /sys/kernel/btf/vmlinux && echo 1 || echo 0)
@@ -16,8 +16,8 @@ Summary:        Profiling based on perf_event
 Distribution:   OpenCloudOS
 Vendor:         Tencent
 URL:            https://github.com/OpenCloudOS
-BuildArch:      x86_64
-ExclusiveArch:  x86_64
+BuildArch:      x86_64 aarch64
+ExclusiveArch:  x86_64 aarch64
 
 Requires:       elfutils-libelf
 Requires:       glibc
@@ -32,20 +32,19 @@ BuildRequires:  bpftool
 
 # source files
 Source:         https://github.com/OpenCloudOS/perf-prof/archive/refs/tags/%{version}.tar.gz
-
+Patch0: glibc_2.17.patch
 
 %description
 Kernel profiler based on perf_event and ebpf
 
 %prep
 %setup -q
+%if %{defined glibc_217}
+%patch0 -p1
+%endif
 
 %build
-if [ -f /sys/kernel/btf/vmlinux ]; then
-    make CONFIG_LIBBPF=y
-else
-    make
-fi
+make
 strip -g %{name}
 
 %install

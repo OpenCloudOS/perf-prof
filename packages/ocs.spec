@@ -32,11 +32,7 @@ task-state, watchdog, kmemleak, kvm-exit, mpdelay.
 %setup -q
 
 %build
-if [ -f /sys/kernel/btf/vmlinux ]; then
-    make CONFIG_LIBBPF=y
-else
-    make
-fi
+make
 strip -g %{name}
 
 %install

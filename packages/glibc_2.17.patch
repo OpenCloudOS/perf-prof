@@ -1,0 +1,14 @@
+diff --git a/lib/bpf/libbpf_internal.h b/lib/bpf/libbpf_internal.h
+index 57dec64..328fd40 100644
+--- a/lib/bpf/libbpf_internal.h
++++ b/lib/bpf/libbpf_internal.h
+@@ -157,6 +157,9 @@ static inline bool str_has_sfx(const char *str, const char *sfx)
+ 
+ #endif
+ 
++asm (".symver fmemopen, fmemopen@GLIBC_");
++asm (".symver fcntl64, fcntl@GLIBC_");
++
+ extern void libbpf_print(enum libbpf_print_level level,
+ 			 const char *format, ...)
+ 	__attribute__((format(printf, 2, 3)));
