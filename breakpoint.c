@@ -1282,6 +1282,7 @@ decode:
 static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct breakpoint_ctx *ctx = dev->private;
+    struct env *env = dev->env;
     // in linux/perf_event.h
     // PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ADDR | PERF_SAMPLE_CPU | PERF_SAMPLE_CALLCHAIN |
     // PERF_SAMPLE_REGS_INTR
@@ -1312,7 +1313,7 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
             break;
     }
 
-    if (dev->env->callchain)
+    if (env->callchain)
         regs_intr = (struct sample_regs_intr *)&data->callchain.ips[data->callchain.nr];
     else
         regs_intr = (struct sample_regs_intr *)&data->callchain;
@@ -1381,12 +1382,13 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
         #endif
     }
 
-    if (dev->env->callchain) {
-        if (!dev->env->flame_graph)
-            print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid, (callchain_cbs)print_regs_intr, NULL, regs_intr);
+    if (env->callchain) {
+        if (!env->flame_graph)
+            print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid,
+                env->verbose >= 0 ? (callchain_cbs)print_regs_intr : NULL, NULL, regs_intr);
         else
             flame_graph_add_callchain(ctx->flame, &data->callchain, data->tid_entry.pid, NULL);
-    } else
+    } else if (env->verbose >= 0)
         print_regs_intr(regs_intr, 0);
 }
 
