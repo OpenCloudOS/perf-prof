@@ -119,8 +119,7 @@ void BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_
              * that it does not generate incorrect output in kvm_entry.
              * (data->latency > filter_latency) condition is not met.
              */
-            if (curr->latency != INT64_MAX)
-                curr->latency += INT64_MAX;
+            curr->latency = INT64_MAX;
         }
     }
 }
