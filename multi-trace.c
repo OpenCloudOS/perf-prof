@@ -1105,7 +1105,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     struct multi_trace_type_header *e  = (void *)event->sample.array;
     struct multi_trace_type_header *e1 = (void *)event1->sample.array;
     struct multi_trace_type_header *e2 = event2 ? (void *)event2->sample.array : NULL;
-    bool cmp_e1, cmp_e2;
+    bool cmp_e1, cmp_e2, samecpu_cmp_e1;
     void *raw = NULL;
     int size = 0;
 
@@ -1126,6 +1126,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     }
     iter->reason = NULL;
 
+    samecpu_cmp_e1 = cmp_e1;
     if (env->same1 || env->same2) {
         cmp_e1 = cmp_e1 && env->same1;
         cmp_e2 = cmp_e2 && env->same2;
@@ -1133,7 +1134,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
 
     // e->cpu_entry.cpu maybe -1, See block_event_convert()
     if (env->samecpu && e->cpu_entry.cpu != -1) {
-        if (cmp_e1) {
+        if (samecpu_cmp_e1) {
             // cpu tracking
             // ctx->comm: rundelay, syscalls. The key is pid.
             int track_tid = ctx->comm ? (int)info->key : e1->tid_entry.tid;
@@ -1156,7 +1157,7 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
                 tp_samecpu(curr->tp, raw, size, iter->recent_cpu))
                 goto TRUE;
 
-            if (!ctx->comm) {
+            if (cmp_e1 && !ctx->comm) {
                 iter->debug_msg = "samecpu-1";
                 if (e->cpu_entry.cpu == e1->cpu_entry.cpu ||
                     tp_samecpu(curr->tp, raw, size, e1->cpu_entry.cpu))
