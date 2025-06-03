@@ -1126,6 +1126,11 @@ bool event_need_to_print(union perf_event *event1, union perf_event *event2, str
     }
     iter->reason = NULL;
 
+    if (env->same1 || env->same2) {
+        cmp_e1 = cmp_e1 && env->same1;
+        cmp_e2 = cmp_e2 && env->same2;
+    }
+
     // e->cpu_entry.cpu maybe -1, See block_event_convert()
     if (env->samecpu && e->cpu_entry.cpu != -1) {
         if (cmp_e1) {

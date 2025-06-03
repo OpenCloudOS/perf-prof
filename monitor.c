@@ -181,6 +181,10 @@ static void detail_parse(const char *s)
         env.hide_than = nsparse(s+5, NULL);
     else if (s[0] == '-')
         env.before_event1 = nsparse(s+1, NULL);
+    else if (s[0] == '1' && s[1] == '\0')
+        env.same1 = true;
+    else if (s[0] == '2' && s[1] == '\0')
+        env.same2 = true;
     else
         env.after_event2 = nsparse(s, NULL);
 }
@@ -522,11 +526,13 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ('g',      "call-graph", &env.callchain,                    "Enable call-graph recording"),
     OPT_STRDUP_EMPTY( 0 ,     "flame-graph", &env.flame_graph,         "file",  "Specify the folded stack file."),
     OPT_STRDUP_NONEG( 0 ,         "heatmap", &env.heatmap,             "file",  "Specify the output latency file."),
-    OPT_PARSE_OPTARG( LONG_OPT_detail, "detail", NULL, "-N,+N,hide<N,same*",
+    OPT_PARSE_OPTARG( LONG_OPT_detail, "detail", NULL, "-N,+N,1,2,hide<N,same*",
                                                        "More detailed information output.\n"
                                                        "For multi-trace profiler:\n"
                                                        "   -N: Before event1, print events within N nanoseconds.\n"
                                                        "   +N: After event2, print events within N nanoseconds.\n"
+                                                       "    1: Only show events same as event1.\n"
+                                                       "    2: Only show events same as event2.\n"
                                                        "hide<N: Hide event intervals less than N nanoseconds.\n"
                                                        "samecpu: Only show events with the same cpu as event1 or event2.\n"
                                                        "samepid: Only show events with the same pid as event1 or event2.\n"

@@ -164,6 +164,7 @@ struct env {
         bool samepid;
         bool sametid;
         bool samekey;
+        bool same1, same2;
     char *device;
     int ldlat;
     bool overwrite;
