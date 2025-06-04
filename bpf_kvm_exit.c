@@ -28,6 +28,10 @@ struct kvmexit_ctx {
     bool thread;
 };
 
+struct extra_rundelay {
+    u64 rundelay;
+};
+
 static int comm_notify(struct comm_notify *notify, int pid, int state, u64 free_time)
 {
     if (state == NOTIFY_COMM_DELETE) {
@@ -55,7 +59,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (global_comm_ref() < 0)
         goto destroy;
 
-    ctx->lat_dist = latency_dist_new_quantile(env->perins, true, 0);
+    ctx->lat_dist = latency_dist_new_quantile(env->perins, true, sizeof(struct extra_rundelay));
     if (!ctx->lat_dist)
         goto unref;
 
@@ -210,6 +214,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
     unsigned int exit_reason = node->key & 0xffffffff;
     u32 isa = node->key >> 32;
     double p99 = tdigest_quantile(node->td, 0.99);
+    struct extra_rundelay *extra = (void *)node->extra;
 
     if (ctx->print_header) {
         ctx->print_header = false;
@@ -219,15 +224,15 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         if (env->verbose >= -1) {
             if (env->perins)
                 printf(ctx->thread ? "   PID THREAD COMM            " : "   PID ");
-            printf("%-*s %8s %16s %12s %12s %12s %12s\n", isa == KVM_ISA_VMX ? 20 : 32, "exit_reason", "calls",
-                     "total(us)", "min(us)", "avg(us)", "p99(us)", "max(us)");
+            printf("%-*s %8s %16s %12s %12s %12s %12s %12s\n", isa == KVM_ISA_VMX ? 20 : 32, "exit_reason", "calls",
+                     "total(us)", "min(us)", "avg(us)", "p99(us)", "max(us)", "rundelay(us)");
         }
 
         if (env->verbose >= 0) {
             if (env->perins)
                 printf(ctx->thread ? "------ ------ --------------- " : "------ ");
-            printf("%s %8s %16s %12s %12s %12s %12s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
-                "--------", "----------------", "------------", "------------", "------------", "------------");
+            printf("%s %8s %16s %12s %12s %12s %12s %12s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
+                "--------", "----------------", "------------", "------------", "------------", "------------", "------------");
         }
     }
     if (env->perins) {
@@ -236,10 +241,10 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         else
             printf("%6d ", (int)node->instance);
     }
-    printf("%-*s %8lu %16.3f %12.3f %12.3f %12.3f %12.3f\n", isa == KVM_ISA_VMX ? 20 : 32,
+    printf("%-*s %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n", isa == KVM_ISA_VMX ? 20 : 32,
             find_exit_reason(isa, exit_reason),
             node->n, node->sum/1000.0,
-            node->min/1000.0, node->sum/node->n/1000.0, p99/1000.0, node->max/1000.0);
+            node->min/1000.0, node->sum/node->n/1000.0, p99/1000.0, node->max/1000.0, extra->rundelay/1000.0);
 }
 
 static void output2(void *opaque, struct latency_node *node)
@@ -250,7 +255,7 @@ static void output2(void *opaque, struct latency_node *node)
     if (ctx->print_header) {
         ctx->print_header = false;
         print_time(ctx->output2);
-        fprintf(ctx->output2, "\n   PID  non-HLT max latency(us)\n");
+        fprintf(ctx->output2, "\n   PID  max-latency(us)\n");
     }
     fprintf(ctx->output2, "%6d  %.3f\n", (int)node->instance, node->max/1000.0);
 }
@@ -281,6 +286,7 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
 {
     struct kvmexit_ctx *ctx = dev->private;
     struct env *env = dev->env;
+    struct latency_node *node;
     // in linux/perf_event.h
     // PERF_SAMPLE_TIME | PERF_SAMPLE_RAW
     struct kvm_vcpu_event *raw = (void *)event->sample.array + sizeof(u64) + sizeof(u32)/* u32 size; */;
@@ -304,22 +310,25 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
         else
             ins = raw->tgid;
     }
+    node = latency_dist_input(ctx->lat_dist, ins, key, delta, 0);
+    if (node && ctx->oncpu) {
+        struct extra_rundelay *extra = (void *)node->extra;
+        extra->rundelay += raw->run_delay;
+    }
 
-    latency_dist_input(ctx->lat_dist, ins, key, delta, 0);
-    if (ctx->lat_dist2 && raw->exit_reason != hlt)
-        latency_dist_input(ctx->lat_dist2, raw->tgid, 0, delta, 0);
+    if (ctx->lat_dist2)
+        latency_dist_input(ctx->lat_dist2, raw->tgid, 0, raw->exit_reason != hlt ? delta : raw->run_delay, 0);
 
     if (unlikely(env->verbose >= VERBOSE_EVENT))
         goto print_event;
 
     if (env->greater_than &&
-        raw->exit_reason != hlt &&
-        delta > env->greater_than) {
+        (raw->exit_reason != hlt ? delta : raw->run_delay) > env->greater_than) {
     print_event:
         if (dev->print_title) prof_dev_print_time(dev, *time, stdout);
-        printf("%16s %6u [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu sched %lu\n", global_comm_get(raw->pid),
+        printf("%16s %6u [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu rundelay %lu\n", global_comm_get(raw->pid),
             raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
-            find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? raw->sched_latency : 0);
+            find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? raw->run_delay : 0);
     }
 }
 

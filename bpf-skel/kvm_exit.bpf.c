@@ -61,9 +61,15 @@ void BPF_PROG(kvm_entry) // int vcpu_id | unsigned long vcpu_pc
 
     data = &percpu_event[cpu];
     data->latency = bpf_ktime_get_ns() - (u64)data->latency;
-    if (data->latency > filter_latency)
+    if (data->latency > filter_latency) {
+        if (data->run_delay) {
+            struct task_struct *task = (void *)bpf_get_current_task();
+            u64 run_delay = BPF_CORE_READ(task, sched_info.run_delay);
+            data->run_delay = run_delay - data->run_delay;
+        }
         perf_output(ctx, data, sizeof(*data));
-    data->sched_latency = 0;
+    }
+    data->run_delay = 0;
 }
 
 SEC("raw_tp/sched_switch")
@@ -71,24 +77,19 @@ void BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_
 {
     struct kvm_vcpu_event *curr, *prev_event, *next_event;
     u64 cpu = bpf_get_smp_processor_id();
-    u64 time = 0;
     u32 next_pid;
 
     if (cpu >= MAX_CPUS || !work_cpus[cpu])
         return;
 
-    time = 0;
     curr = &percpu_event[cpu];
     if (curr->pid) {
-        time = bpf_ktime_get_ns();
         prev_event = bpf_map_lookup_elem(&kvm_vcpu, &curr->pid);
         if (!prev_event) {
-            curr->sched_latency = time;
             bpf_map_update_elem(&kvm_vcpu, &curr->pid, curr, BPF_ANY);
         } else {
             prev_event->exit_reason = curr->exit_reason;
             prev_event->latency = curr->latency;
-            prev_event->sched_latency = time;
         }
         /*
          *  CPU     0                1
@@ -112,7 +113,20 @@ void BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_
             curr->isa = next_event->isa;
             curr->exit_reason = next_event->exit_reason;
             curr->latency = next_event->latency;
-            curr->sched_latency = (time ?: bpf_ktime_get_ns()) - (u64)next_event->sched_latency;
+            /*
+             * __schedule() {
+             *   trace_sched_switch
+             *   context_switch->prepare_task_switch->sched_info_switch->sched_info_arrive {
+             *     next->sched_info.run_delay += delta;
+             *   }
+             * }
+             * In __schedule(), the sched_switch event occurs first, followed by the
+             * modification of sched_info.run_delay. So, we read the old value in sched_switch,
+             * read the new value in kvm_entry, and subtract them to get run_delay.
+             *
+             * Depends on CONFIG_SCHED_INFO, CONFIG_SCHEDSTATS
+             */
+            curr->run_delay = BPF_CORE_READ(next, sched_info.run_delay);
         } else {
             /*
              * For a newly generated vCPU, setting a INT64_MAX latency can ensure
@@ -170,7 +184,7 @@ void BPF_PROG(kvm_entry_pid) // int vcpu_id | unsigned long vcpu_pc
     if (data) {
         data->latency = bpf_ktime_get_ns() - data->latency;
         if (data->latency > filter_latency)
-            perf_output(ctx, data, offsetof(struct kvm_vcpu_event, sched_latency));
+            perf_output(ctx, data, offsetof(struct kvm_vcpu_event, run_delay));
     }
 }
 

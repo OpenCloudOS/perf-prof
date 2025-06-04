@@ -7,7 +7,7 @@ struct kvm_vcpu_event
     uint32_t isa;   //KVM_ISA_VMX  KVM_ISA_SVM
     uint32_t exit_reason;
     int64_t latency;
-    int64_t sched_latency;
+    int64_t run_delay;
 };
 
 #define KVM_ISA_VMX   1
