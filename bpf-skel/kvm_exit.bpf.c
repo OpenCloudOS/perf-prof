@@ -90,13 +90,21 @@ void BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_
         } else {
             prev_event->exit_reason = curr->exit_reason;
             prev_event->latency = curr->latency;
+            /*
+             * From kvm_exit to kvm_entry, the vcpu may have multiple sched_switches
+             * and sched_migrations. So save run_delay here, use it in kvm_entry and
+             * clean it up.
+             * Depends on CONFIG_SCHED_INFO, CONFIG_SCHEDSTATS
+             */
+            if (curr->run_delay == 0)
+                prev_event->run_delay = BPF_CORE_READ(prev, sched_info.run_delay);
         }
         /*
          *  CPU     0                1
-         *      vcpu->idle
-         *  (1) idle->awk        idle->vcpu(load kvm_vcpu, update percpu_event[1])
-         *  (2) awk ->idle       vcpu->idle(update kvm_vcpu)
-         *      idle->vcpu
+         *      vcpu=>idle
+         *  (1) idle=>awk        idle=>vcpu(load kvm_vcpu, update percpu_event[1])
+         *  (2) awk =>idle       vcpu=>idle(update kvm_vcpu)
+         *      idle=>vcpu
          *
          * Assigning pid = 0 can avoid (1) (2) setting the old exit_reason/latency
          * to the kvm_vcpu hashmap.
@@ -113,20 +121,7 @@ void BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_
             curr->isa = next_event->isa;
             curr->exit_reason = next_event->exit_reason;
             curr->latency = next_event->latency;
-            /*
-             * __schedule() {
-             *   trace_sched_switch
-             *   context_switch->prepare_task_switch->sched_info_switch->sched_info_arrive {
-             *     next->sched_info.run_delay += delta;
-             *   }
-             * }
-             * In __schedule(), the sched_switch event occurs first, followed by the
-             * modification of sched_info.run_delay. So, we read the old value in sched_switch,
-             * read the new value in kvm_entry, and subtract them to get run_delay.
-             *
-             * Depends on CONFIG_SCHED_INFO, CONFIG_SCHEDSTATS
-             */
-            curr->run_delay = BPF_CORE_READ(next, sched_info.run_delay);
+            curr->run_delay = next_event->run_delay;
         } else {
             /*
              * For a newly generated vCPU, setting a INT64_MAX latency can ensure
