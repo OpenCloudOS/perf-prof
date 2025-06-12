@@ -29,7 +29,9 @@ struct kvmexit_ctx {
 };
 
 struct extra_rundelay {
+    u64 wait;
     u64 rundelay;
+    u32 switches;
 };
 
 static int comm_notify(struct comm_notify *notify, int pid, int state, u64 free_time)
@@ -224,15 +226,19 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         if (env->verbose >= -1) {
             if (env->perins)
                 printf(ctx->thread ? "   PID THREAD COMM            " : "   PID ");
-            printf("%-*s %8s %16s %12s %12s %12s %12s %12s\n", isa == KVM_ISA_VMX ? 20 : 32, "exit_reason", "calls",
-                     "total(us)", "min(us)", "avg(us)", "p99(us)", "max(us)", "rundelay(us)");
+            printf("%-*s %8s %16s %12s %12s %12s %12s%s", isa == KVM_ISA_VMX ? 20 : 32, "exit_reason", "calls",
+                     "total(us)", "min(us)", "avg(us)", "p99(us)", "max(us)", ctx->oncpu ? " " : "\n");
+            if (ctx->oncpu)
+                printf("total wait(us) rundelay(us)\n");
         }
 
         if (env->verbose >= 0) {
             if (env->perins)
                 printf(ctx->thread ? "------ ------ --------------- " : "------ ");
-            printf("%s %8s %16s %12s %12s %12s %12s %12s\n", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
-                "--------", "----------------", "------------", "------------", "------------", "------------", "------------");
+            printf("%s %8s %16s %12s %12s %12s %12s%s", isa == KVM_ISA_VMX ? "--------------------" : "--------------------------------",
+                "--------", "----------------", "------------", "------------", "------------", "------------", ctx->oncpu ? " " : "\n");
+            if (ctx->oncpu)
+                printf("-------------- ------------\n");
         }
     }
     if (env->perins) {
@@ -241,10 +247,12 @@ static void print_latency_node(void *opaque, struct latency_node *node)
         else
             printf("%6d ", (int)node->instance);
     }
-    printf("%-*s %8lu %16.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n", isa == KVM_ISA_VMX ? 20 : 32,
+    printf("%-*s %8lu %16.3f %12.3f %12.3f %12.3f %12.3f%s", isa == KVM_ISA_VMX ? 20 : 32,
             find_exit_reason(isa, exit_reason),
             node->n, node->sum/1000.0,
-            node->min/1000.0, node->sum/node->n/1000.0, p99/1000.0, node->max/1000.0, extra->rundelay/1000.0);
+            node->min/1000.0, node->sum/node->n/1000.0, p99/1000.0, node->max/1000.0, ctx->oncpu ? " " : "\n");
+    if (ctx->oncpu)
+        printf("%14.3f %12.3f\n", extra->wait/1000.0, extra->rundelay/1000.0);
 }
 
 static void output2(void *opaque, struct latency_node *node)
@@ -313,7 +321,10 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
     node = latency_dist_input(ctx->lat_dist, ins, key, delta, 0);
     if (node && ctx->oncpu) {
         struct extra_rundelay *extra = (void *)node->extra;
+        int64_t wait = raw->sched_latency - raw->run_delay;
+        extra->wait += (wait < 0 ? 0 : wait);
         extra->rundelay += raw->run_delay;
+        extra->switches += raw->switches;
     }
 
     if (ctx->lat_dist2)
@@ -326,9 +337,13 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
         (raw->exit_reason != hlt ? delta : raw->run_delay) > env->greater_than) {
     print_event:
         if (dev->print_title) prof_dev_print_time(dev, *time, stdout);
-        printf("%16s %6u [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu rundelay %lu\n", global_comm_get(raw->pid),
+        printf("%16s %6u [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu%s", global_comm_get(raw->pid),
             raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
-            find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? raw->run_delay : 0);
+            find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? " " : "\n");
+        if (ctx->oncpu) {
+            int64_t wait = raw->sched_latency - raw->run_delay;
+            printf("wait %ld rundelay %lu sw %u\n", wait < 0 ? 0 : wait, raw->run_delay, raw->switches);
+        }
     }
 }
 

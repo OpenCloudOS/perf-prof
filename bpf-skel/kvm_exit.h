@@ -4,10 +4,12 @@
 struct kvm_vcpu_event
 {
     uint32_t tgid, pid;
-    uint32_t isa;   //KVM_ISA_VMX  KVM_ISA_SVM
+    uint16_t isa;   //KVM_ISA_VMX  KVM_ISA_SVM
+    uint16_t switches;
     uint32_t exit_reason;
     int64_t latency;
     int64_t run_delay;
+    int64_t sched_latency;
 };
 
 #define KVM_ISA_VMX   1
