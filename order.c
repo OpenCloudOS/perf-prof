@@ -760,6 +760,10 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
             break;
         }
 
+        // Don't care about the correctness of lost.
+        if (!dev->prof->lost)
+            goto skip_lost_detect;
+
         /*                     lost
          * perf_mmap A: - -A-|=======|-A- -
          * perf_mmap B: - -B-|- -B- -|-B- -
@@ -822,6 +826,7 @@ void order_process(struct prof_dev *dev, struct perf_mmap *target_map, perfclock
             mmap_event->lost_pause = 0;
             dev->order.maybe_lost_pause_time += get_ktime_ns() - mmap_event->pause_start_time;
         }
+    skip_lost_detect:
 
 
         /* Keep order in perf_mmap. Why do this?
