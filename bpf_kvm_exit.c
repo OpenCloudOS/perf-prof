@@ -23,6 +23,7 @@ struct kvmexit_ctx {
     struct latency_dist *lat_dist2; // non-HLT, per process.
     FILE *output2;
     struct perf_thread_map *thread_map;
+    u64 recent_time;
     bool print_header;
     bool oncpu;
     bool thread;
@@ -304,6 +305,9 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
     u64 ins = 0;
     u32 hlt;
 
+    if (*time > ctx->recent_time)
+        ctx->recent_time = *time;
+
     switch (raw->isa) {
         case KVM_ISA_VMX: hlt = EXIT_REASON_HLT; break;
         case KVM_ISA_SVM: hlt = SVM_EXIT_HLT; break;
@@ -372,6 +376,19 @@ static void bpf_kvm_exit_sigusr(struct prof_dev *dev, int signum)
     }
 }
 
+static u64 bpf_kvm_exit_minevtime(struct prof_dev *dev)
+{
+    struct kvmexit_ctx *ctx = dev->private;
+    struct env *env = dev->env;
+    u64 minevtime = ULLONG_MAX;
+
+    if (ctx->thread && env->interval) {
+        if (ctx->recent_time > env->interval * NSEC_PER_MSEC)
+            minevtime = ctx->recent_time - env->interval * NSEC_PER_MSEC;
+    }
+    return minevtime;
+}
+
 static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm-exit",
     "[OPTION...] [--perins] [--than ns]",
     "Generate bpf:kvm-exit event.", "",
@@ -400,6 +417,7 @@ struct monitor bpf_kvm_exit = {
     .sample = bpf_kvm_exit_sample,
     .print_dev = bpf_kvm_exit_print_dev,
     .sigusr = bpf_kvm_exit_sigusr,
+    .minevtime = bpf_kvm_exit_minevtime,
 };
 MONITOR_REGISTER(bpf_kvm_exit)
 
