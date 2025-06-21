@@ -47,6 +47,7 @@ LIBS_perf-prof-$(CONFIG_LIBBPF)     += -lz
 perf-prof-libs-$(CONFIG_LIBBPF)     += lib/bpf/libbpf.a
 LIBS_perf-prof-$(CONFIG_CPLUS_DEMANGLE) += -liberty
 LIBS_perf-prof-$(CONFIG_CXX_DEMANGLE)   += -lstdc++
+LIBS_perf-prof-$(CONFIG_LIBTCMALLOC)    += -ltcmalloc
 
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a
 perf-prof-libs += lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a

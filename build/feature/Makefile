@@ -76,7 +76,8 @@ FILES=                                          \
          test-libzstd.bin			\
          test-clang-bpf-co-re.bin		\
          test-file-handle.bin			\
-         test-libpfm4.bin
+         test-libpfm4.bin			\
+         test-libtcmalloc.bin
 
 FILES := $(addprefix $(OUTPUT),$(FILES))
 
@@ -378,6 +379,9 @@ $(OUTPUT)test-file-handle.bin:
 
 $(OUTPUT)test-libpfm4.bin:
 	$(BUILD) -lpfm
+
+$(OUTPUT)test-libtcmalloc.bin:
+	$(BUILD) -ltcmalloc
 
 $(OUTPUT)test-btf-vmlinux.bin: /sys/kernel/btf/vmlinux
 	@:
