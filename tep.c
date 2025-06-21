@@ -33,13 +33,18 @@ static char *uprobe_retprobe = NULL;
 __ctor
 static void __kprobe_uprobe(void)
 {
-    size_t unused;
+    size_t size;
     sysfs__read_int("bus/event_source/devices/kprobe/type", &kprobe_type);
     sysfs__read_int("bus/event_source/devices/uprobe/type", &uprobe_type);
-    if (sysfs__read_str("bus/event_source/devices/kprobe/format/retprobe", &kprobe_retprobe, &unused) < 0)
+    if (sysfs__read_str("bus/event_source/devices/kprobe/format/retprobe", &kprobe_retprobe, &size) < 0)
         kprobe_type = 0;
-    if (sysfs__read_str("bus/event_source/devices/uprobe/format/retprobe", &uprobe_retprobe, &unused) < 0)
+    else
+        kprobe_retprobe = realloc(kprobe_retprobe, size);
+    if (sysfs__read_str("bus/event_source/devices/uprobe/format/retprobe", &uprobe_retprobe, &size) < 0)
         uprobe_type = 0;
+    else
+        uprobe_retprobe = realloc(uprobe_retprobe, size);
+
 }
 
 void pr_stat(const char *fmt, ...)
