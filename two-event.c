@@ -1051,6 +1051,11 @@ struct mem_profile_class {
     struct callchain_ctx *cc;
 };
 
+struct callchain_value {
+    u64 bytes;
+    int pid;
+};
+
 static struct two_event *mem_profile_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
 {
     struct two_event *two = NULL;
@@ -1072,8 +1077,8 @@ static struct two_event *mem_profile_new(struct two_event_class *class, struct t
     two = two_event_new(class, tp1, tp2);
     if (two) {
         profile = container_of(two, struct mem_profile, base);
-        profile->alloc = keyvalue_pairs_new(sizeof(u64));
-        profile->free = keyvalue_pairs_new(sizeof(u64));
+        profile->alloc = keyvalue_pairs_new(sizeof(struct callchain_value));
+        profile->free = keyvalue_pairs_new(sizeof(struct callchain_value));
     }
     return two;
 }
@@ -1100,7 +1105,7 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
 
     if (two) {
         unsigned long long bytes_alloc = 0;
-        u64 *bytes;
+        struct callchain_value *val;
         void *raw;
         int size;
 
@@ -1113,8 +1118,10 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
         profile->alloc_bytes += bytes_alloc;
         if (two->tp1->stack) {
             data = (void *)event1->sample.array;
-            bytes = keyvalue_pairs_add_key(profile->alloc, (struct_key *)&data->callchain);
-            *bytes += bytes_alloc;
+            val = keyvalue_pairs_add_key(profile->alloc, (struct_key *)&data->callchain);
+            val->bytes += bytes_alloc;
+            if (val->pid == 0)
+                val->pid = data->h.tid_entry.pid;
         }
 
         if (event2) {
@@ -1122,8 +1129,10 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
             profile->free_bytes += bytes_alloc;
             if (two->tp2->stack) {
                 data = (void *)event2->sample.array;
-                bytes = keyvalue_pairs_add_key(profile->free, (struct_key *)&data->callchain);
-                *bytes += bytes_alloc;
+                val = keyvalue_pairs_add_key(profile->free, (struct_key *)&data->callchain);
+                val->bytes += bytes_alloc;
+                if (val->pid == 0)
+                    val->pid = data->h.tid_entry.pid;
             }
         }
     }
@@ -1157,20 +1166,20 @@ static void __print_alloc(void *opaque, struct_key *key, void *value, unsigned i
 {
     struct mem_profile *profile = opaque;
     struct mem_profile_class *mpclass = container_of(profile->base.class, struct mem_profile_class, base);
-    u64 *bytes = value;
-    printf("Allocate %lu (%.1f%%) bytes on %u (%.1f%%) objects:\n", *bytes, *bytes * 100.0 / profile->alloc_bytes,
+    struct callchain_value *val = value;
+    printf("Allocate %lu (%.1f%%) bytes on %u (%.1f%%) objects:\n", val->bytes, val->bytes * 100.0 / profile->alloc_bytes,
                                                                      n, n * 100.0 / profile->nr_alloc);
-    print_callchain_common(mpclass->cc, key, 0);
+    print_callchain_common(mpclass->cc, key, val->pid);
 }
 
 static void __print_free(void *opaque, struct_key *key, void *value, unsigned int n)
 {
     struct mem_profile *profile = opaque;
     struct mem_profile_class *mpclass = container_of(profile->base.class, struct mem_profile_class, base);
-    u64 *bytes = value;
-    printf("Free %lu (%.1f%%) bytes on %u (%.1f%%) objects:\n", *bytes, *bytes * 100.0 / profile->free_bytes,
+    struct callchain_value *val = value;
+    printf("Free %lu (%.1f%%) bytes on %u (%.1f%%) objects:\n", val->bytes, val->bytes * 100.0 / profile->free_bytes,
                                                                  n, n * 100.0 / profile->nr_free);
-    print_callchain_common(mpclass->cc, key, 0);
+    print_callchain_common(mpclass->cc, key, val->pid);
 }
 
 static void mem_profile_print(struct two_event *two)
@@ -1232,7 +1241,7 @@ static struct two_event_class *mem_profile_class_new(struct two_event_impl *impl
         class->remaining = mem_profile_remaining;
         class->print_header = mem_profile_print_header;
         class->print = mem_profile_print;
-        mpclass->cc = callchain_ctx_new(CALLCHAIN_KERNEL, stdout);
+        mpclass->cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
     }
     return class;
 }

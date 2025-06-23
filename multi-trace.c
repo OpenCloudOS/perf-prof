@@ -1996,7 +1996,7 @@ static const char *kmemprof_desc[] = PROFILER_DESC("kmemprof",
     );
 static const char *kmemprof_argv[] = PROFILER_ARGV("kmemprof",
     PROFILER_ARGV_OPTION,
-    //PROFILER_ARGV_CALLCHAIN_FILTER, // not support user callchain
+    PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "event", "key");
 static profiler kmemprof = {
     .name = "kmemprof",
