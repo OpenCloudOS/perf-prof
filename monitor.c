@@ -22,6 +22,9 @@
 #if defined(__i386__) || defined(__x86_64__)
 #include <cpuid.h>
 #endif
+#ifdef HAVE_LIBTCMALLOC
+#include <gperftools/tcmalloc.h>
+#endif
 #include <linux/thread_map.h>
 #include <linux/cgroup.h>
 #include <trace_helpers.h>
@@ -1310,6 +1313,9 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
             print_devtree();
             unique_string_stat(stdout);
             obj__stat(stdout);
+        #ifdef HAVE_LIBTCMALLOC
+            tc_malloc_stats();
+        #endif
             break;
         case SIGWINCH:
             prof_dev_winsize(NULL);
