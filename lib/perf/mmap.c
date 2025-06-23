@@ -34,23 +34,41 @@ size_t perf_mmap__mmap_len(struct perf_mmap *map)
 int perf_mmap__mmap(struct perf_mmap *map, struct perf_mmap_param *mp,
 		    int fd, int cpu)
 {
+	size_t ev_len = mp->mask + 1;
+
 	map->prev = 0;
 	map->mask = mp->mask;
 	map->base = mmap(NULL, perf_mmap__mmap_len(map), mp->prot,
 			 MAP_SHARED, fd, 0);
-	if (map->base == MAP_FAILED) {
-		map->base = NULL;
-		return -1;
-	}
+	if (map->base == MAP_FAILED)
+		goto failed;
+
+	if (ev_len > PERF_SAMPLE_MAX_SIZE)
+		ev_len = PERF_SAMPLE_MAX_SIZE;
+	map->event_copy = mmap(NULL, ev_len, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (map->event_copy == MAP_FAILED)
+		goto failed1;
 
 	map->fd  = fd;
 	map->cpu = cpu;
 	return 0;
+
+failed1:
+	munmap(map->base, perf_mmap__mmap_len(map));
+failed:
+	map->base = NULL;
+	map->event_copy = NULL;
+	return -1;
 }
 
 void perf_mmap__munmap(struct perf_mmap *map)
 {
 	if (map && map->base != NULL) {
+		size_t ev_len = map->mask + 1;
+		if (ev_len > PERF_SAMPLE_MAX_SIZE)
+			ev_len = PERF_SAMPLE_MAX_SIZE;
+		munmap(map->event_copy, ev_len);
 		munmap(map->base, perf_mmap__mmap_len(map));
 		map->base = NULL;
 		map->fd = -1;
