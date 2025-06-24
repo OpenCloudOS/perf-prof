@@ -23,7 +23,7 @@
 #include <cpuid.h>
 #endif
 #ifdef HAVE_LIBTCMALLOC
-#include <gperftools/tcmalloc.h>
+#include <gperftools/malloc_extension_c.h>
 #endif
 #include <linux/thread_map.h>
 #include <linux/cgroup.h>
@@ -1314,7 +1314,11 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
             unique_string_stat(stdout);
             obj__stat(stdout);
         #ifdef HAVE_LIBTCMALLOC
-            tc_malloc_stats();
+            {
+                char buff[8192];
+                MallocExtension_GetStats(buff, sizeof(buff));
+                write(STDOUT_FILENO, buff, strlen(buff));
+            }
         #endif
             break;
         case SIGWINCH:
