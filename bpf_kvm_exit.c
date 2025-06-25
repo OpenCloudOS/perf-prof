@@ -192,6 +192,13 @@ failed:
     return -1;
 }
 
+static void bpf_kvm_exit_fix_sample_pos(struct prof_dev *dev)
+{
+    dev->pos.sample_type |= PERF_SAMPLE_TID | PERF_SAMPLE_CPU;
+    dev->pos.tid_pos = sizeof(u64); // PERF_SAMPLE_TIME | kvm_vcpu_event
+    dev->pos.cpu_pos = -1;
+}
+
 #define FD(e, x, y) ((int *) xyarray__entry(e->fd, x, y))
 static int bpf_kvm_exit_filter(struct prof_dev *dev)
 {
@@ -305,6 +312,11 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
     u64 ins = 0;
     u32 hlt;
 
+    if (unlikely(!prof_dev_is_final(dev))) {
+        // When bpf:kvm-exit is used as a forwarding device, it only output the event.
+        goto print_event;
+    }
+
     if (*time > ctx->recent_time)
         ctx->recent_time = *time;
 
@@ -341,7 +353,7 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
         (raw->exit_reason != hlt ? delta : raw->run_delay) > env->greater_than) {
     print_event:
         if (dev->print_title) prof_dev_print_time(dev, *time, stdout);
-        printf("%16s %6u [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu%s", global_comm_get(raw->pid),
+        printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu%s", global_comm_get(raw->pid),
             raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
             find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? " " : "\n");
         if (ctx->oncpu) {
@@ -411,6 +423,7 @@ struct monitor bpf_kvm_exit = {
     .argv = bpf_kvm_exit_argv,
     .pages = 4,
     .init = bpf_kvm_exit_init,
+    .fix_sample_pos = bpf_kvm_exit_fix_sample_pos,
     .filter = bpf_kvm_exit_filter,
     .deinit = bpf_kvm_exit_deinit,
     .interval = bpf_kvm_exit_interval,
