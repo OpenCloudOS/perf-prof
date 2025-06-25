@@ -14,6 +14,9 @@ def get_profilers(args, runtime):
         if line.find('Available Profilers:') >= 0:
             profiler_start = True
             continue
+        if line.find('Available eBPF Profilers:') >= 0:
+            profiler_start = True
+            continue
         if profiler_start:
             if line == '\n':
                 profiler_start = False
