@@ -525,6 +525,8 @@ static int perf_sample_pos_init(struct prof_dev *dev)
         dev->pos.cpu_pos = pos;
         pos += sizeof(u32) + sizeof(u32);
     }
+    if (dev->prof->fix_sample_pos)
+        dev->prof->fix_sample_pos(dev);
 
     return 0;
 }

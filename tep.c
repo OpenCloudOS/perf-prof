@@ -559,6 +559,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         sys = s = tp->name;
         sep = strchr(s, ':');
         if (!sep) { // profiler/option/
+        profiler:
             prof = monitor_find(sys);
             if (!prof) {
                 fprintf(stderr, "profiler %s not found\n", sys);
@@ -594,7 +595,10 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             if (id < 0) {
                 id = tp_kprobe_uprobe(tp, sys, name);
                 if (id < 0) {
-                    fprintf(stderr, "%s:%s not found\n", sys, name);
+                    *sep = ':';
+                    if (monitor_find(sys)) // e.g. bpf:kvm-exit
+                        goto profiler;
+                    fprintf(stderr, "%s not found\n", sys);
                     goto err_out;
                 }
             } else {

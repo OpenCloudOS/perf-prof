@@ -236,6 +236,10 @@ typedef struct monitor {
     void (*print_dev)(struct prof_dev *dev, int indent);
     void (*interval)(struct prof_dev *dev);
 
+    // fixup `struct perf_sample_pos'.
+    // Used by bpf profiler to allow getting pid, time, cpu from PERF_SAMPLE_RAW.
+    void (*fix_sample_pos)(struct prof_dev *dev);
+
     // Profiler minimum event time. return evclock_t.
     u64 (*minevtime)(struct prof_dev *dev);
 

@@ -1754,7 +1754,7 @@ perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance,
     event_dev->time = *(u64 *)(data + dev->pos.time_pos);
     if (dev->pos.id_pos >= 0)
         event_dev->id = *(u64 *)(data + dev->pos.id_pos);
-    event_dev->cpu = *(u32 *)(data + dev->pos.cpu_pos);
+    event_dev->cpu = dev->pos.cpu_pos >= 0 ? *(u32 *)(data + dev->pos.cpu_pos) : perf_cpu_map__cpu(dev->cpus, *instance);
     event_dev->instance = *instance;
     event_dev->dev = dev;
 
