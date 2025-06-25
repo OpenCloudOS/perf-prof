@@ -77,7 +77,8 @@ FILES=                                          \
          test-clang-bpf-co-re.bin		\
          test-file-handle.bin			\
          test-libpfm4.bin			\
-         test-libtcmalloc.bin
+         test-libtcmalloc.bin			\
+         test-rpmalloc.bin
 
 FILES := $(addprefix $(OUTPUT),$(FILES))
 
@@ -382,6 +383,9 @@ $(OUTPUT)test-libpfm4.bin:
 
 $(OUTPUT)test-libtcmalloc.bin:
 	$(BUILD) -ltcmalloc
+
+$(OUTPUT)test-rpmalloc.bin:
+	$(BUILD) -I../../lib/ -lpthread
 
 $(OUTPUT)test-btf-vmlinux.bin: /sys/kernel/btf/vmlinux
 	@:

@@ -1,6 +1,8 @@
 perf-prof-y += vsprintf.o rbtree.o rblist.o ctype.o string.o strlist.o thread_map.o
 perf-prof-y += argv_split.o hweight.o
 perf-prof-y += cgroup.o epoll.o tdigest.o
+perf-prof-$(CONFIG_RPMALLOC) += rpmalloc.o
+CFLAGS_rpmalloc.o += -Wno-declaration-after-statement -Wno-redundant-decls -DENABLE_STATISTICS=1
 
 perf-prof-y += demangle-cxx.o
 perf-prof-y += demangle-java.o
