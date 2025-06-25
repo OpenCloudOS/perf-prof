@@ -25,6 +25,9 @@
 #ifdef HAVE_LIBTCMALLOC
 #include <gperftools/malloc_extension_c.h>
 #endif
+#ifdef HAVE_RPMALLOC
+#include <rpmalloc.h>
+#endif
 #include <linux/thread_map.h>
 #include <linux/cgroup.h>
 #include <trace_helpers.h>
@@ -1319,6 +1322,9 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
                 MallocExtension_GetStats(buff, sizeof(buff));
                 write(STDOUT_FILENO, buff, strlen(buff));
             }
+        #endif
+        #ifdef HAVE_RPMALLOC
+            rpmalloc_dump_statistics(stdout);
         #endif
             break;
         case SIGWINCH:
