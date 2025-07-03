@@ -235,7 +235,7 @@ static int sdt_arg_size(char *n_ptr, const char **suffix)
     return 0;
 }
 
-static int sdt_probe_arg(char **pcmd, int i, const char *arg)
+static int sdt_probe_arg(char **pcmd, int i, const char *arg, const char *fmt)
 {
     char *op, *desc = strdup(arg), *new_op = NULL;
     const char *suffix = "";
@@ -266,7 +266,13 @@ static int sdt_probe_arg(char **pcmd, int i, const char *arg)
         goto error;
 
     if (ret == SDT_ARG_VALID) {
-        *pcmd = straddf(*pcmd, free, " arg%d=%s%s", i + 1, new_op, suffix);
+        if (fmt && strstr(fmt, "%s")) {
+            *pcmd = straddf(*pcmd, free, " ");
+            if (!*pcmd)
+                goto error;
+            *pcmd = straddf(*pcmd, free, fmt, new_op);
+        } else
+            *pcmd = straddf(*pcmd, free, " arg%d=%s%s", i + 1, new_op, suffix);
         if (!*pcmd)
             goto error;
     }
@@ -278,11 +284,12 @@ error:
     return ret;
 }
 
-static char *sdt_probe_command(struct sdt_probe *probe, const char *prefix)
+static char *sdt_probe_command(struct sdt_probe *probe, const char *prefix, const char *arg_fmt)
 {
     char *cmd = NULL;
     char **args = NULL;
-    int i, args_count;
+    char **fmts = NULL;
+    int i, args_count, fmts_count;
 
     cmd = straddf(cmd, free, "%s%s/%s %s:0x%0*llx", prefix,
                 probe->provider, probe->name, probe->binpath,
@@ -299,21 +306,27 @@ static char *sdt_probe_command(struct sdt_probe *probe, const char *prefix)
     if (probe->arg_fmt[0] == '\0')
         goto out;
 
+    if (arg_fmt)
+        fmts = argv_split(arg_fmt, &fmts_count);
+
     args = argv_split(probe->arg_fmt, &args_count);
-    for (i = 0; i < args_count; ++i) {
-        if (sdt_probe_arg(&cmd, i, args[i]) < 0)
+    for (i = 0; i < args_count && (!fmts || i < fmts_count); ++i) {
+        if (sdt_probe_arg(&cmd, i, args[i], fmts ? fmts[i] : NULL) < 0)
             goto error;
     }
-    if (args)
-        argv_free(args);
 out:
-    return cmd;
-error:
-    if (cmd)
-        free(cmd);
     if (args)
         argv_free(args);
-    return NULL;
+    if (fmts)
+        argv_free(fmts);
+    return cmd;
+
+error:
+    if (cmd) {
+        free(cmd);
+        cmd = NULL;
+    }
+    goto out;
 }
 
 static void uprobe_events(struct sdt_probe *probe, void *payload, const char *prefix)
@@ -334,7 +347,7 @@ static void uprobe_events(struct sdt_probe *probe, void *payload, const char *pr
     if (p->addr && probe->addr != p->addr)
         return ;
 
-    uprobe = sdt_probe_command(probe, prefix);
+    uprobe = sdt_probe_command(probe, prefix, p->arg_fmt);
     if (uprobe) {
         printf("%s:%s@%s\n", probe->provider, probe->name, probe->binpath);
         if (env.verbose)
@@ -380,7 +393,7 @@ static void list(struct sdt_probe *probe, void *payload)
                     probe->base_addr, probe->semaphore);
         printf("    Arguments: %s\n", probe->arg_fmt);
 
-        uprobe = sdt_probe_command(probe, "p:");
+        uprobe = sdt_probe_command(probe, "p:", p->arg_fmt);
         printf("    Uprobe: %s\n", uprobe ? : "");
         free(uprobe);
     }
@@ -438,9 +451,14 @@ static int usdt_argc_init(int argc, char *argv[])
         if ((sep = strchr(s, '@'))) {
             *sep = '\0';
             s = sep + 1;
+            if (*s)
+                usdt.addr = strtoll(s, NULL, 0);
         }
-        if (*s)
-            usdt.addr = strtoll(s, NULL, 0);
+        if ((sep = strchr(s, ' '))) {
+            *sep = '\0';
+            s = sep + 1;
+            usdt.arg_fmt = s;
+        }
 
         elf_foreach_probe(usdt.binpath, cb, &usdt);
 
@@ -451,15 +469,22 @@ static int usdt_argc_init(int argc, char *argv[])
 }
 
 static const char *usdt_desc[] = PROFILER_DESC("usdt",
-    "[OPTION...] {add|del|list} [[profider:]name@]binpath[@addr] ...",
+    "[OPTION...] {add|del|list} [[profider:]name@]binpath[@addr][ args] ...",
     "User Statically-Defined Tracing.", "",
     "SYNOPSIS",
     "    Find the location of the static trace point from the .note.stapsdt section",
     "    of the elf file, and add the kernel uprobe event.", "",
+    "FORMAT",
+    "      [[profider:]name@]binpath[@addr][ args]",
+    "    profider:name is optional. binpath is required. @addr is optional, used to",
+    "    select a specific one among multiple profider:name. args is optional, use",
+    "    '%s' to format each arg, see EXAMPLES.", "",
     "EXAMPLES",
     "    "PROGRAME" usdt list /usr/lib64/libc.so.6",
     "    "PROGRAME" usdt add /usr/lib64/libc.so.6",
-    "    "PROGRAME" usdt del /usr/lib64/libc.so.6");
+    "    "PROGRAME" usdt del /usr/lib64/libc.so.6",
+    "    "PROGRAME" usdt list /lib64/libpython3.6m.so.1.0 -v",
+    "    "PROGRAME" usdt add 'python:function__entry@/lib64/libpython3.6m.so.1.0 filename=+0(%s):string funcname=+0(%s):string'");
 static const char *usdt_argv[] = PROFILER_ARGV("usdt",
     "OPTION:",
     "version", "verbose", "quiet", "help"
