@@ -705,7 +705,7 @@ static int unique_string_node_cmp(struct rb_node *rbn, const void *entry)
     struct unique_string_tmp *tmp = (void *)entry;
 
     if (s->len == tmp->len)
-        return strcmp(s->str, tmp->str);
+        return strncmp(s->str, tmp->str, tmp->len);
     else
         return s->len - tmp->len;
 }
@@ -717,7 +717,8 @@ static struct rb_node *unique_string_node_new(struct rblist *rlist, const void *
         RB_CLEAR_NODE(&s->rbnode);
         s->n = 0;
         s->len = tmp->len;
-        strcpy(s->str, tmp->str);
+        strncpy(s->str, tmp->str, s->len);
+        s->str[s->len] = '\0';
         return &s->rbnode;
     } else
         return NULL;
@@ -736,14 +737,14 @@ static struct rblist unique_strings = {
     .node_delete = unique_string_node_delete,
 };
 
-const char *unique_string(const char *str)
+const char *unique_string_len(const char *str, int len)
 {
     struct rb_node *rbn;
     struct unique_string *s = NULL;
     struct unique_string_tmp tmp;
 
     tmp.str = str;
-    tmp.len = strlen(str);
+    tmp.len = len ? : strlen(str);
     rbn = rblist__findnew(&unique_strings, &tmp);
     if (rbn) {
         s = container_of(rbn, struct unique_string, rbnode);

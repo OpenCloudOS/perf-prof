@@ -43,7 +43,10 @@ void keyvalue_pairs_sorted_foreach(struct key_value_paires *pairs, keyvalue_cmp 
 void keyvalue_pairs_reinit(struct key_value_paires *pairs);
 unsigned int keyvalue_pairs_nr_entries(struct key_value_paires *pairs);
 
-const char *unique_string(const char *str);
+const char *unique_string_len(const char *str, int len);
+static inline const char *unique_string(const char *str) {
+    return unique_string_len(str, 0);
+}
 void unique_string_stat(FILE *fp);
 
 
