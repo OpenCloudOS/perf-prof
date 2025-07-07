@@ -361,7 +361,7 @@ struct prof_dev {
     struct perf_sample_pos {
         u64 sample_type;
         // Starting from event->sample.array, not include perf_event_header.
-        short tid_pos, time_pos, id_pos, cpu_pos;
+        short tid_pos, time_pos, id_pos, cpu_pos, callchain_pos;
     } pos;
     struct perf_sample_time_ctx { // PERF_SAMPLE_TIME
         evclock_t last_evtime; // ns, tsc, ...

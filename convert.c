@@ -477,9 +477,10 @@ static inline bool is_sampling_event(struct perf_event_attr *attr)
 static int perf_sample_pos_init(struct prof_dev *dev)
 {
     struct perf_evlist *evlist = dev->evlist;
-    struct perf_evsel *evsel;
+    struct perf_evsel *evsel, *onlyone = NULL;
     u64 mask = PERF_SAMPLE_IDENTIFIER | PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME |
-               PERF_SAMPLE_ADDR | PERF_SAMPLE_ID | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU;
+               PERF_SAMPLE_ADDR | PERF_SAMPLE_ID | PERF_SAMPLE_STREAM_ID | PERF_SAMPLE_CPU |
+               PERF_SAMPLE_PERIOD | PERF_SAMPLE_READ;
     u64 sample_type = 0;
     int pos = 0;
 
@@ -488,10 +489,12 @@ static int perf_sample_pos_init(struct prof_dev *dev)
         if (is_sampling_event(attr)) {
             if (sample_type == 0) {
                 sample_type = attr->sample_type & mask;
+                onlyone = evsel;
             } else if (sample_type != (attr->sample_type & mask)) {
                 fprintf(stderr, "Could not init pos: sample_type mismatch.\n");
                 return -1;
-            }
+            } else
+                onlyone = NULL;
         }
     }
 
@@ -500,6 +503,7 @@ static int perf_sample_pos_init(struct prof_dev *dev)
     dev->pos.time_pos = -1;
     dev->pos.id_pos = -1;
     dev->pos.cpu_pos = -1;
+    dev->pos.callchain_pos = -1;
 
     if (sample_type & PERF_SAMPLE_IDENTIFIER)
         pos += sizeof(u64);
@@ -525,6 +529,17 @@ static int perf_sample_pos_init(struct prof_dev *dev)
         dev->pos.cpu_pos = pos;
         pos += sizeof(u32) + sizeof(u32);
     }
+    if (sample_type & PERF_SAMPLE_PERIOD)
+        pos += sizeof(u64);
+    if (sample_type & PERF_SAMPLE_READ) {
+        if (onlyone) {
+            pos += perf_evsel__read_size(onlyone);
+            dev->pos.callchain_pos = pos;
+        }
+    }
+    else
+        dev->pos.callchain_pos = pos;
+
     if (dev->prof->fix_sample_pos)
         dev->prof->fix_sample_pos(dev);
 
