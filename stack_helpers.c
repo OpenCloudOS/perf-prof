@@ -194,16 +194,15 @@ void callchain_ctx_free(struct callchain_ctx *cc)
     free(cc);
 }
 
-static void __print_callchain_kernel(struct callchain_ctx *cc, u64 ip, bool *printed)
+static int __print_callchain_kernel(struct callchain_ctx *cc, u64 ip, bool *printed)
 {
-    int len = 0;
+    int len = 0, len_sep = 0;
     if (*printed)
-        len += fprintf(cc->fout, "%c", cc->seperate);
+        len_sep += fprintf(cc->fout, "%c", cc->seperate);
     if (cc->print2string_kernel)
         len += fprintf(cc->fout, "%s", (char *)ip);
     else {
         const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
-        len = 0;
         if (cc->addr)
             len += fprintf(cc->fout, "    %016lx", ip);
         if (cc->symbol) {
@@ -211,24 +210,24 @@ static void __print_callchain_kernel(struct callchain_ctx *cc, u64 ip, bool *pri
                 len += fprintf(cc->fout, "%s%s", len ? " " : "", ksym ? ksym->name : "Unknown");
                 if (cc->offset)
                     len += fprintf(cc->fout, "+0x%lx", ksym ? ip - ksym->addr : 0L);
-            } else // Symbol not found, print ip.
-                len += fprintf(cc->fout, "%016lx", ip);
+            } else // Symbol not found.
+                len += fprintf(cc->fout, "Unknown");
         }
         if (cc->dso)
             len += fprintf(cc->fout, "%s([kernel.kallsyms])", len ? " " : "");
     }
-    if (len)
-        *printed = true;
+    *printed = len > 0;
+    return len_sep + len;
 }
 
-static void __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, u64 ip, bool *printed)
+static int __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, u64 ip, bool *printed)
 {
     struct dso *dso = NULL;
     const struct sym *sym = NULL;
     const char *symbol = "Unknown";
     u64 offset = 0L;
     const char *dso_name = "Unknown";
-    int len = 0;
+    int len = 0, len_sep = 0;
 
     if (!cc->print2string_user && syms) {
         dso = syms__find_dso(syms, ip, &offset);
@@ -242,11 +241,10 @@ static void __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, 
         }
     }
     if (*printed)
-        len += fprintf(cc->fout, "%c", cc->seperate);
+        len_sep += fprintf(cc->fout, "%c", cc->seperate);
     if (cc->print2string_user)
         len += fprintf(cc->fout, "%s", (char *)ip);
     else {
-        len = 0;
         if (cc->addr)
             len += fprintf(cc->fout, "    %016lx", ip);
         if (cc->symbol) {
@@ -254,49 +252,81 @@ static void __print_callchain_user(struct callchain_ctx *cc, struct syms *syms, 
                 len += fprintf(cc->fout, "%s%s", len ? " " : "", symbol);
                 if (cc->offset)
                     len += fprintf(cc->fout, "+0x%lx", offset);
-            } else // Symbol not found, print ip.
-                len += fprintf(cc->fout, "%016lx", ip);
+            } else // Symbol not found.
+                len += fprintf(cc->fout, "Unknown");
         }
         if (cc->dso)
             len += fprintf(cc->fout, "%s(%s)", len ? " " : "", dso_name);
     }
-    if (len)
-        *printed = true;
+    *printed = len > 0;
+    return len_sep + len;
 }
+
+static int __print_callchain_py(struct callchain_ctx *cc, u64 ip, bool *printed)
+{
+    int len = 0, len_sep = 0;
+    if (*printed)
+        len_sep += fprintf(cc->fout, "%c", cc->seperate);
+    if (cc->print2string_user)
+        len += fprintf(cc->fout, "%s", (char *)ip);
+    else {
+        char *str = (char *)ip;
+        char *dso = strchr(str, '(');
+        if (cc->addr && (cc->symbol || cc->offset || cc->dso))
+            len += fprintf(cc->fout, "    %16s", "");
+        if (cc->symbol || cc->offset) {
+            int n = dso ? dso - str - 1 : strlen(str);
+            len += fprintf(cc->fout, "%s%.*s", len ? " " : "", n, str);
+        }
+        if (cc->dso)
+            len += fprintf(cc->fout, "%s%s", len ? " " : "", dso);
+    }
+    *printed = len > 0;
+    return len_sep + len;
+}
+
 
 static bool __print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid)
 {
     u64 i;
-    bool kernel = false, user = false, printed = false;
+    bool kernel = false, user = false, py = false, printed = false;
     struct syms *syms = NULL;
+    int len = 0;
 
     for (i = 0; i < callchain->nr; i++) {
         u64 ip = callchain->ips[i];
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = true;
-            user = false;
+            user = py = false;
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
-            kernel = false;
             user = true;
+            kernel = py = false;
             if (ctx.syms_cache && cc->user && !cc->print2string_user)
                 syms = syms_cache__get_syms(ctx.syms_cache, pid);
             continue;
+        } else if (ip == PERF_CONTEXT_PYSTACK) {
+            py = true;
+            kernel = user = false;
+            continue;
         }
+
         if (kernel) {
-            __print_callchain_kernel(cc, ip, &printed);
+            len += __print_callchain_kernel(cc, ip, &printed);
         } else if (user) {
-            __print_callchain_user(cc, syms, ip, &printed);
-        }
+            len += __print_callchain_user(cc, syms, ip, &printed);
+        } else if (py)
+            len += __print_callchain_py(cc, ip, &printed);
     }
-    return printed;
+    return len > 0;
 }
 
 static bool __print_callchain_reverse(struct callchain_ctx *cc, struct callchain *callchain, u32 pid)
 {
-    u64 i, kstart = 0, kend = 0, ustart = 0, uend = 0;
+    u64 i, kstart = 0, kend = 0, ustart = 0, uend = 0, pystart = 0, pyend = 0;
     struct syms *syms = NULL;
     bool printed = false;
+    int len = 0;
 
     for (i = 0; i < callchain->nr; i++) {
         u64 ip = callchain->ips[i];
@@ -311,30 +341,41 @@ static bool __print_callchain_reverse(struct callchain_ctx *cc, struct callchain
             kend = i - 1;
             ustart = i + 1;
             uend = callchain->nr - 1;
+        } else if (ip == PERF_CONTEXT_PYSTACK) {
+            uend = i - 1;
+            pystart = i + 1;
+            pyend = callchain->nr - 1;
             break;
+        }
+    }
+    if (pystart) {
+        for (; pyend >= pystart; pyend--) {
+            u64 ip = callchain->ips[pyend];
+            // There may be more than 1 PERF_CONTEXT_* tag.
+            if (ip > PERF_CONTEXT_MAX)
+                continue;
+            len += __print_callchain_py(cc, ip, &printed);
         }
     }
     if (ustart) {
         for (; uend >= ustart; uend--) {
             u64 ip = callchain->ips[uend];
             // There may be more than 1 PERF_CONTEXT_* tag.
-            if (ip == PERF_CONTEXT_KERNEL ||
-                ip == PERF_CONTEXT_USER)
+            if (ip > PERF_CONTEXT_MAX)
                 continue;
-            __print_callchain_user(cc, syms, ip, &printed);
+            len += __print_callchain_user(cc, syms, ip, &printed);
         }
     }
     if (kstart) {
         for (; kend >= kstart; kend--) {
             u64 ip = callchain->ips[kend];
             // There may be more than 1 PERF_CONTEXT_* tag.
-            if (ip == PERF_CONTEXT_KERNEL ||
-                ip == PERF_CONTEXT_USER)
+            if (ip > PERF_CONTEXT_MAX)
                 continue;
-            __print_callchain_kernel(cc, ip, &printed);
+            len += __print_callchain_kernel(cc, ip, &printed);
         }
     }
-    return printed;
+    return len > 0;
 }
 
 void print_callchain(struct callchain_ctx *cc, struct callchain *callchain, u32 pid)
@@ -354,7 +395,7 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
             callchain_cbs kernel_cb, callchain_cbs user_cb, void *opaque)
 {
     __u64 i;
-    bool kernel = false, user = false;
+    bool kernel = false, user = false, py = false;
     struct syms *syms = NULL;
 
     if (cc == NULL ||
@@ -368,15 +409,15 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
         __u64 ip = callchain->ips[i];
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = true;
-            user = false;
+            user = py = false;
             if (kernel_cb)
                 kernel_cb(opaque, PERF_CONTEXT_KERNEL);
             if (cc->debug)
                 fprintf(cc->fout, "    %016llx PERF_CONTEXT_KERNEL\n", ip);
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
-            kernel = false;
             user = true;
+            kernel = py = false;
             if (ctx.syms_cache && cc->user) {
                 syms = syms_cache__get_syms(ctx.syms_cache, pid);
             }
@@ -385,7 +426,14 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
             if (cc->debug)
                 fprintf(cc->fout, "    %016llx PERF_CONTEXT_USER\n", ip);
             continue;
+        } else if (ip == PERF_CONTEXT_PYSTACK) {
+            py = true;
+            kernel = user = false;
+            if (cc->debug)
+                fprintf(cc->fout, "    %016llx PERF_CONTEXT_PYSTACK\n", ip);
+            continue;
         }
+
         if (kernel) {
             const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
             fprintf(cc->fout, "    %016llx %s+0x%llx ([kernel.kallsyms])\n", ip, ksym ? ksym->name : "Unknown",
@@ -401,7 +449,9 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
                                 sym ? offset - sym->start : 0L, dso__name(dso)?:"Unknown");
             } else
                 fprintf(cc->fout, "    %016llx Unknown\n", ip);
-        } else
+        } else if (py)
+            fprintf(cc->fout, "    %16s %s\n", "", (char *)ip);
+        else
             fprintf(cc->fout, "    %016llx\n", ip);
     }
 }
@@ -415,7 +465,7 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
                                           int *context_kernel_num, int *context_user_num)
 {
     __u64 i;
-    bool kernel = false, user = false;
+    bool kernel = false, user = false, py = false;
     struct syms *syms = NULL;
     char buff[1024];
     int len = 0;
@@ -435,20 +485,25 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
         u64 ip = callchain->ips[i];
         if (ip == PERF_CONTEXT_KERNEL) {
             kernel = true;
-            user = false;
+            user = py = false;
             if (i + 1 < callchain->nr)
                 (*context_kernel_num) ++;
             continue;
         } else if (ip == PERF_CONTEXT_USER) {
-            kernel = false;
             user = true;
+            kernel = py = false;
             if (ctx.syms_cache && cc->user) {
                 syms = syms_cache__get_syms(ctx.syms_cache, pid);
             }
             if (i + 1 < callchain->nr)
                 (*context_user_num) ++;
             continue;
+        } else if (ip == PERF_CONTEXT_PYSTACK) {
+            py = true;
+            kernel = user = false;
+            continue;
         }
+
         if (kernel && cc->print2string_kernel) {
             const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
             len = 0;
@@ -492,6 +547,10 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
                 len += snprintf(buff+len, sizeof(buff)-len, "%s(%s)", len ? " " : "", dso_name);
             // Convert to unique string.
             callchain->ips[i] = (__u64)(void *)unique_string(buff);
+        } else if (py && cc->print2string_user) {
+            char *s = strchr((char *)ip, '(');
+            int len = s ? s - (char *)ip - 1 : 0;
+            callchain->ips[i] = (__u64)(void *)unique_string_len((char *)ip, len);
         }
     }
 }
