@@ -208,13 +208,13 @@ int order_init(struct prof_dev *dev)
     if (perf_sample_time_init(dev) < 0)
         return -1;
     if (!(dev->pos.sample_type & PERF_SAMPLE_TIME)) {
-        fprintf(stderr, "--order cannot be enabled\n");
+        fprintf(stderr, "%s: --order cannot be enabled\n", dev->prof->name);
         return -1;
     }
 
     for_each_source_dev_get(source, tmp, dev) {
         order_init(source);
-        heap_size += source->order.nr_mmaps;
+        heap_size += source->order.heap_size;
     }
 
     perf_evlist__for_each_mmap(dev->evlist, map, dev->env->overwrite)
@@ -283,6 +283,34 @@ void order_deinit(struct prof_dev *dev)
         free(dev->order.data);
     if (dev->order.permap_event)
         free(dev->order.permap_event);
+}
+
+int order_together(struct prof_dev *main_dev, struct prof_dev *dev)
+{
+    int heap_size;
+    void **data;
+
+    // main_dev may be a forwarding source, and heap-sorting must
+    // be enabled for the top-level device. See order_main_dev().
+    main_dev = order_main_dev(main_dev);
+
+    if (order_init(main_dev) < 0)
+        return -1;
+    if (order_init(dev) < 0)
+        return -1;
+
+    heap_size = main_dev->order.heap_size + dev->order.heap_size;
+    data = calloc(heap_size, sizeof(*main_dev->order.data));
+    if (!data)
+        return -1;
+
+    free(main_dev->order.data);
+    main_dev->order.heap_size = heap_size;
+    main_dev->order.data = data;
+    min_heap_init(&main_dev->order.heapsort, data, heap_size);
+
+    list_splice_tail_init(&dev->order.heap_event_list, &main_dev->order.heap_event_list);
+    return 0;
 }
 
 int order_register(struct prof_dev *dev, read_event *read_event, void *stream)

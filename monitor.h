@@ -585,6 +585,7 @@ perfclock_t prof_dev_list_minevtime(void);
 // order.c
 int order_init(struct prof_dev *dev);
 void order_deinit(struct prof_dev *dev);
+int order_together(struct prof_dev *main_dev, struct prof_dev *dev);
 typedef union perf_event *read_event(void *stream, bool init, int *ins, bool *writable, bool *converted);
 int order_register(struct prof_dev *dev, read_event *read_event, void *stream);
 void order_unregister(struct prof_dev *dev, void *stream);
@@ -605,7 +606,7 @@ static inline struct prof_dev *order_main_dev(struct prof_dev *dev) {
     return main_dev;
 }
 static inline bool using_order(struct prof_dev *dev) {
-    return dev->env->order || dev->prof->order;
+    return dev->env->order || dev->prof->order || dev->order.enabled;
 }
 enum order_break_reason {
     ORDER_BREAK_NONE,
