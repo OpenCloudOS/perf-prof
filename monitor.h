@@ -577,11 +577,11 @@ perfclock_t prof_dev_list_minevtime(void);
     "usage-self", "sampling-limit", "perfeval-cpus", "perfeval-pids", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
-    "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", \
+    "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", "python-callchain", \
     "user-callchain", "kernel-callchain", \
     "irqs_disabled", "tif_need_resched", "exclude_pid", "nr_running_min", "nr_running_max"
 #define PROFILER_ARGV_CALLCHAIN_FILTER \
-        "FILTER OPTION:", "user-callchain", "kernel-callchain"
+        "FILTER OPTION:", "user-callchain", "kernel-callchain", "python-callchain"
 #define PROFILER_ARGV_PROFILER \
     "PROFILER OPTION:" \
 
