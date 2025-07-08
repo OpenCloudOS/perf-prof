@@ -69,6 +69,8 @@ void flame_graph_close(struct flame_graph *fg);
 void flame_graph_reset(struct flame_graph *fg);
 
 
+#define PERF_CONTEXT_PYSTACK  (PERF_CONTEXT_KERNEL - 2)
+
 struct heatmap;
 struct heatmap *heatmap_open(const char *time_uints, const char *latency_units, const char *path);
 void heatmap_close(struct heatmap *heatmap);

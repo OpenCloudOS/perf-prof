@@ -138,6 +138,7 @@ struct env {
     bool exclude_host;
     bool user_callchain, user_callchain_set;
     bool kernel_callchain, kernel_callchain_set;
+    bool python_callchain;
     // ebpf
     bool irqs_disabled_set, tif_need_resched_set, exclude_pid_set;
     bool nr_running_min_set, nr_running_max_set;
@@ -419,6 +420,8 @@ struct prof_dev {
         struct prof_dev *parent;
         struct list_head child_list;
         struct list_head link_to_parent;
+
+        struct prof_dev *pystack;
     } links;
     struct perf_event_forward_to {
         struct prof_dev *target;
@@ -699,5 +702,10 @@ ssize_t kcore_read(unsigned long kaddr, void *buf, size_t count);
 //kvm_exit_reason.c
 const char *find_exit_reason(unsigned int isa, unsigned int val);
 
+// pystack.c
+int pystack_link(struct prof_dev *main_dev);
+void pystack_unlink(struct prof_dev *main_dev);
+union perf_event *
+pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *writable, int reserved);
 
 #endif

@@ -2,7 +2,7 @@ perf-prof-y += trace_helpers.o uprobe_helpers.o stack_helpers.o latency_helpers.
 perf-prof-y += count_helpers.o localtime.o
 perf-prof-y += lib/ filter/ arch/
 perf-prof-y += monitor.o tep.o timer.o convert.o net.o event-spread.o vcpu_info.o
-perf-prof-y += sched.o comm.o perfeval.o ptrace.o
+perf-prof-y += sched.o comm.o perfeval.o ptrace.o pystack.o
 perf-prof-$(CONFIG_LIBBPF) += bpf-skel/
 
 perf-prof-y += split-lock.o

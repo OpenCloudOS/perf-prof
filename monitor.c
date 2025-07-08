@@ -468,6 +468,7 @@ struct option main_options[] = {
     OPT_BOOL_NONEG  ( 0 ,   "exclude-kernel", &env.exclude_kernel,              "exclude kernel"),
     OPT_BOOLEAN_SET ( 0 ,   "user-callchain", &env.user_callchain,   &env.user_callchain_set,   "include user callchains, no- prefix to exclude"),
     OPT_BOOLEAN_SET ( 0 , "kernel-callchain", &env.kernel_callchain, &env.kernel_callchain_set, "include kernel callchains, no- prefix to exclude"),
+    OPT_BOOL_NONEG  ( 0 , "python-callchain", &env.python_callchain,                            "include python callchains"),
     OPT_INT_OPTARG_SET( 0 ,    "irqs_disabled", &env.irqs_disabled,    &env.irqs_disabled_set,    1, "0|1",  "ebpf, irqs disabled or not."),
     OPT_INT_OPTARG_SET( 0 , "tif_need_resched", &env.tif_need_resched, &env.tif_need_resched_set, 1, "0|1",  "ebpf, TIF_NEED_RESCHED is set or not."),
     OPT_INT_NONEG_SET ( 0 ,      "exclude_pid", &env.exclude_pid,      &env.exclude_pid_set,         "pid",  "ebpf, exclude pid"),
@@ -1091,7 +1092,7 @@ static void print_devtree(void)
     struct prof_dev *dev, *next;
     printf("running: %d\n", running);
     list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
-        if (prof_dev_at_top(dev))
+        if (!dev->links.parent)
             print_dev(dev, 4);
 }
 
@@ -1736,14 +1737,24 @@ static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *
 static inline union perf_event *
 perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance, bool writable, bool converted)
 {
+    union perf_event *py_event = event;
     struct perf_record_dev *event_dev = (void *)dev->forward.event_dev;
     void *data;
+    int header_size = offsetof(struct perf_record_dev, event);
 
-    memset(event_dev, 0, offsetof(struct perf_record_dev, event));
-    event_dev->header.size = offsetof(struct perf_record_dev, event) + event->header.size;
+    if (unlikely(dev->links.pystack))
+        py_event = pystack_perf_event(dev, event, &writable, header_size);
+
+    if (py_event != event) {
+        event_dev = (void *)py_event - header_size;
+        event = py_event;
+    } else
+        memcpy(&event_dev->event, event, event->header.size);
+
+    event_dev->header.size = header_size + event->header.size;
+    event_dev->header.misc = 0;
     event_dev->header.type = PERF_RECORD_DEV;
 
-    memcpy(&event_dev->event, event, event->header.size);
     if (!converted)
         perf_event_convert(dev, &event_dev->event, true);
 
@@ -1793,7 +1804,10 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
         dev = event_dev->dev;
         instance = event_dev->instance;
         converted = true;
-    }
+    } else if (unlikely(dev->links.pystack) &&
+               event->header.type == PERF_RECORD_SAMPLE)
+        event = pystack_perf_event(dev, event, &writable, 0);
+
     prof = dev->prof;
     env = dev->env;
 
@@ -2174,6 +2188,10 @@ reinit:
         if (env->order || prof->order)
             if (order_init(dev) < 0)
                 goto out_munmap;
+
+        if (env->python_callchain)
+            if (pystack_link(dev) < 0)
+                goto out_order_deinit;
     }
 
     if (dev->env->interval) {
@@ -2585,7 +2603,7 @@ static void prof_dev_free(struct prof_dev *dev)
 {
     profiler *prof = dev->prof;
     struct perf_evlist *evlist = dev->evlist;
-    struct prof_dev *child, *next;
+    struct prof_dev *child, *next, *parent;
 
     if (dev->env->interval) {
         timer_destroy(&dev->timer);
@@ -2638,7 +2656,10 @@ static void prof_dev_free(struct prof_dev *dev)
         }
     }
 
-    if (dev->links.parent) {
+    parent = dev->links.parent;
+    if (parent) {
+        if (parent->links.pystack == dev)
+            parent->links.pystack = NULL;
         list_del(&dev->links.link_to_parent);
     }
 
