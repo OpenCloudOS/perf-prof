@@ -119,6 +119,28 @@ struct rb_node *rblist__find_first(struct rblist *rblist, const void *entry)
 	return match;
 }
 
+int rblist__find_remove(struct rblist *rblist, const void *entry)
+{
+	struct rb_node *node = rblist->entries.rb_root.rb_node;
+
+	while (node != NULL) {
+		int rc = rblist->node_cmp(node, entry);
+		if (rc > 0)
+			node = node->rb_left;
+		else if (rc < 0)
+			node = node->rb_right;
+		else
+			goto found;
+	}
+	return 0;
+
+found:
+	rb_erase_cached(node, &rblist->entries);
+	--rblist->nr_entries;
+	rblist->node_delete(rblist, node);
+	return 1;
+}
+
 void rblist__init(struct rblist *rblist)
 {
 	if (rblist != NULL) {
