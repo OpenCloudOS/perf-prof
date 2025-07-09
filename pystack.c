@@ -169,6 +169,14 @@ static void pystack_lost(struct prof_dev *dev, union perf_event *event, int ins,
 
     print_lost_fn(dev, event, ins);
 
+    // Thread loss event: just remove the thread itself.
+    if (!prof_dev_ins_oncpu(dev)) {
+        struct pystack_node tmp;
+        tmp.pid = prof_dev_ins_thread(dev, ins);
+        rblist__find_remove(&ctx->pystack, &tmp);
+        return;
+    }
+
     // Order is enabled by default.
     // When order is enabled, event loss will be sensed in advance, but it
     // needs to be processed later.
@@ -331,6 +339,7 @@ pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *wri
     struct pystack_node tmp, *node;
     struct rb_node *rbn;
     void *data;
+    int pid;
     bool callchain;
 
     if (!pydev ||
@@ -339,6 +348,9 @@ pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *wri
         return event;
 
     data = (void *)event->sample.array;
+    pid = *(u32 *)(data + main_dev->pos.tid_pos + sizeof(u32));
+    if (pid == 0)
+        return event;
 
     callchain = main_dev->env->callchain;
     if (!callchain && main_dev->pos.id_pos >= 0) {
@@ -351,7 +363,7 @@ pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *wri
         return event;
 
     ctx = pydev->private;
-    tmp.pid = *(u32 *)(data + main_dev->pos.tid_pos + sizeof(u32));
+    tmp.pid = pid;
     rbn = rblist__find(&ctx->pystack, &tmp);
     node = rb_entry_safe(rbn, struct pystack_node, rbnode);
     if (node) {
