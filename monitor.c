@@ -648,6 +648,10 @@ struct env *clone_env(struct env *p)
     CLONE (perfeval_cpus);
     CLONE (perfeval_pids);
 
+    if (p->workload.pid && !e->pids) {
+        asprintf(&e->pids, "%d", p->workload.pid);
+    }
+
     return e;
 
 failed:
