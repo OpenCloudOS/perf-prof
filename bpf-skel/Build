@@ -1,1 +1,2 @@
 perf-prof-$(CONFIG_LIBBPF) += kvm_exit.skel.h
+perf-prof-$(CONFIG_LIBBPF) += bpf_task_state.skel.h
