@@ -5,6 +5,10 @@
 #include <linux/rblist.h>
 #include <monitor.h>
 #include <stack_helpers.h>
+#include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include <bpf-skel/bpf_pystack.h>
+#include <bpf-skel/bpf_pystack.skel.h>
 
 #define PYSTACK_MAX_DEPTH 128
 
@@ -248,13 +252,25 @@ static void pystack_sample(struct prof_dev *dev, union perf_event *event, int in
         } __packed raw;
     } *data = (void *)event->sample.array;
     unsigned short common_type = data->raw.common_type;
-    struct function__entry_return *function = &data->raw.function;
-    const char *filename = (const char *)function + function->filename_offset;
-    const char *funcname = (const char *)function + function->funcname_offset;
-    int lineno = function->lineno;
+    // struct function__entry_return *function = &data->raw.function;
+    // const char *filename = (const char *)function + function->filename_offset;
+    // const char *funcname = (const char *)function + function->funcname_offset;
+    // int lineno = function->lineno;
+    // struct pystack_node tmp, *node;
+    // struct rb_node *rbn;
+    // char buf[4096];
+    struct function__entry_return function_tmp;
+    struct function__entry_return *function;
+    const char *filename,*funcname;
+    int lineno;
     struct pystack_node tmp, *node;
     struct rb_node *rbn;
     char buf[4096];
+    memcpy(&function_tmp, &data->raw.function, sizeof(function_tmp));
+    function = &function_tmp;
+    filename = (const char *)function + function->filename_offset;
+    funcname = (const char *)function + function->funcname_offset;
+    lineno = function->lineno;
 
     if (!function->common_pid)
         return;
@@ -267,9 +283,11 @@ static void pystack_sample(struct prof_dev *dev, union perf_event *event, int in
     node = rb_entry_safe(rbn, struct pystack_node, rbnode);
     if (node) {
         int n = snprintf(buf, sizeof(buf), "%s (%s:%d)", funcname, filename, lineno);
+        printf("[pystack in stack] %s,%s,%d\n", funcname, filename, lineno);
         if (common_type == ctx->fun_entry) {
             if (node->depth < PYSTACK_MAX_DEPTH) {
                 const char *str = unique_string_len(buf, n>sizeof(buf) ? sizeof(buf)-1 : n);
+                //printf("[pystack in stack] %s\n", str);
                 node->stack[node->depth] = str;
             }
             node->depth++;
@@ -335,9 +353,6 @@ union perf_event *
 pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *writable, int reserved)
 {
     struct prof_dev *pydev = main_dev->links.pystack;
-    struct pystack_ctx *ctx;
-    struct pystack_node tmp, *node;
-    struct rb_node *rbn;
     void *data;
     int pid;
     bool callchain;
@@ -348,10 +363,11 @@ pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *wri
         return event;
 
     data = (void *)event->sample.array;
+
     pid = *(u32 *)(data + main_dev->pos.tid_pos + sizeof(u32));
     if (pid == 0)
         return event;
-
+        
     callchain = main_dev->env->callchain;
     if (!callchain && main_dev->pos.id_pos >= 0) {
         struct perf_evsel *evsel;
@@ -362,47 +378,99 @@ pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *wri
     if (!callchain)
         return event;
 
-    ctx = pydev->private;
-    tmp.pid = pid;
-    rbn = rblist__find(&ctx->pystack, &tmp);
-    node = rb_entry_safe(rbn, struct pystack_node, rbnode);
-    if (node) {
-        union perf_event *new_event = ctx->fixed_event + reserved;
-        struct callchain *cc = data + main_dev->pos.callchain_pos;
-        int copy_len = (void *)&cc->ips[cc->nr] - (void *)event;
-        int depth = node->depth;
-        int d;
+    if(main_dev->env->python_callchain){
+        struct pystack_ctx *ctx;
+        struct pystack_node tmp, *node;
+        struct rb_node *rbn;
+        tmp.pid = pid;
+        ctx = pydev->private;
+        rbn = rblist__find(&ctx->pystack, &tmp);
+        node = rb_entry_safe(rbn, struct pystack_node, rbnode);
+        if (node) {
+            union perf_event *new_event = ctx->fixed_event + reserved;
+            struct callchain *cc = data + main_dev->pos.callchain_pos;
+            int copy_len = (void *)&cc->ips[cc->nr] - (void *)event;
+            int depth = node->depth;
+            int d;
 
-        /*
-         * Generate new events: put PERF_CONTEXT_PYSTACK at the end of
-         * the callchain.
-         *
-         * { u64   nr,
-         *   u64   ips[nr]; } && PERF_SAMPLE_CALLCHAIN
-         *
-         * Default callchain context order:
-         *   PERF_CONTEXT_KERNEL
-         *   PERF_CONTEXT_USER
-         *   PERF_CONTEXT_PYSTACK => Contains only the unique string:
-         *                           "funcname (filename:lineno)"
-         */
-        memcpy(new_event, event, copy_len);
-        data = (void *)new_event->sample.array;
-        cc = data + main_dev->pos.callchain_pos;
-        cc->ips[cc->nr++] = PERF_CONTEXT_PYSTACK;
+            memcpy(new_event, event, copy_len);
+            data = (void *)new_event->sample.array;
+            cc = data + main_dev->pos.callchain_pos;
+            cc->ips[cc->nr++] = PERF_CONTEXT_PYSTACK;
 
-        if (depth > PYSTACK_MAX_DEPTH)
-            depth = PYSTACK_MAX_DEPTH;
-        d = depth;
-        while (depth-- > 0)
-            cc->ips[cc->nr++] = (u64)node->stack[depth];
+            if (depth > PYSTACK_MAX_DEPTH)
+                depth = PYSTACK_MAX_DEPTH;
+            d = depth;
 
-        if (event->header.size > copy_len)
-            memcpy((void *)&cc->ips[cc->nr], (void *)event + copy_len, event->header.size - copy_len);
+            while (depth-- > 0)
+                cc->ips[cc->nr++] = (u64)node->stack[depth];
 
-        new_event->header.size += (d+1) * sizeof(u64);
-        *writable = 1;
-        return new_event;
+            if (event->header.size > copy_len)
+                memcpy((void *)&cc->ips[cc->nr], (void *)event + copy_len, event->header.size - copy_len);
+            new_event->header.size += (d+1) * sizeof(u64);
+            *writable = 1;
+            return new_event;
+        }
+    }
+    else if(main_dev->env->bpf_python_callchain){
+        struct bpf_pystack_ctx {
+            struct bpf_pystack_bpf *obj;
+            void *fixed_event;
+        } *ctx = pydev->private;
+        struct stack_t node = {0};
+
+        int str_id_to_str_fd, thread_stack_fd;
+        str_id_to_str_fd = bpf_map__fd(ctx->obj->maps.str_id_to_str);
+        thread_stack_fd = bpf_map__fd(ctx->obj->maps.thread_stack);
+
+        if(bpf_map_lookup_elem(thread_stack_fd, &pid, &node)<0){
+            return event;
+        }else if(node.depth <=0 || node.depth > PYSTACK_MAX_DEPTH){ 
+            printf("tid %d python callchain depth is %d, which is invalid faild, skip this event.\n", pid,node.depth);
+            return event;
+        }else{
+            union perf_event *new_event = ctx->fixed_event + reserved;
+            struct callchain *cc = data + main_dev->pos.callchain_pos;
+            int copy_len = (void *)&cc->ips[cc->nr] - (void *)event;
+            int depth = node.depth;
+            int d;
+
+            if (copy_len <= 0 || copy_len > event->header.size) {
+                printf("Invalid copy_len: %d, event->header.size: %u\n", copy_len, event->header.size);
+                return event;
+            }
+            memcpy(new_event, event, copy_len);
+            data = (void *)new_event->sample.array;
+            cc = data + main_dev->pos.callchain_pos;
+            cc->ips[cc->nr++] = PERF_CONTEXT_PYSTACK;
+
+            if (depth > PYSTACK_MAX_DEPTH)
+                depth = PYSTACK_MAX_DEPTH;
+            d = depth;
+            while (depth-- > 0){
+                struct perstack *perstack = &node.pystack[depth];
+                char filefunc[MAX_STR_LEN] = {0};
+                char buf[4096];
+                const char *str;
+                int len, ret = bpf_map_lookup_elem(str_id_to_str_fd, &perstack->filefunc, filefunc);
+                if (ret<0) {
+                    printf("fail to find value from str_id_to_str_fd: %lu\n", perstack->filefunc);
+                    continue;
+                }
+                if(depth == 0)
+                    len = snprintf(buf, sizeof(buf), "%s:%d (%.2fms) [Max dealy, not in current stack]", filefunc, perstack->lineno, 
+                        (double)(perstack->time/1000000.00));
+                else
+                    len = snprintf(buf, sizeof(buf), "%s: %d", filefunc, perstack->lineno);
+                str = unique_string_len(buf, len>sizeof(buf) ? sizeof(buf)-1 : len);
+                cc->ips[cc->nr++] = (u64)str;
+            }
+            if (event->header.size > copy_len)
+                memcpy((void *)&cc->ips[cc->nr], (void *)event + copy_len, event->header.size - copy_len);
+            new_event->header.size += (d+1) * sizeof(u64);
+            *writable = 1;
+            return new_event;                
+        }
     }
     return event;
 }

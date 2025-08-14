@@ -469,6 +469,7 @@ struct option main_options[] = {
     OPT_BOOLEAN_SET ( 0 ,   "user-callchain", &env.user_callchain,   &env.user_callchain_set,   "include user callchains, no- prefix to exclude"),
     OPT_BOOLEAN_SET ( 0 , "kernel-callchain", &env.kernel_callchain, &env.kernel_callchain_set, "include kernel callchains, no- prefix to exclude"),
     OPT_BOOL_NONEG  ( 0 , "python-callchain", &env.python_callchain,                            "include python callchains"),
+    OPT_STRDUP_NONEG(0, "bpf-python-callchain", &env.bpf_python_callchain, "path of your libpython (/usr/lib64/libpython3.6m.so.1.0)", "include python callchains by bpf, extra string"),
     OPT_INT_OPTARG_SET( 0 ,    "irqs_disabled", &env.irqs_disabled,    &env.irqs_disabled_set,    1, "0|1",  "ebpf, irqs disabled or not."),
     OPT_INT_OPTARG_SET( 0 , "tif_need_resched", &env.tif_need_resched, &env.tif_need_resched_set, 1, "0|1",  "ebpf, TIF_NEED_RESCHED is set or not."),
     OPT_INT_NONEG_SET ( 0 ,      "exclude_pid", &env.exclude_pid,      &env.exclude_pid_set,         "pid",  "ebpf, exclude pid"),
@@ -2196,6 +2197,9 @@ reinit:
         if (env->python_callchain)
             if (pystack_link(dev) < 0)
                 goto out_order_deinit;
+        if (env->bpf_python_callchain)
+            if (bpf_pystack_link(dev) < 0)
+                goto out_order_deinit;        
     }
 
     if (dev->env->interval) {
