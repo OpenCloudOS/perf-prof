@@ -1230,36 +1230,67 @@ TRUE:
     if (!env->verbose)
         iter->debug_msg = NULL;
 
-    // rundelay, samecpu
-    if (ctx->rundelay && env->samecpu && e->cpu_entry.cpu != -1) {
-        int next_pid, cpuslot = -1;
+    // samecpu
+    if (env->samecpu && e->cpu_entry.cpu != -1) {
+        int next_pid, cpuslot = -1, i;
         const char *prev_comm;
         iter->running_time = 0;
         iter->comm = NULL;
+        // Only the sched_switch event can return 1.
         if (tp_oncpu(curr->tp, raw, size, &next_pid, &prev_comm)) {
-            if (e->cpu_entry.cpu == iter->recent_cpu) cpuslot = 2;
-            else if (e->cpu_entry.cpu == e1->cpu_entry.cpu) cpuslot = 0;
-            else if (e->cpu_entry.cpu == e2->cpu_entry.cpu) cpuslot = 1;
+            /* cpu tracking
+             * iter->recent_cpu : indicates the CPU that `track_tid` is running on.
+             * iter->curr_cpu[2]: records the pid and start time running on
+             * recent_cpu, and changes with recent_cpu.
+             *
+             * [000]  sched_wakeup: track_tid CPU:002         | recent_cpu = 2
+             * [002]  ...                                     |
+             * [002]  sched_migrate_task: track_tid dst_cpu=3 | recent_cpu = 3
+             * [003]  ...                                     |
+             * [003]  sched_switch: xx => track_tid           | recent_cpu = 3
+             * [003]  sched_switch: track_tid => py           | recent_cpu = -1
+             */
+            if (e->cpu_entry.cpu == iter->recent_cpu) {
+                // curr_cpu[2] may be -1, and when it is different from recent_cpu,
+                // curr_pid[2] and curr_time[2] are no longer correct and need to be
+                // synchronized from [0], [1] or reset.
+                if (iter->curr_cpu[2] != iter->recent_cpu) {
+                    iter->curr_cpu[2] = iter->recent_cpu;
+                    if (iter->curr_cpu[2] == iter->curr_cpu[0]) {
+                        iter->curr_pid[2] = iter->curr_pid[0];
+                        iter->curr_time[2] = iter->curr_time[0];
+                    } else if (iter->curr_cpu[2] == iter->curr_cpu[1]) {
+                        iter->curr_pid[2] = iter->curr_pid[1];
+                        iter->curr_time[2] = iter->curr_time[1];
+                    } else {
+                        iter->curr_pid[2] = -1;
+                        iter->curr_time[2] = 0;
+                    }
+                }
+                cpuslot = 2;
+            } else if (e->cpu_entry.cpu == iter->curr_cpu[2]) cpuslot = 2;
+              else if (e->cpu_entry.cpu == iter->curr_cpu[0]) cpuslot = 0;
+              else if (e->cpu_entry.cpu == iter->curr_cpu[1]) cpuslot = 1;
+
             if (cpuslot >= 0) {
-                if (iter->curr_cpu[cpuslot] == e->cpu_entry.cpu &&
-                    iter->curr_time[cpuslot] &&
+                if (iter->curr_time[cpuslot] &&
                     iter->curr_pid[cpuslot] > 0 && // exclude swapper/*
-                    iter->curr_pid[cpuslot] != next_pid) {
+                    iter->curr_pid[cpuslot] == e->tid_entry.tid) {
                     iter->running_time = iter->time - iter->curr_time[cpuslot];
                     iter->comm = prev_comm;
                 }
                 iter->curr_pid[cpuslot] = next_pid;
                 iter->curr_time[cpuslot] = iter->time;
-                if (cpuslot == 2) {
-                    iter->curr_cpu[2] = e->cpu_entry.cpu;
-                    if (iter->curr_cpu[0] == iter->curr_cpu[2]) {
-                        iter->curr_pid[0] = iter->curr_pid[2];
-                        iter->curr_time[0] = iter->curr_time[2];
+
+                for (i = 0; i < 3; i++)
+                    if (cpuslot != i && iter->curr_cpu[i] == iter->curr_cpu[cpuslot]) {
+                        iter->curr_pid[i] = iter->curr_pid[cpuslot];
+                        iter->curr_time[i] = iter->curr_time[cpuslot];
                     }
-                    if (iter->curr_cpu[1] == iter->curr_cpu[2]) {
-                        iter->curr_pid[1] = iter->curr_pid[2];
-                        iter->curr_time[1] = iter->curr_time[2];
-                    }
+                if (cpuslot == 2 && iter->recent_cpu == -1) {
+                    iter->curr_cpu[2] = -1;
+                    iter->curr_pid[2] = -1;
+                    iter->curr_time[2] = 0;
                 }
             }
         }

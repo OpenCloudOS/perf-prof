@@ -321,7 +321,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 unit = opts->env->tsc ? "kcyc" : "us";
 
                 if (iter)
-                    iter->recent_cpu = opts->comm ? e1->cpu_entry.cpu : -1;
+                    iter->recent_cpu = e1->cpu_entry.cpu;
 
                 // print events before event1
                 if (iter && iter->start && iter->start != iter->event1) {
@@ -354,18 +354,16 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                         multi_trace_raw_size(event1, &raw, &size, two->tp1);
                         tp_target_cpu(two->tp1, raw, size, e1->cpu_entry.cpu, track_tid, &iter->recent_cpu, &iter->reason);
                     }
-                    // rundelay, tracking running time.
-                    if (opts->rundelay) {
-                        iter->curr_cpu[0] = e1->cpu_entry.cpu;
-                        iter->curr_cpu[1] = e2->cpu_entry.cpu;
-                        iter->curr_cpu[2] = iter->recent_cpu;
-                        iter->curr_time[0] = iter->time;
-                        if (!tp_oncpu(two->tp1, raw, size, &iter->curr_pid[0], &dummy))
-                            iter->curr_pid[0] = e1->tid_entry.tid;
-                        if (iter->curr_cpu[2] == iter->curr_cpu[0]) {
-                            iter->curr_pid[2] = iter->curr_pid[0];
-                            iter->curr_time[2] = iter->curr_time[0];
-                        }
+                    // tracking running time.
+                    iter->curr_cpu[0] = e1->cpu_entry.cpu;
+                    iter->curr_cpu[1] = e2->cpu_entry.cpu;
+                    iter->curr_cpu[2] = iter->recent_cpu;
+                    iter->curr_time[0] = iter->time;
+                    if (!tp_oncpu(two->tp1, raw, size, &iter->curr_pid[0], &dummy))
+                        iter->curr_pid[0] = e1->tid_entry.tid;
+                    if (iter->curr_cpu[2] == iter->curr_cpu[0]) {
+                        iter->curr_pid[2] = iter->curr_pid[0];
+                        iter->curr_time[2] = iter->curr_time[0];
                     }
                 }
 
