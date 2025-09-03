@@ -635,6 +635,7 @@ u64 rdtsc(void);
 evclock_t perfclock_to_evclock(struct prof_dev *dev, perfclock_t time);
 perfclock_t evclock_to_perfclock(struct prof_dev *dev, evclock_t time);
 real_ns_t evclock_to_real_ns(struct prof_dev *dev, evclock_t time);
+u64 evclock_to_realtime_ns(struct prof_dev *dev, evclock_t evtime);
 int perf_sample_forward_init(struct prof_dev *dev);
 int perf_sample_time_init(struct prof_dev *dev);
 int perf_event_convert_init(struct prof_dev *dev);

@@ -3,7 +3,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <monitor.h>
+#include <sys/time.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <linux/rblist.h>
@@ -582,6 +582,8 @@ static void report_kmemleak(struct prof_dev *dev)
     int size;
     struct rblist sorted;
     struct key_value_paires *kv_pairs = NULL;
+    bool selected = true;
+    u64 time_ns = 0UL;
 
     while (!rblist__empty(&ctx->gc_free)) {
         __gc_free_first(ctx);
@@ -606,6 +608,11 @@ static void report_kmemleak(struct prof_dev *dev)
         rblist__add_node(&sorted, alloc);
     } while (!rblist__empty(&ctx->alloc));
 
+    if (dev->env->greater_than) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        time_ns = tv.tv_sec * NSEC_PER_SEC + tv.tv_usec * 1000;
+    }
 
     if (ctx->report_leaked_bytes) {
         kv_pairs = keyvalue_pairs_new(sizeof(struct leaked_bytes));
@@ -618,11 +625,15 @@ static void report_kmemleak(struct prof_dev *dev)
         alloc = container_of(rbn, struct perf_event_backup, rbnode);
         event = &alloc->event;
         data = (void *)event->sample.array;
+        if (time_ns) {
+            u64 realtime_ns = evclock_to_realtime_ns(dev, (evclock_t)(u64)data->time);
+            selected = realtime_ns ? (time_ns - realtime_ns > dev->env->greater_than) : true;
+        }
 
-        if (kv_pairs) {
+        if (kv_pairs && selected) {
             collect_leaked_bytes(ctx, kv_pairs, alloc);
         }
-        if (!kv_pairs || dev->env->verbose) {
+        if ((!kv_pairs && selected) || dev->env->verbose) {
             __raw_size(event, alloc->callchain, &raw, &size);
             tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
             __print_callchain(dev, event, alloc->callchain);
@@ -879,7 +890,8 @@ static const char *kmemleak_desc[] = PROFILER_DESC("kmemleak",
     "                       --free kmem:kfree//ptr=ptr/ --order -m 128 -g");
 static const char *kmemleak_argv[] = PROFILER_ARGV("kmemleak",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event", "alloc", "free", "call-graph", "flame-graph");
+    PROFILER_ARGV_PROFILER, "event", "alloc", "free", "call-graph", "flame-graph",
+    "than\nMemory allocation exceeded the specified time.");
 struct monitor kmemleak = {
     .name = "kmemleak",
     .desc = kmemleak_desc,

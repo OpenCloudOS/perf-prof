@@ -469,6 +469,17 @@ convert_none:
         goto convert_none;
 }
 
+u64 evclock_to_realtime_ns(struct prof_dev *dev, evclock_t evtime)
+{
+    if (likely(dev->time_ctx.base_evtime > 0 && evtime.clock > 0)) {
+        s64 off_ns = evclock_to_real_ns(dev, evtime) - dev->time_ctx.base_evtime;
+        off_ns += dev->time_ctx.base_timespec.tv_nsec;
+
+        return dev->time_ctx.base_timespec.tv_sec * NSEC_PER_SEC + off_ns;
+    } else
+        return 0UL;
+}
+
 static inline bool is_sampling_event(struct perf_event_attr *attr)
 {
 	return attr->sample_period != 0;
