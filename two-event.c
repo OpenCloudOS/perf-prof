@@ -288,6 +288,7 @@ static inline void __make_buff(char *buff, int len, const char *debug_msg, s64 t
     *buff++ = '\0';
 }
 
+#define SCALE 50
 static void delay_two(struct two_event *two, union perf_event *event1, union perf_event *event2, struct event_info *info, struct event_iter *iter)
 {
     struct delay *delay = NULL;
@@ -371,6 +372,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                 if (iter) {
                     bool first = true;
                     int hide = 0;
+                    unsigned long time_scale = 0;
                     struct {
                         u64 time;
                         union perf_event *event;
@@ -378,7 +380,7 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                         const char *debug_msg;
                         const char *reason;
                     } prev = {0, NULL, NULL, NULL};
-                    snprintf(buff, sizeof(buff), "|+%12.3f %s", delta/1000.0, unit);
+                    snprintf(buff, sizeof(buff), "|+ %.3f %s", delta/1000.0, unit);
                     while (event_iter_cmd(iter, CMD_NEXT)) {
                         if (iter->curr == iter->event2)
                             break;
@@ -395,12 +397,22 @@ static void delay_two(struct two_event *two, union perf_event *event1, union per
                                 }
                             }
                             if (!first) {
-                                if (iter->comm) __make_buff(buff, sizeof(buff), iter->debug_msg, iter->running_time, iter->comm);
-                                else __make_buff(buff, sizeof(buff), iter->debug_msg, iter->time - e1->time, iter->reason);
+                                if (unlikely(iter->debug_msg))
+                                    __make_buff(buff, sizeof(buff), iter->debug_msg, 0 , NULL);
+                                else if (iter->comm || iter->reason)
+                                    __make_buff(buff, sizeof(buff), NULL,
+                                                iter->comm ? iter->running_time : iter->time - e1->time,
+                                                iter->comm ?                    : iter->reason);
+                                else if (time_scale >= SCALE) {
+                                    snprintf(buff, sizeof(buff), "|- %.3f %s", (iter->time - e1->time)/1000.0, unit);
+                                    time_scale = 0;
+                                } else
+                                    buff[1] = '\0';
                             }
                             multi_trace_print_title(iter->event, iter->tp, buff);
                             first = false;
                             hide = 0;
+                            time_scale ++;
                        set_prev:
                             prev.time = iter->time;
                             prev.event = iter->event;
@@ -512,14 +524,22 @@ static remaining_return delay_remaining(struct two_event *two, union perf_event 
             if (iter) {
                 bool first = true;
                 char buff[32];
-                snprintf(buff, sizeof(buff), "| >= %12.3f %s", delta/1000.0, unit);
+                unsigned long time_scale = 0;
+                snprintf(buff, sizeof(buff), "| >= %.3f %s", delta/1000.0, unit);
                 event_iter_cmd(iter, CMD_EVENT1);
                 while (event_iter_cmd(iter, CMD_NEXT)) {
                     if (iter->curr == iter->event2)
                         break;
                     if (event_need_to_print(event1, NULL, info, iter)) {
-                        multi_trace_print_title(iter->event, iter->tp, first ? buff : "|");
+                        if (!first) {
+                            if ((time_scale % SCALE) == 0)
+                                snprintf(buff, sizeof(buff), "|- %.3f %s", (iter->time - e1->time)/1000.0, unit);
+                            else
+                                buff[1] = '\0';
+                        }
+                        multi_trace_print_title(iter->event, iter->tp, buff);
                         first = false;
+                        time_scale ++;
                     }
                 }
                 printf("| >= %12.3f %s, event2 may be lost.\n", delta/1000.0, unit);
