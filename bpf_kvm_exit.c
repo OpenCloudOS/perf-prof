@@ -195,7 +195,14 @@ failed:
 static void bpf_kvm_exit_fix_sample_pos(struct prof_dev *dev)
 {
     dev->pos.sample_type |= PERF_SAMPLE_TID | PERF_SAMPLE_CPU;
-    dev->pos.tid_pos = sizeof(u64); // PERF_SAMPLE_TIME | kvm_vcpu_event
+    /* PERF_SAMPLE_TIME | PERF_SAMPLE_RAW
+     *   __u64 time;
+     *  struct {
+     *      __u32   size;
+     *      __u8    data[0];
+     *  } raw;
+     */
+    dev->pos.tid_pos = sizeof(u64) + sizeof(u32);
     dev->pos.cpu_pos = -1;
 }
 
@@ -229,7 +236,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
     if (ctx->print_header) {
         ctx->print_header = false;
         print_time(stdout);
-        printf("kvm-exit latency\n");
+        printf("kvm_exit latency\n");
 
         if (env->verbose >= -1) {
             if (env->perins)
@@ -313,7 +320,7 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
     u32 hlt;
 
     if (unlikely(!prof_dev_is_final(dev))) {
-        // When bpf:kvm-exit is used as a forwarding device, it only output the event.
+        // When bpf:kvm_exit is used as a forwarding device, it only output the event.
         goto print_event;
     }
 
@@ -353,7 +360,7 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
         (raw->exit_reason != hlt ? delta : raw->run_delay) > env->greater_than) {
     print_event:
         if (dev->print_title) prof_dev_print_time(dev, *time, stdout);
-        printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm-exit: %s lat %lu%s", global_comm_get(raw->pid),
+        printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm_exit: %s lat %lu%s", global_comm_get(raw->pid),
             raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
             find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? " " : "\n");
         if (ctx->oncpu) {
@@ -401,24 +408,24 @@ static u64 bpf_kvm_exit_minevtime(struct prof_dev *dev)
     return minevtime;
 }
 
-static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm-exit",
+static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm_exit",
     "[OPTION...] [--perins] [--than ns]",
-    "Generate bpf:kvm-exit event.", "",
+    "Generate bpf:kvm_exit event.", "",
     "BPF-EVENT",
     "    u32 exit_reason   # exit reason",
     "    u64 latency       # kvm:kvm_exit => kvm:kvm_entry",
     "    u64 sched_latency # switch_out => switch_in", "",
     "EXAMPLES",
-    "    "PROGRAME" bpf:kvm-exit -p 2347 -i 1000 --than 50ms",
-    "    "PROGRAME" bpf:kvm-exit -C 1-4 -i 1000 --perins");
-static const char *bpf_kvm_exit_argv[] = PROFILER_ARGV("bpf:kvm-exit",
+    "    "PROGRAME" bpf:kvm_exit -p 2347 -i 1000 --than 50ms",
+    "    "PROGRAME" bpf:kvm_exit -C 1-4 -i 1000 --perins");
+static const char *bpf_kvm_exit_argv[] = PROFILER_ARGV("bpf:kvm_exit",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "perins", "than",
     "threshold  Vmexit latency threshold, Dflt: 1ms",
     "detail     Display per-thread stat",
     "output2    Output the non-HLT maximum latency for each process");
 struct monitor bpf_kvm_exit = {
-    .name = "bpf:kvm-exit",
+    .name = "bpf:kvm_exit",
     .desc = bpf_kvm_exit_desc,
     .argv = bpf_kvm_exit_argv,
     .pages = 4,
