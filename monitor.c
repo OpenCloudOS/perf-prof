@@ -841,14 +841,16 @@ static profiler *parse_main_options(int argc, char *argv[])
             if (argc == 0)
                 printf(prof->compgen ? "\"%s %s\"\n" : "%s%s\n", prof->name, prof->compgen ?: "");
         } else {
+            char *COMP_SKIPLEN = getenv("COMP_SKIPLEN");
+            int skiplen = COMP_SKIPLEN ? atoi(COMP_SKIPLEN) : 0;
             struct monitor *m = NULL;
             while((m = monitor_next(m))) {
                 if (!argc || argv[0][0] == '\0' ||
                     strncmp(m->name, argv[0], strlen(argv[0])) == 0) {
                     if (m->compgen && comp_type != '?')
-                        printf("\"%s %s\"\n", m->name, m->compgen);
+                        printf("\"%s %s\"\n", m->name + skiplen, m->compgen);
                     else
-                        printf("%s\n", m->name);
+                        printf("%s\n", m->name + skiplen);
                 }
             }
         }
