@@ -389,7 +389,6 @@ static void bpf_kvm_exit_sigusr(struct prof_dev *dev, int signum)
     struct kvmexit_ctx *ctx = dev->private;
 
     if (signum == SIGUSR1) {
-        prof_dev_reopen_output(dev);
         if (ctx->output2)
             ctx->output2 = freopen(dev->env->output2, "a", ctx->output2);
     }

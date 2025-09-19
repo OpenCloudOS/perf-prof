@@ -1313,9 +1313,11 @@ static void handle_signal(int fd, unsigned int revents, void *ptr)
             running = -1;
             break;
         case SIGUSR1: {
-                list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link)
+                list_for_each_entry_safe(dev, next, &prof_dev_list, dev_link) {
+                    prof_dev_reopen_output(dev);
                     if (dev->prof->sigusr)
                         dev->prof->sigusr(dev, SIGUSR1);
+                }
             }
             break;
         case SIGUSR2:
