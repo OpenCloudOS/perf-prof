@@ -1820,6 +1820,14 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     env = dev->env;
 
     switch (event->header.type) {
+    case PERF_RECORD_MMAP:
+        if (prof->mmap)
+            prof->mmap(dev, event, instance);
+        break;
+    case PERF_RECORD_MMAP2:
+        if (prof->mmap2)
+            prof->mmap2(dev, event, instance);
+        break;
     case PERF_RECORD_LOST:
         if (prof->lost)
             prof->lost(dev, event, instance, 0, 0);
@@ -1895,6 +1903,26 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
             prof->context_switch_cpu(dev, event, instance);
         else
             print_context_switch_cpu_fn(dev, event, instance);
+        break;
+    case PERF_RECORD_NAMESPACES:
+        if (prof->namespaces)
+            prof->namespaces(dev, event, instance);
+        break;
+    case PERF_RECORD_KSYMBOL:
+        if (prof->ksymbol)
+            prof->ksymbol(dev, event, instance);
+        break;
+    case PERF_RECORD_BPF_EVENT:
+        if (prof->bpf_event)
+            prof->bpf_event(dev, event, instance);
+        break;
+    case PERF_RECORD_CGROUP:
+        if (prof->cgroup)
+            prof->cgroup(dev, event, instance);
+        break;
+    case PERF_RECORD_TEXT_POKE:
+        if (prof->text_poke)
+            prof->text_poke(dev, event, instance);
         break;
     case PERF_RECORD_ORDER_TIME:
         break;

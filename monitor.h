@@ -249,36 +249,53 @@ typedef struct monitor {
 
     /* PERF_RECORD_* */
 
-    //PERF_RECORD_LOST          = 2,
+    //PERF_RECORD_MMAP             = 1,
+    //PERF_RECORD_MMAP2            = 10,
+    void (*mmap)(struct prof_dev *dev, union perf_event *event, int instance);
+    void (*mmap2)(struct prof_dev *dev, union perf_event *event, int instance);
+
+    //PERF_RECORD_LOST             = 2,
     // lost_start: evclock_t, lost_end: evclock_t.
     void (*lost)(struct prof_dev *dev, union perf_event *event, int instance, u64 lost_start, u64 lost_end);
 
-    //PERF_RECORD_COMM          = 3,
+    //PERF_RECORD_COMM             = 3,
     void (*comm)(struct prof_dev *dev, union perf_event *event, int instance);
 
-    //PERF_RECORD_EXIT          = 4,
+    //PERF_RECORD_EXIT             = 4,
     void (*exit)(struct prof_dev *dev, union perf_event *event, int instance);
 
-    //PERF_RECORD_THROTTLE          = 5,
-    //PERF_RECORD_UNTHROTTLE            = 6,
+    //PERF_RECORD_THROTTLE         = 5,
+    //PERF_RECORD_UNTHROTTLE       = 6,
     void (*throttle)(struct prof_dev *dev, union perf_event *event, int instance);
     void (*unthrottle)(struct prof_dev *dev, union perf_event *event, int instance);
 
-    //PERF_RECORD_FORK          = 7,
+    //PERF_RECORD_FORK             = 7,
     void (*fork)(struct prof_dev *dev, union perf_event *event, int instance);
 
-    //PERF_RECORD_SAMPLE            = 9,
+    //PERF_RECORD_SAMPLE           = 9,
     // userspace ftrace filter: return >0: sample; <=0: drop.
     long (*ftrace_filter)(struct prof_dev *dev, union perf_event *event, int instance);
     void (*sample)(struct prof_dev *dev, union perf_event *event, int instance);
 
-    //PERF_RECORD_SWITCH            = 14,
-    //PERF_RECORD_SWITCH_CPU_WIDE       = 15,
+    //PERF_RECORD_SWITCH           = 14,
+    //PERF_RECORD_SWITCH_CPU_WIDE  = 15,
     void (*context_switch)(struct prof_dev *dev, union perf_event *event, int instance);
     void (*context_switch_cpu)(struct prof_dev *dev, union perf_event *event, int instance);
 
-    //PERF_RECORD_NAMESPACES            = 16,
-    void (*namespace)(struct prof_dev *dev, union perf_event *event, int instance);
+    //PERF_RECORD_NAMESPACES       = 16,
+    void (*namespaces)(struct prof_dev *dev, union perf_event *event, int instance);
+
+    //PERF_RECORD_KSYMBOL          = 17,
+    void (*ksymbol)(struct prof_dev *dev, union perf_event *event, int instance);
+
+    //PERF_RECORD_BPF_EVENT        = 18,
+    void (*bpf_event)(struct prof_dev *dev, union perf_event *event, int instance);
+
+    //PERF_RECORD_CGROUP           = 19,
+    void (*cgroup)(struct prof_dev *dev, union perf_event *event, int instance);
+
+    //PERF_RECORD_TEXT_POKE        = 20,
+    void (*text_poke)(struct prof_dev *dev, union perf_event *event, int instance);
 }profiler;
 
 enum prof_dev_state {
