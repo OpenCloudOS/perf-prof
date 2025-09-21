@@ -4,7 +4,7 @@
 #include <monitor.h>
 
 // comm ~ "xyz*" || comm ~ "abc?"
-static int comm_filter(struct tp_filter *tp_filter, const char *s, const char *comm_field)
+static int comm_filter(char **result, const char *s, const char *comm_field)
 {
     const char *op;
     int ret;
@@ -17,44 +17,84 @@ static int comm_filter(struct tp_filter *tp_filter, const char *s, const char *c
     else
         op = "==";
 
-    if (tp_filter->comm == NULL)
-        ret = asprintf(&tp_filter->comm, "%s %s \"%s\"", comm_field, op, s);
+    if (*result == NULL)
+        ret = asprintf(result, "%s %s \"%s\"", comm_field, op, s);
     else {
         char *tmp;
-        ret = asprintf(&tmp, "%s || %s %s \"%s\"", tp_filter->comm, comm_field, op, s);
+        ret = asprintf(&tmp, "%s || %s %s \"%s\"", *result, comm_field, op, s);
         if (ret >= 0) {
-            free(tp_filter->comm);
-            tp_filter->comm = tmp;
+            free(*result);
+            *result = tmp;
         }
     }
     return ret;
 }
 
 // pid==x || pid==y || (pid>=z0&&pid<=z1)
-static int pid_filter(struct tp_filter *tp_filter, int pid_start, int pid_end, const char *pid_field)
+static int range_filter(char **result, int start, int end, const char *field)
 {
     int ret = 0;
 
-    if (pid_start < 0 || pid_end < 0)
+    if (start < 0 || end < 0)
         return -1;
 
-    if (tp_filter->pid == NULL) {
-        if (pid_start == pid_end)
-            ret = asprintf(&tp_filter->pid, "%s==%d", pid_field, pid_start);
+    if (*result == NULL) {
+        if (start == end)
+            ret = asprintf(result, "%s==%d", field, start);
         else
-            ret = asprintf(&tp_filter->pid, "(%s>=%d&&%s<=%d)", pid_field, pid_start, pid_field, pid_end);
+            ret = asprintf(result, "(%s>=%d&&%s<=%d)", field, start, field, end);
     } else {
         char *tmp;
-        if (pid_start == pid_end)
-            ret = asprintf(&tmp, "%s || %s==%d", tp_filter->pid, pid_field, pid_start);
+        if (start == end)
+            ret = asprintf(&tmp, "%s || %s==%d", *result, field, start);
         else
-            ret = asprintf(&tmp, "%s || (%s>=%d&&%s<=%d)", tp_filter->pid, pid_field, pid_start, pid_field, pid_end);
+            ret = asprintf(&tmp, "%s || (%s>=%d&&%s<=%d)", *result, field, start, field, end);
         if (ret >= 0) {
-            free(tp_filter->pid);
-            tp_filter->pid = tmp;
+            free(*result);
+            *result = tmp;
         }
     }
     return ret;
+}
+
+char *pid_filter(struct perf_thread_map *threads, const char *field)
+{
+    int pid, idx, pid_start = -2, pid_end = -2;
+    char *filter = NULL;
+
+    perf_thread_map__for_each_thread(pid, idx, threads) {
+        if (pid >= 0) {
+            // The pids are sorted from small to large and can be used to
+            // judge whether they are numerically continuous.
+            if (pid_end + 1 != pid) {
+                range_filter(&filter, pid_start, pid_end, field);
+                pid_start = pid;
+            }
+            pid_end = pid;
+        }
+    }
+    range_filter(&filter, pid_start, pid_end, field);
+    return filter;
+}
+
+char *cpu_filter(struct perf_cpu_map *cpus, const char *field)
+{
+    int cpu, idx, cpu_start = -2, cpu_end = -2;
+    char *filter = NULL;
+
+    perf_cpu_map__for_each_cpu(cpu, idx, cpus) {
+        if (cpu >= 0) {
+            // The cpus are sorted from small to large and can be used to
+            // judge whether they are numerically continuous.
+            if (cpu_end + 1 != cpu) {
+                range_filter(&filter, cpu_start, cpu_end, field);
+                cpu_start = cpu;
+            }
+            cpu_end = cpu;
+        }
+    }
+    range_filter(&filter, cpu_start, cpu_end, field);
+    return filter;
 }
 
 
@@ -87,30 +127,16 @@ struct tp_filter *tp_filter_new(struct perf_thread_map *threads, const char *pid
 
         while ((sep = strchr(s, ',')) != NULL) {
             *sep = '\0';
-            comm_filter(tp_filter, s, comm_field);
+            comm_filter(&tp_filter->comm, s, comm_field);
             s = sep + 1;
         }
-        comm_filter(tp_filter, s, comm_field);
+        comm_filter(&tp_filter->comm, s, comm_field);
 
         free(f);
 
         tp_filter->filter = tp_filter->comm;
     } else if (threads) {
-        int pid, pid_1 = -2, pid_start = -2;
-        int idx;
-
-        perf_thread_map__for_each_thread(pid, idx, threads) {
-            if (pid >= 0) {
-                // The pids are sorted from small to large and can be used to
-                // judge whether they are numerically continuous.
-                if (pid_1 + 1 != pid) {
-                    pid_filter(tp_filter, pid_start, pid_1, pid_field);
-                    pid_start = pid;
-                }
-                pid_1 = pid;
-            }
-        }
-        pid_filter(tp_filter, pid_start, pid_1, pid_field);
+        tp_filter->pid = pid_filter(threads, pid_field);
         tp_filter->filter = tp_filter->pid;
     }
 

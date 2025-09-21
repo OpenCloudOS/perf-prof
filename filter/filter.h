@@ -30,6 +30,11 @@ struct tp_filter {
     char *pid;  //perf_thread_map, pid==x || pid==y || pid==z
 };
 
+// Return an allocated string, which needs to be freed.
+char *pid_filter(struct perf_thread_map *threads, const char *field);
+// Return an allocated string, which needs to be freed.
+char *cpu_filter(struct perf_cpu_map *cpus, const char *field);
+
 struct tp_filter *tp_filter_new(struct perf_thread_map *threads, const char *pid_field,
                                      const char *filter, const char *comm_field);
 void tp_filter_free(struct tp_filter *tp_filter);
