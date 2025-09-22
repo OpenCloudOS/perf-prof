@@ -31,3 +31,11 @@ def test_oncpu_attach_to_pid(runtime, memleak_check, dead_loop_tid):
 def test_oncpu_attach_to_cpu0(runtime, memleak_check):
     oncpu(['-m', '128', '-C', '0'], runtime, memleak_check)
 
+def test_oncpu_prio_rt(runtime, memleak_check):
+    oncpu(['-m', '128', '--prio', '1-99'], runtime, memleak_check)
+
+def test_oncpu_prio_100(runtime, memleak_check):
+    oncpu(['-m', '128', '--prio', '100'], runtime, memleak_check)
+
+def test_oncpu_prio_rt_CPU0(runtime, memleak_check):
+    oncpu(['-m', '128', '-C', '0', '--prio', '1-99'], runtime, memleak_check)

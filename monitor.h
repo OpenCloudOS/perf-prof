@@ -121,6 +121,7 @@ struct env {
     char *impl;
     char *output;
     char *output2;
+    char *prio_map;
     int watermark;
     bool watermark_set;
     bool inherit;

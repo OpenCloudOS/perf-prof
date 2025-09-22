@@ -563,6 +563,7 @@ struct option main_options[] = {
     OPT_BIT_NONEG   ( 0 ,              "32", &env.bytes,                        "Display output in 32-bit values", 4),
     OPT_BIT_NONEG   ( 0 ,              "64", &env.bytes,                        "Display output in 64-bit values", 8),
     OPT_STRDUP_NONEG( 0 ,         "output2", &env.output2,             "file",  "Nonstandard output file name"),
+    OPT_STRDUP_NONEG( 0 ,            "prio", &env.prio_map, "prio[-prio],...",  "Specify the priority range for real-time and normal scheduling"),
 
     OPT_END()
 };

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -37,7 +38,11 @@ struct oncpu_ctx {
     bool tid_to_cpumap;
     int nr_ins;
     int nr_cpus;
-    u64 *last_time;
+    struct {
+        u64 running_time;
+        int pid;
+    } *switch_time;
+    struct perf_cpu_map *prio_map;
     struct rblist runtimes;
     int *percpu_thread_siblings;
     int *perins_vmf_sib;
@@ -267,17 +272,29 @@ static int oncpu_init(struct prof_dev *dev)
     if (!ctx)
         return -1;
     dev->private = ctx;
+    ctx->tid_to_cpumap = !prof_dev_ins_oncpu(dev);
+
+    if (env->prio_map) {
+        if (ctx->tid_to_cpumap)
+            fprintf(stderr, "WARN: --prio is only valid when bound to cpu\n");
+        else if (env->filter && env->filter[0]) {
+            fprintf(stderr, "--prio and --filter are mutually exclusive\n");
+            goto free_ctx;
+        }
+        ctx->prio_map = perf_cpu_map__new(env->prio_map);
+        if (!ctx->prio_map)
+            goto free_ctx;
+    }
 
     if (!env->interval)
         env->interval = 1000;
 
     tep__ref();
 
-    ctx->tid_to_cpumap = !prof_dev_ins_oncpu(dev);
     ctx->nr_ins = prof_dev_nr_ins(dev);
     ctx->nr_cpus = get_present_cpus();
-    ctx->last_time = calloc(ctx->nr_ins, sizeof(u64));
-    if (!ctx->last_time)
+    ctx->switch_time = calloc(ctx->nr_ins, sizeof(*ctx->switch_time));
+    if (!ctx->switch_time)
         goto failed;
 
     rblist__init(&ctx->runtimes);
@@ -325,20 +342,46 @@ static int oncpu_init(struct prof_dev *dev)
 failed:
     oncpu_exit(dev);
     return -1;
+free_ctx:
+    free(ctx);
+    return -1;
 }
 
 static int oncpu_filter(struct prof_dev *dev)
 {
+    struct oncpu_ctx *ctx = dev->private;
     struct perf_evlist *evlist = dev->evlist;
     struct env *env = dev->env;
     struct perf_evsel *evsel;
-    int err;
+    int err = 0;
+
     if (env->filter && env->filter[0]) {
         perf_evlist__for_each_evsel(evlist, evsel) {
             err = perf_evsel__apply_filter(evsel, env->filter);
             if (err < 0)
-                return err;
+                break;
         }
+        return err;
+    }
+    if (ctx->prio_map && !ctx->tid_to_cpumap) {
+        // sched:sched_switch
+        char *prev_filter = cpu_filter(ctx->prio_map, "prev_prio");
+        char *next_filter = cpu_filter(ctx->prio_map, "next_prio");
+        char *filter;
+
+        asprintf(&filter, "(%s) || (%s)", prev_filter, next_filter);
+        free(prev_filter);
+        free(next_filter);
+        if (env->verbose >= VERBOSE_NOTICE)
+            printf("filter: %s\n", filter);
+
+        perf_evlist__for_each_evsel(evlist, evsel) {
+            err = perf_evsel__apply_filter(evsel, filter);
+            if (err < 0)
+                break;
+        }
+        free(filter);
+        return err;
     }
     return 0;
 }
@@ -347,8 +390,10 @@ static void oncpu_exit(struct prof_dev *dev)
 {
     struct oncpu_ctx *ctx = dev->private;
     rblist__exit(&ctx->runtimes);
-    if (ctx->last_time)
-        free(ctx->last_time);
+    if (ctx->switch_time)
+        free(ctx->switch_time);
+    if (ctx->prio_map)
+        perf_cpu_map__put(ctx->prio_map);
     if (ctx->percpu_thread_siblings)
         free(ctx->percpu_thread_siblings);
     if (ctx->perins_vmf_sib)
@@ -372,7 +417,7 @@ static void oncpu_lost(struct prof_dev *dev, union perf_event *event, int ins, u
         // sched:sched_stat_runtime
     } else {
         // sched:sched_switch
-        ctx->last_time[ins] = 0;
+        ctx->switch_time[ins].running_time = 0;
     }
 }
 
@@ -552,18 +597,26 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
          *
          * The runtime of sap1001:112746 is equal to 2359.772143 minus 2359.771892.
         **/
-        if (ctx->last_time[instance] == 0) {
-            ctx->last_time[instance] = data->time;
+        if (ctx->switch_time[instance].running_time == 0 ||
+            ctx->switch_time[instance].pid != data->raw.sched_switch.prev_pid) {
+            ctx->switch_time[instance].running_time = data->time;
+            ctx->switch_time[instance].pid = data->raw.sched_switch.next_pid;
             return;
         }
         tid = data->raw.sched_switch.prev_pid;
         cpu = data->cpu_entry.cpu;
-        runtime = data->time - ctx->last_time[instance];
+        runtime = data->time - ctx->switch_time[instance].running_time;
         comm = data->raw.sched_switch.prev_comm;
-        ctx->last_time[instance] = data->time;
+        ctx->switch_time[instance].running_time = data->time;
+        ctx->switch_time[instance].pid = data->raw.sched_switch.next_pid;
 
         // exclude swapper
         if (tid == 0)
+            return;
+
+        // exclude those not in prio_map
+        if (ctx->prio_map &&
+            perf_cpu_map__idx(ctx->prio_map, data->raw.sched_switch.prev_prio) < 0)
             return;
     }
 
@@ -616,10 +669,11 @@ static const char *oncpu_desc[] = PROFILER_DESC("oncpu",
     "    sched:sched_switch, sched:sched_stat_runtime", "",
     "EXAMPLES",
     "    "PROGRAME" oncpu -p 2347",
-    "    "PROGRAME" oncpu -C 0-3");
+    "    "PROGRAME" oncpu -C 0-3",
+    "    "PROGRAME" oncpu --prio 1-99 # real-time priority");
 static const char *oncpu_argv[] = PROFILER_ARGV("oncpu",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "detail\nMore detailed information output", "filter", "only-comm");
+    PROFILER_ARGV_PROFILER, "detail\nMore detailed information output", "filter", "only-comm", "prio");
 static profiler oncpu = {
     .name = "oncpu",
     .desc = oncpu_desc,
