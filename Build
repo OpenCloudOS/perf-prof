@@ -16,7 +16,6 @@ perf-prof-y += kmemleak.o
 perf-prof-y += percpu-stat.o
 perf-prof-y += kvm-exit.o
 perf-prof-y += num-dist.o
-perf-prof-y += llcstat.o
 perf-prof-y += sched-migrate.o
 perf-prof-y += top.o
 perf-prof-y += order.o
@@ -35,6 +34,8 @@ endif
 perf-prof-y += usdt.o
 perf-prof-y += expr.o
 perf-prof-y += breakpoint.o
+perf-prof-y += hwstat.o
+perf-prof-y += llcstat.o
 perf-prof-y += tlbstat.o
 perf-prof-y += list.o
 perf-prof-y += kcore.o
