@@ -16,7 +16,6 @@ struct cache {
 };
 struct tlbstat_ctx {
     int nr_ins;
-    struct cpuinfo_x86 cpuinfo;
     struct perf_evlist *evlist;
     struct perf_evsel *leader;
     struct cache *total_time_enabled;
@@ -70,19 +69,13 @@ static int tlbstat_init(struct prof_dev *dev)
         return -1;
     dev->private = ctx;
 
-    if (get_cpuinfo(&ctx->cpuinfo) < 0)
-        goto failed;
-
     if (env->interval == 0)
         env->interval = 1000;
 
-    if (ctx->cpuinfo.vendor == X86_VENDOR_INTEL) {
-        dTLB_load_misses = CONFIG(DTLB, OP_READ, RESULT_MISS);
-        dTLB_loads = CONFIG(DTLB, OP_READ, RESULT_ACCESS);
-        dTLB_store_misses = CONFIG(DTLB, OP_WRITE, RESULT_MISS);
-        dTLB_stores = CONFIG(DTLB, OP_WRITE, RESULT_ACCESS);
-    } else
-        goto failed;
+    dTLB_load_misses = CONFIG(DTLB, OP_READ, RESULT_MISS);
+    dTLB_loads = CONFIG(DTLB, OP_READ, RESULT_ACCESS);
+    dTLB_store_misses = CONFIG(DTLB, OP_WRITE, RESULT_MISS);
+    dTLB_stores = CONFIG(DTLB, OP_WRITE, RESULT_ACCESS);
 
     ctx->nr_ins = perf_cpu_map__nr(dev->cpus);
     ctx->total_time_enabled = calloc(ctx->nr_ins, sizeof(struct cache));
