@@ -16,7 +16,7 @@ struct cache {
 };
 struct llcstat_ctx {
     int nr_ins;
-    struct cpuinfo_x86 cpuinfo;
+    struct cpuinfo cpuinfo;
     struct perf_evlist *evlist;
     struct perf_evsel *leader;
     struct cache *total_time_enabled;
@@ -71,11 +71,7 @@ static int llcstat_init(struct prof_dev *dev)
     if (env->interval == 0)
         env->interval = 1000;
 
-    if (ctx->cpuinfo.vendor == X86_VENDOR_INTEL) {
-        type = PERF_TYPE_HARDWARE;
-        l3_cache_reference = PERF_COUNT_HW_CACHE_REFERENCES;
-        l3_cache_miss = PERF_COUNT_HW_CACHE_MISSES;
-    } else if (ctx->cpuinfo.vendor == X86_VENDOR_AMD) {
+    if (ctx->cpuinfo.vendor == X86_VENDOR_AMD) {
         int err;
         char *cpumask = NULL;
         size_t size = 0;
@@ -114,8 +110,11 @@ static int llcstat_init(struct prof_dev *dev)
             }
         } else
             goto failed;
-    } else
-        goto failed;
+    } else {
+        type = PERF_TYPE_HARDWARE;
+        l3_cache_reference = PERF_COUNT_HW_CACHE_REFERENCES;
+        l3_cache_miss = PERF_COUNT_HW_CACHE_MISSES;
+    }
 
     ctx->nr_ins = perf_cpu_map__nr(dev->cpus);
     ctx->total_time_enabled = calloc(ctx->nr_ins, sizeof(struct cache));

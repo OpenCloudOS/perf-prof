@@ -58,13 +58,14 @@ int kernel_release(void);
 #define X86_VENDOR_INTEL    0
 #define X86_VENDOR_AMD      1
 #define X86_VENDOR_HYGON    2
-struct cpuinfo_x86 {
+#define ARM64_VENDER        3
+struct cpuinfo {
     int vendor;
     int family;
     int model;
     int stepping;
 };
-int get_cpuinfo(struct cpuinfo_x86 *info);
+int get_cpuinfo(struct cpuinfo *info);
 static inline int get_cpu_vendor(void) {
     return get_cpuinfo(NULL);
 };

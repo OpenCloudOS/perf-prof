@@ -1421,7 +1421,7 @@ int get_tsc_khz(void)
     return tsc_khz;
 }
 
-int get_cpuinfo(struct cpuinfo_x86 *info)
+int get_cpuinfo(struct cpuinfo *info)
 {
 #if defined(__i386__) || defined(__x86_64__)
     __u32 eax, ebx, ecx, edx;
@@ -1469,6 +1469,12 @@ int get_cpuinfo(struct cpuinfo_x86 *info)
         return X86_VENDOR_HYGON;
     } else
         return -1;
+#elif defined(__aarch64__)
+    if (info) {
+        memset(info, 0, sizeof(*info));
+        info->vendor = ARM64_VENDER;
+    }
+    return ARM64_VENDER;
 #else
     if (info)
         memset(info, 0, sizeof(*info));
