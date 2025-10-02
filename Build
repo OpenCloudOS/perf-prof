@@ -9,7 +9,6 @@ perf-prof-$(CONFIG_LIBBPF) += bpf-skel/
 perf-prof-y += split-lock.o
 perf-prof-y += profile.o
 perf-prof-y += trace.o
-perf-prof-y += signal.o
 perf-prof-y += task-state.o
 perf-prof-y += watchdog.o
 perf-prof-y += kmemleak.o
