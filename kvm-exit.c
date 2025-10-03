@@ -23,6 +23,8 @@ struct sample_type_raw;
 
 struct kvmexit_ctx {
     int nr_ins;
+    u16 kvm_exit_size;
+    u16 sample_size;
     struct sample_type_raw *perins_kvm_exit;
     int *perins_kvm_exit_valid;
     __u64 kvm_exit;
@@ -79,23 +81,9 @@ struct trace_kvm_exit2 {
 	u64 info1;//	offset:32;	size:8;	signed:0;
 	u64 info2;//	offset:40;	size:8;	signed:0;
 };
-struct trace_kvm_exit3 {
-    unsigned short common_type;//	offset:0;	size:2;	signed:0;
-	unsigned char common_flags;//	offset:2;	size:1;	signed:0;
-	unsigned char common_preempt_count;//	offset:3;	size:1;	signed:0;
-	int common_pid;//	offset:4;	size:4;	signed:1;
-
-	unsigned int exit_reason;//	offset:8;	size:4;	signed:0;
-	unsigned long guest_rip;//	offset:16;	size:8;	signed:0;
-	u32 isa;//	offset:24;	size:4;	signed:0;
-	u64 info1;//	offset:32;	size:8;	signed:0;
-	u64 info2;//	offset:40;	size:8;	signed:0;
-	unsigned int vcpu_id;//  offset:48;	size:4;	signed:0;
-};
 union trace_kvm_exit {
     struct trace_kvm_exit1 e1;
     struct trace_kvm_exit2 e2;
-    struct trace_kvm_exit3 e3;
 };
 
 struct trace_kvm_entry {
@@ -136,13 +124,19 @@ static int monitor_ctx_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct kvmexit_ctx *ctx = zalloc(sizeof(*ctx));
+    int id;
     if (!ctx)
         return -1;
     dev->private = ctx;
 
     tep__ref();
     ctx->nr_ins = prof_dev_nr_ins(dev);
-    ctx->perins_kvm_exit = calloc(ctx->nr_ins, sizeof(struct sample_type_raw));
+    id = tep__event_id("kvm", "kvm_exit");
+    if (id < 0)
+        goto failed;
+    ctx->kvm_exit_size = tep__event_size(id);
+    ctx->sample_size = offsetof(struct sample_type_raw, raw.data) + ctx->kvm_exit_size;
+    ctx->perins_kvm_exit = calloc(ctx->nr_ins, ctx->sample_size);
     ctx->perins_kvm_exit_valid = calloc(ctx->nr_ins, sizeof(int));
     if (!ctx->perins_kvm_exit || !ctx->perins_kvm_exit_valid)
         goto failed;
@@ -330,25 +324,22 @@ static inline int __exit_reason(struct kvmexit_ctx *ctx, struct sample_type_raw 
             *isa = KVM_ISA_ARM;
             *guest_rip = raw->raw.kvm_exit.e1.vcpu_pc;
             break;
+        default:
+            return -1;
 #else
         case ALIGN(sizeof(struct trace_kvm_exit1)+sizeof(u32), sizeof(u64)) - sizeof(u32):
             *exit_reason = raw->raw.kvm_exit.e1.exit_reason;
             *isa = KVM_ISA_VMX;
             *guest_rip = raw->raw.kvm_exit.e1.guest_rip;
             break;
-        case ALIGN(sizeof(struct trace_kvm_exit2)+sizeof(u32), sizeof(u64)) - sizeof(u32):
+        default:
+            if (raw->raw.size < ctx->kvm_exit_size)
+                return -1;
             *exit_reason = raw->raw.kvm_exit.e2.exit_reason;
             *isa = raw->raw.kvm_exit.e2.isa;
             *guest_rip = raw->raw.kvm_exit.e2.guest_rip;
             break;
-        case ALIGN(sizeof(struct trace_kvm_exit3)+sizeof(u32), sizeof(u64)) - sizeof(u32):
-            *exit_reason = raw->raw.kvm_exit.e3.exit_reason;
-            *isa = raw->raw.kvm_exit.e3.isa;
-            *guest_rip = raw->raw.kvm_exit.e3.guest_rip;
-            break;
 #endif
-        default:
-            return -1;
         }
     }
     return 0;
@@ -422,7 +413,7 @@ static void kvm_exit_sample(struct prof_dev *dev, union perf_event *event, int i
         if (__exit_reason(ctx, raw, &exit_reason, &isa, &guest_rip) < 0)
             return;
         ctx->perins_kvm_exit_valid[instance] = 1;
-        ctx->perins_kvm_exit[instance] = *raw;
+        memcpy(&ctx->perins_kvm_exit[instance], raw, ctx->sample_size);
     } else if (common_type == ctx->kvm_entry) {
         if (ctx->perins_kvm_exit_valid[instance] == 1) {
             struct sample_type_raw *raw_kvm_exit = &ctx->perins_kvm_exit[instance];
