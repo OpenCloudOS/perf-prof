@@ -972,7 +972,7 @@ static const char *task_state_argv[] = PROFILER_ARGV("task-state",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
     PROFILER_ARGV_PROFILER, "interruptible", "uninterruptible", "than", "filter\nFilter process comm",
-    "perins", "call-graph", "flame-graph", "ptrace");
+    "perins", "call-graph", "flame-graph", "ptrace", "bpf-python-callchain", "python-callchain");
 struct monitor task_state = {
     .name = "task-state",
     .desc = task_state_desc,

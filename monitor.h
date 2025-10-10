@@ -141,6 +141,8 @@ struct env {
     bool user_callchain, user_callchain_set;
     bool kernel_callchain, kernel_callchain_set;
     bool python_callchain;
+    char *bpf_python_callchain;
+    //bool bpf_python_callchain;
     // ebpf
     bool irqs_disabled_set, tif_need_resched_set, exclude_pid_set;
     bool nr_running_min_set, nr_running_max_set;
@@ -596,11 +598,11 @@ perfclock_t prof_dev_list_minevtime(void);
     "usage-self", "sampling-limit", "perfeval-cpus", "perfeval-pids", "version", "verbose", "quiet", "help"
 #define PROFILER_ARGV_FILTER \
     "FILTER OPTION:", \
-    "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", "python-callchain", \
+    "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", "python-callchain", "bpf-python-callchain",\
     "user-callchain", "kernel-callchain", \
     "irqs_disabled", "tif_need_resched", "exclude_pid", "nr_running_min", "nr_running_max"
 #define PROFILER_ARGV_CALLCHAIN_FILTER \
-        "FILTER OPTION:", "user-callchain", "kernel-callchain", "python-callchain"
+        "FILTER OPTION:", "user-callchain", "kernel-callchain", "python-callchain", "bpf-python-callchain"
 #define PROFILER_ARGV_PROFILER \
     "PROFILER OPTION:" \
 
@@ -728,4 +730,7 @@ void pystack_unlink(struct prof_dev *main_dev);
 union perf_event *
 pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *writable, int reserved);
 
+//bpf_pystack.c
+int bpf_pystack_link(struct prof_dev *main_dev);
+void bpf_pystack_unlink(struct prof_dev *main_dev);
 #endif
