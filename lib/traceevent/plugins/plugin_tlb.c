@@ -13,6 +13,7 @@ enum tlb_flush_reason {
 	TLB_REMOTE_SHOOTDOWN,
 	TLB_LOCAL_SHOOTDOWN,
 	TLB_LOCAL_MM_SHOOTDOWN,
+	TLB_REMOTE_IPI_SEND,
 	NR_TLB_FLUSH_REASONS,
 };
 
@@ -42,6 +43,9 @@ static int tlb_flush_handler(struct trace_seq *s, struct tep_record *record,
 		break;
 	case TLB_LOCAL_MM_SHOOTDOWN:
 		trace_seq_puts(s, "local mm shootdown");
+		break;
+	case TLB_REMOTE_IPI_SEND:
+		trace_seq_puts(s, "remote ipi send");
 		break;
 	}
 

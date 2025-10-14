@@ -30,10 +30,20 @@ static int timer_expire_handler(struct trace_seq *s,
 	return 0;
 }
 
+enum hrtimer_mode {
+	HRTIMER_MODE_ABS	= 0x00,
+	HRTIMER_MODE_REL	= 0x01,
+	HRTIMER_MODE_PINNED	= 0x02,
+	HRTIMER_MODE_SOFT	= 0x04,
+	HRTIMER_MODE_HARD	= 0x08,
+};
+
 static int timer_start_handler(struct trace_seq *s,
 			       struct tep_record *record,
 			       struct tep_event *event, void *context)
 {
+	unsigned long long val;
+
 	trace_seq_printf(s, "hrtimer=");
 
 	if (tep_print_num_field(s, "0x%llx", event, "timer",
@@ -49,6 +59,14 @@ static int timer_start_handler(struct trace_seq *s,
 
 	trace_seq_printf(s, " softexpires=");
 	tep_print_num_field(s, "%llu", event, "softexpires", record, 1);
+
+	if (tep_get_field_val(s, event, "mode", record, &val, 0) == 0) {
+		trace_seq_printf(s, " mode=%s", (val & HRTIMER_MODE_REL) ? "REL" : "ABS");
+		if (val & HRTIMER_MODE_PINNED) trace_seq_printf(s, "|PINNED");
+		if (val & HRTIMER_MODE_SOFT) trace_seq_printf(s, "|SOFT");
+		if (val & HRTIMER_MODE_HARD) trace_seq_printf(s, "|HARD");
+	}
+
 	return 0;
 }
 

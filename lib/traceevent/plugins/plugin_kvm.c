@@ -326,6 +326,10 @@ static int kvm_exit_handler(struct trace_seq *s, struct tep_record *record,
 			    struct tep_event *event, void *context)
 {
 	unsigned long long info1 = 0, info2 = 0;
+	unsigned long long val;
+
+	if (tep_get_field_val(s, event, "vcpu_id", record, &val, 0) == 0)
+		trace_seq_printf(s, "vcpu %llu ", val);
 
 	if (print_exit_reason(s, record, event, "exit_reason") < 0)
 		return -1;
@@ -335,6 +339,12 @@ static int kvm_exit_handler(struct trace_seq *s, struct tep_record *record,
 	if (tep_get_field_val(s, event, "info1", record, &info1, 0) >= 0
 	    && tep_get_field_val(s, event, "info2", record, &info2, 0) >= 0)
 		trace_seq_printf(s, " info %llx %llx", info1, info2);
+
+	if (tep_get_field_val(s, event, "intr_info", record, &val, 0) == 0)
+		trace_seq_printf(s, " intr_info 0x%llx", val);
+
+	if (tep_get_field_val(s, event, "error_code", record, &val, 0) == 0)
+		trace_seq_printf(s, " error_code 0x%llx", val);
 
 	return 0;
 }
@@ -433,6 +443,10 @@ static int kvm_mmu_print_role(struct trace_seq *s, struct tep_record *record,
 	};
 	union kvm_mmu_page_role role;
 
+	if (tep_get_field_val(s, event, "gfn", record, &val, 1) < 0)
+		return -1;
+	trace_seq_printf(s, "sp gfn %llx ", val);
+
 	if (tep_get_field_val(s, event, "role", record, &val, 1) < 0)
 		return -1;
 
@@ -481,10 +495,6 @@ static int kvm_mmu_get_page_handler(struct trace_seq *s,
 
 	trace_seq_printf(s, "%s ", val ? "new" : "existing");
 
-	if (tep_get_field_val(s, event, "gfn", record, &val, 1) < 0)
-		return -1;
-
-	trace_seq_printf(s, "sp gfn %llx ", val);
 	return kvm_mmu_print_role(s, record, event, context);
 }
 
