@@ -681,6 +681,13 @@ void keyvalue_pairs_foreach(struct key_value_paires *pairs, foreach_keyvalue f, 
     }
 }
 
+static int kv_n_cmp(const void *k1, const void *k2)
+{
+    struct key_value *kv1 = *(struct key_value **)k1;
+    struct key_value *kv2 = *(struct key_value **)k2;
+    return kv2->n - kv1->n; // Sort from largest to smallest
+}
+
 void keyvalue_pairs_sorted_firstn(struct key_value_paires *pairs, keyvalue_cmp cmp, foreach_keyvalue f, void *opaque, unsigned int n)
 {
     struct rblist *rblist;
@@ -689,12 +696,10 @@ void keyvalue_pairs_sorted_firstn(struct key_value_paires *pairs, keyvalue_cmp c
     void *value = NULL;
     void **sorted_values = NULL;
     unsigned int nr = 0, i;
+    int cmp_value_size;
 
     if (!pairs || rblist__empty(&pairs->kv_pairs))
         return;
-
-    if (pairs->value_size == 0)
-        return keyvalue_pairs_foreach(pairs, f, opaque);
 
     rblist = &pairs->kv_pairs;
     next = rb_first_cached(&rblist->entries);
@@ -703,21 +708,22 @@ void keyvalue_pairs_sorted_firstn(struct key_value_paires *pairs, keyvalue_cmp c
     if (!sorted_values)
         return;
 
+    cmp_value_size = cmp ? pairs->value_size : 0;
     while (next) {
         pos = next;
         next = rb_next(pos);
         kv = container_of(pos, struct key_value, rbnode);
-        value = (void *)kv - pairs->value_size;
+        value = (void *)kv - cmp_value_size;
         sorted_values[nr++] = value;
     }
 
-    qsort(sorted_values, nr, sizeof(*sorted_values), (__compar_fn_t)cmp);
+    qsort(sorted_values, nr, sizeof(*sorted_values), cmp_value_size ? (__compar_fn_t)cmp : kv_n_cmp);
 
     if (n && nr > n)
         nr = n;
     for (i = 0; i < nr; i++) {
-        value = sorted_values[i];
-        kv = value + pairs->value_size;
+        kv = sorted_values[i] + cmp_value_size;
+        value = pairs->value_size ? (void *)kv - pairs->value_size : NULL;
         f(opaque, &kv->key, value, kv->n);
     }
     free(sorted_values);
