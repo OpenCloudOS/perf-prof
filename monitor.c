@@ -2212,7 +2212,9 @@ reinit:
                 }
             }
         }
-        if (!reinit)
+        if (!reinit && prof->reinit)
+            reinit = prof->reinit(dev, err);
+        if (!reinit && !dev->silent)
             fprintf(stderr, "failed to open evlist, %d\n", err);
         goto out_deinit;
     }

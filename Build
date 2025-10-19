@@ -39,6 +39,7 @@ perf-prof-y += tlbstat.o
 perf-prof-y += list.o
 perf-prof-y += kcore.o
 perf-prof-$(CONFIG_LIBBPF) += bpf_kvm_exit.o
+perf-prof-y += misc.o
 
 bin-y += perf-prof
 

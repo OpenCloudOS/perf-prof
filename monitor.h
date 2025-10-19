@@ -230,6 +230,7 @@ typedef struct monitor {
     int (*argc_init)(int argc, char *argv[]);
 
     int (*init)(struct prof_dev *dev);
+    int (*reinit)(struct prof_dev *dev, int err);
     int (*filter)(struct prof_dev *dev);
     void (*enabled)(struct prof_dev *dev);
     void (*deinit)(struct prof_dev *dev);
