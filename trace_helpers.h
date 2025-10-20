@@ -18,6 +18,8 @@ const struct ksym *ksyms__map_addr(const struct ksyms *ksyms,
 				   unsigned long addr);
 const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
 				     const char *name);
+void ksym__register_unregister(struct ksyms *ksyms, struct perf_record_ksymbol *ksymbol);
+
 
 struct sym {
 	const char *name, *demangled;

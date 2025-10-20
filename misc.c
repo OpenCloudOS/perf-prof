@@ -7,6 +7,8 @@
 #include <linux/bitops.h>
 #include <monitor.h>
 #include <stack_helpers.h>
+#include <trace_helpers.h>
+#include <api/fs/fs.h>
 
 #define REC(a) (1<<(PERF_RECORD_ ## a))
 #define TEST(a) (dev->private ? ((u64)dev->private >> (PERF_RECORD_ ## a)) & 1 : 1)
@@ -170,4 +172,68 @@ static profiler misc = {
     .text_poke = misc_text_poke,
 };
 PROFILER_REGISTER(misc);
+
+static int ksymbol_init(struct prof_dev *dev)
+{
+    dev->private = (void *)(u64)(REC(KSYMBOL));
+    dev->type = PROF_DEV_TYPE_SERVICE;
+    dev->silent = true;
+    return misc_init(dev);
+}
+static void ksymbol_deinit(struct prof_dev *dev)
+{
+}
+static void ksymbol_event(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct ksyms *ksyms = dev->private;
+    struct perf_record_ksymbol *ksymbol = (void *)event;
+    ksym__register_unregister(ksyms, ksymbol);
+}
+
+static profiler ksymbol = {
+    .pages = 2,
+    .init = ksymbol_init,
+    .deinit = ksymbol_deinit,
+    .ksymbol = ksymbol_event,
+};
+
+static struct prof_dev *ksymbol_dev = NULL;
+void ksymbol_dev_open(void *ksyms)
+{
+    const char *sysctl_jit_harden = "net/core/bpf_jit_harden";
+    const char *sysctl_jit_kallsyms = "net/core/bpf_jit_kallsyms";
+    int bpf_jit_harden = 0, bpf_jit_kallsyms = 0;
+    struct env *e;
+
+    if (ksymbol_dev)
+        return;
+    /*
+     * Ksymbol type:
+     * PERF_RECORD_KSYMBOL_TYPE_OOL will be found in /proc/kallsyms.
+     * Tracing is not necessary.
+     *
+     * PERF_RECORD_KSYMBOL_TYPE_BPF is controlled by bpf_jit_kallsyms.
+     * If enabled, ksymbols can be found in /proc/kallsyms, no need
+     * tracing. If disabled, ksymbols cannot be found, requiring tracing.
+     * See the kernel function bpf_jit_kallsyms_enabled().
+     */
+    if (sysctl__read_int(sysctl_jit_harden, &bpf_jit_harden) < 0 ||
+        sysctl__read_int(sysctl_jit_kallsyms, &bpf_jit_kallsyms) < 0 ||
+        (bpf_jit_harden == 0 && bpf_jit_kallsyms == 1))
+        return;
+
+    e = zalloc(sizeof(*e)); // free in prof_dev_close()
+    if (!e) return;
+    ksymbol_dev = prof_dev_open(&ksymbol, e);
+    if (ksymbol_dev)
+        ksymbol_dev->private = ksyms;
+}
+
+void ksymbol_dev_close(void)
+{
+    if (ksymbol_dev) {
+        prof_dev_close(ksymbol_dev);
+        ksymbol_dev = NULL;
+    }
+}
 

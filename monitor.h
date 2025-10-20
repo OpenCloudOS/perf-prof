@@ -729,4 +729,9 @@ void pystack_unlink(struct prof_dev *main_dev);
 union perf_event *
 pystack_perf_event(struct prof_dev *main_dev, union perf_event *event, bool *writable, int reserved);
 
+
+// misc.c
+void ksymbol_dev_open(void *ksyms);
+void ksymbol_dev_close(void);
+
 #endif

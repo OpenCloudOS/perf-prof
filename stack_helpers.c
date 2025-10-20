@@ -64,6 +64,7 @@ static int global_syms_ref(bool kernel, bool user)
             ctx.ksyms = ksyms__load();
             if (!ctx.ksyms)
                 return -1;
+            ksymbol_dev_open(ctx.ksyms);
             refcount_set(&ctx.ksyms_ref, 1);
         } else
             refcount_inc(&ctx.ksyms_ref);
@@ -85,6 +86,7 @@ static int global_syms_ref(bool kernel, bool user)
 static void global_syms_unref(bool kernel, bool user)
 {
     if (kernel && ctx.ksyms && refcount_dec_and_test(&ctx.ksyms_ref)) {
+        ksymbol_dev_close();
         ksyms__free(ctx.ksyms);
         ctx.ksyms = NULL;
     }

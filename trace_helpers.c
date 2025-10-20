@@ -43,6 +43,14 @@
 
 #define MKDEV(ma, mi)   (((ma) << MINORBITS) | (mi))
 
+struct ksym_dyn {
+    struct ksym sym;
+    int len;
+    int type;
+    struct list_head link;
+    char name[0];
+};
+
 struct ksyms {
     struct ksym *syms;
     int syms_sz;
@@ -50,7 +58,42 @@ struct ksyms {
     char *strs;
     int strs_sz;
     int strs_cap;
+    struct list_head ksym_dyn_list;
 };
+
+static void ksym_dyn_free(struct ksyms *ksyms)
+{
+    struct ksym_dyn *dyn, *n;
+    list_for_each_entry_safe(dyn, n, &ksyms->ksym_dyn_list, link) {
+        list_del(&dyn->link);
+        free(dyn);
+    }
+}
+
+void ksym__register_unregister(struct ksyms *ksyms, struct perf_record_ksymbol *ksymbol)
+{
+    struct ksym_dyn *dyn;
+
+    if (ksymbol->flags & PERF_RECORD_KSYMBOL_FLAGS_UNREGISTER) {
+        list_for_each_entry(dyn, &ksyms->ksym_dyn_list, link) {
+            if (ksymbol->addr == dyn->sym.addr &&
+                ksymbol->len == dyn->len) {
+                list_del(&dyn->link);
+                free(dyn);
+                break;
+            }
+        }
+    } else {
+        int name_len = strlen(ksymbol->name);
+        dyn = malloc(sizeof(*dyn) + name_len + 1);
+        dyn->sym.name = dyn->name;
+        dyn->sym.addr = ksymbol->addr;
+        dyn->len = ksymbol->len;
+        dyn->type = ksymbol->ksym_type; // PERF_RECORD_KSYMBOL_TYPE_*
+        strcpy(dyn->name, ksymbol->name);
+        list_add(&dyn->link, &ksyms->ksym_dyn_list);
+    }
+}
 
 static int ksyms__add_symbol(struct ksyms *ksyms, const char *name, unsigned long addr)
 {
@@ -136,6 +179,8 @@ struct ksyms *ksyms__load(void)
     qsort(ksyms->syms, ksyms->syms_sz, sizeof(*ksyms->syms), ksym_cmp);
 
     fclose(f);
+
+    INIT_LIST_HEAD(&ksyms->ksym_dyn_list);
     return ksyms;
 
 err_out:
@@ -148,7 +193,7 @@ void ksyms__free(struct ksyms *ksyms)
 {
     if (!ksyms)
         return;
-
+    ksym_dyn_free(ksyms);
     free(ksyms->syms);
     free(ksyms->strs);
     free(ksyms);
@@ -159,6 +204,14 @@ const struct ksym *ksyms__map_addr(const struct ksyms *ksyms,
 {
     int start = 0, end = ksyms->syms_sz - 1, mid;
     unsigned long sym_addr;
+    struct ksym_dyn *dyn;
+
+    if (unlikely(!list_empty(&ksyms->ksym_dyn_list))) {
+        list_for_each_entry(dyn, &ksyms->ksym_dyn_list, link) {
+            if (addr >= dyn->sym.addr && addr <= dyn->sym.addr + dyn->len)
+                return &dyn->sym;
+        }
+    }
 
     /* find largest sym_addr <= addr using binary search */
     while (start < end) {
