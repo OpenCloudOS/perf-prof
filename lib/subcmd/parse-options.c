@@ -25,11 +25,11 @@ static inline bool isshort(int short_name)
 static int opterror(const struct option *opt, const char *reason, int flags)
 {
 	if (flags & OPT_SHORT)
-		fprintf(stderr, " Error: switch `%c' %s", opt->short_name, reason);
+		fprintf(stderr, " Error: switch `%c' %s\n", opt->short_name, reason);
 	else if (flags & OPT_UNSET)
-		fprintf(stderr, " Error: option `no-%s' %s", opt->long_name, reason);
+		fprintf(stderr, " Error: option `no-%s' %s\n", opt->long_name, reason);
 	else
-		fprintf(stderr, " Error: option `%s' %s", opt->long_name, reason);
+		fprintf(stderr, " Error: option `%s' %s\n", opt->long_name, reason);
 
 	return -1;
 }
@@ -43,11 +43,11 @@ static const char *skip_prefix(const char *str, const char *prefix)
 static void optwarning(const struct option *opt, const char *reason, int flags)
 {
 	if (flags & OPT_SHORT)
-		fprintf(stderr, " Warning: switch `%c' %s", opt->short_name, reason);
+		fprintf(stderr, " Warning: switch `%c' %s\n", opt->short_name, reason);
 	else if (flags & OPT_UNSET)
-		fprintf(stderr, " Warning: option `no-%s' %s", opt->long_name, reason);
+		fprintf(stderr, " Warning: option `no-%s' %s\n", opt->long_name, reason);
 	else
-		fprintf(stderr, " Warning: option `%s' %s", opt->long_name, reason);
+		fprintf(stderr, " Warning: option `%s' %s\n", opt->long_name, reason);
 }
 
 static int get_arg(struct parse_opt_ctx_t *p, const struct option *opt,
