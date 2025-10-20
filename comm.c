@@ -106,7 +106,7 @@ static int comm_init(struct prof_dev *dev)
         .sample_period = 1,
         .sample_type   = PERF_SAMPLE_TIME | PERF_SAMPLE_RAW,
         .pinned        = 1,
-        .disabled      = 1,
+        .disabled      = 0,
         .watermark     = 1,
     };
     struct perf_evsel *evsel;

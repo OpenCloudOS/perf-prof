@@ -1021,7 +1021,7 @@ static int perf_clock_init(struct prof_dev *dev)
         .sample_period = 1,
         .sample_type   = PERF_SAMPLE_TIME,
         .pinned        = 1,
-        .disabled      = 1,
+        .disabled      = 0,
         .watermark     = 0,
         .wakeup_events = 1,
     };

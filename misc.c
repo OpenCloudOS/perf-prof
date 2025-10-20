@@ -23,7 +23,7 @@ static int misc_init(struct prof_dev *dev)
         .sample_period = 0,
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU,
         .pinned        = 0,
-        .disabled      = 1,
+        .disabled      = 0,
         .sample_id_all = 1,
         .ksymbol       = TEST(KSYMBOL), // bpf symbol
         .bpf_event     = TEST(BPF_EVENT),
