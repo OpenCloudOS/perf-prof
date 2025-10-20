@@ -525,6 +525,7 @@ int sysfs__read_bool(const char *entry, bool *value)
 
 	return ret;
 }
+
 int sysctl__read_int(const char *sysctl, int *value)
 {
 	char path[PATH_MAX];
@@ -536,6 +537,19 @@ int sysctl__read_int(const char *sysctl, int *value)
 	snprintf(path, sizeof(path), "%s/sys/%s", procfs, sysctl);
 
 	return filename__read_int(path, value);
+}
+
+int sysctl__write_int(const char *sysctl, int value)
+{
+	char path[PATH_MAX];
+	const char *procfs = procfs__mountpoint();
+
+	if (!procfs)
+		return -1;
+
+	snprintf(path, sizeof(path), "%s/sys/%s", procfs, sysctl);
+
+	return filename__write_int(path, value);
 }
 
 int sysfs__write_int(const char *entry, int value)
