@@ -26,6 +26,7 @@ void perf_evsel__init(struct perf_evsel *evsel, struct perf_event_attr *attr,
 	evsel->attr = *attr;
 	evsel->idx  = idx;
 	evsel->leader = evsel;
+	evsel->init_enabled = !attr->disabled;
 }
 
 struct perf_evsel *perf_evsel__new(struct perf_event_attr *attr)
@@ -150,6 +151,11 @@ int perf_evsel__open(struct perf_evsel *evsel, struct perf_cpu_map *cpus,
 	if (evsel->fd == NULL &&
 	    perf_evsel__alloc_fd(evsel, cpus->nr, threads->nr) < 0)
 		return -ENOMEM;
+
+	if (evsel->leader != evsel) {
+		evsel->attr.disabled = evsel->leader->attr.disabled;
+		evsel->init_enabled = 0;
+	}
 
 	for (cpu = 0; cpu < cpus->nr; cpu++) {
 		for (thread = 0; thread < threads->nr; thread++) {
@@ -381,6 +387,11 @@ int perf_evsel__enable(struct perf_evsel *evsel)
 
 	if (evsel->keep_disable) return 0;
 
+	if (evsel->init_enabled) {
+		evsel->init_enabled = 0;
+		return 0;
+	}
+
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_ENABLE, NULL, i);
 	return err;
@@ -393,6 +404,11 @@ int perf_evsel__enable_group(struct perf_evsel *evsel)
 
 	if (evsel->keep_disable) return 0;
 	if (evsel->leader != evsel) return 0;
+
+	if (evsel->init_enabled) {
+		evsel->init_enabled = 0;
+		return 0;
+	}
 
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_ENABLE, (void *)PERF_IOC_FLAG_GROUP, i);
@@ -412,6 +428,7 @@ int perf_evsel__disable(struct perf_evsel *evsel)
 
 	if (evsel->keep_disable) return 0;
 
+	evsel->init_enabled = 0;
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_DISABLE, NULL, i);
 	return err;
@@ -425,6 +442,7 @@ int perf_evsel__disable_group(struct perf_evsel *evsel)
 	if (evsel->keep_disable) return 0;
 	if (evsel->leader != evsel) return 0;
 
+	evsel->init_enabled = 0;
 	for (i = 0; i < xyarray__max_x(evsel->fd) && !err; i++)
 		err = perf_evsel__run_ioctl(evsel, PERF_EVENT_IOC_DISABLE, (void *)PERF_IOC_FLAG_GROUP, i);
 	return err;
@@ -432,8 +450,10 @@ int perf_evsel__disable_group(struct perf_evsel *evsel)
 
 void perf_evsel__keep_disable(struct perf_evsel *evsel, bool keep_disable)
 {
-	if (keep_disable && !evsel->attr.disabled)
+	if (keep_disable && !evsel->attr.disabled) {
 		evsel->attr.disabled = 1;
+		evsel->init_enabled = 0;
+	}
 	evsel->keep_disable = keep_disable;
 }
 

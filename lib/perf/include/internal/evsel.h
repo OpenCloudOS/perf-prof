@@ -47,6 +47,7 @@ struct perf_evsel {
 	u32			 ids;
 	struct perf_evsel	*leader;
 	bool			 keep_disable;
+	bool			 init_enabled;
 
 	/* parse modifier helper */
 	int			 nr_members;
