@@ -55,6 +55,16 @@ const volatile bool tif_need_resched = false;
 #endif
 
 
+// sched_policy
+//
+// if (task->policy == sched_policy)
+//     continue;
+// else
+//     break;
+const volatile bool filter_sched_policy = false;
+const volatile u32  sched_policy = 0;
+
+
 // exclude_pid
 //
 // if (pid == exclude_pid)
@@ -76,6 +86,7 @@ const volatile bool filter_nr_running = false;
 const volatile u32 nr_running_min = 0;
 const volatile u32 nr_running_max = 0xffffffff;
 
+
 SEC("perf_event")
 int perf_event_do_filter(struct bpf_perf_event_data *ctx)
 {
@@ -83,7 +94,7 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
     struct rq *rq;
     u32 nr_running = 0;
     unsigned long flags;
-    u32 pid;
+    u32 pid, policy;
 
     if (filter_irqs_disabled) {
         if (((ctx->regs.EFLAGS >> EFLAGS_IF_BIT) & 1) == irqs_disabled)
@@ -95,6 +106,12 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
     if (filter_tif_need_resched) {
         flags = BPF_CORE_READ(task, thread_info.flags);
         if (((flags >> TIF_NEED_RESCHED) & 1) != tif_need_resched)
+            return BREAK;
+    }
+
+    if (filter_sched_policy) {
+        policy = BPF_CORE_READ(task, policy);
+        if (policy != sched_policy)
             return BREAK;
     }
 

@@ -40,6 +40,8 @@ int bpf_filter_open(struct bpf_filter *filter)
     ASSIGN(irqs_disabled);
     ASSIGN(filter_tif_need_resched);
     ASSIGN(tif_need_resched);
+    ASSIGN(filter_sched_policy);
+    ASSIGN(sched_policy);
     ASSIGN(filter_exclude_pid);
     ASSIGN(exclude_pid);
     ASSIGN(filter_nr_running);
@@ -117,6 +119,12 @@ int bpf_filter_init(struct bpf_filter *filter, struct env *env)
     if (env->tif_need_resched_set) {
         filter->filter_tif_need_resched = true;
         filter->tif_need_resched = env->tif_need_resched;
+        need_bpf ++;
+    }
+
+    if (env->sched_policy_set) {
+        filter->filter_sched_policy = true;
+        filter->sched_policy = env->sched_policy;
         need_bpf ++;
     }
 

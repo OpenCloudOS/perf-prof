@@ -143,12 +143,13 @@ struct env {
     bool python_callchain;
     // ebpf
     bool irqs_disabled_set, tif_need_resched_set, exclude_pid_set;
-    bool nr_running_min_set, nr_running_max_set;
+    bool nr_running_min_set, nr_running_max_set, sched_policy_set;
     int  irqs_disabled;
     int  tif_need_resched;
     int  exclude_pid;
     int  nr_running_min;
     int  nr_running_max;
+    int  sched_policy;
     // ebpf end
     char *tp_alloc;
     char *tp_free;
@@ -599,7 +600,7 @@ perfclock_t prof_dev_list_minevtime(void);
     "FILTER OPTION:", \
     "exclude-host", "exclude-guest", "exclude-user", "exclude-kernel", "python-callchain", \
     "user-callchain", "kernel-callchain", \
-    "irqs_disabled", "tif_need_resched", "exclude_pid", "nr_running_min", "nr_running_max"
+    "irqs_disabled", "tif_need_resched", "exclude_pid", "nr_running_min", "nr_running_max", "sched_policy"
 #define PROFILER_ARGV_CALLCHAIN_FILTER \
         "FILTER OPTION:", "user-callchain", "kernel-callchain", "python-callchain"
 #define PROFILER_ARGV_PROFILER \

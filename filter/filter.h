@@ -11,6 +11,8 @@ struct bpf_filter {
     bool irqs_disabled;
     bool filter_tif_need_resched;
     bool tif_need_resched;
+    bool filter_sched_policy;
+    u32 sched_policy;
     bool filter_exclude_pid;
     u32 exclude_pid;
     bool filter_nr_running;

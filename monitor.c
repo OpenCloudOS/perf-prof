@@ -474,6 +474,8 @@ struct option main_options[] = {
     OPT_INT_NONEG_SET ( 0 ,      "exclude_pid", &env.exclude_pid,      &env.exclude_pid_set,         "pid",  "ebpf, exclude pid"),
     OPT_INT_NONEG_SET ( 0 ,   "nr_running_min", &env.nr_running_min,   &env.nr_running_min_set,       NULL,  "ebpf, minimum number of running processes for CPU runqueue."),
     OPT_INT_NONEG_SET ( 0 ,   "nr_running_max", &env.nr_running_max,   &env.nr_running_max_set,       NULL,  "ebpf, maximum number of running processes for CPU runqueue."),
+    OPT_INT_NONEG_SET ( 0 ,     "sched_policy", &env.sched_policy,     &env.sched_policy_set,         NULL,  "ebpf, schedule policy, 0:NORMAL, 1:FIFO, 2:RR, etc."),
+
 
     OPT_GROUP("PROFILER OPTION:"),
     OPT_PARSE_NONEG ('e', "event", NULL,    "EVENT,...",        "Event selector. use '"PROGRAME" list' to list available tp events.\n"
@@ -767,10 +769,6 @@ static void flush_main_options(profiler *p)
     }
 }
 
-#ifndef CONFIG_LIBBPF
-static const char *LIBBPF_BUILD = "NO CONFIG_LIBBPF=y";
-#endif
-
 static profiler *parse_main_options(int argc, char *argv[])
 {
     profiler *prof = NULL;
@@ -781,11 +779,13 @@ static profiler *parse_main_options(int argc, char *argv[])
     bool enable_optcomp = false;
 
 #ifndef CONFIG_LIBBPF
+    static const char *LIBBPF_BUILD = "NO CONFIG_LIBBPF=y";
     set_option_nobuild(main_options, 0,    "irqs_disabled", LIBBPF_BUILD, true);
     set_option_nobuild(main_options, 0, "tif_need_resched", LIBBPF_BUILD, true);
     set_option_nobuild(main_options, 0,      "exclude_pid", LIBBPF_BUILD, true);
     set_option_nobuild(main_options, 0,   "nr_running_min", LIBBPF_BUILD, true);
     set_option_nobuild(main_options, 0,   "nr_running_max", LIBBPF_BUILD, true);
+    set_option_nobuild(main_options, 0,     "sched_policy", LIBBPF_BUILD, true);
 #endif
 
     while (argc > 0) {
