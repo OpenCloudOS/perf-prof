@@ -28,6 +28,13 @@ def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
     for std, line in kmemleak.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
+def test_kmemleak_kmem_cache_alloc_than1s(runtime, memleak_check):
+    kmemleak = PerfProf(['kmemleak',
+                '--alloc', 'kmem:kmem_cache_alloc//ptr=ptr/size=bytes_req/stack/,kmem:kmem_cache_alloc_node//ptr=ptr/size=bytes_req/stack/',
+                '--free', 'kmem:kmem_cache_free//ptr=ptr/',
+                '-m', '256', '--order', '--than', '1s'])
+    for std, line in kmemleak.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
 
 def test_kmemleak_mm_page_alloc(runtime, memleak_check):
     alloc_format = PerfProf.event_format('kmem:mm_page_alloc')

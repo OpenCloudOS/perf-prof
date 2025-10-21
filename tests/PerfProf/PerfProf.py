@@ -326,6 +326,10 @@ class PerfProf(object):
         pmu_path = "/sys/bus/event_source/devices/" + pmu
         return os.path.exists(pmu_path)
 
+    @staticmethod
+    def btf_exists():
+        return os.path.exists("/sys/kernel/btf/vmlinux")
+
 class DeadLoop():
     def __init__(self, loop=lambda :True):
         self.tid = -1
