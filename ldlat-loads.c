@@ -436,9 +436,9 @@ static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, in
 
 static const char *ldlat_loads_desc[] = PROFILER_DESC("ldlat-loads",
     "[OPTION...] [--ldlat cycles] [-T trigger] [--perins] [--than cycles]",
-    "Load Latency Performance Monitoring on Intel Platform.", "",
+    "Count the retired load latency on Intel Platform.", "",
     "SYNOPSIS",
-    "    Load Latency Performance Monitoring Facility", "",
+    "    PMU: MEM_TRANS_RETIRED.*", "",
     "EXAMPLES",
     "    "PROGRAME" ldlat-loads -C 0 -i 1000",
     "    "PROGRAME" ldlat-loads -p 2347 --ldlat 10 --than 100 -i 1000");
@@ -469,7 +469,7 @@ static int ldlat_stores_init(struct prof_dev *dev)
     struct env *env = dev->env;
     struct perf_event_attr attr = {
         .type          = PERF_TYPE_RAW,
-        .config        = 0x82d0, //MEM_UOPS_RETIRED.ALL_STORES /sys/bus/event_source/devices/cpu/events/mem-stores
+        .config        = 0x82d0, //MEM_INST_RETIRED.ALL_STORES /sys/bus/event_source/devices/cpu/events/mem-stores
         .size          = sizeof(struct perf_event_attr),
         //Every trigger_freq memory load, the PEBS hardware triggers an assist and causes a PEBS record to be written
         .sample_period = env->trigger_freq ?: 1000,
@@ -506,7 +506,9 @@ failed:
 
 static const char *ldlat_stores_desc[] = PROFILER_DESC("ldlat-stores",
     "[OPTION...] [-T trigger] [--perins]",
-    "PEBS Data Address Profiling on Intel Platform.", "",
+    "Count the retired store instructions on Intel Platform.", "",
+    "SYNOPSIS",
+    "    PMU: MEM_INST_RETIRED.ALL_STORES", "",
     "EXAMPLES",
     "    "PROGRAME" ldlat-stores -C 0 -i 1000",
     "    "PROGRAME" ldlat-stores -p 2347 -v -i 1000");

@@ -201,7 +201,10 @@ static void page_faults_sample(struct prof_dev *dev, union perf_event *event, in
 
 static const char *page_faults_desc[] = PROFILER_DESC("page-faults",
     "[OPTION...] [-g]",
-    "Print the user mode regs and stack when a page fault occurs.", "",
+    "Trace page fault exception.", "",
+    "Additional sampling of user-mode general registers helps analyze the",
+    "page fault stack.",
+    "",
     "EXAMPLES",
     "    "PROGRAME" page-faults -p 2347 -g",
     "    "PROGRAME" page-faults -C 0 -g");

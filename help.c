@@ -157,7 +157,7 @@ static void help_exit(struct prof_dev *dev)
 
 static const char *help_desc[] = PROFILER_DESC("",
     "[profiler] [PROFILER OPTION...] help",
-    "Helps writing profiler commands, event attrs, event filters.", "",
+    "Help to quickly assemble commands.", "",
     "SYNOPSIS",
     "    Helps writing event attrs, event filters, 'help' can be added anywhere",
     "    in the command, but must be after the profiler.", "",

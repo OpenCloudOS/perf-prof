@@ -404,7 +404,7 @@ static void hrtimer_help(struct help_ctx *hctx)
 
 static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
     "[OPTION...] [-e EVENT[...]] [-F freq] [--period ns] [-g] {expression}",
-    "High-resolution conditional timing sampling.",
+    "High-resolution conditional sampling.",
     "",
     "SYNOPSIS",
     "    High-resolution timer sampling. During the sampling interval, it is up to",
@@ -441,12 +441,9 @@ PROFILER_REGISTER(hrtimer);
 
 static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
     "[OPTION...] [-F freq] [--period ns] [--than ns] [-g]",
-    "Detect the hrtimer latency to determine if the irq is off.",
+    "Detect irq off.",
     "",
     "SYNOPSIS",
-    "    Hrtimer latency detection, --period specifies the hrtimer period, if the period",
-    "    exceeds the time specified by --than, it will be printed.",
-    "",
     "    Based on hrtimer. See '"PROGRAME" hrtimer -h' for more information.",
     "",
     "EXAMPLES",

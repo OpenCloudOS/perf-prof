@@ -663,8 +663,8 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
 }
 
 static const char *oncpu_desc[] = PROFILER_DESC("oncpu",
-    "[OPTION...] [--detail] [--filter filter]",
-    "Determine which processes are running on which CPUs.", "",
+    "[OPTION...] [--detail] [--filter filter] [--only-comm] [--prio n]",
+    "Monitor the process running on the CPU.", "",
     "TRACEPOINT",
     "    sched:sched_switch, sched:sched_stat_runtime", "",
     "EXAMPLES",

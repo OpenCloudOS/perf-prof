@@ -243,7 +243,7 @@ static void tlbstat_interval(struct prof_dev *dev)
 
 static const char *tlbstat_desc[] = PROFILER_DESC("tlbstat",
     "[OPTION...] [--exclude-host]",
-    "dTLB state on x86 platform.", "",
+    "Monitor the dTLB state.", "",
     "EXAMPLES",
     "    "PROGRAME" tlbstat -i 1000",
     "    "PROGRAME" tlbstat -C 0-3 -i 1000");

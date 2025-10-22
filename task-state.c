@@ -960,7 +960,7 @@ static void task_state_print_dev(struct prof_dev *dev, int indent)
 
 static const char *task_state_desc[] = PROFILER_DESC("task-state",
     "[OPTION...] [-S] [-D] [--than ns] [--filter comm] [--perins] [-g [--flame-graph file]]",
-    "Trace task state, wakeup, switch, INTERRUPTIBLE, UNINTERRUPTIBLE.", "",
+    "Monitor task state: R S D T I RD.", "",
     "TRACEPOINT",
     "    sched:sched_switch, sched:sched_wakeup, sched:sched_wakeup_new", "",
     "EXAMPLES",

@@ -244,7 +244,7 @@ found:
 
 static const char *event_care_desc[] = PROFILER_DESC("event-care",
     "[OPTION...] -e EVENT",
-    "Care if any events are lost or out-of-order.", "",
+    "Care about event loss and out-of-order.", "",
     "EXAMPLES",
     "    "PROGRAME" event-care -e sched:sched_wakeup -m 64");
 static const char *event_care_argv[] = PROFILER_ARGV("event-care",

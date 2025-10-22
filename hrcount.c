@@ -580,7 +580,7 @@ static void hrcount_help(struct help_ctx *hctx)
 
 static const char *hrcount_desc[] = PROFILER_DESC("hrcount",
     "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
-    "High-resolution counter.",
+    "High-resolution periodic counter.",
     "",
     "SYNOPSIS",
     "    High-resolution counters are capable of displaying count changes at millisecond or",
@@ -661,7 +661,7 @@ static int stat_read(struct prof_dev *dev, struct perf_evsel *leader, struct per
 
 static const char *stat_desc[] = PROFILER_DESC("stat",
     "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
-    "Periodic counter with lower resolution.",
+    "Low-resolution periodic counter.",
     "",
     "SYNOPSIS",
     "    Based on hrcount. See '"PROGRAME" hrcount -h' for more information.",

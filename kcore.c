@@ -181,7 +181,7 @@ static int kcore_argc_init(int argc, char *argv[])
 }
 
 static const char *kcore_desc[] = PROFILER_DESC("kcore",
-    "[OPTION...] [--8|16|32|64] [--string] [kaddr|symbol] [count]",
+    "[OPTION...] [--8|16|32|64] [--string] kaddr|symbol [count]",
     "Read kernel memory.", "",
     "SYNOPSIS",
     "    Read from /proc/kcore.", "",

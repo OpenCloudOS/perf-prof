@@ -295,7 +295,7 @@ static void profile_interval(struct prof_dev *dev)
 
 static const char *profile_desc[] = PROFILER_DESC("profile",
     "[OPTION...] -F freq [-g [--flame-graph file [-i INT]]] [--than percent]",
-    "Sampling at the specified frequency to profile high CPU utilization.", "",
+    "Sampling at the specified frequency.", "",
     "EXAMPLES",
     "    "PROGRAME" profile -F 997 -p 2347 -g --flame-graph cpu",
     "    "PROGRAME" profile -F 997 -C 0-3 --than 30 -g --flame-graph cpu");

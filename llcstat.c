@@ -287,7 +287,7 @@ static void llcstat_interval(struct prof_dev *dev)
 
 static const char *llcstat_desc[] = PROFILER_DESC("llcstat",
     "[OPTION...] [--exclude-host]",
-    "Last level cache state on x86 platform.", "",
+    "Monitor the last level cache state.", "",
     "EXAMPLES",
     "    "PROGRAME" llcstat -i 1000",
     "    "PROGRAME" llcstat -C 0-3 -i 1000");

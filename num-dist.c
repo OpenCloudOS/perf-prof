@@ -373,7 +373,7 @@ static void num_dist_help(struct help_ctx *hctx)
 
 static const char *num_dist_desc[] = PROFILER_DESC("num-dist",
     "[OPTION...] -e EVENT [--perins] [--than ns] [--heatmap file] [-g]",
-    "Numerical distribution. Get 'num' data from the event itself.", "",
+    "Numerical distribution.", "",
     "EXAMPLES",
     "    "PROGRAME" num-dist -e sched:sched_stat_runtime help",
     "    "PROGRAME" num-dist -e sched:sched_stat_runtime//num=runtime/ -C 0 -i 1000",

@@ -145,7 +145,7 @@ static void hwstat_interval(struct prof_dev *dev)
 
 static const char *hwstat_desc[] = PROFILER_DESC("hwstat",
     "[OPTION...] [--exclude-host]",
-    "HW state, cycles, IPC.", "",
+    "Monitor the hardware state: cycles, IPC.", "",
     "EXAMPLES",
     "    "PROGRAME" hwstat -i 1000",
     "    "PROGRAME" hwstat -C 0-3 -i 1000");

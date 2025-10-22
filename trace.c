@@ -352,7 +352,7 @@ static void trace_help(struct help_ctx *hctx)
 
 static const char *trace_desc[] = PROFILER_DESC("trace",
     "[OPTION...] -e EVENT [--overwrite] [-g [--flame-graph file [-i INT]]]",
-    "Trace events and print them directly.",
+    "Trace and print events.",
     "",
     "EXAMPLES",
     "    "PROGRAME" trace -e sched:sched_wakeup -C 0 -g",

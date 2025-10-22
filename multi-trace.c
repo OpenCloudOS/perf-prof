@@ -1949,7 +1949,7 @@ static void multi_trece_help(struct help_ctx *hctx)
 
 static const char *multi_trace_desc[] = PROFILER_DESC("multi-trace",
     "[OPTION...] -e EVENT [-e ...] [-k key] [--impl impl] [--than|--only-than ns] [--detail] [--perins] [--heatmap file] [--cycle]",
-    "Multipurpose trace: delay, pair, kmemprof, syscalls.", "",
+    "Multipurpose trace: latency and pair analysis.", "",
     "SYNOPSIS",
     "    Multiple events are associated by key and finally converted into two-event analysis.",
     "",
@@ -2016,7 +2016,7 @@ static void kmemprof_help(struct help_ctx *hctx)
 
 static const char *kmemprof_desc[] = PROFILER_DESC("kmemprof",
     "[OPTION...] -e alloc -e free [-k str]",
-    "Memory allocation profile. Both user and kernel allocators are supported.", "",
+    "Profile memory allocation: user/kernel allocators.", "",
     "SYNOPSIS",
     "    Profile alloc and free bytes, as well as the alloc stack.",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
@@ -2122,7 +2122,7 @@ static void syscalls_help(struct help_ctx *hctx)
 
 static const char *syscalls_desc[] = PROFILER_DESC("syscalls",
     "[OPTION...] -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]",
-    "Syscalls latency analysis.", "",
+    "Profile syscalls latency.", "",
     "SYNOPSIS",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
     "EXAMPLES",
@@ -2297,7 +2297,7 @@ static void nested_trace_help(struct help_ctx *hctx)
 
 static const char *nested_trace_desc[] = PROFILER_DESC("nested-trace",
     "[OPTION...] -e E,E_ret [-e ...] [-k str] [--impl impl] [--than ns] [--detail] [--perins] [--heatmap file]",
-    "Nested-event trace: delay, call, call-delay.", "",
+    "Profile nested-event: function calls.", "",
     "SYNOPSIS", "",
     "    Function calls, interrupts, etc. are possible nested events.",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
@@ -2440,7 +2440,7 @@ static void rundelay_help(struct help_ctx *hctx)
 static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
     "[OPTION...] -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\\n"
     "        -e sched:sched_switch//key=next_pid/ -k pid [--filter comm] [--than ns] [--detail] [--perins] [--heatmap file]",
-    "Schedule rundelay.",
+    "Profile scheduling rundelay.",
     "",
     "SYNOPSIS",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.",

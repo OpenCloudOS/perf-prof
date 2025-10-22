@@ -526,7 +526,7 @@ verbose_print:
 
 static const char *blktrace_desc[] = PROFILER_DESC("blktrace",
     "[OPTION...] -d device [--than ns]",
-    "Track IO latency on block devices.", "",
+    "Trace IO latency on block devices.", "",
     "TRACEPOINT",
     "    block:block_getrq, block:block_rq_insert, block:block_rq_issue, block:block_rq_complete", "",
     "EXAMPLES",

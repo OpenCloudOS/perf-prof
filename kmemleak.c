@@ -879,7 +879,7 @@ static void kmemleak_help(struct help_ctx *hctx)
 
 static const char *kmemleak_desc[] = PROFILER_DESC("kmemleak",
     "[OPTION...] --alloc EVENT[...] --free EVENT[...] [-g [--flame-graph file]]",
-    "Memory leak analysis. Both user and kernel allocators are supported.", "",
+    "Memory leak analysis: user/kernel allocators.", "",
     "SYNOPSIS",
     "    Memory leak: Allocated but not freed.", "",
     "    --alloc specify memory allocation events. --free specify memory free events.",
