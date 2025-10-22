@@ -13,9 +13,8 @@
 #include <tep.h>
 #include <trace_helpers.h>
 #include <stack_helpers.h>
+#include <tp_struct.h>
 
-typedef u64 sector_t;
-typedef u32 __kernel_dev_t;
 
 static profiler blktrace;
 
@@ -63,64 +62,6 @@ struct blktrace_ctx {
     struct list_head lost_list;
 };
 
-struct trace_block_getrq {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
-    sector_t sector;//  offset:16;      size:8; signed:0;
-    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
-    char rwbs[8];//     offset:28;      size:8; signed:1;
-    char comm[16];//    offset:36;      size:16;        signed:1;
-};
-
-struct trace_block_rq_insert {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
-    sector_t sector;//  offset:16;      size:8; signed:0;
-    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
-    unsigned int bytes;//       offset:28;      size:4; signed:0;
-    char rwbs[8];//     offset:32;      size:8; signed:1;
-    char comm[16];//    offset:40;      size:16;        signed:1;
-    //__data_loc char[] cmd;    offset:56;      size:4; signed:1;
-};
-
-struct trace_block_rq_issue {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
-    sector_t sector;//  offset:16;      size:8; signed:0;
-    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
-    unsigned int bytes;//       offset:28;      size:4; signed:0;
-    char rwbs[8];//     offset:32;      size:8; signed:1;
-    char comm[16];//    offset:40;      size:16;        signed:1;
-    //__data_loc char[] cmd;    offset:56;      size:4; signed:1;
-};
-
-struct trace_block_rq_complete {
-    unsigned short common_type;//       offset:0;       size:2; signed:0;
-    unsigned char common_flags;//       offset:2;       size:1; signed:0;
-    unsigned char common_preempt_count;//       offset:3;       size:1; signed:0;
-    int common_pid;//   offset:4;       size:4; signed:1;
-
-    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
-    sector_t sector;//  offset:16;      size:8; signed:0;
-    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
-    int error;//        offset:28;      size:4; signed:1;
-    char rwbs[8];//     offset:32;      size:8; signed:1;
-    //__data_loc char[] cmd;    offset:40;      size:4; signed:1;
-};
-
-
 // in linux/perf_event.h
 // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_RAW
 struct sample_type_raw {
@@ -138,10 +79,10 @@ struct sample_type_raw {
         union {
             __u8    data[0];
             unsigned short common_type;
-            struct trace_block_getrq getrq;
-            struct trace_block_rq_insert rq_insert;
-            struct trace_block_rq_issue rq_issue;
-            struct trace_block_rq_complete rq_complete;
+            struct block_getrq getrq;
+            struct block_rq_insert rq_insert;
+            struct block_rq_issue rq_issue;
+            struct block_rq_complete rq_complete;
         };
     } __packed raw;
 };

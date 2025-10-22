@@ -134,6 +134,54 @@ struct task_rename {
     short oom_score_adj;//      offset:44;      size:2; signed:1;
 };
 
+typedef u64 sector_t;
+typedef u32 __kernel_dev_t;
+
+struct block_getrq {
+    COMMON_HEADER
+
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
+    sector_t sector;//  offset:16;      size:8; signed:0;
+    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
+    char rwbs[8];//     offset:28;      size:8; signed:1;
+    char comm[16];//    offset:36;      size:16;        signed:1;
+};
+
+struct block_rq_insert {
+    COMMON_HEADER
+
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
+    sector_t sector;//  offset:16;      size:8; signed:0;
+    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
+    unsigned int bytes;//       offset:28;      size:4; signed:0;
+    char rwbs[8];//     offset:32;      size:8; signed:1;
+    char comm[16];//    offset:40;      size:16;        signed:1;
+    short cmd_offset, cmd_len;//__data_loc char[] cmd;    offset:56;      size:4; signed:1;
+};
+
+struct block_rq_issue {
+    COMMON_HEADER
+
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
+    sector_t sector;//  offset:16;      size:8; signed:0;
+    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
+    unsigned int bytes;//       offset:28;      size:4; signed:0;
+    char rwbs[8];//     offset:32;      size:8; signed:1;
+    char comm[16];//    offset:40;      size:16;        signed:1;
+    short cmd_offset, cmd_len;//__data_loc char[] cmd;    offset:56;      size:4; signed:1;
+};
+
+struct block_rq_complete {
+    COMMON_HEADER
+
+    __kernel_dev_t dev;//        offset:8;       size:4; signed:0;
+    sector_t sector;//  offset:16;      size:8; signed:0;
+    unsigned int nr_sector;//   offset:24;      size:4; signed:0;
+    int error;//        offset:28;      size:4; signed:1;
+    char rwbs[8];//     offset:32;      size:8; signed:1;
+    short cmd_offset, cmd_len;//__data_loc char[] cmd;    offset:40;      size:4; signed:1;
+};
+
 
 #if defined(__i386__) || defined(__x86_64__)
 struct kvm_pvclock_update {
