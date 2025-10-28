@@ -65,6 +65,18 @@ const volatile bool filter_sched_policy = false;
 const volatile u32  sched_policy = 0;
 
 
+// sched_prio filter
+//
+// Only allow events from tasks with priorities in the sched_prio array
+// if (task->prio is marked in sched_prio[])
+//     continue;  // allow event
+// else
+//     break;     // filter out event
+#define MAX_PRIO 140  // Linux scheduling priorities: 0-99 (RT), 100-139 (normal)
+const volatile bool filter_sched_prio = false;
+const volatile u32 sched_prio[MAX_PRIO] = {0};
+
+
 // exclude_pid
 //
 // if (pid == exclude_pid)
@@ -94,7 +106,7 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
     struct rq *rq;
     u32 nr_running = 0;
     unsigned long flags;
-    u32 pid, policy;
+    u32 pid, policy, prio;
 
     if (filter_irqs_disabled) {
         if (((ctx->regs.EFLAGS >> EFLAGS_IF_BIT) & 1) == irqs_disabled)
@@ -112,6 +124,12 @@ int perf_event_do_filter(struct bpf_perf_event_data *ctx)
     if (filter_sched_policy) {
         policy = BPF_CORE_READ(task, policy);
         if (policy != sched_policy)
+            return BREAK;
+    }
+
+    if (filter_sched_prio) {
+        prio = BPF_CORE_READ(task, prio);
+        if (prio >= MAX_PRIO || !sched_prio[prio])
             return BREAK;
     }
 

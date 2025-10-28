@@ -47,6 +47,17 @@ int bpf_filter_open(struct bpf_filter *filter)
     ASSIGN(filter_nr_running);
     ASSIGN(nr_running_min);
     ASSIGN(nr_running_max);
+    if (filter->prio_map) {
+        struct perf_cpu_map *cpu_prio_map = perf_cpu_map__new(filter->prio_map);
+        int prio, idx;
+        if (cpu_prio_map) {
+            obj->rodata->filter_sched_prio = true;
+            perf_cpu_map__for_each_cpu(prio, idx, cpu_prio_map)
+                if (prio < ARRAY_SIZE(obj->rodata->sched_prio))
+                    obj->rodata->sched_prio[prio] = 1;
+            perf_cpu_map__put(cpu_prio_map);
+        }
+    }
 
     // Bump memlock so we can get reasonably sized bpf maps or progs.
     if (getrlimit(RLIMIT_MEMLOCK, &old_rlim) == 0) {
@@ -88,6 +99,10 @@ void bpf_filter_close(struct bpf_filter *filter)
         filter->obj = NULL;
         filter->bpf_fd = -1;
     }
+    if (filter && filter->prio_map) {
+        free(filter->prio_map);
+        filter->prio_map = NULL;
+    }
 }
 
 #else
@@ -98,7 +113,13 @@ int bpf_filter_open(struct bpf_filter *filter)
     filter->bpf_fd = -1;
     return 0;
 }
-void bpf_filter_close(struct bpf_filter *filter) {}
+void bpf_filter_close(struct bpf_filter *filter)
+{
+    if (filter && filter->prio_map) {
+        free(filter->prio_map);
+        filter->prio_map = NULL;
+    }
+}
 
 #endif
 
@@ -125,6 +146,11 @@ int bpf_filter_init(struct bpf_filter *filter, struct env *env)
     if (env->sched_policy_set) {
         filter->filter_sched_policy = true;
         filter->sched_policy = env->sched_policy;
+        need_bpf ++;
+    }
+
+    if (env->prio_map) {
+        filter->prio_map = strdup(env->prio_map);
         need_bpf ++;
     }
 
