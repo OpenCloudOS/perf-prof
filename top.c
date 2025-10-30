@@ -768,7 +768,7 @@ static const char *top_desc[] = PROFILER_DESC("top",
     "    "PROGRAME" top -e irq:irq_handler_entry//key=irq/ -C 0",
     "    "PROGRAME" top -e 'sched:sched_stat_runtime//key=pid/comm=comm/top-by=\"runtime/1000\"/alias=run(us)/' -C 0 -i 1000",
     "    "PROGRAME" top -e sched:sched_stat_runtime//key=pid/comm=comm/top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ -C 0 -i 1000",
-    "    "PROGRAME" top -e 'sched:sched_process_exec//key=pid/comm=\"(char *)&common_type+filename_offset\"/' --only-comm",
+    "    "PROGRAME" top -e 'sched:sched_process_exec//key=pid/comm=filename/' --only-comm",
     "    "PROGRAME" top -e 'workqueue:workqueue_execute_start//key=common_pid/alias=NUM/comm=ksymbol(function)/' --only-comm",
     "    "PROGRAME" top -e 'skb:kfree_skb//key=protocol/comm=ksymbol(location)/' -m 32");
 static const char *top_argv[] = PROFILER_ARGV("top",

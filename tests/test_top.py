@@ -46,13 +46,13 @@ def test_sched_stat_runtime(runtime, memleak_check):
 
 def test_sched_process_exec(runtime, memleak_check):
     #perf-prof top -e sched:sched_process_exec//comm=filename/ --only-comm
-    top = PerfProf(['top', '-e', 'sched:sched_process_exec//comm="(char *)&common_type+filename_offset"/', '--only-comm'])
+    top = PerfProf(['top', '-e', 'sched:sched_process_exec//comm=filename/', '--only-comm'])
     for std, line in top.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
 def test_irq_handler_entry(runtime, memleak_check):
-    #perf-prof top -e irq:irq_handler_entry//comm="(char *)&common_type+name_offset"/  --only-comm
-    top = PerfProf(['top', '-e', 'irq:irq_handler_entry//comm="(char *)&common_type+name_offset"/', '--only-comm'])
+    #perf-prof top -e irq:irq_handler_entry//comm=name/  --only-comm
+    top = PerfProf(['top', '-e', 'irq:irq_handler_entry//comm=name/', '--only-comm'])
     for std, line in top.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 

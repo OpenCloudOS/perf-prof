@@ -102,7 +102,7 @@ def test_expr_workqueue_execute_start(runtime, memleak_check):
     expr(['-e', 'workqueue:workqueue_execute_start', 'printf("=%s=", ksymbol(function))', '-v'], runtime, memleak_check)
 
 def test_expr_sched_process_exec(runtime, memleak_check):
-    expr(['-e', 'sched:sched_process_exec', 'printf("=%s=", (char *)&common_type + filename_offset)'], runtime, memleak_check)
+    expr(['-e', 'sched:sched_process_exec', 'printf("=%s=", filename)'], runtime, memleak_check)
 
 def test_expr_workqueue_execute_start_u0(runtime, memleak_check):
     expr(['-e', 'workqueue:workqueue_execute_start', 'printf("work=%ld work*2=%ld work*2=%ld work>0=%ld work<0=%ld", work, work*2, (long)work*2, (long)work>0, (long)work<0)'], runtime, memleak_check)

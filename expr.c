@@ -920,7 +920,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "    "PROGRAME" expr -e sched:sched_wakeup '&pid'",
     "    "PROGRAME" expr -e 'kmem:mm_page_alloc/order>0/' '1<<order' -v",
     "    "PROGRAME" expr -e workqueue:workqueue_execute_start 'printf(\"%s \", ksymbol(function))' -v",
-    "    "PROGRAME" expr -e sched:sched_process_exec 'printf(\"%s \", (char *)&common_type + filename_offset)'"
+    "    "PROGRAME" expr -e sched:sched_process_exec 'printf(\"%s \", filename)'"
 );
 static const char *expr_argv[] = PROFILER_ARGV("expr",
     "OPTION:",
