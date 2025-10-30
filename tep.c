@@ -322,7 +322,7 @@ event_fields *tep__event_fields(int id)
     struct tep_event *event;
     struct tep_format_field **common_fields;
     struct tep_format_field **fields;
-    int nr_common = 0, nr_fields = 0, nr_dynamic = 0;
+    int nr_common = 0, nr_fields = 0, nr_dynamic = 0, first_dynamic = -1;
     int extra_len = 0;
     event_fields *ef = NULL;
     char *extra = NULL;
@@ -344,8 +344,13 @@ event_fields *tep__event_fields(int id)
     while (common_fields[nr_common]) nr_common++;
     while (fields[nr_fields]) {
         if (fields[nr_fields]->flags & TEP_FIELD_IS_DYNAMIC) {
-            nr_dynamic++;
-            extra_len += 2*strlen(fields[nr_fields]->name) + sizeof("_offset") + sizeof("_len");
+            /* For dynamic fields, we need to create additional fields:
+             * - First dynamic field creates 3 entries: base, base_offset, base_len
+             * - Subsequent dynamic fields create 2 entries: base_offset, base_len
+             */
+            int dyns = (nr_dynamic==0 ? 3 : 2);
+            extra_len += dyns * strlen(fields[nr_fields]->name) + sizeof("_offset") + sizeof("_len");
+            nr_dynamic += dyns-1;
         }
         nr_fields++;
     }
@@ -382,6 +387,9 @@ event_fields *tep__event_fields(int id)
             ef[i].size = 2;
             ef[i].elementsize = 2;
             ef[i].is_unsigned = 1;
+
+            if (first_dynamic < 0)
+                first_dynamic = f;
         } else {
             ef[i].name = fields[f]->name;
             ef[i].offset = fields[f]->offset;
@@ -391,6 +399,16 @@ event_fields *tep__event_fields(int id)
         }
         i++;
         f++;
+    }
+    if (first_dynamic >= 0 && i > 0) {
+        /* Create the base field entry for the first dynamic field.
+         * This field represents the actual dynamic data and is marked
+         * as an array type (size=0) to indicate variable length. */
+        ef[i].name = fields[first_dynamic]->name;
+        ef[i].offset = ef[i-1].offset + ef[i-1].size;
+        ef[i].size = 0; /* Mark as ARRAY type for variable length */
+        ef[i].elementsize = 1;
+        i++;
     }
     ef[i].name = NULL;
 

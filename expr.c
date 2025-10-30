@@ -673,7 +673,12 @@ void expr_dump(struct expr_prog *prog)
                     int t = s->type;
                     printf(" "); do { printf("*"); t -= PTR; } while (t >= PTR);
                 }
-                if (s->type & ARRAY) printf(" [%d]", s->nr_elm);
+                if (s->type & ARRAY) {
+                    /* Display array dimensions - show empty brackets for
+                     * flexible array members where nr_elm is 0 */
+                    if (s->nr_elm) printf(" [%d]", s->nr_elm);
+                    else printf(" []");
+                }
                 printf(" %.*s\n", (int)LEN(s->hash), s->name);
             }
         }
