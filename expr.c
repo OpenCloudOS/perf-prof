@@ -424,11 +424,27 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     // global variable declaration
     if (declare) {
         struct global_var_declare *save = declare;
-        int max_offset;
+        int max_offset, name_size = 0;
+
+        while (declare->name) {
+            name_size += strlen(declare->name) + 1;
+            declare ++;
+        }
+        s = realloc(s, name_size + strsize);
+        if (!s) goto err_return;
+        memset(s + name_size, 0, strsize);
+
     restart:
         max_offset = 0;
+        declare = save;
+        str = s;
         while (declare->name) {
-            p = (char *)declare->name;
+            // FIX: Copy declare->name to safe buffer to prevent access after free
+            // declare structure and its name fields (e.g., "_offset", "_len") are temporary
+            // released after expr_compile, but expr_dump needs to access later
+            // Solution: Copy names to str buffer for safe long-term access by expr_dump
+            p = strcpy(str, declare->name);
+            str += strlen(declare->name) + 1;
             next();
             id->class = Glo;
             switch (declare->elementsize) {
@@ -452,7 +468,6 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
             datasize += 256;
             data = d = realloc(d, datasize);
             memset(d, 0, datasize);
-            declare = save;
             goto restart;
         }
         data += max_offset;
@@ -703,8 +718,10 @@ void expr_dump(struct expr_prog *prog)
     if (prog->str) {
         char *c = prog->str;
         printf("Strings:\n");
-        while (*c)
+        while (*c) {
+            printf("    %p:", c);
             c += printf("    %s\n", c) - 4;
+        }
     }
 }
 
