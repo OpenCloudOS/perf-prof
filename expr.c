@@ -141,13 +141,14 @@ static void next(void)
                 tk = tk * 147 + *p++;
             tk = HASH(tk, p - pp);
             id = symtab;
-            while (id->token && id < symtab+nr_syms) {
+            while (id < symtab+nr_syms && id->token) {
                 if (tk == id->hash && !memcmp(id->name, pp, p - pp)) { tk = id->token; return; }
                 id ++;
             }
             if (id == symtab+nr_syms) {
                 nr_syms += 16;
                 symtab = realloc(symtab, nr_syms*sizeof(*symtab));
+                memset(&symtab[nr_syms-16], 0, 16*sizeof(*symtab));
                 id = &symtab[n_syms];
             }
             n_syms ++;
@@ -384,7 +385,9 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     // reset
     loc = 0;
     n_syms = 0;
-    nr_syms = 16;
+    // Default keywords (6) + library symbols (5) + tracepoint headers (4) = 15 symbols
+    // Original nr_syms = 16 is too small, memory reallocations needed
+    nr_syms = 32;
     symtab = calloc(nr_syms, sizeof(struct symbol_table));
     data = d = malloc(datasize);
     str = s = malloc(strsize);
@@ -472,13 +475,25 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     prog = malloc(sizeof(*prog));
     if (!prog) goto err_return;
     memset(prog, 0, sizeof(*prog));
-    prog->symtab = realloc(symtab, nr_syms*sizeof(*symtab));
-    prog->nr_syms = nr_syms;
+    prog->symtab = realloc(symtab, n_syms*sizeof(*symtab));
+    prog->nr_syms = n_syms;
     if (data - d) { prog->data = d; prog->datasize = datasize; }
     else { free(d); prog->data = NULL; prog->datasize = 0; }
     if (str - s) prog->str = s; else { free(s); prog->str = NULL; }
     prog->insn = realloc(le, nr_insn*sizeof(long));
     prog->nr_insn = nr_insn;
+    // FIX: Instruction relocation mechanism for jump targets after realloc
+    // For JMP/JSR/BZ/BNZ instructions, adjust target address by offset
+    if (prog->insn != le) {
+        for (i=1; i<nr_insn; i++) {
+            switch (prog->insn[i]) {
+                case JMP: case JSR: case BZ: case BNZ:
+                    prog->insn[i+1] -= (void *)le - (void *)prog->insn;
+                default: break;
+            }
+            if (prog->insn[i] <= SI) i++;
+        }
+    }
 
     for (i=0; i<prog->nr_syms; i++) {
         struct symbol_table *sym = &prog->symtab[i];
@@ -651,6 +666,7 @@ void expr_dump(struct expr_prog *prog)
 
     printf("Instruction:\n");
     while (insn < insn_end) {
+        printf("  %p:", insn+1);
         printf("%8.4s", &INSN[*++insn * 5]);
         if (*insn <= SI) printf(" 0x%lx\n", *++insn); else printf("\n");
     }
