@@ -64,7 +64,13 @@ class PerfProf(object):
         env = None
         stdin = None
 
-        if memleak_check:
+        if memleak_check == "valgrind":
+            # Use valgrind for memory leak detection
+            valgrind_args = ["valgrind", "--leak-check=full", "--track-origins=yes", "--error-exitcode=1"]
+            # Create a copy of args to avoid modifying the original
+            self.args = valgrind_args + self.args.copy()
+        elif memleak_check:
+            # Use tcmalloc for memory leak detection (existing functionality)
             env = {"LD_PRELOAD" : TCMALLOC,
                    "HEAPCHECK"  : "draconian",
                    "PPROF_PATH" : PERF_PROF_PATH}
@@ -75,7 +81,9 @@ class PerfProf(object):
             if runtime != None and runtime > 0:
                 print('Runtime ' + str(runtime) + ' second', end='')
             print('\033[35m')
-            if memleak_check:
+            if memleak_check == "valgrind":
+                print('valgrind_check ', end='')
+            elif memleak_check:
                 for key, value in env.items():
                     print(key + '=' + value + ' ', end='')
             _a = list(map(self.escape_to_shell_param, self.args))
