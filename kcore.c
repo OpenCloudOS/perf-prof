@@ -181,18 +181,18 @@ static int kcore_argc_init(int argc, char *argv[])
 }
 
 static const char *kcore_desc[] = PROFILER_DESC("kcore",
-    "[OPTION...] [--8|16|32|64] [--string] kaddr|symbol [count]",
+    "[OPTION...] [-1|2|4|8] [--string] kaddr|symbol [count]",
     "Read kernel memory.", "",
     "SYNOPSIS",
     "    Read from /proc/kcore.", "",
     "EXAMPLES",
     "    "PROGRAME" kcore --string linux_banner",
-    "    "PROGRAME" kcore --64 0xffffffff81ade0c0 1");
+    "    "PROGRAME" kcore -8 0xffffffff81ade0c0 1");
 static const char *kcore_argv[] = PROFILER_ARGV("kcore",
     "OPTION:",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_PROFILER,
-    "string", "8", "16", "32", "64"
+    "string", "1", "2", "4", "8"
 );
 static profiler kcore_profiler = {
     .name = "kcore",
