@@ -461,6 +461,13 @@ static int monitor_ctx_init(struct prof_dev *dev)
                             tp->sys, tp->name);
             }
         }
+        // Check that any -e option does not have all events marked as untraced.
+        // At least one event in each -e option must be traced.
+        if (ctx->tp_list[i]->nr_real_tp - ctx->tp_list[i]->nr_untraced == 0) {
+            fprintf(stderr, "Error: All events in -e option %d are marked as untraced.\n", i + 1);
+            fprintf(stderr, "  -e %s\n", ctx->tp_list[i]->event_str);
+            goto failed;
+        }
     }
 
     if (stacks) {
