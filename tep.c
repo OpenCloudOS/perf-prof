@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <fnmatch.h>
+#include <linux/string.h>
 #include <linux/time64.h>
 #include <api/fs/tracing_path.h>
 #include <monitor.h>
@@ -489,17 +491,127 @@ static int tp_kprobe_uprobe(struct tp *tp, char *sys, char *name)
     return id;
 }
 
+struct wildcard_match_ctx {
+    const char *pattern;
+    const char *slash;
+    char *result;
+};
+
+static bool has_wildcard(const char *str)
+{
+    return strchr(str, '*') != NULL || strchr(str, '?') != NULL || strchr(str, '[') != NULL;
+}
+
+// Callback for matching events against wildcard pattern
+static void wildcard_match_cb(char **evt_list, int evt_num, void *opaque)
+{
+    struct wildcard_match_ctx *ctx = opaque;
+    int i;
+
+    for (i = 0; i < evt_num; i++) {
+        if (fnmatch(ctx->pattern, evt_list[i], 0) == 0) {
+            ctx->result = straddf(ctx->result, free, "%s%s%s,", evt_list[i],
+                                  ctx->slash ? "/" : "",
+                                  ctx->slash ? ctx->slash+1 : "");
+            if (!ctx->result)
+                return;
+        }
+    }
+}
+
+// Expand wildcard event pattern to concrete event names
+// Returns: expanded event string (comma-separated), or NULL on error
+// Caller must free the returned string
+static char *expand_wildcard_events(const char *pattern, const char *slash)
+{
+    struct wildcard_match_ctx ctx = {
+        .pattern = pattern,
+        .slash = slash,
+        .result = NULL,
+    };
+
+    print_tracepoint_events(wildcard_match_cb, &ctx);
+    if (ctx.result == NULL)
+        fprintf(stderr, "No events matching pattern '%s'\n", pattern);
+    return ctx.result;
+}
+
+// Expand all wildcard patterns in event_str
+// Returns: expanded event string, or original string if no wildcards
+// Caller must free the returned string if it differs from input
+static char *expand_event_wildcards(const char *event_str)
+{
+    char *result = NULL;
+    char *tmp_str = NULL;
+    char *s, *sep;
+    int result_len = 0;
+
+    tmp_str = event_str && *event_str ? strdup(event_str) : NULL;
+    if (!tmp_str)
+        return NULL;
+
+    s = tmp_str;
+    while ((sep = next_sep(s, ',')) != NULL || *s) {
+        char *event_name = s;
+        char *slash;
+
+        if (sep) {
+            *sep = '\0';
+            s = sep + 1;
+        }
+        slash = strchr(event_name, '/');
+        if (slash)
+            *slash = '\0';
+
+        // Check if event name (before any '/') contains wildcard
+        if (has_wildcard(event_name)) {
+            // Expand this event pattern
+            // If there were attributes after the event, append them to each expanded event
+            char *expanded = expand_wildcard_events(event_name, slash);
+            if (!expanded) {
+                free(tmp_str);
+                free(result);
+                return NULL;
+            }
+            result = straddf(result, free, expanded);
+            free (expanded);
+        } else {
+            if (slash)
+                *slash = '/';
+            result = straddf(result, free, "%s,", event_name);
+        }
+
+        if (!result || !sep)
+            break;
+    }
+
+    if (result) {
+        result_len = strlen(result);
+        result[result_len - 1] = '\0'; // Remove ','
+        free(tmp_str);
+        return result;
+    } else
+        return tmp_str;
+}
+
 struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 {
-    char *s = event_str;
+    char *expanded_str;
+    char *s;
     char *sep;
-    int i, str_len = strlen(event_str);
+    int i, str_len;
     int nr_tp = 0;
     struct tp_list *tp_list = NULL;
 
-    if (!s)
+    // Expand wildcard patterns if present
+    expanded_str = expand_event_wildcards(event_str);
+    if (!expanded_str)
         return NULL;
 
+    if (dev->env->verbose)
+        fprintf(stdout, "Wildcard expansion: '%s' -> '%s'\n", event_str, expanded_str);
+
+    s = expanded_str;
     while ((sep = next_sep(s, ',')) != NULL) {
         nr_tp ++;
         s = sep + 1;
@@ -520,15 +632,18 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
      * - Parsed string: tp_list->event_str + str_len + 1 (for in-place tokenization)
      * The parsed copy will have '\0' inserted to separate individual event names
      */
+    str_len = strlen(expanded_str);
     tp_list->event_str = malloc(str_len*2 + 2);
     if (!tp_list->event_str) {
         free(tp_list);
+        free(expanded_str);
         return NULL;
     }
     tp_list->nr_tp = nr_tp;
-    strcpy(tp_list->event_str, event_str);
+    strcpy(tp_list->event_str, expanded_str);
     s = tp_list->event_str + str_len + 1;
-    strcpy(s, event_str);
+    strcpy(s, expanded_str);
+    free(expanded_str);
     i = 0;
     while ((sep = next_sep(s, ',')) != NULL) {
         tp_list->tp[i++].name = s;
