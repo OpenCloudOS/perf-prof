@@ -92,7 +92,6 @@ struct multi_trace_ctx {
     struct callchain_ctx *cc;
     struct perf_thread_map *thread_map; // profiler rundelay
     bool comm; // profiler rundelay, syscalls
-    bool rundelay; // profiler rundelay
     int level; // level = sched_init()
 
     /* lost */
@@ -381,10 +380,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     struct tep_handle *tep;
     int oncpu = prof_dev_ins_oncpu(dev);
     struct two_event_options options = {
-        .keyname = oncpu ? "CPU" : "THREAD",
+        .keyname = (oncpu && !ctx->comm) ? "CPU" : "THREAD",
         .perins = env->perins,
         .comm = ctx->comm,
-        .rundelay = strcmp(dev->prof->name, "rundelay") == 0,
         .only_print_greater_than = env->only_print_greater_than,
         .greater_than = env->greater_than,
         .lower_than = env->lower_than,
@@ -402,7 +400,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     ctx->dev = dev;
     ctx->oncpu = oncpu;
-    ctx->rundelay = options.rundelay;
     INIT_LIST_HEAD(&ctx->needed_list);
     INIT_LIST_HEAD(&ctx->pending_list);
     INIT_LIST_HEAD(&ctx->timeline_lost_list);
@@ -445,7 +442,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
                 nr_real_nonpull_tp += env->detail ? 1 : !tp->untraced;
             if (env->key && !tp->key) {
                 struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
-                if (!tep_find_any_field(event, env->key)) {
+                if (event && !tep_find_any_field(event, env->key)) {
                     fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
                     goto failed;
                 }
@@ -546,7 +543,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     } else
         goto failed;
 
-    if (keyname) {
+    // rundelay automatically sets the key.
+    if (keyname || strcmp(dev->prof->name, "rundelay") == 0) {
         ctx->lost_affect = LOST_AFFECT_ALL_EVENT;
     } else {
         // use instance as key, cpu or pid.
@@ -2377,21 +2375,24 @@ static int rundelay_filter(struct prof_dev *dev)
     for (i = 0; i < ctx->nr_list; i++) {
         struct tp *tp;
         for_each_real_tp(ctx->tp_list[i], tp, j) {
-            if (!tp->untraced && tp->key &&
+            if (!tp->untraced &&
                 (tp->id == sched_wakeup || tp->id == sched_wakeup_new || tp->id == sched_switch)) {
                 struct tp_filter *tp_filter = NULL;
                 char buff[4096];
                 char *filter = NULL;
 
                 if (tp->id == sched_wakeup || tp->id == sched_wakeup_new) {
-                    if (i == 0 && strcmp(tp->key, "pid") == 0) {
-                        match ++;
+                    if (i == 0) {
+                        if (tp_set_key(tp, "pid") == 0)
+                            match ++;
                         tp_filter = tp_filter_new(ctx->thread_map, "pid", env->filter, "comm");
                     }
                 } else if (tp->id == sched_switch) {
-                    if (i == 0 && strcmp(tp->key, "prev_pid") == 0) {
+                    if (i == 0) {
                         int preempt = kernel_release() >= KERNEL_VERSION(4, 14, 0) ? TASK_REPORT_MAX : 0;
-                        match ++;
+
+                        if (tp_set_key(tp, "prev_pid") == 0)
+                            match ++;
                         tp_filter = tp_filter_new(ctx->thread_map, "prev_pid", env->filter, "prev_comm");
                         if (tp_filter) {
                             snprintf(buff, sizeof(buff), "prev_state==%d && (%s)", preempt, tp_filter->filter);
@@ -2401,8 +2402,9 @@ static int rundelay_filter(struct prof_dev *dev)
                             tp_update_filter(tp, buff);
                         }
                     }
-                    if (i == 1 && strcmp(tp->key, "next_pid") == 0) {
-                        match ++;
+                    if (i == 1) {
+                        if (tp_set_key(tp, "next_pid") == 0)
+                            match ++;
                         tp_filter = tp_filter_new(ctx->thread_map, "next_pid", env->filter, "next_comm");
                     }
                 }
@@ -2445,30 +2447,31 @@ static void rundelay_help(struct help_ctx *hctx)
 }
 
 static const char *rundelay_desc[] = PROFILER_DESC("rundelay",
-    "[OPTION...] -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\\n"
-    "        -e sched:sched_switch//key=next_pid/ -k pid [--filter comm] [--than ns] [--detail] [--perins] [--heatmap file]",
+    "[OPTION...] -e sched:sched_wakeup*,sched:sched_switch \\\n"
+    "        -e sched:sched_switch [--filter comm] [--than ns] [--detail] [--perins] [--heatmap file]",
     "Profile scheduling rundelay.",
     "",
     "SYNOPSIS",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.",
     "",
     "EXAMPLES",
-    "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid --order -p 1 -i 1000 --than 4ms",
-    "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid --order --filter java -i 1000 --than 4ms",
-    "    "PROGRAME" rundelay -e sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/ \\",
-    "                       -e sched:sched_switch//key=next_pid/ -k pid --order -i 1000");
+    "    "PROGRAME" rundelay -e sched:sched_wakeup*,sched:sched_switch \\",
+    "                       -e sched:sched_switch -p 1 -i 1000 --than 4ms",
+    "    "PROGRAME" rundelay -e sched:sched_wakeup*,sched:sched_switch \\",
+    "                       -e sched:sched_switch//stack/ --filter java -i 1000 --than 4ms",
+    "    "PROGRAME" rundelay -e sched:sched_wakeup*,sched:sched_switch \\",
+    "                       -e sched:sched_switch -i 1000");
 static const char *rundelay_argv[] = PROFILER_ARGV("rundelay",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "event", "key", "than", "detail", "perins", "heatmap", "filter\nFilter process comm");
+    PROFILER_ARGV_PROFILER, "event", "than", "detail", "perins", "heatmap", "filter\nFilter process comm");
 static profiler rundelay = {
     .name = "rundelay",
     .desc = rundelay_desc,
     .argv = rundelay_argv,
-    .compgen = "-e 'sched:sched_wakeup,sched:sched_wakeup_new,sched:sched_switch//key=prev_pid/' -e 'sched:sched_switch//key=next_pid/' -k pid --order",
+    .compgen = "-e 'sched:sched_wakeup*,sched:sched_switch' -e 'sched:sched_switch'",
     .pages = 64,
+    .order = 1,
     .help = rundelay_help,
     .init = rundelay_init,
     .filter = rundelay_filter,

@@ -1013,6 +1013,23 @@ long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size)
     return expr_run(prog);
 }
 
+int tp_set_key(struct tp *tp, const char *key)
+{
+    if (!tp->key || strcmp(tp->key, key)) {
+        if (tp->key_prog)
+            expr_destroy(tp->key_prog);
+
+        tp->key_prog = tp_new_prog(tp, (char *)key);
+        if (!tp->key_prog)
+            return -1;
+        tp->key = key;
+
+        if (tp->dev->env->verbose >= VERBOSE_NOTICE)
+            printf("%s:%s key \"%s\"\n", tp->sys, tp->name, tp->key);
+    }
+    return 0;
+}
+
 char *tp_get_comm(struct tp *tp, void *data, int size)
 {
     long comm = tp_prog_run(tp, tp->comm_prog, data, size);

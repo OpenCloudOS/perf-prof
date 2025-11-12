@@ -23,7 +23,6 @@ struct two_event_options {
     int keylen;
     bool perins;
     bool comm;
-    bool rundelay;
     bool only_print_greater_than;
     unsigned long greater_than;
     unsigned long lower_than;
