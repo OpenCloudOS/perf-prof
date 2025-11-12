@@ -430,6 +430,10 @@ static char *next_sep(char *s, int c)
         if (*s == '\'' || *s == '"') {
             int quote = *s++;
             while (*s && *s++ != quote);
+        } else if (*s == '(') {
+            s = next_sep(++s, ')');
+            if (!s) break;
+            s++;
         } else
             s++;
     }
@@ -848,7 +852,14 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                         perf_cpu_map__put(tp->cpus);
                         tp->cpus = NULL;
                     }
+                } else if (*attr) {
+                    fprintf(stderr, "Syntax error: Unknown attr %s\n", attr);
+                    goto err_out;
                 }
+            }
+            if (*s) {
+                fprintf(stderr, "Syntax error: %s\n", s);
+                goto err_out;
             }
         }
 
