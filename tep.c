@@ -599,7 +599,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     char *expanded_str;
     char *s;
     char *sep;
-    int i, str_len;
+    int i;
     int nr_tp = 0;
     struct tp_list *tp_list = NULL;
 
@@ -626,24 +626,9 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     if (!tp_list)
         return NULL;
 
-    /*
-     * Allocate space for dual string storage:
-     * - Original string: tp_list->event_str (for error messages and display)
-     * - Parsed string: tp_list->event_str + str_len + 1 (for in-place tokenization)
-     * The parsed copy will have '\0' inserted to separate individual event names
-     */
-    str_len = strlen(expanded_str);
-    tp_list->event_str = malloc(str_len*2 + 2);
-    if (!tp_list->event_str) {
-        free(tp_list);
-        free(expanded_str);
-        return NULL;
-    }
+    tp_list->event_str = expanded_str;
     tp_list->nr_tp = nr_tp;
-    strcpy(tp_list->event_str, expanded_str);
-    s = tp_list->event_str + str_len + 1;
-    strcpy(s, expanded_str);
-    free(expanded_str);
+    s = tp_list->event_str;
     i = 0;
     while ((sep = next_sep(s, ',')) != NULL) {
         tp_list->tp[i++].name = s;

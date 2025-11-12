@@ -426,6 +426,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     for (i = 0; i < ctx->nr_list; i++) {
         struct tp *tp;
+        int nr_real_untraced = 0;
+
         ctx->tp_list[i] = tp_list_new(dev, env->events[i]);
         if (!ctx->tp_list[i]) {
             goto failed;
@@ -456,13 +458,14 @@ static int monitor_ctx_init(struct prof_dev *dev)
                     !tp_kernel(tp) && !tp->vcpu)
                     fprintf(stderr, "The event %s:%s needs the vm attr to convert the fields of the Guest events.\n",
                             tp->sys, tp->name);
+                nr_real_untraced++;
             }
         }
         // Check that any -e option does not have all events marked as untraced.
         // At least one event in each -e option must be traced.
-        if (ctx->tp_list[i]->nr_real_tp - ctx->tp_list[i]->nr_untraced == 0) {
-            fprintf(stderr, "Error: All events in -e option %d are marked as untraced.\n", i + 1);
-            fprintf(stderr, "  -e %s\n", ctx->tp_list[i]->event_str);
+        if (ctx->tp_list[i]->nr_real_tp - nr_real_untraced == 0) {
+            fprintf(stderr, "Error: All tracepoint events in -e option %d are marked as untraced.\n", i + 1);
+            fprintf(stderr, "  -e %s\n", env->events[i]);
             goto failed;
         }
     }
