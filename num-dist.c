@@ -284,8 +284,11 @@ static long num_dist_ftrace_filter(struct prof_dev *dev, union perf_event *event
     bool callchain = !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
     void *raw;
     int size;
+    struct expr_global *glo;
+
     __raw_size(event, &raw, &size, callchain);
-    return tp_list_ftrace_filter(dev, ctx->tp_list, raw, size);
+    glo = GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size);
+    return tp_list_ftrace_filter(dev, ctx->tp_list, glo);
 }
 
 static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int instance)

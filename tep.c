@@ -1305,18 +1305,23 @@ err_return:
     return err;
 }
 
-long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, void *data, int size)
+long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, struct expr_global *global)
 {
-    unsigned short common_type = *(unsigned short *)data;
+    unsigned short common_type;
     struct tp *tp;
     int i;
+
+    if (!global || !global->data)
+        return -1;
+
+    common_type = *(unsigned short *)global->data;
 
     for_each_real_tp(tp_list, tp, i) {
         if (tp->id == common_type) {
             if (!tp->ftrace_filter)
                 return 1;
             else
-                return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(0, 0, data, size));
+                return tp_prog_run(tp, tp->ftrace_filter, global);
         }
     }
     return -1;

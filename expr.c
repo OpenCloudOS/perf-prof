@@ -888,7 +888,8 @@ static long expr_ftrace_filter(struct prof_dev *dev, union perf_event *event, in
 {
     struct expression_info *info = dev->private;
     struct sample_type_header *raw = (void *)event->sample.array;
-    return tp_list_ftrace_filter(dev, info->tp_list, raw->raw.data, raw->raw.size);
+    struct expr_global *glo = GLOBAL(raw->cpu_entry.cpu, raw->tid_entry.pid, raw->raw.data, raw->raw.size);
+    return tp_list_ftrace_filter(dev, info->tp_list, glo);
 }
 
 static void expr_sample(struct prof_dev *dev, union perf_event *event, int instance)

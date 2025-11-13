@@ -718,11 +718,13 @@ static long kmemleak_ftrace_filter(struct prof_dev *dev, union perf_event *event
     void *raw;
     int size;
     long err;
+    struct expr_global *glo;
 
     __raw_size(event, callchain, &raw, &size);
-    err = tp_list_ftrace_filter(dev, ctx->tp_alloc, raw, size);
+    glo = GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size);
+    err = tp_list_ftrace_filter(dev, ctx->tp_alloc, glo);
     if (err < 0)
-        err = tp_list_ftrace_filter(dev, ctx->tp_free, raw, size);
+        err = tp_list_ftrace_filter(dev, ctx->tp_free, glo);
     return err;
 }
 

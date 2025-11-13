@@ -731,14 +731,17 @@ static long kvm_mmu_ftrace_filter(struct prof_dev *dev, union perf_event *event,
     struct kvmmmu_ctx *ctx = dev->private;
     struct sample_type_raw *raw = (void *)event->sample.array;
     unsigned short common_type = raw->raw.common_type;
+    struct expr_global *glo;
 
     if (common_type == ctx->kvm_mmu_get_page ||
         common_type == ctx->kvm_mmu_prepare_zap_page ||
         common_type == ctx->kvm_mmu_set_spte ||
         common_type == ctx->mark_mmio_spte)
         return 1;
-    else
-        return tp_list_ftrace_filter(dev, ctx->tp_list, raw->raw.data, raw->raw.size);
+    else {
+        glo = GLOBAL(raw->cpu_entry.cpu, raw->tid_entry.pid, raw->raw.data, raw->raw.size);
+        return tp_list_ftrace_filter(dev, ctx->tp_list, glo);
+    }
 }
 
 static void kvm_mmu_sample(struct prof_dev *dev, union perf_event *event, int instance)
