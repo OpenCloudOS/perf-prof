@@ -24,7 +24,7 @@ struct top_ctx {
     struct tp_list *tp_list;
     struct rblist top_list;
     unsigned long nr_events;
-
+    struct tp *tp_printkey;
     char *EVENT; //toupper(env->event)
     int nr_fields;
     int nr_top_by;
@@ -244,13 +244,15 @@ static int monitor_ctx_init(struct prof_dev *dev)
         }
         if (env->key && !tp->key) {
             struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
-            if (!tep_find_any_field(event, env->key)) {
+            if (event && !tep_find_any_field(event, env->key)) {
                 fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
                 goto failed;
             }
             tp->key_prog = tp_new_prog(tp, env->key);
             tp->key = env->key;
         }
+        if (tp->printkey_prog && !ctx->tp_printkey)
+            ctx->tp_printkey = tp;
 
         if (tp->key && !key_name) {
             key_name = strdup(tp->key);
@@ -659,10 +661,12 @@ static void top_interval(struct prof_dev *dev)
         if (!ctx->altwin || !dev->tty.row || ++row < dev->tty.row) {
             t = container_of(rbn, struct top_info, rbnode);
             if (!ctx->only_comm) {
-                if (t->key < 100000000UL)
+                if (ctx->tp_printkey) {
+                    int ret = tp_print_key(ctx->tp_printkey, t->key);
+                    if (ret > 0 && ctx->key_len+1 > ret)
+                        printf("%-*s ", ctx->key_len - ret, "");
+                } else
                     printf("%*lu ", ctx->key_len, t->key);
-                else
-                    printf("0x%*lx ", ctx->key_len, t->key);
             }
             for (i = 0; i < ctx->nr_fields; i++)
                 printf("%*lu ", ctx->fields[i].len, t->counter[i]);

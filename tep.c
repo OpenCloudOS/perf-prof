@@ -819,6 +819,16 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 
                     tp->key_prog = prog;
                     tp->key = value;
+                } else if (strcmp(attr, "printkey") == 0) {
+                    struct global_var_declare declare[2] = {0};
+                    declare[0].name = "key";
+                    declare[0].offset = 0;
+                    declare[0].size = declare[0].elementsize = sizeof(u64);
+                    declare[0].is_unsigned = 1;
+                    tp->printkey_prog = expr_compile(value, declare);
+                    tp->printkey = value;
+                    if (!tp->printkey_prog)
+                        goto err_out;
                 } else if (strcmp(attr, "role") == 0) {
                     if (!fields) fields = tep__event_fields(id);
                     if (fields)  prog = expr_compile(value, fields);
@@ -954,6 +964,8 @@ void tp_list_free(struct tp_list *tp_list)
             expr_destroy(tp->num_prog);
         if (tp->key_prog)
             expr_destroy(tp->key_prog);
+        if (tp->printkey_prog)
+            expr_destroy(tp->printkey_prog);
         if (tp->role_prog)
             expr_destroy(tp->role_prog);
         tp_broadcast_free(tp);
@@ -1024,6 +1036,14 @@ int tp_set_key(struct tp *tp, const char *key)
             printf("%s:%s key \"%s\"\n", tp->sys, tp->name, tp->key);
     }
     return 0;
+}
+
+long tp_print_key(struct tp *tp, u64 key)
+{
+    if (tp->printkey_prog)
+        return tp_prog_run(tp, tp->printkey_prog, &key, sizeof(key));
+    else
+        return 0;
 }
 
 char *tp_get_comm(struct tp *tp, void *data, int size)

@@ -561,7 +561,16 @@ static void delay_print_node(void *opaque, struct latency_node *node)
     bool than = !!opts->greater_than;
 
     if (opts->perins) {
-        printf("%-*lu ", opts->keylen, node->instance);
+        int ret = 0;
+        if (two->tp1->printkey_prog)
+            ret = tp_print_key(two->tp1, node->instance);
+        else if (two->tp2->printkey_prog)
+            ret = tp_print_key(two->tp2, node->instance);
+        if (ret > 0) {
+            if (opts->keylen+1 > ret)
+                printf("%-*s ", opts->keylen - ret, "");
+        } else printf("%-*lu ", opts->keylen, node->instance);
+
         // if (comm) node->instance means pid.
         if (opts->comm && delay_class->global_comm)
             printf("%-*s ", TASK_COMM_LEN, tep__pid_to_comm((int)node->instance));
