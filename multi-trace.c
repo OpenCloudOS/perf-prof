@@ -2093,6 +2093,14 @@ static int syscalls_init(struct prof_dev *dev)
         free(env->impl);
     env->impl = strdup(TWO_EVENT_SYSCALLS_IMPL);
 
+    if (env->key)
+        free(env->key);
+    if (prof_dev_ins_oncpu(dev)) {
+        env->key = strdup("common_pid");
+        env->order = 1;
+    } else
+        env->key = NULL;
+
     if (multi_trace_init(dev) < 0)
         return -1;
 
@@ -2129,17 +2137,17 @@ static void syscalls_help(struct help_ctx *hctx)
 }
 
 static const char *syscalls_desc[] = PROFILER_DESC("syscalls",
-    "[OPTION...] -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [-k common_pid] [--than ns] [--perins] [--heatmap file]",
+    "[OPTION...] -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit [--than ns] [--perins] [--heatmap file]",
     "Profile syscalls latency.", "",
     "SYNOPSIS",
     "    Based on multi-trace. See '"PROGRAME" multi-trace -h' for more information.", "",
     "EXAMPLES",
     "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -p 1 --perins",
-    "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -k common_pid --order -C 0");
+    "    "PROGRAME" syscalls -e raw_syscalls:sys_enter -e raw_syscalls:sys_exit -C 0");
 static const char *syscalls_argv[] = PROFILER_ARGV("syscalls",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_CALLCHAIN_FILTER,
-    PROFILER_ARGV_PROFILER, "event", "key", "than", "perins", "heatmap");
+    PROFILER_ARGV_PROFILER, "event", "than", "perins", "heatmap");
 static profiler syscalls = {
     .name = "syscalls",
     .desc = syscalls_desc,
