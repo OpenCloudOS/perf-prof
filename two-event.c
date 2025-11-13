@@ -1139,7 +1139,9 @@ static void mem_profile_two(struct two_event *two, union perf_event *event1, uni
         profile = container_of(two, struct mem_profile, base);
 
         multi_trace_raw_size(event1, &raw, &size, two->tp1);
-        bytes_alloc = tp_get_mem_size(two->tp1, raw, size);
+
+        data = (void *)event1->sample.array;
+        bytes_alloc = tp_get_mem_size(two->tp1, GLOBAL(data->h.cpu_entry.cpu, data->h.tid_entry.pid, raw, size));
 
         profile->nr_alloc ++;
         profile->alloc_bytes += bytes_alloc;

@@ -1613,7 +1613,7 @@ static long multi_trace_ftrace_filter(struct prof_dev *dev, union perf_event *ev
                 if (!tp->ftrace_filter)
                     return 1;
                 multi_trace_raw_size(event, &raw, &size, tp);
-                return tp_prog_run(tp, tp->ftrace_filter, raw, size);
+                return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
             }
         }
     }
@@ -1692,7 +1692,7 @@ found:
             if (event_is_sched_wakeup_and_unnecessary) ctx->sched_wakeup_unnecessary ++;
 
             if (tp->role_prog)
-                role.role = tp_get_role(tp, raw, size);
+                role.role = tp_get_role(tp, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
         }
         /*
          * The role ATTR can only change the `need_find_prev' and `need_backup' variables
@@ -1720,7 +1720,7 @@ found:
     // !untraced: tp->key || env->key
     //  untraced: tp->key
     if (tp->key_prog) {
-        key = tp_get_key(tp, raw, size);
+        key = tp_get_key(tp, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
     } else
         key = ctx->oncpu ? prof_dev_ins_cpu(dev, instance) : prof_dev_ins_thread(dev, instance);
 

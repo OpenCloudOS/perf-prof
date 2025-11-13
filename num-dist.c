@@ -316,7 +316,7 @@ static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int i
     callchain = tp->stack || env->callchain;
     __raw_size(event, &raw, &size, callchain);
 
-    delta = tp_get_num(tp, raw, size);
+    delta = tp_get_num(tp, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
     latency_dist_input(ctx->dist, env->perins?instance:0, i, delta, env->greater_than);
 
     if (env->heatmap)

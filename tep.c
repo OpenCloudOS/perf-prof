@@ -1011,11 +1011,11 @@ struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str)
     return prog;
 }
 
-long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size)
+long tp_prog_run(struct tp *tp, struct expr_prog *prog, struct expr_global *global)
 {
-    if (expr_load_data(prog, data, size) != 0) {
+    if (expr_load_global(prog, global) != 0) {
         expr_dump(prog);
-        fprintf(stderr, "tp %s:%s prog load data failed!\n", tp->sys, tp->name);
+        fprintf(stderr, "tp %s:%s prog load global failed!\n", tp->sys, tp->name);
         return -1;
     }
     return expr_run(prog);
@@ -1041,44 +1041,44 @@ int tp_set_key(struct tp *tp, const char *key)
 long tp_print_key(struct tp *tp, u64 key)
 {
     if (tp->printkey_prog)
-        return tp_prog_run(tp, tp->printkey_prog, &key, sizeof(key));
+        return tp_prog_run(tp, tp->printkey_prog, GLOBAL(0, 0, &key, sizeof(key)));
     else
         return 0;
 }
 
-char *tp_get_comm(struct tp *tp, void *data, int size)
+char *tp_get_comm(struct tp *tp, struct expr_global *global)
 {
-    long comm = tp_prog_run(tp, tp->comm_prog, data, size);
+    long comm = tp_prog_run(tp, tp->comm_prog, global);
     return comm == -1 ? (char *)"Error" : (char *)(unsigned long)comm;
 }
 
-unsigned long tp_get_key(struct tp *tp, void *data, int size)
+unsigned long tp_get_key(struct tp *tp, struct expr_global *global)
 {
-    long key = tp_prog_run(tp, tp->key_prog, data, size);
+    long key = tp_prog_run(tp, tp->key_prog, global);
     return key == -1 ? 0 : (unsigned long)key;
 }
 
-unsigned long tp_get_role(struct tp *tp, void *data, int size)
+unsigned long tp_get_role(struct tp *tp, struct expr_global *global)
 {
-    long key = tp_prog_run(tp, tp->role_prog, data, size);
+    long key = tp_prog_run(tp, tp->role_prog, global);
     return key == -1 ? 0 : (unsigned long)key;
 }
 
-unsigned long tp_get_num(struct tp *tp, void *data, int size)
+unsigned long tp_get_num(struct tp *tp, struct expr_global *global)
 {
-    long num = tp_prog_run(tp, tp->num_prog, data, size);
+    long num = tp_prog_run(tp, tp->num_prog, global);
     return num == -1 ? 0 : (unsigned long)num;
 }
 
-void *tp_get_mem_ptr(struct tp *tp, void *data, int size)
+void *tp_get_mem_ptr(struct tp *tp, struct expr_global *global)
 {
-    long mem_ptr = tp_prog_run(tp, tp->mem_ptr_prog, data, size);
+    long mem_ptr = tp_prog_run(tp, tp->mem_ptr_prog, global);
     return mem_ptr == -1 ? NULL : (void *)mem_ptr;
 }
 
-unsigned long tp_get_mem_size(struct tp *tp, void *data, int size)
+unsigned long tp_get_mem_size(struct tp *tp, struct expr_global *global)
 {
-    long mem_size = tp_prog_run(tp, tp->mem_size_prog, data, size);
+    long mem_size = tp_prog_run(tp, tp->mem_size_prog, global);
     return mem_size == -1 ? 1 : (unsigned long)mem_size;
 }
 
@@ -1316,7 +1316,7 @@ long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, void *
             if (!tp->ftrace_filter)
                 return 1;
             else
-                return tp_prog_run(tp, tp->ftrace_filter, data, size);
+                return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(0, 0, data, size));
         }
     }
     return -1;
@@ -1382,7 +1382,7 @@ out:
 static bool default_samecpu(struct tp *tp, void *raw, int size, int cpu)
 {
     if (tp->tp_cpu_prog) {
-        long result = tp_prog_run(tp, tp->tp_cpu_prog, raw, size);
+        long result = tp_prog_run(tp, tp->tp_cpu_prog, GLOBAL(0, 0, raw, size));
         return result == cpu;
     } else
         return false;
@@ -1391,7 +1391,7 @@ static bool default_samecpu(struct tp *tp, void *raw, int size, int cpu)
 static bool default_samepid(struct tp *tp, void *raw, int size, int pid)
 {
     if (tp->tp_pid_prog) {
-        long result = tp_prog_run(tp, tp->tp_pid_prog, raw, size);
+        long result = tp_prog_run(tp, tp->tp_pid_prog, GLOBAL(0, 0, raw, size));
         return result == pid;
     } else
         return false;

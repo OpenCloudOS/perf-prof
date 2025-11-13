@@ -744,6 +744,7 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
     int size;
     bool is_alloc;
     bool callchain;
+    struct expr_global *glo;
 
     /* PERF_SAMPLE_ID:
      * alloc need stack, free does not need stack, PERF_SAMPLE_ID must be set.
@@ -777,10 +778,11 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
         tep__update_comm(NULL, data->tid_entry.tid);
     }
 
+    glo = GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size);
     if (is_alloc) {
-        ptr = tp_get_mem_ptr(tp, raw, size);
+        ptr = tp_get_mem_ptr(tp, glo);
         if (tp->mem_size_prog)
-            bytes_alloc = tp_get_mem_size(tp, raw, size);
+            bytes_alloc = tp_get_mem_size(tp, glo);
 
         entry.ptr = (__u64)ptr;
         entry.bytes_alloc = (unsigned long)bytes_alloc;
@@ -798,7 +800,7 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
         }
         ctx->stat.total_alloc ++;
     } else {
-        ptr = tp_get_mem_ptr(tp, raw, size);
+        ptr = tp_get_mem_ptr(tp, glo);
 
         entry.ptr = (__u64)ptr;
         entry.insert = 0;

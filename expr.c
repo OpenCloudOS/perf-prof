@@ -96,6 +96,9 @@ enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
 #define ADD_LIB(name, _type, insn) \
     { p = (char *)name; { next(); id->class = Sys; id->type = _type; id->value = insn; } }
+#define ADD_GLO(name, _type, _value) \
+    { p = (char *)name; { next(); id->class = Glo; id->type = _type; id->nr_elm = 1; id->value = (long)_value; } }
+
 
 #define TK_SHIFT 6
 #define HASH(tk, len) (((tk) << TK_SHIFT) + (len))
@@ -385,7 +388,7 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     // reset
     loc = 0;
     n_syms = 0;
-    // Default keywords (6) + library symbols (5) + tracepoint headers (4) = 15 symbols
+    // Default keywords (6) + library symbols (5) + default global (2) + tracepoint headers (4) = 17 symbols
     // Original nr_syms = 16 is too small, memory reallocations needed
     nr_syms = 32;
     symtab = calloc(nr_syms, sizeof(struct symbol_table));
@@ -395,6 +398,11 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
 
     if (!symtab || !data || !str || !le)
         goto err_return;
+
+    prog = calloc(1, sizeof(*prog));
+    if (!prog)
+        goto err_return;
+
 
     // add keywords to symbol table
     ADD_KEY("char", Int, CHAR);
@@ -415,6 +423,11 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("ntohs", SHORT, NTHS);
     // int strncmp(const char *s1, const char *s2, long n);
     ADD_LIB("strncmp", INT, STRNCMP);
+
+    // add default global var to symbol table
+    ADD_GLO("__cpu", INT, &prog->glo.__cpu);
+    ADD_GLO("__pid", INT, &prog->glo.__pid);
+
 
     data = d; // reset data
     memset(d, 0, datasize);
@@ -487,9 +500,6 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
 
     nr_insn = e - le + 1;
 
-    prog = malloc(sizeof(*prog));
-    if (!prog) goto err_return;
-    memset(prog, 0, sizeof(*prog));
     prog->symtab = realloc(symtab, n_syms*sizeof(*symtab));
     prog->nr_syms = n_syms;
     if (data - d) { prog->data = d; prog->datasize = datasize; }
@@ -649,6 +659,23 @@ int expr_load_data(struct expr_prog *prog, void *d, int size)
     if (!prog || size > prog->datasize) return -1;
     memcpy(prog->data, d, size);
     prog->data[size] = 0;
+    return 0;
+}
+
+int expr_load_global(struct expr_prog *prog, struct expr_global *global)
+{
+    if (!prog || !global) return -1;
+
+    // Load tracepoint raw data
+    if (global->data && global->size > 0) {
+        if (expr_load_data(prog, global->data, global->size) != 0)
+            return -1;
+    }
+
+    // Set default global variables
+    prog->glo.__cpu = global->__cpu;
+    prog->glo.__pid = global->__pid;
+
     return 0;
 }
 
@@ -874,6 +901,8 @@ static void expr_sample(struct prof_dev *dev, union perf_event *event, int insta
     tp_print_marker(&info->tp_list->tp[0]);
     tp_print_event(&info->tp_list->tp[0], raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
+    info->prog->glo.__cpu = raw->cpu_entry.cpu;
+    info->prog->glo.__pid = raw->tid_entry.pid;
     expr_load_data(info->prog, raw->raw.data, raw->raw.size);
     result = expr_run(info->prog);
     printf("result: 0x%lx\n", result);

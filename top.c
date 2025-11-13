@@ -465,6 +465,7 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
     struct perf_evsel *evsel = NULL;
     void *data = raw->raw.data;
     int size = raw->raw.size;
+    struct expr_global *glo = GLOBAL(raw->cpu_entry.cpu, raw->tid_entry.pid, data, size);
     struct tp *tp = NULL;
     struct tp *tmp;
     int field = 0;
@@ -549,7 +550,7 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
      * commATTR/commATTR       commATTR has the same meaning.
      */
     if (tp->key_prog)
-        info.key = tp_get_key(tp, data, size);
+        info.key = tp_get_key(tp, glo);
     else {
         info.key = raw->tid_entry.tid;
         // raw->tid_entry.pid may be -1, when process exits.
@@ -559,7 +560,7 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
 
     if (ctx->show_comm) {
         if (tp->comm_prog)
-            info.pcomm = tp_get_comm(tp, data, size);
+            info.pcomm = tp_get_comm(tp, glo);
         else {
             // !comm_prog: info.key has PID meaning.
             tep__update_comm(NULL, (int)info.key);
@@ -578,7 +579,7 @@ static void top_sample(struct prof_dev *dev, union perf_event *event, int instan
     p = container_of(rbn, struct top_info, rbnode);
     for (i = 0; i < tp->nr_top; i++, field++) {
         if (!tp->top_add[i].event)
-            p->counter[field] += (unsigned long)tp_prog_run(tp, tp->top_add[i].field_prog, data, size);
+            p->counter[field] += (unsigned long)tp_prog_run(tp, tp->top_add[i].field_prog, glo);
         else
             p->counter[field] += 1;
     }

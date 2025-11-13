@@ -205,15 +205,15 @@ void tp_print_marker(struct tp *tp);
 #include <event-spread.h>
 
 struct expr_prog *tp_new_prog(struct tp *tp, char *expr_str);
-long tp_prog_run(struct tp *tp, struct expr_prog *prog, void *data, int size);
+long tp_prog_run(struct tp *tp, struct expr_prog *prog, struct expr_global *global);
 int tp_set_key(struct tp *tp, const char *key);
 long tp_print_key(struct tp *tp, u64 key);
-char *tp_get_comm(struct tp *tp, void *data, int size);
-void *tp_get_mem_ptr(struct tp *tp, void *data, int size);
-unsigned long tp_get_mem_size(struct tp *tp, void *data, int size);
-unsigned long tp_get_key(struct tp *tp, void *data, int size);
-unsigned long tp_get_role(struct tp *tp, void *data, int size);
-unsigned long tp_get_num(struct tp *tp, void *data, int size);
+char *tp_get_comm(struct tp *tp, struct expr_global *global);
+void *tp_get_mem_ptr(struct tp *tp, struct expr_global *global);
+unsigned long tp_get_mem_size(struct tp *tp, struct expr_global *global);
+unsigned long tp_get_key(struct tp *tp, struct expr_global *global);
+unsigned long tp_get_role(struct tp *tp, struct expr_global *global);
+unsigned long tp_get_num(struct tp *tp, struct expr_global *global);
 void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);

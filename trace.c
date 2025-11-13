@@ -260,7 +260,7 @@ static long trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, i
             if (!tp->ftrace_filter)
                 return 1;
             __raw_size(event, &raw, &size, have_callchain(dev, event, evsel));
-            return tp_prog_run(tp, tp->ftrace_filter, raw, size);
+            return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
         }
     }
     return 0;
@@ -301,7 +301,7 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     }
     tp_print_event(tp, data->time, data->cpu_entry.cpu, raw, size);
     if (tp && tp->exec_prog)
-        tp_prog_run(tp, tp->exec_prog, raw, size);
+        tp_prog_run(tp, tp->exec_prog, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
     __print_callchain(dev, event, callchain);
 }
 
