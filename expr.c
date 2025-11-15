@@ -375,7 +375,7 @@ static const char *ksymbol(unsigned long func)
     char *name = function_resolver(NULL, (unsigned long long *)&func, NULL);
     return name ? : "Unknown";
 }
-
+static void dump_symtab(struct symbol_table *symtab, int nr, bool print_value);
 struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare)
 {
     int i, err;
@@ -529,6 +529,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     return prog;
 
 err_return:
+    printf("Available variables:\n");
+    dump_symtab(symtab, nr_syms, 0);
     if (symtab) free(symtab);
     if (d) free(d);
     if (s) free(s);
@@ -697,10 +699,42 @@ void expr_destroy(struct expr_prog *prog)
     free(prog);
 }
 
+static void dump_symtab(struct symbol_table *symtab, int nr, bool print_value)
+{
+    int i;
+    for (i = 0; i < nr; i++) {
+        struct symbol_table *s = &symtab[i];
+        if (s->token == Id && s->class == Glo) {
+            if (print_value)
+                printf("    %16p%s", (void *)s->value, s->ref ? " +" : "  ");
+            else
+                printf("    ");
+            if (s->type & UNSIGNED) printf(" unsigned");
+            switch (s->type & 0x3) {
+                case CHAR: printf(" char"); break;
+                case SHORT: printf(" short"); break;
+                case INT: printf(" int"); break;
+                case LONG: printf(" long"); break;
+                default: break;
+            }
+            if (s->type >= PTR) {
+                int t = s->type;
+                printf(" "); do { printf("*"); t -= PTR; } while (t >= PTR);
+            }
+            if (s->type & ARRAY) {
+                /* Display array dimensions - show empty brackets for
+                 * flexible array members where nr_elm is 0 */
+                if (s->nr_elm) printf(" [%d]", s->nr_elm);
+                else printf(" []");
+            }
+            printf(" %.*s\n", (int)LEN(s->hash), s->name);
+        }
+    }
+}
+
 void expr_dump(struct expr_prog *prog)
 {
     long *insn_end, *insn;
-    int i;
 
     if (!prog) return;
     insn = prog->insn;
@@ -715,31 +749,7 @@ void expr_dump(struct expr_prog *prog)
 
     if (prog->data) {
         printf("Global variable:\n");
-        for (i=0; i<prog->nr_syms; i++) {
-            struct symbol_table *s = &prog->symtab[i];
-            if (s->token == Id && s->class == Glo) {
-                printf("    %16p", (void *)s->value);
-                if (s->type & UNSIGNED) printf(" unsigned");
-                switch (s->type & 0x3) {
-                    case CHAR: printf(" char"); break;
-                    case SHORT: printf(" short"); break;
-                    case INT: printf(" int"); break;
-                    case LONG: printf(" long"); break;
-                    default: break;
-                }
-                if (s->type >= PTR) {
-                    int t = s->type;
-                    printf(" "); do { printf("*"); t -= PTR; } while (t >= PTR);
-                }
-                if (s->type & ARRAY) {
-                    /* Display array dimensions - show empty brackets for
-                     * flexible array members where nr_elm is 0 */
-                    if (s->nr_elm) printf(" [%d]", s->nr_elm);
-                    else printf(" []");
-                }
-                printf(" %.*s\n", (int)LEN(s->hash), s->name);
-            }
-        }
+        dump_symtab(prog->symtab, prog->nr_syms, 1);
     }
 
     if (prog->str) {
