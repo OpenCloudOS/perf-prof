@@ -83,14 +83,14 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR, ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu,
-       PRTF, KSYM, NTHL, NTHS, STRNCMP, EXIT };
+       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
-             "PRTF,KSYM,NTHL,NTHS,SCMP,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -423,6 +423,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("ntohs", SHORT, NTHS);
     // int strncmp(const char *s1, const char *s2, long n);
     ADD_LIB("strncmp", INT, STRNCMP);
+    // char *comm_get(int pid);
+    ADD_LIB("comm_get", CHAR | PTR, COMM);
 
     // add default global var to symbol table
     ADD_GLO("__cpu", INT, &prog->glo.__cpu);
@@ -524,6 +526,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
         struct symbol_table *sym = &prog->symtab[i];
         if (sym->class == Sys && sym->value == KSYM && sym->ref)
             function_resolver_ref();
+        if (sym->class == Sys && sym->value == COMM && sym->ref)
+            global_comm_ref();
     }
 
     return prog;
@@ -624,6 +628,7 @@ long expr_run(struct expr_prog *prog)
             case NTHL: a = (int)ntohl((int)*sp); break;
             case NTHS: a = (short)ntohs((short)*sp); break;
             case STRNCMP: t = sp + pc[1]; a = strncmp((const char *)t[-1], (const char *)t[-2], (long)t[-3]); break;
+            case COMM: a = (long)(void *)(global_comm_get((int)*sp) ?: "<...>"); break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -691,6 +696,8 @@ void expr_destroy(struct expr_prog *prog)
         struct symbol_table *s = &prog->symtab[i];
         if (s->class == Sys && s->value == KSYM && s->ref)
             function_resolver_unref();
+        if (s->class == Sys && s->value == COMM && s->ref)
+            global_comm_unref();
     }
     if (prog->symtab) free(prog->symtab);
     if (prog->data) free(prog->data);
@@ -987,6 +994,9 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "",
     "    int strncmp(const char *s1, const char *s2, long n)",
     "        Compare two strings.",
+    "",
+    "    char *comm_get(int pid)",
+    "        Get the comm string of pid",
     "",
     "EXAMPLES",
     "    "PROGRAME" expr -e sched:sched_wakeup help",
