@@ -77,20 +77,20 @@ jmp_buf synerr_jmp;
 enum {
     Num = 128, Fun, Sys, Glo, Loc, Id,
     Int, Sizeof,
-    Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
+    Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Match, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
 };
 
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR, ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu,
-       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, EXIT };
+       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
-             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -209,7 +209,8 @@ static void next(void)
         else if (tk == '*') { tk = Mul; return; }
         else if (tk == '[') { tk = Brak; return; }
         else if (tk == '?') { tk = Cond; return; }
-        else if (tk == '~' || tk == ';' || tk == '{' || tk == '}' || tk == '(' || tk == ')' || tk == ']' || tk == ',' || tk == ':') return;
+        else if (tk == '~') { tk = Match; return; }
+        else if (tk == ';' || tk == '{' || tk == '}' || tk == '(' || tk == ')' || tk == ']' || tk == ',' || tk == ':') return;
     }
 }
 
@@ -222,7 +223,7 @@ static void expr(int lev)
     else if (tk == '"') {
         *++e = IMM; *++e = ival; next();
         while (tk == '"') next();
-        ty = PTR;
+        ty = (CHAR|PTR);
     }
     else if (tk == Sizeof) {
         next(); if (tk == '(') next(); else { synerr("open paren expected in sizeof"); }
@@ -284,7 +285,7 @@ static void expr(int lev)
         ty = ty + PTR;
     }
     else if (tk == '!') { next(); expr(Inc); *++e = PSH; *++e = IMM; *++e = 0; *++e = EQ; ty = INT; }
-    else if (tk == '~') { next(); expr(Inc); *++e = PSH; *++e = IMM; *++e = -1; *++e = XOR; ty = INT; }
+    else if (tk == Match) { next(); expr(Inc); *++e = PSH; *++e = IMM; *++e = -1; *++e = XOR; ty = INT; }
     else if (tk == Add) { next(); expr(Inc); ty = INT; }
     else if (tk == Sub) {
         next(); *++e = IMM;
@@ -329,6 +330,12 @@ static void expr(int lev)
         else if (tk == Gt)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?GTu:GT;  ty = INT; }
         else if (tk == Le)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?LEu:LE;  ty = INT; }
         else if (tk == Ge)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?GEu:GE;  ty = INT; }
+        else if (tk == Match) {
+            if ( t != (CHAR|PTR)) synerr("~ operator requires char * operand");
+            next(); *++e = PSH; expr(Shl);
+            if (ty != (CHAR|PTR)) synerr("~ operator requires char * operand");
+            *++e = MATCH; ty = INT;
+        }
         else if (tk == Shl) { next(); *++e = PSH; expr(Add); *++e = SHL; ty = INT; }
         else if (tk == Shr) { next(); *++e = PSH; expr(Add); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?SHR:SAR; ty = INT; }
         else if (tk == Add) {
@@ -374,6 +381,100 @@ static const char *ksymbol(unsigned long func)
 {
     char *name = function_resolver(NULL, (unsigned long long *)&func, NULL);
     return name ? : "Unknown";
+}
+
+/* Wildcard matching function that implements trace event filter's ~ operator
+ * Supports:
+ *   * - matches any number of characters
+ *   ? - matches exactly one character
+ *   [abc] - matches any character in the set
+ *   [a-z] - matches any character in the range
+ *   [^abc]|[!abc] - matches any character NOT in the set
+ * Returns: 1 if string matches pattern, 0 otherwise
+ */
+static int wildcard_match(const char *str, const char *pattern)
+{
+    const char *s, *p, *star = NULL, *str_backup = NULL;
+    int invert, match;
+
+    if (!str || !pattern)
+        return 0;
+
+    s = str;
+    p = pattern;
+
+    while (*s) {
+        if (*p == '*') {
+            /* Skip consecutive stars */
+            while (*p == '*')
+                p++;
+            /* If star is at the end, it matches everything */
+            if (!*p)
+                return 1;
+            /* Save positions for backtracking */
+            star = p;
+            str_backup = s;
+        } else if (*p == '?') {
+            /* ? matches exactly one character */
+            s++;
+            p++;
+        } else if (*p == '[') {
+            /* Character class matching */
+            p++;
+            invert = 0;
+            if (*p == '^' || *p == '!') {
+                invert = 1;
+                p++;
+            }
+            match = 0;
+            while (*p && *p != ']') {
+                if (*(p+1) == '-' && *(p+2) != ']' && *(p+2)) {
+                    /* Range: [a-z] */
+                    if (*s >= *p && *s <= *(p+2))
+                        match = 1;
+                    p += 3;
+                } else {
+                    /* Single character */
+                    if (*s == *p)
+                        match = 1;
+                    p++;
+                }
+            }
+            if (*p == ']')
+                p++;
+            if (invert)
+                match = !match;
+            if (!match) {
+                /* Backtrack if we have a star */
+                if (star) {
+                    p = star;
+                    s = ++str_backup;
+                    continue;
+                }
+                return 0;
+            }
+            s++;
+        } else if (*p == *s) {
+            /* Exact character match */
+            s++;
+            p++;
+        } else {
+            /* No match, try to backtrack */
+            if (star) {
+                p = star;
+                s = ++str_backup;
+            } else {
+                return 0;
+            }
+        }
+    }
+
+    /* Skip any trailing stars */
+    while (*p == '*')
+        p++;
+
+    /* Match if we've consumed both strings */
+    return !*p;
 }
 static void dump_symtab(struct symbol_table *symtab, int nr, bool print_value);
 struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare)
@@ -629,6 +730,7 @@ long expr_run(struct expr_prog *prog)
             case NTHS: a = (short)ntohs((short)*sp); break;
             case STRNCMP: t = sp + pc[1]; a = strncmp((const char *)t[-1], (const char *)t[-2], (long)t[-3]); break;
             case COMM: a = (long)(void *)(global_comm_get((int)*sp) ?: "<...>"); break;
+            case MATCH: a = wildcard_match((const char *)*sp++, (const char *)a); break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -970,6 +1072,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "    5           << >>       Bitwise left shift and right shift",
     "    6           < <=        For relational operators < and <= respectively",
     "                > >=        For relational operators > and >= respectively",
+    "                ~           Extended Operator: Wildcard pattern matching",
     "    7           == !=       For relational = and != respectively",
     "    8           &           Bitwise AND",
     "    9           ^           Bitwise XOR (exclusive or)",
@@ -998,12 +1101,22 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "    char *comm_get(int pid)",
     "        Get the comm string of pid",
     "",
+    "  Extended Operator (C++-style operator overloading)",
+    "    ~(const char *str, const char *pattern)",
+    "        This operator overloads the bitwise NOT operator to provide trace event filter's ~ functionality.",
+    "        Supports *, ?, and character classes [abc], [a-z], [^abc], [!abc].",
+    "        Returns 1 if str matches pattern, 0 otherwise.",
+    "        This operator can be used when kernel-side trace event filters fail,",
+    "        allowing user-space filter implementation.",
+    "",
     "EXAMPLES",
     "    "PROGRAME" expr -e sched:sched_wakeup help",
     "    "PROGRAME" expr -e sched:sched_wakeup '&pid'",
     "    "PROGRAME" expr -e 'kmem:mm_page_alloc/order>0/' '1<<order' -v",
     "    "PROGRAME" expr -e workqueue:workqueue_execute_start 'printf(\"%s \", ksymbol(function))' -v",
-    "    "PROGRAME" expr -e sched:sched_process_exec 'printf(\"%s \", filename)'"
+    "    "PROGRAME" expr -e sched:sched_process_exec 'printf(\"%s \", filename)'",
+    "    "PROGRAME" expr -e sched:sched_wakeup 'comm ~ \"*sh\"' -v",
+    "    "PROGRAME" expr -e sched:sched_switch 'prev_comm ~ \"systemd*\" || next_comm ~ \"systemd*\"'"
 );
 static const char *expr_argv[] = PROFILER_ARGV("expr",
     "OPTION:",
