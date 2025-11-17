@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
+#include <string.h>
 #include <unistd.h>
 #include <setjmp.h>
 #include <arpa/inet.h>
@@ -83,14 +84,14 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR, ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu,
-       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, EXIT };
+       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, STREQ, STRNE, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
-             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -324,8 +325,18 @@ static void expr(int lev)
         else if (tk == Or)  { next(); *++e = PSH; expr(Xor); *++e = OR;  ty = INT; }
         else if (tk == Xor) { next(); *++e = PSH; expr(And); *++e = XOR; ty = INT; }
         else if (tk == And) { next(); *++e = PSH; expr(Eq);  *++e = AND; ty = INT; }
-        else if (tk == Eq)  { next(); *++e = PSH; expr(Lt);  *++e = EQ;  ty = INT; }
-        else if (tk == Ne)  { next(); *++e = PSH; expr(Lt);  *++e = NE;  ty = INT; }
+        else if (tk == Eq)  {
+            next(); *++e = PSH; expr(Lt);
+            if (t == (CHAR|PTR) && ty == (CHAR|PTR)) *++e = STREQ;
+            else *++e = EQ;
+            ty = INT;
+        }
+        else if (tk == Ne)  {
+            next(); *++e = PSH; expr(Lt);
+            if (t == (CHAR|PTR) && ty == (CHAR|PTR)) *++e = STRNE;
+            else *++e = NE;
+            ty = INT;
+        }
         else if (tk == Lt)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?LTu:LT;  ty = INT; }
         else if (tk == Gt)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?GTu:GT;  ty = INT; }
         else if (tk == Le)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?LEu:LE;  ty = INT; }
@@ -731,6 +742,8 @@ long expr_run(struct expr_prog *prog)
             case STRNCMP: t = sp + pc[1]; a = strncmp((const char *)t[-1], (const char *)t[-2], (long)t[-3]); break;
             case COMM: a = (long)(void *)(global_comm_get((int)*sp) ?: "<...>"); break;
             case MATCH: a = wildcard_match((const char *)*sp++, (const char *)a); break;
+            case STREQ: a = (strcmp((const char *)*sp++, (const char *)a) == 0); break;
+            case STRNE: a = (strcmp((const char *)*sp++, (const char *)a) != 0); break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -1074,6 +1087,7 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "                > >=        For relational operators > and >= respectively",
     "                ~           Extended Operator: Wildcard pattern matching",
     "    7           == !=       For relational = and != respectively",
+    "                            Supports both numeric and string comparison",
     "    8           &           Bitwise AND",
     "    9           ^           Bitwise XOR (exclusive or)",
     "    10          |           Bitwise OR (inclusive or)",
@@ -1102,12 +1116,19 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "        Get the comm string of pid",
     "",
     "  Extended Operator (C++-style operator overloading)",
-    "    ~(const char *str, const char *pattern)",
+    "    ~ (const char *str, const char *pattern)",
     "        This operator overloads the bitwise NOT operator to provide trace event filter's ~ functionality.",
     "        Supports *, ?, and character classes [abc], [a-z], [^abc], [!abc].",
     "        Returns 1 if str matches pattern, 0 otherwise.",
-    "        This operator can be used when kernel-side trace event filters fail,",
-    "        allowing user-space filter implementation.",
+    "",
+    "    ==(const char *s1, const char *s2)",
+    "    !=(const char *s1, const char *s2)",
+    "        When both operands are string pointers (char *), == and != operators",
+    "        perform string comparison instead of pointer comparison.",
+    "        Returns 1 for true, 0 for false.",
+    "        Examples:",
+    "            comm == \"systemd\"          - Check if process name equals systemd",
+    "            prev_comm == next_comm     - Compare two string fields",
     "",
     "EXAMPLES",
     "    "PROGRAME" expr -e sched:sched_wakeup help",
@@ -1116,7 +1137,8 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "    "PROGRAME" expr -e workqueue:workqueue_execute_start 'printf(\"%s \", ksymbol(function))' -v",
     "    "PROGRAME" expr -e sched:sched_process_exec 'printf(\"%s \", filename)'",
     "    "PROGRAME" expr -e sched:sched_wakeup 'comm ~ \"*sh\"' -v",
-    "    "PROGRAME" expr -e sched:sched_switch 'prev_comm ~ \"systemd*\" || next_comm ~ \"systemd*\"'"
+    "    "PROGRAME" expr -e sched:sched_switch 'prev_comm ~ \"systemd*\" || next_comm ~ \"systemd*\"'",
+    "    "PROGRAME" expr -e sched:sched_process_exec 'filename != \"/bin/sh\"'"
 );
 static const char *expr_argv[] = PROFILER_ARGV("expr",
     "OPTION:",
