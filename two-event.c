@@ -749,6 +749,7 @@ const char *syscalls_table[] = {
 #include <asm-generic/unistd.h>
 #endif
 };
+const int syscalls_table_size = sizeof(syscalls_table)/sizeof(syscalls_table[0]);
 
 static struct two_event *syscalls_new(struct two_event_class *class, struct tp *tp1, struct tp *tp2)
 {

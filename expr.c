@@ -57,6 +57,8 @@
 #include <expr.h>
 #include <stack_helpers.h>
 
+extern const char *syscalls_table[];
+extern const int syscalls_table_size;
 
 char *p, *lp, // current position in source code
      *data, *str;   // data/string pointer
@@ -84,14 +86,14 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR, ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu,
-       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, STREQ, STRNE, EXIT };
+       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, STREQ, STRNE, SYSCALL, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
-             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,SCAL,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -500,7 +502,7 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     // reset
     loc = 0;
     n_syms = 0;
-    // Default keywords (6) + library symbols (5) + default global (2) + tracepoint headers (4) = 17 symbols
+    // Default keywords (6) + library symbols (7) + default global (2) + tracepoint headers (4) = 19 symbols
     // Original nr_syms = 16 is too small, memory reallocations needed
     nr_syms = 32;
     symtab = calloc(nr_syms, sizeof(struct symbol_table));
@@ -537,6 +539,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("strncmp", INT, STRNCMP);
     // char *comm_get(int pid);
     ADD_LIB("comm_get", CHAR | PTR, COMM);
+    // char *syscall_name(int id);
+    ADD_LIB("syscall_name", CHAR | PTR, SYSCALL);
 
     // add default global var to symbol table
     ADD_GLO("__cpu", INT, &prog->glo.__cpu);
@@ -744,6 +748,13 @@ long expr_run(struct expr_prog *prog)
             case MATCH: a = wildcard_match((const char *)*sp++, (const char *)a); break;
             case STREQ: a = (strcmp((const char *)*sp++, (const char *)a) == 0); break;
             case STRNE: a = (strcmp((const char *)*sp++, (const char *)a) != 0); break;
+            case SYSCALL: {
+                int id = (int)*sp;
+                if (id >= 0 && id < syscalls_table_size && syscalls_table[id])
+                    a = (long)(void *)syscalls_table[id];
+                else
+                    a = (long)(void *)"Unknown";
+            } break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -1114,6 +1125,9 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "",
     "    char *comm_get(int pid)",
     "        Get the comm string of pid",
+    "",
+    "    char *syscall_name(int id)",
+    "        Get the syscall name by id, and return a string.",
     "",
     "  Extended Operator (C++-style operator overloading)",
     "    ~ (const char *str, const char *pattern)",
