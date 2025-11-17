@@ -86,14 +86,14 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR, ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu,
-       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, STREQ, STRNE, SYSCALL, EXIT };
+       PRTF, KSYM, NTHL, NTHS, STRNCMP, COMM, MATCH, STREQ, STRNE, SYSCALL, KVMEXIT, EXIT };
 
 // types
 enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
-             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,SCAL,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,SCAL,KEXI,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -541,6 +541,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("comm_get", CHAR | PTR, COMM);
     // char *syscall_name(int id);
     ADD_LIB("syscall_name", CHAR | PTR, SYSCALL);
+    // char *exit_reason_str(int isa, int val);
+    ADD_LIB("exit_reason_str", CHAR | PTR, KVMEXIT);
 
     // add default global var to symbol table
     ADD_GLO("__cpu", INT, &prog->glo.__cpu);
@@ -755,6 +757,8 @@ long expr_run(struct expr_prog *prog)
                 else
                     a = (long)(void *)"Unknown";
             } break;
+            case KVMEXIT: t = sp + pc[1];
+                    a = (long)(void *)find_exit_reason((unsigned int)t[-1], (unsigned int)t[-2]); break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }
@@ -1128,6 +1132,10 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "",
     "    char *syscall_name(int id)",
     "        Get the syscall name by id, and return a string.",
+    "",
+    "    char *exit_reason_str(int isa, int val)",
+    "        Get the KVM exit reason string according to ISA and exit reason value.",
+    "        ISA: 1=VMX, 2=SVM, 3=ARM. Returns a string describing the exit reason.",
     "",
     "  Extended Operator (C++-style operator overloading)",
     "    ~ (const char *str, const char *pattern)",
