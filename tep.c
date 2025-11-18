@@ -820,11 +820,12 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                     tp->key_prog = prog;
                     tp->key = value;
                 } else if (strcmp(attr, "printkey") == 0) {
-                    struct global_var_declare declare[2] = {0};
+                    struct global_var_declare declare[2];
                     declare[0].name = "key";
                     declare[0].offset = 0;
                     declare[0].size = declare[0].elementsize = sizeof(u64);
                     declare[0].is_unsigned = 1;
+                    declare[1].name = NULL;
                     tp->printkey_prog = expr_compile(value, declare);
                     tp->printkey = value;
                     if (!tp->printkey_prog)
