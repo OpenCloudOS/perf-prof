@@ -70,6 +70,24 @@ def test_kmem_cache_alloc(runtime, memleak_check):
 
 def test_3event(runtime, memleak_check):
     #perf-prof top -e sched:sched_switch//key=prev_pid/comm=prev_comm/,sched:sched_wakeup//key=pid/comm=comm/,sched:sched_stat_runtime//top-by="runtime/1000"/alias=run(us)/ -m 64
-    top = PerfProf(['top', '-e', 'sched:sched_switch//key=prev_pid/comm=prev_comm/,sched:sched_wakeup//key=pid/comm=comm/,sched:sched_stat_runtime//top-by="runtime/1000"/alias=run(us)/', '-m', '64'])
+    top = PerfProf(['top', '-e', 'sched:sched_switch//key=prev_pid/comm=prev_comm/,sched:sched_wakeup//key=pid/comm=comm/,sched:sched_stat_runtime//key=pid/top-by="runtime/1000"/alias=run(us)/', '-m', '64'])
+    for std, line in top.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_printkey_pid(runtime, memleak_check):
+    #perf-prof top -e sched:sched_wakeup//key=pid/printkey='printf("%d",key)'/comm=comm/ -m 64
+    top = PerfProf(['top', '-e', 'sched:sched_wakeup//key=pid/printkey=printf("%d",key)/comm=comm/', '-m', '64'])
+    for std, line in top.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_printkey_hex(runtime, memleak_check):
+    #perf-prof top -e sched:sched_wakeup//key=pid/printkey='printf("0x%x",key)'/comm=comm/ -m 64
+    top = PerfProf(['top', '-e', 'sched:sched_wakeup//key=pid/printkey=printf("0x%x",key)/comm=comm/', '-m', '64'])
+    for std, line in top.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_printkey_conditional(runtime, memleak_check):
+    #perf-prof top -e 'sched:sched_wakeup//key=prio/printkey=printf("%s",key<10?"HIGH":"LOW")/comm=comm/' -m 64
+    top = PerfProf(['top', '-e', 'sched:sched_wakeup//key=prio/printkey=printf("%s",key<10?"HIGH":"LOW")/comm=comm/', '-m', '64'])
     for std, line in top.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)

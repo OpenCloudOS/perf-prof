@@ -20,9 +20,9 @@ def test_multi_trace_userspace_ftrace_filter(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
 def test_multi_trace_switch_role(runtime, memleak_check):
-    # perf-prof multi-trace -e sched:sched_switch//role="(next_pid?1:0)|(prev_pid?2:0)"/ --cycle -i 1000 --perins
+    # perf-prof multi-trace -e sched:sched_switch//role=(next_pid?1:0)|(prev_pid?2:0)/ --cycle -i 1000 --perins
     multi_trace = PerfProf(["multi-trace",
-                            '-e', 'sched:sched_switch//role="(next_pid?1:0)|(prev_pid?2:0)"',
+                            '-e', 'sched:sched_switch//role=(next_pid?1:0)|(prev_pid?2:0)/',
                             '--cycle', '-i', '1000', '--perins'])
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)
@@ -187,5 +187,23 @@ def test_multi_trace_tid_sleep_100ms(runtime, memleak_check, sleep_loop_tid_100m
                             '-e', 'sched:sched_wakeup/pid==' + str(sleep_loop_tid_100ms) + '/',
                             '-e', 'sched:sched_switch/next_pid==' + str(sleep_loop_tid_100ms) + '/',
                             '-i', '1000', '-m', '512', '--order', '--than', '105ms', '--detail=-1ms,samecpu'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
+def test_multi_trace_printkey_pid(runtime, memleak_check):
+    # perf-prof multi-trace -e 'sched:sched_wakeup//key=pid/printkey=printf("PID:%d",key)/' -e 'sched:sched_switch//key=next_pid/' -k pid --order -i 1000 --perins
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'sched:sched_wakeup//key=pid/printkey=printf("PID:%d ",key)/',
+                            '-e', 'sched:sched_switch//key=next_pid/',
+                            '-k', 'pid', '--order', '-i', '1000', '--perins'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
+def test_multi_trace_printkey_hex(runtime, memleak_check):
+    # perf-prof multi-trace -e 'irq:softirq_entry/vec==1/key=vec/printkey=printf("VEC:0x%x",key)/' -e 'irq:softirq_exit/vec==1/key=vec/' -i 1000
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'irq:softirq_entry/vec==1/key=vec/printkey=printf("VEC:0x%x ",key)/',
+                            '-e', 'irq:softirq_exit/vec==1/key=vec/',
+                            '-i', '1000', '--order', '--perins'])
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)

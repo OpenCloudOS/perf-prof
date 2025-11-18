@@ -197,3 +197,27 @@ def test_uretprobe(runtime, memleak_check):
     prof = PerfProf(['trace', '-e', e, '-C', '0', '-m', '64'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_wildcard_asterisk(runtime, memleak_check):
+    #perf-prof trace -e 'sched:sched_wak*' -C 0
+    prof = PerfProf(['trace', '-e', 'sched:sched_wak*', '-C', '0', '-m', '64'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_wildcard_question_mark(runtime, memleak_check):
+    #perf-prof trace -e 'timer:timer_init' -C 0
+    prof = PerfProf(['trace', '-e', 'timer:timer_ini?', '-C', '0', '-m', '64'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_wildcard_with_filter(runtime, memleak_check):
+    #perf-prof trace -e 'sched:sched_wak*/prio<10/' -C 0
+    prof = PerfProf(['trace', '-e', 'sched:sched_wak?[!_]*/prio<10/', '-C', '0', '-m', '64'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_wildcard_multiple_events(runtime, memleak_check):
+    #perf-prof trace -e 'sched:sched_wak*,sched:sched_switch' -C 0
+    prof = PerfProf(['trace', '-e', 'sched:sched_wak*,sched:sched_switch', '-C', '0', '-m', '64'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

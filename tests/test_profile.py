@@ -57,3 +57,27 @@ def test_profile_bpf_sched_policy(runtime, memleak_check):
     prof = PerfProf(["profile", '-F', '997', '-m', '32', '--sched_policy', '2', '-g', '--flame-graph', 'profile'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_profile_bpf_prio_rt(runtime, memleak_check):
+    if not PerfProf.btf_exists():
+        pytest.skip("'bpf' does not support")
+    # Test BPF priority filtering for real-time tasks (priority 1-99)
+    prof = PerfProf(["profile", '-F', '997', '-m', '32', '--prio', '1-99', '-g', '--flame-graph', 'profile'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_profile_bpf_prio_normal(runtime, memleak_check):
+    if not PerfProf.btf_exists():
+        pytest.skip("'bpf' does not support")
+    # Test BPF priority filtering for normal tasks (priority 100-139)
+    prof = PerfProf(["profile", '-F', '997', '-m', '32', '--prio', '100-139', '-g', '--flame-graph', 'profile'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_profile_bpf_prio_single(runtime, memleak_check):
+    if not PerfProf.btf_exists():
+        pytest.skip("'bpf' does not support")
+    # Test BPF priority filtering for single priority value
+    prof = PerfProf(["profile", '-F', '997', '-m', '32', '--prio', '120', '-g', '--flame-graph', 'profile'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

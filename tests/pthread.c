@@ -17,7 +17,7 @@ void *threadFunc(void *arg) {
     if (arg < depth)
         pthread_create(&threads, NULL, threadFunc, ++arg);
 
-	return NULL;
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
