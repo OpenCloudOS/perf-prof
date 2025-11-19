@@ -1511,6 +1511,50 @@ int kernel_release(void)
     return -1;
 }
 
+/*
+ * BPF JIT Symbols Management Function
+ *
+ * Background: In early Linux kernels, /proc/kallsyms doesn't include BPF JIT
+ * compiled function symbols by default. The net.core.bpf_jit_kallsyms kernel
+ * parameter needs to be enabled to include these symbols. Since kernel 5.5,
+ * BPF JIT symbols are included by default, no longer depending on this switch.
+ *
+ * Additionally: Enabling bpf_jit_kallsyms ensures bpf_get_stack can correctly
+ * retrieve the stack trace. Kernel call path:
+ *   unwind_get_return_address->
+ *     __kernel_text_address->
+ *       is_bpf_text_address returns true
+ */
+void sysctl_bpf_jit_kallsyms(bool enable)
+{
+    const char *sysctl_jit_enable = "net/core/bpf_jit_enable";
+    const char *sysctl_jit_kallsyms = "net/core/bpf_jit_kallsyms";
+    static int bpf_jit_enable = 0;
+    static int bpf_jit_kallsyms = 0;
+    static int ref = 0;
+
+    /* Kernel 5.5+ includes BPF JIT symbols by default, no manual handling needed */
+    /* Kernel commit af91acb: "bpf: Fix bpf jit kallsym access" fixed this issue */
+    if (kernel_release() >= KERNEL_VERSION(5, 5, 0))
+        return;
+
+    if (enable) {
+        ref++;
+        if (ref == 1 &&
+            sysctl__read_int(sysctl_jit_enable, &bpf_jit_enable) == 0) {
+            sysctl__read_int(sysctl_jit_kallsyms, &bpf_jit_kallsyms);
+            if (bpf_jit_enable && !bpf_jit_kallsyms)
+                sysctl__write_int(sysctl_jit_kallsyms, 1);
+        }
+    } else {
+        if (ref > 0) ref--;
+        if (ref == 0) {
+            if (bpf_jit_enable && !bpf_jit_kallsyms)
+                sysctl__write_int(sysctl_jit_kallsyms, 0);
+        }
+    }
+}
+
 int callchain_flags(struct prof_dev *dev, int dflt_flags)
 {
     int flags = dflt_flags;

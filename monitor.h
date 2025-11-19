@@ -70,7 +70,7 @@ static inline int get_cpu_vendor(void) {
     return get_cpuinfo(NULL);
 };
 int in_guest(void);
-
+void sysctl_bpf_jit_kallsyms(bool enable);
 int callchain_flags(struct prof_dev *dev, int default_flags);
 int exclude_callchain_user(struct prof_dev *dev, int dflt_flags);
 int exclude_callchain_kernel(struct prof_dev *dev, int dflt_flags);

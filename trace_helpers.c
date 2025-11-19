@@ -153,13 +153,18 @@ struct ksyms *ksyms__load(void)
     int i, ret;
     FILE *f;
 
-    f = fopen("/proc/kallsyms", "r");
-    if (!f)
-        return NULL;
-
     ksyms = calloc(1, sizeof(*ksyms));
     if (!ksyms)
-        goto err_out;
+        return NULL;
+
+    /*
+     * Enable BPF JIT symbols temporarily for early kernels (< 5.5)
+     * This ensures BPF JIT compiled functions are visible in /proc/kallsyms
+     */
+    sysctl_bpf_jit_kallsyms(1);
+    f = fopen("/proc/kallsyms", "r");
+    if (!f)
+        goto err_out1;
 
     while (true) {
         ret = fscanf(f, "%lx %c %s%*[^\n]\n",
@@ -171,6 +176,8 @@ struct ksyms *ksyms__load(void)
         if (ksyms__add_symbol(ksyms, sym_name, sym_addr))
             goto err_out;
     }
+    fclose(f);
+    sysctl_bpf_jit_kallsyms(0);
 
     /* now when strings are finalized, adjust pointers properly */
     for (i = 0; i < ksyms->syms_sz; i++)
@@ -178,14 +185,14 @@ struct ksyms *ksyms__load(void)
 
     qsort(ksyms->syms, ksyms->syms_sz, sizeof(*ksyms->syms), ksym_cmp);
 
-    fclose(f);
-
     INIT_LIST_HEAD(&ksyms->ksym_dyn_list);
     return ksyms;
 
 err_out:
-    ksyms__free(ksyms);
     fclose(f);
+err_out1:
+    sysctl_bpf_jit_kallsyms(0);
+    ksyms__free(ksyms);
     return NULL;
 }
 
