@@ -21,6 +21,7 @@
 
 static struct tep_handle *tep = NULL;
 static struct tep_plugin_list *plugins = NULL;
+static int resolver_ref = 0;
 static int global_comm = 0;
 int kprobe_type = 0;
 int uprobe_type = 0;
@@ -59,6 +60,29 @@ void pr_stat(const char *fmt, ...)
      */
 }
 
+/*
+ * on_demand_ksym_resolver - Delayed kernel symbol resolver with lazy loading
+ *
+ * This function implements lazy loading of kernel symbols to avoid the expensive
+ * ksyms__load() operation during program startup. The /proc/kallsyms file can
+ * be very large and loading it is time-consuming.
+ *
+ * The resolver only triggers symbol table loading on first actual use, such as
+ * when printing events with %ps format specifier for kernel function names.
+ * This significantly improves perf-prof startup performance for use cases that
+ * don't require symbol resolution.
+ */
+static char *on_demand_ksym_resolver(void *priv, unsigned long long *addrp, char **modp)
+{
+    /* Load kernel symbols only on first actual resolution request */
+    if (resolver_ref == 0) {
+        function_resolver_ref();  /* This calls ksyms__load() internally */
+        resolver_ref = 1;
+    }
+
+    return function_resolver(priv, addrp, modp);
+}
+
 struct tep_handle *tep__ref(void)
 {
     if (tep != NULL) {
@@ -68,8 +92,7 @@ struct tep_handle *tep__ref(void)
     tep = tep_alloc();
     tep_add_plugin_path(tep, (char *)PLUGINS_DIR, TEP_PLUGIN_FIRST);
     plugins = tep_load_plugins(tep);
-    function_resolver_ref();
-    tep_set_function_resolver(tep, function_resolver, NULL);
+    tep_set_function_resolver(tep, on_demand_ksym_resolver, NULL);
     if (global_comm_ref() == 0)
         global_comm = 1;
     return tep;
@@ -86,7 +109,10 @@ void tep__unref(void)
             global_comm = 0;
         }
         tep_reset_function_resolver(tep);
-        function_resolver_unref();
+        if (resolver_ref) {
+            function_resolver_unref();
+            resolver_ref = 0;
+        }
         tep_unload_plugins(plugins, tep);
         tep_free(tep);
         tep = NULL;
