@@ -93,7 +93,7 @@ enum { CHAR, SHORT, INT, LONG, ARRAY = 0x4, UNSIGNED = 0x8, PTR = 0x10 };
 
 #define INSN "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LI  ,SI  ,LEV ,PSH ,LTu ,GTu ,LEu, GEu ," \
              "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,SAR ,ADD ,SUB ,MUL ,DIV ,MOD ,DIVu,MODu," \
-             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,SCAL,KEXI,SYST,EXIT,"
+             "PRTF,KSYM,NTHL,NTHS,SCMP,COMM,MACH,SSEQ,SSNE,SCAL,VMXT,SYST,EXIT,"
 
 #define ADD_KEY(name, _token, _type) \
     { p = (char *)name; { next(); id->token = _token; id->class = 0; id->type = _type; id->value = 0; } }
@@ -753,19 +753,19 @@ long expr_run(struct expr_prog *prog)
             case STREQ: a = (strcmp((const char *)*sp++, (const char *)a) == 0); break;
             case STRNE: a = (strcmp((const char *)*sp++, (const char *)a) != 0); break;
             case SYSCALL: {
-                int id = (int)*sp;
-                if (id >= 0 && id < syscalls_table_size && syscalls_table[id])
-                    a = (long)(void *)syscalls_table[id];
-                else
-                    a = (long)(void *)"Unknown";
-            } break;
+                    int id = (int)*sp;
+                    if (id >= 0 && id < syscalls_table_size && syscalls_table[id])
+                        a = (long)(void *)syscalls_table[id];
+                    else
+                        a = (long)(void *)"Unknown";
+                } break;
             case KVMEXIT: t = sp + pc[1];
                     a = (long)(void *)find_exit_reason((unsigned int)t[-1], (unsigned int)t[-2]); break;
             case SYSTEM: t = sp + pc[1]; {
-                char cmd[4096];
-                int ret = snprintf(cmd, sizeof(cmd), (char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
-                a = (ret < 0 || ret >= sizeof(cmd)) ? -1 : system(cmd);
-            } break;
+                    char cmd[4096];
+                    int ret = snprintf(cmd, sizeof(cmd), (char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
+                    a = (ret < 0 || ret >= sizeof(cmd)) ? -1 : system(cmd);
+                } break;
             case EXIT: if (prog->debug) printf("exit(0x%lx) cycle = %ld\n", a, cycle); return a;
             default: printf("unknown instruction = %ld! cycle = %ld\n", i, cycle); return -1;
         }

@@ -870,7 +870,7 @@ parse_next:
         struct sched_wakeup *wakeup = &sched_event->sched_wakeup;
 
         tmp.pid = wakeup->pid;
-        if (ctx->mode == 2 || ctx->mode == 3)
+        if (ctx->SD)
              rbn = rblist__find(&ctx->task_states, &tmp);
         else rbn = rblist__findnew(&ctx->task_states, &tmp);
         task = rb_entry_safe(rbn, struct task_state_node, rbnode);
@@ -891,7 +891,7 @@ parse_next:
                 }
             }
 
-            if (ctx->mode == 2 || ctx->mode == 3) {
+            if (ctx->SD) {
                 rblist__remove_node(&ctx->task_states, rbn);
                 goto free_event;
             }
