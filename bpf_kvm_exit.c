@@ -13,7 +13,7 @@
 #include <bpf-skel/kvm_exit.skel.h>
 #include <internal/xyarray.h>
 #include <internal/evsel.h>
-
+#include <linux/thread_map.h>
 
 struct kvmexit_ctx {
     struct kvm_exit_bpf *obj;
@@ -59,12 +59,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->obj)
         goto free_ctx;
 
-    if (global_comm_ref() < 0)
-        goto destroy;
-
     ctx->lat_dist = latency_dist_new_quantile(env->perins, true, sizeof(struct extra_rundelay));
     if (!ctx->lat_dist)
-        goto unref;
+        goto destroy;
 
     if (env->output2) {
         ctx->lat_dist2 = latency_dist_new(env->perins, 0, 0);
@@ -75,18 +72,22 @@ static int monitor_ctx_init(struct prof_dev *dev)
             goto free_lat2;
     }
 
-    ctx->notify.notify = comm_notify;
-    global_comm_register_notify(&ctx->notify);
-
+    // Only oncpu mode needs global comm service to track system-wide process changes
+    if (ctx->oncpu) {
+        if (global_comm_ref() < 0)
+            goto close2;
+        ctx->notify.notify = comm_notify;
+        global_comm_register_notify(&ctx->notify);
+    }
     ctx->thread = env->perins && (!ctx->oncpu || env->detail);
     return 0;
 
+close2:
+    if (ctx->output2) fclose(ctx->output2);
 free_lat2:
     latency_dist_free(ctx->lat_dist2);
 free_lat:
     latency_dist_free(ctx->lat_dist);
-unref:
-    global_comm_unref();
 destroy:
     kvm_exit_bpf__destroy(ctx->obj);
 free_ctx:
@@ -98,11 +99,13 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct kvmexit_ctx *ctx = dev->private;
     perf_thread_map__put(ctx->thread_map);
-    global_comm_unregister_notify(&ctx->notify);
+    if (ctx->oncpu) {
+        global_comm_unregister_notify(&ctx->notify);
+        global_comm_unref();
+    }
     if (ctx->output2) fclose(ctx->output2);
     latency_dist_free(ctx->lat_dist2);
     latency_dist_free(ctx->lat_dist);
-    global_comm_unref();
     kvm_exit_bpf__destroy(ctx->obj);
     free(ctx);
 }
@@ -145,7 +148,9 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
         .watermark     = 1,
         .wakeup_watermark = (dev->pages << 12) / 3,
     };
-    int cpu, ins, i, tid;
+    int cpu, ins, i, tid, tgid;
+    struct perf_thread_map *tgidmap = NULL;
+    struct prof_dev *tgiddev = NULL;
 
     if (monitor_ctx_init(dev) < 0)
         return -1;
@@ -169,16 +174,28 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
     } else {
         // can only be bound to cpu
         ctx->thread_map = dev->threads;
+        // Pre-read comms to avoid costly global_comm lookups
+        thread_map__read_comms(ctx->thread_map);
         perf_cpu_map__put(dev->cpus);
         dev->cpus = perf_cpu_map__new(NULL);
         dev->threads = perf_thread_map__new_dummy();
 
         tid = perf_thread_map__pid(ctx->thread_map, 0);
-        ctx->obj->rodata->filter_pid = get_tgid(tid);
+        tgid = get_tgid(tid);
+        ctx->obj->rodata->filter_pid = tgid;
 
         bpf_program__set_autoload(ctx->obj->progs.kvm_exit, 0);
         bpf_program__set_autoload(ctx->obj->progs.kvm_entry, 0);
         bpf_program__set_autoload(ctx->obj->progs.sched_switch, 0);
+
+        // Monitor main thread exit to auto-close device via hangup callback
+        tgidmap = thread_map__new_by_tid(tgid);
+        if (!tgidmap)
+            goto failed;
+        tgiddev = trace_dev_open("sched:sched_process_exit", NULL, tgidmap, dev, NULL, (void *)prof_dev_close);
+        if (!tgiddev)
+            goto failed;
+        perf_thread_map__put(tgidmap);
     }
 
     ctx->obj->rodata->filter_latency = dev->env->threshold ? : 1000000 /* 1ms */;
@@ -188,6 +205,10 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
     return 0;
 
 failed:
+    if (tgiddev)
+        prof_dev_close(tgiddev);
+    if (tgidmap)
+        perf_thread_map__put(tgidmap);
     monitor_ctx_exit(dev);
     return -1;
 }
@@ -221,6 +242,21 @@ static int bpf_kvm_exit_filter(struct prof_dev *dev)
             return -1;
     }
     return kvm_exit_bpf__attach(ctx->obj);
+}
+
+// Get process name: use global_comm in oncpu mode, thread_map in process-tracking mode
+static const char *comm_get(struct prof_dev *dev, int pid)
+{
+    struct kvmexit_ctx *ctx = dev->private;
+    if (ctx->oncpu)
+        return global_comm_get(pid);
+    else {
+        int idx = perf_thread_map__idx(ctx->thread_map, pid);
+        if (idx >= 0)
+            return perf_thread_map__comm(ctx->thread_map, idx);
+        else
+            return "<...>";
+    }
 }
 
 static void print_latency_node(void *opaque, struct latency_node *node)
@@ -258,7 +294,7 @@ static void print_latency_node(void *opaque, struct latency_node *node)
     }
     if (env->perins) {
         if (ctx->thread)
-            printf("%6d %6d %-15s ", (int)(node->instance >> 32), (int)node->instance, global_comm_get((int)node->instance));
+            printf("%6d %6d %-15s ", (int)(node->instance >> 32), (int)node->instance, comm_get(dev, (int)node->instance));
         else
             printf("%6d ", (int)node->instance);
     }
@@ -360,7 +396,7 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
         (raw->exit_reason != hlt ? delta : raw->run_delay) > env->greater_than) {
     print_event:
         if (dev->print_title) prof_dev_print_time(dev, *time, stdout);
-        printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm_exit: %s lat %lu%s", global_comm_get(raw->pid),
+        printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm_exit: %s lat %lu%s", comm_get(dev, raw->pid),
             raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
             find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? " " : "\n");
         if (ctx->oncpu) {
@@ -379,7 +415,7 @@ static void bpf_kvm_exit_print_dev(struct prof_dev *dev, int indent)
     dev_printf("kvm_vcpu:\n");
     while (bpf_map__get_next_key(ctx->obj->maps.kvm_vcpu,
                 pid == 0 ? NULL : &pid, &pid, sizeof(pid)) == 0) {
-        dev_printf("%6u %s\n", pid, global_comm_get(pid));
+        dev_printf("%6u %s\n", pid, comm_get(dev, pid));
         n++;
     }
 }
@@ -439,4 +475,3 @@ struct monitor bpf_kvm_exit = {
     .minevtime = bpf_kvm_exit_minevtime,
 };
 MONITOR_REGISTER(bpf_kvm_exit)
-
