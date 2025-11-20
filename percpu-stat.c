@@ -90,14 +90,12 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->evsel_list.node_new = evsel_node_new;
     ctx->evsel_list.node_delete = evsel_node_delete;
 
-    tep__ref();
     return 0;
 }
 
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct percpu_stat_ctx *ctx = dev->private;
-    tep__unref();
     rblist__exit(&ctx->evsel_list);
     free(ctx);
 }

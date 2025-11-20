@@ -87,8 +87,9 @@ static void pid_comm_exit_delete(struct rblist *rblist, struct rb_node *rb_node)
 
     // notify
     if (!list_empty(&global_comm_notify_list)) {
-        struct comm_notify *node;
-        list_for_each_entry(node, &global_comm_notify_list, link) {
+        struct comm_notify *node, *n;
+        // The notify callback may remove itself from the list.
+        list_for_each_entry_safe(node, n, &global_comm_notify_list, link) {
             node->notify(node, b->pid, NOTIFY_COMM_DELETE, b->update_time);
         }
     }
@@ -132,8 +133,6 @@ static int comm_init(struct prof_dev *dev)
 
     reduce_wakeup_times(dev, &attr);
 
-    tep__ref();
-
     ctx->task_newtask = tep__event_id("task", "task_newtask");
     if (ctx->task_newtask < 0) goto failed;
     attr.config = ctx->task_newtask;
@@ -155,12 +154,9 @@ static int comm_init(struct prof_dev *dev)
     if (!evsel)  goto failed;
     perf_evlist__add(evlist, evsel);
 
-    tep__unref();
-
     return 0;
 
 failed:
-    tep__unref();
     comm_deinit(dev);
     return -1;
 }

@@ -215,7 +215,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->rq_tracks.node_new = request_track_node_new;
     ctx->rq_tracks.node_delete = request_track_node_delete;
 
-    tep__ref();
+    if (env->verbose)
+        tep__ref();
+    else
+        tep__ref_light();
 
     return 0;
 

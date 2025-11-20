@@ -134,7 +134,7 @@ static int pystack_init(struct prof_dev *dev)
     if (!ctx->fixed_event)
         goto deinit;
 
-    tep__ref();
+    tep__ref_light();
 
     ctx->fun_entry = python_event_id("python", "function__entry");
     if (ctx->fun_entry < 0) goto failed;

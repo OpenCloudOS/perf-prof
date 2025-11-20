@@ -992,7 +992,7 @@ static void print_event(struct perf_event_attr *attr)
         }
         printf("%s", str);
     } else if (attr->type == PERF_TYPE_TRACEPOINT) {
-        struct tep_event *e = tep_find_event(tep__ref(), (int)attr->config);
+        struct tep_event *e = tep_find_event(tep__ref_light(), (int)attr->config);
         if (e) printf("%s:%s", e->system, e->name);
         tep__unref();
     } else if (attr->type == PERF_TYPE_RAW) {

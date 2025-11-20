@@ -522,7 +522,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
         return -1;
     dev->private = ctx;
 
-    tep__ref();
+    if (env->event || env->verbose >= VERBOSE_EVENT)
+        tep__ref();
+    else
+        tep__ref_light();
 
     INIT_LIST_HEAD(&ctx->kvm_mmu_gen_list);
 

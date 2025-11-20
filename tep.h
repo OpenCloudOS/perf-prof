@@ -10,6 +10,7 @@
 void pr_stat(const char *fmt, ...);
 
 struct tep_handle *tep__ref(void);
+struct tep_handle *tep__ref_light(void);
 void tep__unref(void);
 int tep__event_id(const char *sys, const char *name);
 void tep__update_comm(const char *comm, int pid);

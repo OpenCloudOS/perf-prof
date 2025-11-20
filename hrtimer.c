@@ -50,7 +50,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->dev = dev;
 
     if (env->event) {
-        tep__ref();
+        tep__ref_light();
 
         ctx->tp_list = tp_list_new(dev, env->event);
         if (!ctx->tp_list)

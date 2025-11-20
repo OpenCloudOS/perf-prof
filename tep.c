@@ -83,18 +83,90 @@ static char *on_demand_ksym_resolver(void *priv, unsigned long long *addrp, char
     return function_resolver(priv, addrp, modp);
 }
 
+/*
+ * tep__ref() - Get fully initialized tep handle with plugins and global_comm
+ *
+ * Use this when you need:
+ * - Global comm tracking: Process name tracking across the system
+ * - Plugin support: Event pretty-printing and enhanced formatting
+ * - Full tracepoint functionality: Complete event processing capabilities
+ */
 struct tep_handle *tep__ref(void)
+{
+    if (!tep) {
+        tep = tep_alloc();
+        if (!tep)
+            return NULL;
+    } else
+        tep_ref(tep);
+
+    if (!plugins) {
+        tep_add_plugin_path(tep, (char *)PLUGINS_DIR, TEP_PLUGIN_FIRST);
+        plugins = tep_load_plugins(tep);
+        tep_set_function_resolver(tep, on_demand_ksym_resolver, NULL);
+    }
+    if (global_comm == 0 && global_comm_ref() == 0)
+        global_comm = 1;
+    return tep;
+}
+
+/*
+ * tep__ref_light() - Get lightweight tep handle without plugins or global_comm
+ *
+ * This is a performance-optimized version of tep__ref() that provides minimal
+ * tep functionality without expensive initialization overhead. It can be called
+ * from both internal tep.c functions and external code that doesn't need full
+ * initialization.
+ *
+ * Use this when you only need:
+ * - Event ID lookup: Query event identifiers
+ * - Field information: Access event field definitions
+ * - Basic tep operations: Event structure queries
+ * - Internal utility functions: Helper operations within tep.c
+ *
+ * Benefits:
+ * - Fast initialization: Avoids expensive global_comm_ref() call
+ * - Lower overhead: Suitable for frequent internal calls
+ * - Flexible upgrade: Can call tep__ref() later if full features needed
+ *
+ * Typical users:
+ * - Internal tep.c functions (tep__event_id, tep__pid_to_comm, etc.)
+ * - Utility functions that only query event metadata
+ * - Code paths that don't need process name tracking
+ * - Performance-sensitive event lookups
+ *
+ * Lifecycle scenarios:
+ *
+ * Scenario 1: Full initialization already done
+ *   caller:   tep__ref()       -> tep with full init (refcount=1)
+ *   caller:   tep__ref_light() -> increment refcount (refcount=2)
+ *   caller:   tep__unref()     -> decrement (refcount=1)
+ *   caller:   tep__unref()     -> free with full cleanup
+ *
+ * Scenario 2: Only lightweight operations needed
+ *   caller:   tep__ref_light() -> minimal tep (refcount=1, no plugins/global_comm)
+ *   caller:   tep__unref()     -> free minimal tep (plugins=NULL safely handled)
+ *
+ * Scenario 3: Upgrade from light to full
+ *   caller:   tep__ref_light() -> minimal tep (refcount=1)
+ *   caller:   tep__ref()       -> initialize plugins/global_comm (refcount=2)
+ *   caller:   tep__unref()     -> decrement (refcount=1)
+ *   caller:   tep__unref()     -> free with full cleanup
+ *
+ * Important notes:
+ * - Always pair with tep__unref() to properly manage reference counting
+ * - Returned tep may have limited functionality (no plugins, no resolver)
+ * - Can safely call tep__ref() later to upgrade to full initialization
+ * - tep__unref() safely handles both minimal and full tep cleanup
+ * - Safe to mix with tep__ref() calls
+ */
+struct tep_handle *tep__ref_light(void)
 {
     if (tep != NULL) {
         tep_ref(tep);
         return tep;
     }
     tep = tep_alloc();
-    tep_add_plugin_path(tep, (char *)PLUGINS_DIR, TEP_PLUGIN_FIRST);
-    plugins = tep_load_plugins(tep);
-    tep_set_function_resolver(tep, on_demand_ksym_resolver, NULL);
-    if (global_comm_ref() == 0)
-        global_comm = 1;
     return tep;
 }
 
@@ -113,7 +185,8 @@ void tep__unref(void)
             function_resolver_unref();
             resolver_ref = 0;
         }
-        tep_unload_plugins(plugins, tep);
+        if (plugins)
+            tep_unload_plugins(plugins, tep);
         tep_free(tep);
         tep = NULL;
     } else
@@ -127,7 +200,14 @@ int tep__event_id(const char *sys, const char *name)
     struct tep_event *event;
     int id = -1;
 
-    tep__ref();
+    if (!tep) {
+        char path[256];
+        snprintf(path, sizeof(path), "%s/events/%s/%s/id", tracing_path_mount(), sys, name);
+        filename__read_int(path, &id);
+        return id;
+    }
+
+    tep__ref_light();
     event = tep_find_event_by_name(tep, sys, name);
     if (event) {
         id = event->id;
@@ -178,7 +258,7 @@ void tep__update_comm(const char *comm, int pid)
             buff[len] = '\0';
         comm = buff;
     }
-    tep__ref();
+    tep__ref_light();
     tep_override_comm(tep, comm, pid);
     tep__unref();
 }
@@ -192,7 +272,7 @@ const char *tep__pid_to_comm(int pid)
         return comm ? comm : "<...>";
     }
 
-    tep__ref();
+    tep__ref_light();
     comm = tep_data_comm_from_pid(tep, pid);
     tep__unref();
     return comm;
@@ -251,7 +331,7 @@ bool tep__event_has_field(int id, const char *field)
     bool has_field = false;
     struct tep_event *event;
 
-    tep__ref();
+    tep__ref_light();
     event = tep_find_event(tep, id);
     if (event) {
         has_field = !!tep_find_any_field(event, field);
@@ -267,7 +347,7 @@ bool tep__event_field_size(int id, const char *field)
     struct tep_format_field *format;
     int size = -1;
 
-    tep__ref();
+    tep__ref_light();
     event = tep_find_event(tep, id);
     if (event) {
         format = tep_find_any_field(event, field);
@@ -290,7 +370,7 @@ int tep__event_size(int id)
     else if (id == KRETPROBE || id == URETPROBE)
         return sizeof(struct kretprobe_trace_entry_head);
 
-    tep__ref();
+    tep__ref_light();
     event = tep_find_event(tep, id);
     if (event) {
         fields = tep_event_fields(event);
@@ -359,7 +439,7 @@ event_fields *tep__event_fields(int id)
     if (id > TRACE_EVENT_TYPE_MAX)
         return kprobe_uprobe_event_fields(id);
 
-    tep__ref();
+    tep__ref_light();
     event = tep_find_event(tep, id);
     if (!event)
         goto _return;
@@ -668,7 +748,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     if (*s)
         tp_list->tp[i++].name = s;
 
-    tep__ref();
+    tep__ref_light();
     /*
      * Event syntax:
      *    EVENT,EVENT,...
@@ -1191,7 +1271,7 @@ void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, i
 
         if (tp->id <= TRACE_EVENT_TYPE_MAX) {
             struct tep_record record = {.size = size, .data = data};
-            struct tep_event *e = tep_find_event_by_record(tep__ref(), &record);
+            struct tep_event *e = tep_find_event_by_record(tep__ref_light(), &record);
             if (e) {
                 static struct trace_seq s;
                 static int inited = 0;
@@ -1383,7 +1463,7 @@ struct tp_matcher *tp_matcher_find(struct tp *tp, const char *sys, const char *n
         return NULL;
 
     matcher = NULL;
-    tep__ref();
+    tep__ref_light();
 
     /*
      * default tp_matcher

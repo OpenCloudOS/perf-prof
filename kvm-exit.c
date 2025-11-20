@@ -129,7 +129,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
         return -1;
     dev->private = ctx;
 
-    tep__ref();
+    if (env->greater_than || env->verbose)
+        tep__ref();
+    else
+        tep__ref_light();
+
     ctx->nr_ins = prof_dev_nr_ins(dev);
     id = tep__event_id("kvm", "kvm_exit");
     if (id < 0)

@@ -119,7 +119,7 @@ static int help_init(struct prof_dev *dev)
     if (!ctx->tp_list)
         exit(-1);
 
-    tep__ref();
+    tep__ref_light();
 
     for (i = 0; i < env->nr_events; i++) {
         ctx->tp_list[i] = tp_list_new(dev, env->events[i]);

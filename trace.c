@@ -388,7 +388,6 @@ static void tracepoint_deinit(struct prof_dev *dev)
 {
     struct tracepoint_private *p = dev->private;
     tp_list_free(p->tp_list);
-    tep__unref();
     free(p);
 }
 
@@ -417,7 +416,6 @@ static int tracepoint_init(struct prof_dev *dev)
     p = zalloc(sizeof(*p));
     if (!p) return -1;
 
-    tep__ref();
     dev->private = p;
     dev->silent = true;
     p->tp_list = tp_list_new(dev, env->event);

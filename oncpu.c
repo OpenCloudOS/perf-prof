@@ -289,7 +289,10 @@ static int oncpu_init(struct prof_dev *dev)
     if (!env->interval)
         env->interval = 1000;
 
-    tep__ref();
+    if (env->verbose)
+        tep__ref();
+    else
+        tep__ref_light();
 
     ctx->nr_ins = prof_dev_nr_ins(dev);
     ctx->nr_cpus = get_present_cpus();
