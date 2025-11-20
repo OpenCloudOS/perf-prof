@@ -31,14 +31,16 @@ BuildRequires:  bpftool
 %endif
 
 # source files
-Source:         https://github.com/OpenCloudOS/perf-prof/archive/refs/tags/%{version}.tar.gz
+# Use %{tag} which is auto-detected by rpm.sh to support both old (1.5.5) and new (v1.6.0) tag formats
+Source:         https://github.com/OpenCloudOS/perf-prof/archive/refs/tags/%{tag}.tar.gz
 Patch0: glibc_2.17.patch
 
 %description
 Kernel profiler based on perf_event and ebpf
 
 %prep
-%setup -q
+# GitHub strips 'v' prefix from directory name: v1.6.0 -> perf-prof-1.6.0
+%setup -q -n %{name}-%{version}
 %if %{defined glibc_217}
 %patch0 -p1
 %endif

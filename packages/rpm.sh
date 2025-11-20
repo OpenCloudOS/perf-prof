@@ -8,6 +8,24 @@ then
   exit 0
 fi
 
+# Auto-detect tag format: check if tag exists with or without 'v' prefix
+# This supports both old format (1.5.5) and new format (v1.6.0)
+# User can pass either "1.6.0" or "v1.6.0", we detect the actual tag in git
+if git rev-parse "$tag" >/dev/null 2>&1; then
+    # Tag exists as-is (could be "1.5.5" or "v1.6.0")
+    actual_tag="$tag"
+elif git rev-parse "v$tag" >/dev/null 2>&1; then
+    # Tag needs 'v' prefix (user passed "1.6.0", actual tag is "v1.6.0")
+    actual_tag="v$tag"
+else
+    echo "Error: Tag not found. Tried both '$tag' and 'v$tag'" 1>&2
+    exit 1
+fi
+
+# Strip 'v' prefix from version if present (for rpmbuild %{version})
+# GitHub strips 'v' from directory name: v1.6.0 -> perf-prof-1.6.0
+version="${tag#v}"
+
 sym_ver_le_217()
 {
     local sym=$1
@@ -38,8 +56,8 @@ if [ -n "$glibc_217" ]; then
     fcntl_ver=$(sym_ver_le_217 fcntl)
     sed -i -e "s/fmemopen@GLIBC_/$fmemopen_ver/" -e "s/fcntl@GLIBC_/$fcntl_ver/" $src/glibc_2.17.patch
     rpmbuild -bb perf-prof.spec \
-        --define "version $tag" --define "glibc_217 1"
+        --define "version $version" --define "tag $actual_tag" --define "glibc_217 1"
 else
     rpmbuild -bb perf-prof.spec \
-        --define "version $tag"
+        --define "version $version" --define "tag $actual_tag"
 fi
