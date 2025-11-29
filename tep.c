@@ -528,7 +528,7 @@ _return:
     return ef;
 }
 
-static char *next_sep(char *s, int c)
+char *next_sep(char *s, int c)
 {
     while (*s) {
         if (*s == (char)c)

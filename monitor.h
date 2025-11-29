@@ -191,6 +191,9 @@ struct env {
     char *perfeval_cpus;
     char *perfeval_pids;
 
+    /* sql */
+    char *query;
+
     /* workload */
     struct workload workload;
 

@@ -23,6 +23,8 @@ int tep__event_size(int id);
 typedef struct global_var_declare event_fields;
 event_fields *tep__event_fields(int id);
 
+char *next_sep(char *s, int c);
+
 struct prof_dev;
 struct tp_matcher;
 

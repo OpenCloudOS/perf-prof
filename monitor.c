@@ -567,6 +567,7 @@ struct option main_options[] = {
     OPT_BIT_NONEG   ('8',               "8", &env.bytes,                        "Display output in 64-bit values", 8),
     OPT_STRDUP_NONEG( 0 ,         "output2", &env.output2,             "file",  "Nonstandard output file name"),
     OPT_STRDUP_NONEG( 0 ,            "prio", &env.prio_map, "prio[-prio],...",  "Specify the priority range for real-time and normal scheduling"),
+    OPT_STRDUP_NONEG( 0 ,           "query", &env.query,                "SQL",  "Execute SQL query on collected events"),
 
     OPT_END()
 };
@@ -602,6 +603,10 @@ static void free_env(struct env *e)
     if (e->kvmclock) free(e->kvmclock);
     if (e->perfeval_cpus) free(e->perfeval_cpus);
     if (e->perfeval_pids) free(e->perfeval_pids);
+    if (e->output2) free(e->output2);
+    if (e->prio_map) free(e->prio_map);
+    if (e->query) free(e->query);
+
     if (e->workload.pid > 0) {
         kill(e->workload.pid, SIGTERM);
     }
