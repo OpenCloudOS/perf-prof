@@ -11,6 +11,7 @@ struct tp_private {
     sqlite3_stmt *insert_stmt;
     struct tep_format_field **fields;
     int nr_fields;
+    const char *table_name;
 };
 
 struct sql_ctx {
@@ -230,22 +231,23 @@ static int sql_create_table(struct prof_dev *dev)
         col_buf[col_len] = '\0';
         ins_buf[ins_len] = '\0';
 
-        snprintf(buf, sizeof(buf), table_fmt, tp->name, tp->name, col_buf);
+        priv->table_name = tp->alias ? tp->alias : tp->name;
+        snprintf(buf, sizeof(buf), table_fmt, priv->table_name, priv->table_name, col_buf);
         if (dev->env->verbose)
             printf("CREATE SQL: %s\n", buf);
         if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
-            fprintf(stderr, "Failed to create table %s: %s\n", tp->name, errmsg);
+            fprintf(stderr, "Failed to create table %s: %s\n", priv->table_name, errmsg);
             return -1;
         }
 
         if (priv->insert_stmt)
             continue;
 
-        snprintf(buf, sizeof(buf), insert_fmt, tp->name, ins_buf);
+        snprintf(buf, sizeof(buf), insert_fmt, priv->table_name, ins_buf);
         if (dev->env->verbose)
             printf("INSERT SQL: %s\n", buf);
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
-            fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", tp->name, sqlite3_errmsg(ctx->sql));
+            fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
             return -1;
         }
     }
@@ -464,7 +466,7 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
             if (sqlite3_step(priv->insert_stmt) != SQLITE_DONE) {
                 if (dev->env->verbose) {
                     fprintf(stderr, "Failed to insert record into %s: %s\n",
-                            tp->name, sqlite3_errmsg(ctx->sql));
+                            priv->table_name, sqlite3_errmsg(ctx->sql));
                 }
             } else {
                 ctx->total_inserts++;
