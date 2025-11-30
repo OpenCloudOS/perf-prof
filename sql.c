@@ -192,13 +192,12 @@ static int sql_create_table(struct prof_dev *dev)
                 "_time INTEGER, "
                 "_cpu INTEGER, "
                 "_period INTEGER, "
-                "common_type INTEGER, "
                 "common_flags INTEGER, "
                 "common_preempt_count INTEGER, "
                 "common_pid INTEGER"
                 "%s" // raw data columns
         ");";
-    const char *insert_fmt = "INSERT INTO %s VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?%s);";
+    const char *insert_fmt = "INSERT INTO %s VALUES(?, ?, ?, ?, ?, ?, ?, ?%s);";
     char buf[1024];
 
     for_each_real_tp(ctx->tp_list, tp, i) {
@@ -237,7 +236,7 @@ static int sql_create_table(struct prof_dev *dev)
                                 ", ?");
             j++;
         }
-        priv->nr_fields = 9 + j;
+        priv->nr_fields = 8 + j;
         col_buf[col_len] = '\0';
         ins_buf[ins_len] = '\0';
 
@@ -543,8 +542,7 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
             sqlite3_bind_int64(priv->insert_stmt, idx++, data->time);
             sqlite3_bind_int(priv->insert_stmt, idx++, data->cpu_entry.cpu);
             sqlite3_bind_int64(priv->insert_stmt, idx++, data->period);
-            // common_*
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_type);
+            // common_* (common_type removed - use event_id from event_metadata table)
             sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_flags);
             sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_preempt_count);
             sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_pid);
