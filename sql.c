@@ -12,6 +12,12 @@ struct tp_private {
     struct tep_format_field **fields;
     int nr_fields;
     const char *table_name;
+    time_t created_time;
+
+    /* Event statistics */
+    uint64_t sample_count;
+    uint64_t first_sample_time;
+    uint64_t last_sample_time;
 };
 
 struct sql_ctx {
@@ -20,6 +26,8 @@ struct sql_ctx {
     struct tep_handle *tep;
     int nr_query;
     int **col_widths;
+
+    sqlite3_stmt *update_metadata_stmt;
 
     /* Transaction optimization fields */
     bool in_transaction;
@@ -158,6 +166,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
             free(priv);
         }
     }
+    if (ctx->update_metadata_stmt)
+        sqlite3_finalize(ctx->update_metadata_stmt);
     if (ctx->col_widths) {
         for (i = 0; i < ctx->nr_query; i++)
             if (ctx->col_widths[i])
@@ -239,6 +249,10 @@ static int sql_create_table(struct prof_dev *dev)
             fprintf(stderr, "Failed to create table %s: %s\n", priv->table_name, errmsg);
             return -1;
         }
+        priv->created_time = time(NULL);
+        priv->sample_count = 0;
+        priv->first_sample_time = 0;
+        priv->last_sample_time = 0;
 
         if (priv->insert_stmt)
             continue;
@@ -249,6 +263,119 @@ static int sql_create_table(struct prof_dev *dev)
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
             fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
             return -1;
+        }
+    }
+    return 0;
+}
+
+static int sql_create_metadata_table(struct prof_dev *dev)
+{
+    struct sql_ctx *ctx = dev->private;
+    struct tp *tp;
+    int i;
+    const char *metadata_table_fmt =
+        "CREATE TABLE IF NOT EXISTS event_metadata ("
+            "table_name TEXT PRIMARY KEY, "
+            "event_system TEXT NOT NULL, "
+            "event_name TEXT NOT NULL, "
+            "event_id INTEGER NOT NULL, "
+            "filter_expression TEXT, "
+            "has_stack BOOLEAN DEFAULT FALSE, "
+            "max_stack INTEGER, "
+            "field_count INTEGER NOT NULL, "
+            "created_time INTEGER NOT NULL, "
+            "sample_count INTEGER DEFAULT 0, "
+            "first_sample_time INTEGER, "
+            "last_sample_time INTEGER "
+        ");";
+
+    const char *insert_metadata_fmt =
+        "INSERT OR REPLACE INTO event_metadata VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+
+    const char *update_metadata_fmt =
+        "UPDATE event_metadata SET "
+            "created_time = ?, "
+            "sample_count = ?, "
+            "first_sample_time = ?, "
+            "last_sample_time = ? "
+        "WHERE table_name = ?;";
+
+    sqlite3_stmt *stmt;
+    char *errmsg = NULL;
+
+    /* Create metadata table */
+    if (sqlite3_exec(ctx->sql, metadata_table_fmt, NULL, NULL, &errmsg) != SQLITE_OK) {
+        fprintf(stderr, "Failed to create metadata table: %s\n", errmsg);
+        return -1;
+    }
+
+    /* Prepare insert statement */
+    if (sqlite3_prepare_v3(ctx->sql, insert_metadata_fmt, -1,
+                          SQLITE_PREPARE_PERSISTENT, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Failed to prepare metadata insert statement: %s\n",
+                sqlite3_errmsg(ctx->sql));
+        return -1;
+    }
+
+    /* Insert metadata for each event */
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tp_private *priv = tp->private;
+
+        sqlite3_bind_text(stmt, 1, priv->table_name, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, tp->sys, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, tp->name, -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 4, tp->id);
+        sqlite3_bind_text(stmt, 5, tp->filter, -1, SQLITE_STATIC);
+        sqlite3_bind_int(stmt, 6, tp->stack ? 1 : 0);
+        sqlite3_bind_int(stmt, 7, tp->max_stack);
+        sqlite3_bind_int(stmt, 8, priv->nr_fields);
+        sqlite3_bind_int64(stmt, 9, priv->created_time); /* created_time */
+        sqlite3_bind_int64(stmt, 10, 0);  /* sample_count */
+        sqlite3_bind_null(stmt, 11);    /* first_sample_time */
+        sqlite3_bind_null(stmt, 12);    /* last_sample_time */
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            fprintf(stderr, "Failed to insert metadata for %s: %s\n",
+                    priv->table_name, sqlite3_errmsg(ctx->sql));
+        }
+
+        sqlite3_reset(stmt);
+    }
+
+    sqlite3_finalize(stmt);
+
+    /* Prepare update statement */
+    if (sqlite3_prepare_v3(ctx->sql, update_metadata_fmt, -1,
+                          SQLITE_PREPARE_PERSISTENT, &ctx->update_metadata_stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Failed to prepare metadata update statement: %s\n",
+                sqlite3_errmsg(ctx->sql));
+        return -1;
+    }
+    return 0;
+}
+
+static int sql_update_metadata_table(struct prof_dev *dev)
+{
+    struct sql_ctx *ctx = dev->private;
+    struct tp *tp;
+    int i;
+    sqlite3_stmt *update_stmt = ctx->update_metadata_stmt;
+
+    /* Update metadata statistics */
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tp_private *priv = tp->private;
+
+        sqlite3_reset(update_stmt);
+        sqlite3_bind_int64(update_stmt, 1, priv->created_time); /* created_time */
+        sqlite3_bind_int64(update_stmt, 2, priv->sample_count);  /* sample_count */
+        sqlite3_bind_int64(update_stmt, 3, priv->first_sample_time); /* first_sample_time */
+        sqlite3_bind_int64(update_stmt, 4, priv->last_sample_time); /* last_sample_time */
+        sqlite3_bind_text(update_stmt, 5, priv->table_name, -1, SQLITE_STATIC);
+
+        if (sqlite3_step(update_stmt) != SQLITE_DONE) {
+            fprintf(stderr, "Failed to insert metadata for %s: %s\n",
+                    priv->table_name, sqlite3_errmsg(ctx->sql));
         }
     }
     return 0;
@@ -289,6 +416,10 @@ static int sql_init(struct prof_dev *dev)
     }
 
     if (sql_create_table(dev) < 0)
+        goto failed;
+
+    /* Create and populate metadata table */
+    if (sql_create_metadata_table(dev) < 0)
         goto failed;
 
     return 0;
@@ -471,6 +602,11 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
             } else {
                 ctx->total_inserts++;
                 ctx->pending_inserts++;
+                priv->sample_count++;
+                if (priv->first_sample_time == 0 || data->time < priv->first_sample_time)
+                    priv->first_sample_time = data->time;
+                if (data->time > priv->last_sample_time)
+                    priv->last_sample_time = data->time;
             }
             break;
         }
@@ -493,6 +629,9 @@ static void sql_interval(struct prof_dev *dev)
 
     /* Commit pending transaction */
     commit_transaction(ctx, false);
+
+    /* Update metadata table */
+    sql_update_metadata_table(dev);
 
     if (!env->query || !env->query[0]) {
         /* Flush to disk for file database */
