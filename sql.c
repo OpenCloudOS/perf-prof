@@ -4,7 +4,7 @@
 #include <time.h>
 #include <monitor.h>
 #include <tep.h>
-
+#include <linux/rblist.h>
 #include <sqlite3.h>
 
 struct tp_private {
@@ -24,6 +24,7 @@ struct sql_ctx {
     sqlite3 *sql;
     struct tp_list *tp_list;
     struct tep_handle *tep;
+    struct rblist symbolic_table;
     int nr_query;
     int **col_widths;
 
@@ -38,6 +39,357 @@ struct sql_ctx {
     uint64_t total_inserts;
     uint64_t total_commits;
 };
+
+struct symbolic_node {
+    struct rb_node rbnode;
+    union {
+        uint64_t event_field;
+        struct {
+            int event_id;
+            int field_offset;
+        };
+    };
+    uint64_t value;
+    const char *str;
+};
+
+static int symbolic_node_cmp(struct rb_node *rbn, const void *entry)
+{
+    struct symbolic_node *node = container_of(rbn, struct symbolic_node, rbnode);
+    const struct symbolic_node *e = entry;
+
+    if (node->event_field > e->event_field)
+        return 1;
+    else if (node->event_field < e->event_field)
+        return -1;
+    else {
+        if (node->value > e->value)
+            return 1;
+        else if (node->value < e->value)
+            return -1;
+        else
+            return 0;
+    }
+}
+
+static struct rb_node *symbolic_node_new(struct rblist *rlist, const void *new_entry)
+{
+    struct symbolic_node *node = malloc(sizeof(*node));
+    if (node) {
+        const struct symbolic_node *e = new_entry;
+        node->event_field = e->event_field;
+        node->value = e->value;
+        /* Note: str points to TEP internal data structure.
+         * It's safe as long as TEP handle lifetime covers the entire program execution.
+         * No string duplication for performance reasons. */
+        node->str = e->str;
+        RB_CLEAR_NODE(&node->rbnode);
+    }
+    return node ? &node->rbnode : NULL;
+}
+
+static void symbolic_node_delete(struct rblist *rblist, struct rb_node *rb_node)
+{
+    struct symbolic_node *node = container_of(rb_node, struct symbolic_node, rbnode);
+    free(node);
+}
+
+static void symbolic_update(struct sql_ctx *ctx, int event_id, int field_offset,
+                            const char *value_str, const char *str)
+{
+    char *endptr = NULL;
+    uint64_t value = strtoull(value_str, &endptr, 0);
+    struct symbolic_node key;
+
+    if (endptr == value_str || *endptr != '\0') {
+        // Not a valid number
+        return;
+    }
+
+    key.event_id = event_id;
+    key.field_offset = field_offset;
+    key.value = value;
+    key.str = str;
+    rblist__findnew(&ctx->symbolic_table, &key);
+}
+
+static const char *symbolic_lookup(struct sql_ctx *ctx, int event_id, int field_offset,
+                                   uint64_t value)
+{
+    struct symbolic_node key, *node;
+    struct rb_node *rbn;
+
+    key.event_id = event_id;
+    key.field_offset = field_offset;
+    key.value = value;
+    rbn = rblist__find(&ctx->symbolic_table, &key);
+    if (rbn) {
+        node = container_of(rbn, struct symbolic_node, rbnode);
+        return node->str;
+    } else
+        return NULL;
+}
+
+struct symbolic_ctx {
+    struct sql_ctx *ctx;
+    int event_id;
+    int do_update;
+    int nr_print_symbolic;
+
+    // Only for kvm:* events, to evaluate the isa expression.
+    // (REC->isa == 1) ? __print_symbolic() : __print_symbolic()
+    int isa;
+    int has_isa;
+    int has_unknown;
+};
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wswitch-enum"
+
+static unsigned long
+tep_try_eval_num_arg(struct tep_print_arg *arg, struct symbolic_ctx *sym_ctx)
+{
+    unsigned long val = -1;
+    unsigned long left, right;
+
+    switch (arg->type) {
+    case TEP_PRINT_NULL: // ~ ! + -
+        return 0;
+    case TEP_PRINT_ATOM:
+        return strtoul(arg->atom.atom, NULL, 0);
+    case TEP_PRINT_FIELD:
+        if (strcmp(arg->field.name, "isa") == 0) {
+            sym_ctx->has_isa = 1;
+            return sym_ctx->isa;
+        }
+        sym_ctx->has_unknown++;
+        return val;
+    case TEP_PRINT_OP:
+        if (arg->op.op[0] == '[' || arg->op.op[0] == '?')
+            return val;
+
+        left = tep_try_eval_num_arg(arg->op.left, sym_ctx);
+        right = tep_try_eval_num_arg(arg->op.right, sym_ctx);
+        switch (arg->op.op[0]) {
+        case '!':
+            switch (arg->op.op[1]) {
+            case 0: val = !right; break;
+            case '=': val = left != right; break;
+            default: goto out;
+            } break;
+        case '~': val = ~right; break;
+        case '|': if (arg->op.op[1]) val = left || right;
+                  else val = left | right;
+            break;
+        case '&': if (arg->op.op[1]) val = left && right;
+                  else val = left & right;
+            break;
+        case '<':
+            switch (arg->op.op[1]) {
+            case 0: val = left < right; break;
+            case '<': val = left << right; break;
+            case '=': val = left <= right; break;
+            default: goto out;
+            } break;
+        case '>':
+            switch (arg->op.op[1]) {
+            case 0: val = left > right; break;
+            case '>': val = left >> right; break;
+            case '=': val = left >= right; break;
+            default: goto out;
+            } break;
+        case '=': if (arg->op.op[1] != '=') goto out;
+                  val = left == right; break;
+        case '-': val = left - right; break;
+        case '+': val = left + right; break;
+        case '/': val = left / right; break;
+        case '%': val = left % right; break;
+        case '*': val = left * right; break;
+        default: goto out;
+        }
+        break;
+    default:
+        break;
+    }
+out:
+    return val;
+}
+
+static void tep_symbolic(struct tep_print_arg *arg, struct symbolic_ctx *sym_ctx)
+{
+    switch (arg->type) {
+    case TEP_PRINT_SYMBOL: {
+        struct tep_print_arg *field = arg->symbol.field;
+        struct tep_print_flag_sym *symbols = arg->symbol.symbols;
+
+        /* Only handle simple case: __print_symbolic(REC->field, ...)
+         * Where the first argument is a direct field reference (TEP_PRINT_FIELD).
+         *
+         * Supported: __print_symbolic(REC->vec, {0, "str0"}, {1, "str1"}, ...)
+         * Not supported: __print_symbolic((REC->dm >> 8 & 0x7), ...)
+         *                (complex expressions with bit operations)
+         *
+         * This ensures we can unambiguously map the field offset to symbolic values. */
+        if (field && field->type == TEP_PRINT_FIELD) {
+            sym_ctx->nr_print_symbolic++;
+            if (sym_ctx->do_update) {
+                int field_offset = field->field.field->offset;
+                /* Register all value->string mappings for this field */
+                while (symbols) {
+                    symbolic_update(sym_ctx->ctx, sym_ctx->event_id, field_offset,
+                                    symbols->value, symbols->str);
+                    symbols = symbols->next;
+                }
+            }
+        }
+        break;
+    }
+    case TEP_PRINT_OP: {
+        struct tep_print_arg *left = arg->op.left;
+        unsigned long val;
+
+        /* The only op for __print_symbolic string should be ? :
+         * Example: (REC->isa == 1) ? __print_symbolic(...) : __print_symbolic(...) */
+        if (arg->op.op[0] != '?')
+            break;
+
+        arg = arg->op.right;
+        sym_ctx->has_isa = sym_ctx->has_unknown = 0;
+        val = tep_try_eval_num_arg(left, sym_ctx);
+
+        /* Special handling for kvm events with isa-based conditional symbolic.
+         * If the condition can be evaluated at registration time (has_isa && !has_unknown),
+         * only process the matching branch. Otherwise, process both branches.
+         *
+         * Example: kvm:kvm_exit has (REC->isa == 1) ? VMX_reasons : SVM_reasons */
+        if (sym_ctx->has_isa && !sym_ctx->has_unknown) {
+            /* Condition is evaluable: process only the matching branch */
+            if (val) tep_symbolic(arg->op.left, sym_ctx);
+            else tep_symbolic(arg->op.right, sym_ctx);
+        } else {
+            /* Condition has unknown fields: process both branches */
+            tep_symbolic(arg->op.left, sym_ctx);
+            tep_symbolic(arg->op.right, sym_ctx);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+#pragma GCC diagnostic pop
+
+static void symbolic_register(struct sql_ctx *ctx)
+{
+    struct tp *tp;
+    int i;
+    int vendor = get_cpu_vendor();
+    int isa = 0;
+
+    if (vendor == X86_VENDOR_INTEL) isa = 1;
+    else if (vendor == X86_VENDOR_AMD || vendor == X86_VENDOR_HYGON) isa = 2;
+
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tep_event *event = tep_find_event(ctx->tep, tp->id);
+        if (event && event->print_fmt.args) {
+            struct tep_print_arg *arg = event->print_fmt.args;
+            while (arg) {
+                struct symbolic_ctx sym_ctx = {ctx, tp->id, 0, 0, isa, 0, 0};
+
+                tep_symbolic(arg, &sym_ctx);
+                /* Only register symbolic() function when there's exactly one __print_symbolic.
+                 * Multiple __print_symbolic in one format would require more complex parsing
+                 * to determine which field maps to which symbolic table - not supported yet.
+                 * This check ensures we only handle the simple, unambiguous case. */
+                if (sym_ctx.nr_print_symbolic == 1) {
+                    sym_ctx.do_update = 1;
+                    tep_symbolic(arg, &sym_ctx);
+                }
+                arg = arg->next;
+            }
+        }
+    }
+}
+
+static void sqlite_symbolic(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    struct sql_ctx *ctx = (struct sql_ctx *)sqlite3_user_data(context);
+    const char *table_field_name;
+    long long value;
+    int table_name_len = 0;
+    const char *field_name;
+    const char *symbol = NULL;
+    struct tp *tp;
+    int i, j;
+
+    /* Validate argument count */
+    if (argc != 2) {
+        sqlite3_result_error(context, "symbolic() requires exactly 2 arguments", -1);
+        return;
+    }
+
+    /* Validate first argument type (table_field_name) */
+    if (sqlite3_value_type(argv[0]) != SQLITE_TEXT) {
+        sqlite3_result_error(context, "symbolic() first argument must be TEXT", -1);
+        return;
+    }
+
+    /* Validate second argument type (value) */
+    if (sqlite3_value_type(argv[1]) != SQLITE_INTEGER) {
+        sqlite3_result_error(context, "symbolic() second argument must be INTEGER", -1);
+        return;
+    }
+
+    table_field_name = (const char *)sqlite3_value_text(argv[0]);
+    value = sqlite3_value_int64(argv[1]);
+
+    /* Check for NULL table_field_name */
+    if (!table_field_name) {
+        sqlite3_result_error(context, "symbolic() table_field_name is NULL", -1);
+        return;
+    }
+
+    field_name = strchr(table_field_name, '.'); // "table_name.field_name"
+    if (field_name) {
+        field_name++; // skip '.'
+        table_name_len = field_name - table_field_name - 1;
+    } else
+        field_name = table_field_name;
+
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tp_private *tp_priv = tp->private;
+        int match = 0;
+
+        if (!table_name_len) {
+            /* No table name specified, match all tables */
+            match = 1;
+        } else {
+            /* Exact match: ensure the table name is followed by '\0' or '.' */
+            if ((strncmp(tp->name, table_field_name, table_name_len) == 0 &&
+                 tp->name[table_name_len] == '\0') ||
+                (strncmp(tp_priv->table_name, table_field_name, table_name_len) == 0 &&
+                 tp_priv->table_name[table_name_len] == '\0')) {
+                match = 1;
+            }
+        }
+
+        if (match) {
+            for (j = 0; j < tp_priv->nr_fields; j++) {
+                struct tep_format_field *field = tp_priv->fields[j];
+                if (strcmp(field->name, field_name) == 0) {
+                    symbol = symbolic_lookup(ctx, tp->id, field->offset, value);
+                    goto found;
+                }
+            }
+        }
+    }
+
+found:
+    if (symbol)
+        sqlite3_result_text(context, symbol, -1, SQLITE_STATIC);
+    else
+        sqlite3_result_text(context, "UNKNOWN", -1, SQLITE_STATIC);
+}
 
 static int monitor_ctx_init(struct prof_dev *dev)
 {
@@ -110,10 +462,22 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->tp_list)
         goto failed;
 
+    rblist__init(&ctx->symbolic_table);
+    ctx->symbolic_table.node_cmp = symbolic_node_cmp;
+    ctx->symbolic_table.node_new = symbolic_node_new;
+    ctx->symbolic_table.node_delete = symbolic_node_delete;
+
+    symbolic_register(ctx);
+
     if (sqlite3_config(SQLITE_CONFIG_SINGLETHREAD) != SQLITE_OK)
         goto failed;
 
     if (sqlite3_open(env->output2 ? : ":memory:", &ctx->sql) != SQLITE_OK)
+        goto failed;
+
+    if (rblist__nr_entries(&ctx->symbolic_table) > 0 &&
+        sqlite3_create_function(ctx->sql, "symbolic", 2, SQLITE_UTF8, ctx,
+                                sqlite_symbolic, NULL, NULL) != SQLITE_OK)
         goto failed;
 
     /* Single-threaded serial write optimization */
@@ -174,6 +538,7 @@ static void monitor_ctx_exit(struct prof_dev *dev)
                 free(ctx->col_widths[i]);
         free(ctx->col_widths);
     }
+    rblist__exit(&ctx->symbolic_table);
     tp_list_free(ctx->tp_list);
     sqlite3_close(ctx->sql);
     tep__unref();
@@ -461,7 +826,7 @@ struct sample_type_header {
         __u32    cpu;
         __u32    reserved;
     }    cpu_entry;
-    __u64		period;
+    __u64        period;
     struct {
         __u32   size;
         union {
@@ -657,7 +1022,7 @@ static void sql_interval(struct prof_dev *dev)
         if (sqlite3_prepare_v3(ctx->sql, query, -1, 0, &stmt, NULL) == SQLITE_OK) {
             int column_count = sqlite3_column_count(stmt);
             int *col_widths = ctx->col_widths[nr_query];
-            int j, k, width;
+            int j, k, width, step_result;
 
             // Allocate memory and initialize column widths
             if (!col_widths) {
@@ -686,7 +1051,7 @@ static void sql_interval(struct prof_dev *dev)
             printf("\n");
 
             // Print rows data
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
+            while ((step_result = sqlite3_step(stmt)) == SQLITE_ROW) {
                 for (j = 0; j < column_count; j++) {
                     if (j > 0) printf(" | ");
                     switch (sqlite3_column_type(stmt, j)) {
@@ -717,6 +1082,12 @@ static void sql_interval(struct prof_dev *dev)
                 }
                 printf("\n");
             }
+
+            /* Check if loop ended due to error */
+            if (step_result != SQLITE_DONE) {
+                fprintf(stderr, "Error executing query: %s\n", sqlite3_errmsg(ctx->sql));
+            }
+
             printf("\n");
 
         cleanup:
