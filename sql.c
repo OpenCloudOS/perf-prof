@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@ struct tp_private {
     int nr_fields;
     const char *table_name;
     time_t created_time;
+    char *function_list;  /* Comma-separated list of available SQL functions for this event */
 
     /* Event statistics */
     uint64_t sample_count;
@@ -135,6 +137,7 @@ struct symbolic_ctx {
     int event_id;
     int do_update;
     int nr_print_symbolic;
+    const char *field_name;
 
     // Only for kvm:* events, to evaluate the isa expression.
     // (REC->isa == 1) ? __print_symbolic() : __print_symbolic()
@@ -234,6 +237,7 @@ static void tep_symbolic(struct tep_print_arg *arg, struct symbolic_ctx *sym_ctx
             sym_ctx->nr_print_symbolic++;
             if (sym_ctx->do_update) {
                 int field_offset = field->field.field->offset;
+                sym_ctx->field_name = field->field.field->name;
                 /* Register all value->string mappings for this field */
                 while (symbols) {
                     symbolic_update(sym_ctx->ctx, sym_ctx->event_id, field_offset,
@@ -290,11 +294,13 @@ static void symbolic_register(struct sql_ctx *ctx)
     else if (vendor == X86_VENDOR_AMD || vendor == X86_VENDOR_HYGON) isa = 2;
 
     for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tp_private *priv = tp->private;
         struct tep_event *event = tep_find_event(ctx->tep, tp->id);
         if (event && event->print_fmt.args) {
             struct tep_print_arg *arg = event->print_fmt.args;
             while (arg) {
-                struct symbolic_ctx sym_ctx = {ctx, tp->id, 0, 0, isa, 0, 0};
+                struct symbolic_ctx sym_ctx = {ctx, tp->id, 0, 0, NULL, isa, 0, 0};
+                int nr_entries, ret;
 
                 tep_symbolic(arg, &sym_ctx);
                 /* Only register symbolic() function when there's exactly one __print_symbolic.
@@ -302,8 +308,24 @@ static void symbolic_register(struct sql_ctx *ctx)
                  * to determine which field maps to which symbolic table - not supported yet.
                  * This check ensures we only handle the simple, unambiguous case. */
                 if (sym_ctx.nr_print_symbolic == 1) {
+                    nr_entries = rblist__nr_entries(&ctx->symbolic_table);
                     sym_ctx.do_update = 1;
                     tep_symbolic(arg, &sym_ctx);
+
+                    if (nr_entries != rblist__nr_entries(&ctx->symbolic_table)) {
+                        char *function_list = NULL;
+                        if (!priv->function_list)
+                            ret = asprintf(&function_list, "symbolic('%s.%s', %s)",
+                                    tp->name, sym_ctx.field_name, sym_ctx.field_name);
+                        else
+                            ret = asprintf(&function_list, "%s, symbolic('%s.%s', %s)",
+                                    priv->function_list, tp->name, sym_ctx.field_name, sym_ctx.field_name);
+                        if (ret > 0) {
+                            if (priv->function_list)
+                                free(priv->function_list);
+                            priv->function_list = function_list;
+                        }
+                    }
                 }
                 arg = arg->next;
             }
@@ -395,6 +417,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct sql_ctx *ctx;
+    struct tp *tp;
+    int i;
 
     if (!env->event)
         return -1;
@@ -462,6 +486,22 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->tp_list)
         goto failed;
 
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tep_event *event = tep_find_event(ctx->tep, tp->id);
+        struct tep_format_field **fields;
+        struct tp_private *priv;
+
+        fields = event ? tep_event_fields(event) : NULL;
+        priv = calloc(1, sizeof(struct tp_private));
+        if (!priv) {
+            if (fields) free (fields);
+            goto failed;
+        }
+        priv->fields = fields;
+        priv->table_name = tp->alias ? tp->alias : tp->name;
+        tp->private = priv;
+    }
+
     rblist__init(&ctx->symbolic_table);
     ctx->symbolic_table.node_cmp = symbolic_node_cmp;
     ctx->symbolic_table.node_new = symbolic_node_new;
@@ -527,6 +567,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
                 sqlite3_finalize(priv->insert_stmt);
             if (priv->fields)
                 free(priv->fields);
+            if (priv->function_list)
+                free(priv->function_list);
             free(priv);
         }
     }
@@ -566,25 +608,12 @@ static int sql_create_table(struct prof_dev *dev)
     char buf[1024];
 
     for_each_real_tp(ctx->tp_list, tp, i) {
-        struct tep_format_field **fields;
-        struct tp_private *priv;
+        struct tp_private *priv = (struct tp_private *)tp->private;
+        struct tep_format_field **fields = priv->fields;
         char col_buf[512];
         char ins_buf[512];
         int j = 0, col_len = 0, ins_len = 0;
         char *errmsg = NULL;
-
-        if (!tp->private) {
-            struct tep_event *event = tep_find_event(ctx->tep, tp->id);
-            fields = event ? tep_event_fields(event) : NULL;
-            priv = calloc(1, sizeof(struct tp_private));
-            if (!priv)
-                return -1;
-            priv->fields = fields;
-            tp->private = priv;
-        } else {
-            priv = (struct tp_private *)tp->private;
-            fields = priv->fields;
-        }
 
         while (fields && fields[j]) {
             if (fields[j]->flags & TEP_FIELD_IS_STRING)
@@ -605,7 +634,6 @@ static int sql_create_table(struct prof_dev *dev)
         col_buf[col_len] = '\0';
         ins_buf[ins_len] = '\0';
 
-        priv->table_name = tp->alias ? tp->alias : tp->name;
         snprintf(buf, sizeof(buf), table_fmt, priv->table_name, priv->table_name, col_buf);
         if (dev->env->verbose)
             printf("CREATE SQL: %s\n", buf);
@@ -650,12 +678,13 @@ static int sql_create_metadata_table(struct prof_dev *dev)
             "created_time INTEGER NOT NULL, "
             "sample_count INTEGER DEFAULT 0, "
             "first_sample_time INTEGER, "
-            "last_sample_time INTEGER "
+            "last_sample_time INTEGER, "
+            "function_list TEXT "
         ");";
 
     const char *insert_metadata_fmt =
         "INSERT OR REPLACE INTO event_metadata VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
     const char *update_metadata_fmt =
         "UPDATE event_metadata SET "
@@ -698,6 +727,7 @@ static int sql_create_metadata_table(struct prof_dev *dev)
         sqlite3_bind_int64(stmt, 10, 0);  /* sample_count */
         sqlite3_bind_null(stmt, 11);    /* first_sample_time */
         sqlite3_bind_null(stmt, 12);    /* last_sample_time */
+        sqlite3_bind_text(stmt, 13, priv->function_list, -1, SQLITE_STATIC);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             fprintf(stderr, "Failed to insert metadata for %s: %s\n",
