@@ -709,7 +709,24 @@ static int sql_create_table(struct prof_dev *dev)
         char *errmsg = NULL;
 
         while (fields && fields[j]) {
-            if (fields[j]->flags & TEP_FIELD_IS_STRING)
+            /* Field type mapping to SQLite types:
+             *
+             * 1. TEXT: String fields (char arrays) with signed=1
+             *    - char comm[16];            offset:8;  size:16; signed:1;  -> TEXT
+             *    - __data_loc char[] cmd;    offset:40; size:4;  signed:1;  -> TEXT
+             *    Only SIGNED string fields are treated as TEXT to ensure they represent
+             *    printable character data, not raw byte arrays.
+             *
+             * 2. BLOB: Array fields regardless of signed flag
+             *    - __u8 saddr[4];            offset:28; size:4;  signed:0;  -> BLOB
+             *    - long sysctl_mem[3];       offset:40; size:24; signed:1;  -> BLOB
+             *    Arrays without string semantics are stored as binary data.
+             *
+             * 3. INTEGER: All other fields (numeric types)
+             *    - int pid;                  offset:24; size:4;  signed:1;  -> INTEGER
+             *    - unsigned int flags;       offset:32; size:4;  signed:0;  -> INTEGER
+             */
+            if ((fields[j]->flags & TEP_FIELD_IS_STRING) && (fields[j]->flags & TEP_FIELD_IS_SIGNED))
                 col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len,
                                 ", %s TEXT", fields[j]->name);
             else if (fields[j]->flags & TEP_FIELD_IS_ARRAY)
@@ -1041,7 +1058,21 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
             sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_preempt_count);
             sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_pid);
 
-            // Parse and bind event-specific fields
+            /* Parse and bind event-specific fields
+             *
+             * Field type handling must match the SQLite type mapping in sql_create_table():
+             *
+             * 1. TEXT binding: String fields (IS_STRING && IS_SIGNED)
+             *    - char comm[16];         signed:1  -> sqlite3_bind_text()
+             *    - __data_loc char[] cmd; signed:1  -> sqlite3_bind_text() with dynamic offset
+             *
+             * 2. BLOB binding: Array fields (IS_ARRAY)
+             *    - __u8 saddr[4];         signed:0  -> sqlite3_bind_blob()
+             *    - __data_loc __u8[] buf  signed:0  -> sqlite3_bind_blob() with dynamic offset
+             *
+             * 3. INTEGER binding: Numeric fields (default)
+             *    - int pid;               signed:1  -> sqlite3_bind_int() or sqlite3_bind_int64()
+             */
             for (j = 0; priv->fields && priv->fields[j]; j++) {
                 struct tep_format_field *field = priv->fields[j];
                 void *base = data->raw.data;
@@ -1049,25 +1080,34 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
                 void *ptr;
                 int len, v = 0;
 
-                if (field->flags & TEP_FIELD_IS_STRING) {
-                    // For string fields, get the pointer and bind as text
+                if ((field->flags & TEP_FIELD_IS_STRING) && (field->flags & TEP_FIELD_IS_SIGNED)) {
+                    // TEXT: String fields with signed=1
                     if (field->flags & TEP_FIELD_IS_DYNAMIC) {
+                        // Dynamic string: __data_loc char[] field
                         ptr = base + *(unsigned short *)(base + field->offset);
                         len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
                     } else {
+                        // Fixed string: char field[N]
                         ptr = base + field->offset;
                         len = -1;
                     }
                     // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
                     sqlite3_bind_text(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
                 } else if (field->flags & TEP_FIELD_IS_ARRAY) {
-                    // For array fields, get the pointer and bind as blob
-                    ptr = base + field->offset;
-                    len = field->size;
+                    // BLOB: Array fields without string semantics
+                    if (field->flags & TEP_FIELD_IS_DYNAMIC) {
+                        // Dynamic array: __data_loc __u8[] buf
+                        ptr = base + *(unsigned short *)(base + field->offset);
+                        len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
+                    } else {
+                        // Fixed array: __u8 saddr[4], long sysctl_mem[3]
+                        ptr = base + field->offset;
+                        len = field->size;
+                    }
                     // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
                     sqlite3_bind_blob(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
                 } else {
-                    // For numeric fields, get the value and bind as integer
+                    // INTEGER: Numeric fields
                     if (field->size == 1)
                         v = *(unsigned char *)(base + field->offset);
                     else if (field->size == 2)
