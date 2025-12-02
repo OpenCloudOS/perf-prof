@@ -9,6 +9,7 @@
 #include <sqlite3.h>
 #include <event-parse-local.h>
 #include <stack_helpers.h>
+#include <arpa/inet.h>
 
 /*
  * SQLite compatibility mode:
@@ -35,6 +36,27 @@ struct tp_private {
     uint64_t last_sample_time;
 };
 
+#define ARG_POINTER_FUNC \
+    FUNC(KSYMBOL, "ksymbol"), \
+    FUNC(IPV4_STR, "ipv4_str"), \
+    FUNC(IPV4_HSTR, "ipv4_hstr"), \
+    FUNC(IPV6_STR, "ipv6_str"), \
+    FUNC(IPSA_STR, "ipsa_str"), \
+    FUNC(IPSA_HSTR, "ipsa_hstr")
+
+#define FUNC(enum_name, func_name) enum_name
+enum {
+    ARG_POINTER_FUNC,
+    ARG_POINTER_MAX,
+};
+#undef FUNC
+
+#define FUNC(enum_name, func_name) func_name
+const char *arg_pointer_func[] = {
+    ARG_POINTER_FUNC,
+};
+#undef FUNC
+
 struct sql_ctx {
     sqlite3 *sql;
     struct tp_list *tp_list;
@@ -43,6 +65,10 @@ struct sql_ctx {
     int nr_query;
     int **col_widths;
     int ksymbol;
+    struct sqlite_func {
+        int data_type; // SQLITE_INTEGER, SQLITE_BLOB
+        const char *func_name;
+    } sqlite_funcs[ARG_POINTER_MAX];
 
     sqlite3_stmt *update_metadata_stmt;
 
@@ -361,26 +387,52 @@ static void arg_pointer_register(struct sql_ctx *ctx)
             if (parse->type == PRINT_FMT_ARG_POINTER &&
                 parse->arg && parse->arg->type == TEP_PRINT_FIELD) {
                 const char *format = parse->format;
-                const char *function = NULL;
                 const char *field_name = parse->arg->field.name;
+                int func = -1, data_type = 0;
 
                 while (*format) if (*format++ == 'p') break;
                 switch (*format) {
                     case 'F': // %pS %ps %pF %pf
                     case 'f':
                     case 'S':
-                    case 's': ctx->ksymbol = 1; function = "ksymbol"; break;
+                    case 's': func = KSYMBOL; data_type = SQLITE_INTEGER; ctx->ksymbol = 1; break;
+                    case 'I':
+                    case 'i': {
+                        switch (format[1]) {
+                            case '4': // %pI4, %pi4, %p[Ii]4[hnbl]
+                                func = (format[2] == 'h' || format[2] == 'l') ? IPV4_HSTR : IPV4_STR;
+                                data_type = SQLITE_BLOB;
+                                break;
+                            case '6': // %pI6, %pi6, %pI6c
+                                func = IPV6_STR; data_type = SQLITE_BLOB;
+                                break;
+                            case 'S': { // %pIS, %piS, %pISc, %pISpc, %p[Ii]S[pfschnbl]
+                                char *fmt = (char *)&format[1];
+                                func = IPSA_STR; data_type = SQLITE_BLOB;
+                                while (*++fmt)
+                                    if (*fmt == 'h' || *fmt == 'l') { // host endian
+                                        func = IPSA_HSTR;
+                                        break;
+                                    }
+                                break;
+                            }
+                            default: break;
+                        }
+                        break;
+                    }
                     default: break;
                 }
 
-                if (function) {
+                if (func >= 0) {
                     const char *prefix = priv->function_list ? : "";
                     const char *separator = priv->function_list ? ", " : "";
-                    ret = asprintf(&function_list, "%s%s%s(%s)", prefix, separator, function, field_name);
+                    ret = asprintf(&function_list, "%s%s%s(%s)", prefix, separator, arg_pointer_func[func], field_name);
                     if (ret > 0) {
                         if (priv->function_list)
                             free(priv->function_list);
                         priv->function_list = function_list;
+                        ctx->sqlite_funcs[func].data_type = data_type;
+                        ctx->sqlite_funcs[func].func_name = arg_pointer_func[func];
                     }
                 }
             }
@@ -474,6 +526,7 @@ found:
 
 static void sqlite_ksymbol(sqlite3_context *context, int argc, sqlite3_value **argv)
 {
+    long func = (long)(long *)sqlite3_user_data(context);
     long long value;
     const char *symbol = NULL;
 
@@ -490,10 +543,86 @@ static void sqlite_ksymbol(sqlite3_context *context, int argc, sqlite3_value **a
     }
 
     value = sqlite3_value_int64(argv[0]);
-    symbol = function_resolver(NULL, (unsigned long long *)&value, NULL);
+    if (func == KSYMBOL)
+        symbol = function_resolver(NULL, (unsigned long long *)&value, NULL);
 
     if (symbol)
         sqlite3_result_text(context, symbol, -1, SQLITE_STATIC);
+    else
+        sqlite3_result_text(context, "??", -1, SQLITE_STATIC);
+}
+
+static void sqlite_blob(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    long func = (long)(long *)sqlite3_user_data(context);
+    const void *value;
+    int bytes;
+    char buf[256];
+    int len = -1;
+    uint32_t addr;
+    char *symbol = NULL;
+
+    /* Validate argument count */
+    if (argc != 1) {
+        snprintf(buf, sizeof(buf), "%s() requires exactly 1 argument", arg_pointer_func[func]);
+        sqlite3_result_error(context, buf, -1);
+        return;
+    }
+
+    /* Validate argument type */
+    if (sqlite3_value_type(argv[0]) != SQLITE_BLOB) {
+        snprintf(buf, sizeof(buf), "%s() argument must be BLOB", arg_pointer_func[func]);
+        sqlite3_result_error(context, buf, -1);
+        return;
+    }
+
+    value = sqlite3_value_blob(argv[0]);
+    bytes = sqlite3_value_bytes(argv[0]);
+
+    switch (func) {
+        case IPV4_STR: // network endian
+            if (bytes != 4) break;
+            symbol = (char *)inet_ntop(AF_INET, value, buf, sizeof(buf));
+            break;
+        case IPV4_HSTR: // host endian
+            if (bytes != 4) break;
+            addr = htonl(*(uint32_t *)value);
+            symbol = (char *)inet_ntop(AF_INET, &addr, buf, sizeof(buf));
+            break;
+        case IPV6_STR:
+            if (bytes != 16) break;
+            symbol = (char *)inet_ntop(AF_INET6, value, buf, sizeof(buf));
+            break;
+        case IPSA_STR: // network endian
+        case IPSA_HSTR: { // host endian
+            struct sockaddr *sa = (struct sockaddr *)value;
+
+            if (sa->sa_family == AF_INET) {
+                struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+
+                if (bytes < sizeof(struct sockaddr_in)) break;
+                addr = func == IPSA_STR ?
+                       sin->sin_addr.s_addr : htonl(sin->sin_addr.s_addr);
+                if (inet_ntop(AF_INET, &addr, buf, sizeof(buf))) {
+                    len = asprintf(&symbol, "%s:%d", buf, ntohs(sin->sin_port));
+                    if (len < 0) symbol = NULL;
+                }
+            } else if (sa->sa_family == AF_INET6) {
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
+
+                if (bytes < sizeof(struct sockaddr_in6)) break;
+                if (inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf))) {
+                    len = asprintf(&symbol, "[%s]:%d", buf, ntohs(sin6->sin6_port));
+                    if (len < 0) symbol = NULL;
+                }
+            }
+            break;
+        }
+        default: break;
+    }
+
+    if (symbol)
+        sqlite3_result_text(context, symbol, len, symbol == buf ? SQLITE_TRANSIENT : free);
     else
         sqlite3_result_text(context, "??", -1, SQLITE_STATIC);
 }
@@ -606,10 +735,14 @@ static int monitor_ctx_init(struct prof_dev *dev)
                                 sqlite_symbolic, NULL, NULL) != SQLITE_OK)
         goto failed;
 
-    if (ctx->ksymbol &&
-        sqlite3_create_function(ctx->sql, "ksymbol", 1, SQLITE_UTF8, ctx,
-                                sqlite_ksymbol, NULL, NULL) != SQLITE_OK)
-        goto failed;
+    for (i = 0; i < ARG_POINTER_MAX; i++) {
+        if (ctx->sqlite_funcs[i].func_name) {
+            void *func = ctx->sqlite_funcs[i].data_type == SQLITE_BLOB ? sqlite_blob : sqlite_ksymbol;
+            if (sqlite3_create_function(ctx->sql, ctx->sqlite_funcs[i].func_name, 1, SQLITE_UTF8,
+                                       (void *)(unsigned long)i, func, NULL, NULL) != SQLITE_OK)
+                goto failed;
+        }
+    }
 
     /* Single-threaded serial write optimization */
     sqlite3_exec(ctx->sql, "PRAGMA page_size = 65536;", NULL, NULL, NULL);
