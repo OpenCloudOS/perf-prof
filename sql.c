@@ -7,6 +7,8 @@
 #include <tep.h>
 #include <linux/rblist.h>
 #include <sqlite3.h>
+#include <event-parse-local.h>
+#include <stack_helpers.h>
 
 /*
  * SQLite compatibility mode:
@@ -40,6 +42,7 @@ struct sql_ctx {
     struct rblist symbolic_table;
     int nr_query;
     int **col_widths;
+    int ksymbol;
 
     sqlite3_stmt *update_metadata_stmt;
 
@@ -344,6 +347,51 @@ static void symbolic_register(struct sql_ctx *ctx)
     }
 }
 
+static void arg_pointer_register(struct sql_ctx *ctx)
+{
+    struct tp *tp;
+    int i, ret;
+    char *function_list;
+
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tp_private *priv = tp->private;
+        struct tep_event *event = tep_find_event(ctx->tep, tp->id);
+        struct tep_print_parse *parse = event ? event->print_fmt.print_cache : NULL;
+        while (parse) {
+            if (parse->type == PRINT_FMT_ARG_POINTER &&
+                parse->arg && parse->arg->type == TEP_PRINT_FIELD) {
+                const char *format = parse->format;
+                const char *function = NULL;
+                const char *field_name = parse->arg->field.name;
+
+                while (*format) if (*format++ == 'p') break;
+                switch (*format) {
+                    case 'F': // %pS %ps %pF %pf
+                    case 'f':
+                    case 'S':
+                    case 's': ctx->ksymbol = 1; function = "ksymbol"; break;
+                    default: break;
+                }
+
+                if (function) {
+                    const char *prefix = priv->function_list ? : "";
+                    const char *separator = priv->function_list ? ", " : "";
+                    ret = asprintf(&function_list, "%s%s%s(%s)", prefix, separator, function, field_name);
+                    if (ret > 0) {
+                        if (priv->function_list)
+                            free(priv->function_list);
+                        priv->function_list = function_list;
+                    }
+                }
+            }
+            parse = parse->next;
+        }
+    }
+
+    if (ctx->ksymbol)
+        function_resolver_ref();
+}
+
 static void sqlite_symbolic(sqlite3_context *context, int argc, sqlite3_value **argv)
 {
     struct sql_ctx *ctx = (struct sql_ctx *)sqlite3_user_data(context);
@@ -422,6 +470,32 @@ found:
         sqlite3_result_text(context, symbol, -1, SQLITE_STATIC);
     else
         sqlite3_result_text(context, "UNKNOWN", -1, SQLITE_STATIC);
+}
+
+static void sqlite_ksymbol(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    long long value;
+    const char *symbol = NULL;
+
+    /* Validate argument count */
+    if (argc != 1) {
+        sqlite3_result_error(context, "ksymbol() requires exactly 1 argument", -1);
+        return;
+    }
+
+    /* Validate argument type (value) */
+    if (sqlite3_value_type(argv[0]) != SQLITE_INTEGER) {
+        sqlite3_result_error(context, "ksymbol() argument must be INTEGER", -1);
+        return;
+    }
+
+    value = sqlite3_value_int64(argv[0]);
+    symbol = function_resolver(NULL, (unsigned long long *)&value, NULL);
+
+    if (symbol)
+        sqlite3_result_text(context, symbol, -1, SQLITE_STATIC);
+    else
+        sqlite3_result_text(context, "??", -1, SQLITE_STATIC);
 }
 
 static int monitor_ctx_init(struct prof_dev *dev)
@@ -519,6 +593,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->symbolic_table.node_delete = symbolic_node_delete;
 
     symbolic_register(ctx);
+    arg_pointer_register(ctx);
 
     if (sqlite3_config(SQLITE_CONFIG_SINGLETHREAD) != SQLITE_OK)
         goto failed;
@@ -529,6 +604,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (rblist__nr_entries(&ctx->symbolic_table) > 0 &&
         sqlite3_create_function(ctx->sql, "symbolic", 2, SQLITE_UTF8, ctx,
                                 sqlite_symbolic, NULL, NULL) != SQLITE_OK)
+        goto failed;
+
+    if (ctx->ksymbol &&
+        sqlite3_create_function(ctx->sql, "ksymbol", 1, SQLITE_UTF8, ctx,
+                                sqlite_ksymbol, NULL, NULL) != SQLITE_OK)
         goto failed;
 
     /* Single-threaded serial write optimization */
@@ -591,6 +671,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
                 free(ctx->col_widths[i]);
         free(ctx->col_widths);
     }
+    if (ctx->ksymbol)
+        function_resolver_unref();
     rblist__exit(&ctx->symbolic_table);
     tp_list_free(ctx->tp_list);
     sqlite3_close(ctx->sql);
