@@ -437,9 +437,28 @@ perf-prof 工具提供了丰富的选项参数，用于控制分析器的行为�
   - **类型**: boolean
   - **可选值**: [1, 2, 4, 8]
 
-- `--output2 <file>`             附加的输出
+- `--query <SQL>`                执行SQL查询语句，用于`sql`分析器
+  - **变量名**: `query`
+  - **类型**: string
+  - **可重复**: false
+  - **值描述**: SQL查询语句，支持标准SQL语法（SELECT, WHERE, GROUP BY, ORDER BY, JOIN等）
+  - **示例**:
+    - 单条查询: `--query 'SELECT comm, COUNT(*) FROM sched_wakeup GROUP BY comm'`
+    - 多条查询: `--query 'SELECT COUNT(*) FROM sched_wakeup; SELECT AVG(prio) FROM sched_wakeup'`
+  - **附加**:
+    - 多条SQL语句用分号(`;`)分隔
+    - 查询将在周期间隔(`-i`)或程序退出时执行
+    - 查询完成后会清空表数据（内存模式）或重建表（文件模式）
+  - **依赖参数**: 需要配合`-e`指定事件源
+
+- `--output2 <file>`             附加输出文件，不同分析器有不同用途
   - **变量名**: `output2`
   - **类型**: string
+  - **值描述**: 文件路径
+  - **按分析器用途**:
+    - `sql`: 指定SQLite数据库文件路径，未指定时使用内存数据库(`:memory:`)
+    - 其他分析器: 根据具体分析器定义
+  - **示例**: ["events.db", "output.sqlite", "/tmp/perf_data.db"]
 
 - `--prio <prio[-prio],...>`     指定进程的优先级列表
   - **变量名**: `prio`
