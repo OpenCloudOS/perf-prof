@@ -8,6 +8,17 @@
 #include <linux/rblist.h>
 #include <sqlite3.h>
 
+/*
+ * SQLite compatibility mode:
+ * Define SQLITE_COMPAT to force using sqlite3_prepare_v2 instead of v3.
+ * This is useful for old systems where sqlite3_prepare_v3 is not available.
+ *
+ * Usage: export CFLAGS=-DSQLITE_COMPAT; make
+ */
+#if defined(SQLITE_PREPARE_PERSISTENT) && !defined(SQLITE_COMPAT)
+#define USE_SQLITE_PREPARE_V3 1
+#endif
+
 struct tp_private {
     sqlite3_stmt *insert_stmt;
     struct tep_format_field **fields;
@@ -652,7 +663,12 @@ static int sql_create_table(struct prof_dev *dev)
         snprintf(buf, sizeof(buf), insert_fmt, priv->table_name, ins_buf);
         if (dev->env->verbose)
             printf("INSERT SQL: %s\n", buf);
+
+    #ifdef USE_SQLITE_PREPARE_V3
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
+    #else
+        if (sqlite3_prepare_v2(ctx->sql, buf, -1, &priv->insert_stmt, NULL) != SQLITE_OK) {
+    #endif
             fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
             return -1;
         }
@@ -704,8 +720,12 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     }
 
     /* Prepare insert statement */
+#ifdef USE_SQLITE_PREPARE_V3
     if (sqlite3_prepare_v3(ctx->sql, insert_metadata_fmt, -1,
                           SQLITE_PREPARE_PERSISTENT, &stmt, NULL) != SQLITE_OK) {
+#else
+    if (sqlite3_prepare_v2(ctx->sql, insert_metadata_fmt, -1, &stmt, NULL) != SQLITE_OK) {
+#endif
         fprintf(stderr, "Failed to prepare metadata insert statement: %s\n",
                 sqlite3_errmsg(ctx->sql));
         return -1;
@@ -740,8 +760,12 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     sqlite3_finalize(stmt);
 
     /* Prepare update statement */
+#ifdef USE_SQLITE_PREPARE_V3
     if (sqlite3_prepare_v3(ctx->sql, update_metadata_fmt, -1,
                           SQLITE_PREPARE_PERSISTENT, &ctx->update_metadata_stmt, NULL) != SQLITE_OK) {
+#else
+    if (sqlite3_prepare_v2(ctx->sql, update_metadata_fmt, -1, &ctx->update_metadata_stmt, NULL) != SQLITE_OK) {
+#endif
         fprintf(stderr, "Failed to prepare metadata update statement: %s\n",
                 sqlite3_errmsg(ctx->sql));
         return -1;
@@ -831,15 +855,8 @@ static int sql_filter(struct prof_dev *dev)
 static void sql_interval(struct prof_dev *dev);
 static void sql_exit(struct prof_dev *dev)
 {
-    struct sql_ctx *ctx = dev->private;
-
     /* Final flush before exit */
     sql_interval(dev);
-
-    /* Force final flush to disk for file database */
-    if (dev->env->output2)
-        sqlite3_db_cacheflush(ctx->sql);
-
     monitor_ctx_exit(dev);
 }
 
@@ -1014,45 +1031,38 @@ static void sql_interval(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct sql_ctx *ctx = dev->private;
-    char *query = env->query;
-    char *to_free = NULL;
-    char *sep = NULL;
+    const char *query = env->query;
     struct tp *tp;
     int i, nr_query = 0;
-
-    /* Commit pending transaction */
-    commit_transaction(ctx, false);
 
     /* Update metadata table */
     sql_update_metadata_table(dev);
 
-    if (!env->query || !env->query[0]) {
-        /* Flush to disk for file database */
-        if (env->output2)
-            sqlite3_db_cacheflush(ctx->sql);
+    /* Commit pending transaction */
+    commit_transaction(ctx, false);
 
+    if (!env->query || !env->query[0]) {
         printf("Total Inserts: %lu\n", ctx->total_inserts);
         return;
-    }
-
-    if (ctx->nr_query > 1) {
-        to_free = query = strdup(query);
-        sep = next_sep(query, ';');
-        if (sep && sep[1])
-            *sep = '\0';
     }
 
     print_time(stdout);
     printf("\n");
 
-    while (nr_query < ctx->nr_query) {
+    while (1) {
         sqlite3_stmt *stmt;
+        const char *next_query;
 
-        printf("=== %s ===\n", query);
-        if (sqlite3_prepare_v3(ctx->sql, query, -1, 0, &stmt, NULL) == SQLITE_OK) {
+    #ifdef USE_SQLITE_PREPARE_V3
+        if (sqlite3_prepare_v3(ctx->sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
+    #else
+        if (sqlite3_prepare_v2(ctx->sql, query, -1, &stmt, &next_query) == SQLITE_OK) {
+    #endif
             int column_count = sqlite3_column_count(stmt);
             int *col_widths = ctx->col_widths[nr_query];
             int j, k, width, step_result;
+
+            printf("=== %.*s ===\n", (int)(next_query - query), query);
 
             // Allocate memory and initialize column widths
             if (!col_widths) {
@@ -1126,16 +1136,11 @@ static void sql_interval(struct prof_dev *dev)
             fprintf(stderr, "Failed to prepare query: %s\n", sqlite3_errmsg(ctx->sql));
 
         nr_query ++;
-        if (sep) {
-            query = sep + 1;
-            sep = next_sep(query, ';');
-            if (sep && sep[1])
-                *sep = '\0';
-        }
+        if (*next_query)
+            query = next_query;
+        else
+            break;
     }
-
-    if (to_free)
-        free(to_free);
 
     // Finalize all prepared statements before dropping tables
     for_each_real_tp(ctx->tp_list, tp, i) {
