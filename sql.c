@@ -1209,9 +1209,9 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
             for (j = 0; priv->fields && priv->fields[j]; j++) {
                 struct tep_format_field *field = priv->fields[j];
                 void *base = data->raw.data;
-                unsigned long long val;
+                long long val = 0;
                 void *ptr;
-                int len, v = 0;
+                int len;
 
                 if ((field->flags & TEP_FIELD_IS_STRING) && (field->flags & TEP_FIELD_IS_SIGNED)) {
                     // TEXT: String fields with signed=1
@@ -1241,20 +1241,28 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
                     sqlite3_bind_blob(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
                 } else {
                     // INTEGER: Numeric fields
+                    // Must respect signedness to correctly bind values to SQLite:
+                    //   - unsigned char 255 should bind as 255, not -1
+                    //   - signed char -1 should bind as -1, not 255
+                    // Using proper type casts ensures correct sign/zero extension to int64.
+                    bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
                     if (field->size == 1)
-                        v = *(unsigned char *)(base + field->offset);
+                        val = is_signed ? *(char *)(base + field->offset)
+                                        : *(unsigned char *)(base + field->offset);
                     else if (field->size == 2)
-                        v = *(unsigned short *)(base + field->offset);
+                        val = is_signed ? *(short *)(base + field->offset)
+                                        : *(unsigned short *)(base + field->offset);
                     else if (field->size == 4)
-                        v = *(unsigned int *)(base + field->offset);
-                    else if (field->size == 8) {
-                        val = *(unsigned long long *)(base + field->offset);
-                        sqlite3_bind_int64(priv->insert_stmt, idx++, val);
-                    } else
-                        sqlite3_bind_null(priv->insert_stmt, idx++);
+                        val = is_signed ? *(int *)(base + field->offset)
+                                        : *(unsigned int *)(base + field->offset);
+                    else if (field->size == 8)
+                        val = is_signed ? *(long long *)(base + field->offset)
+                                        : *(unsigned long long *)(base + field->offset);
 
-                    if (field->size < 8)
-                        sqlite3_bind_int(priv->insert_stmt, idx++, v);
+                    if (field->size <= 8)
+                        sqlite3_bind_int64(priv->insert_stmt, idx++, val);
+                    else
+                        sqlite3_bind_null(priv->insert_stmt, idx++);
                 }
             }
 
