@@ -295,3 +295,93 @@ def test_sql_symbolic_save_to_file(runtime, memleak_check):
     finally:
         if os.path.exists(db_file):
             os.remove(db_file)
+
+def test_sql_ksymbol_hrtimer(runtime, memleak_check):
+    """Test ksymbol() function with hrtimer_expire_entry event"""
+    # perf-prof sql -e timer:hrtimer_expire_entry -i 1000 --query "SELECT ksymbol(function) as func_name, function, COUNT(*) FROM hrtimer_expire_entry GROUP BY function"
+    prof = PerfProf(['sql', '-e', 'timer:hrtimer_expire_entry', '-i', '1000', '-m', '64',
+                     '--query', "SELECT ksymbol(function) as func_name, function, COUNT(*) as count FROM hrtimer_expire_entry GROUP BY function ORDER BY count DESC LIMIT 10"])
+    found_symbol = False
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Check for known kernel functions (should not be ??)
+        if 'tick_sched_timer' in line or 'hrtimer_wakeup' in line or 'watchdog_timer_fn' in line:
+            found_symbol = True
+        # Ensure we don't have only ?? symbols (unless no events captured)
+        if std == 'stdout' and '|' in line and '??' not in line and 'func_name' not in line and line.strip():
+            # Found a valid symbol line
+            assert '0x' not in line or any(x in line for x in ['tick', 'timer', 'sched', 'watchdog']), \
+                   f"Expected kernel function name, got: {line}"
+
+def test_sql_ksymbol_workqueue(runtime, memleak_check):
+    """Test ksymbol() function with workqueue_execute_start event"""
+    # perf-prof sql -e workqueue:workqueue_execute_start -i 1000 --query "SELECT ksymbol(function) as work_func, COUNT(*) as executions FROM workqueue_execute_start GROUP BY function ORDER BY executions DESC"
+    prof = PerfProf(['sql', '-e', 'workqueue:workqueue_execute_start', '-i', '1000', '-m', '64',
+                     '--query', "SELECT ksymbol(function) as work_func, COUNT(*) as executions FROM workqueue_execute_start GROUP BY function ORDER BY executions DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Check that we get function names, not addresses
+        if std == 'stdout' and '|' in line and 'work_func' not in line and line.strip():
+            # Should see function names or ??
+            assert '??' in line or not line.strip().split('|')[0].strip().startswith('0x'), \
+                   f"Expected function name or ??, got: {line}"
+
+def test_sql_ipsa_str_tcp_probe(runtime, memleak_check):
+    """Test ipsa_str() function with tcp:tcp_probe event"""
+    # perf-prof sql -e tcp:tcp_probe -i 2000 --query "SELECT ipsa_str(saddr) as source, ipsa_str(daddr) as dest, COUNT(*) FROM tcp_probe GROUP BY source, dest"
+    prof = PerfProf(['sql', '-e', 'tcp:tcp_probe', '-i', '2000', '-m', '64',
+                     '--query', "SELECT ipsa_str(saddr) as source, ipsa_str(daddr) as dest, COUNT(*) as probes FROM tcp_probe GROUP BY source, dest ORDER BY probes DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Check for IP:port format in output
+        if std == 'stdout' and '|' in line and 'source' not in line and line.strip() and '---' not in line:
+            # Should see IP addresses with ports or ??
+            parts = line.split('|')
+            if len(parts) >= 2:
+                source = parts[0].strip()
+                dest = parts[1].strip()
+                # Valid formats: "IP:port", "[IPv6]:port", or "??"
+                if source and source != '??':
+                    assert ':' in source, f"Expected IP:port format, got: {source}"
+                if dest and dest != '??':
+                    assert ':' in dest, f"Expected IP:port format, got: {dest}"
+
+def test_sql_ipv4_str_inet_sock(runtime, memleak_check):
+    """Test ipv4_str() function with sock:inet_sock_set_state event"""
+    # perf-prof sql -e sock:inet_sock_set_state -i 2000 --query "SELECT ipv4_str(saddr) as source_ip, ipv4_str(daddr) as dest_ip, COUNT(*) FROM inet_sock_set_state GROUP BY source_ip, dest_ip"
+    prof = PerfProf(['sql', '-e', 'sock:inet_sock_set_state', '-i', '2000', '-m', '64',
+                     '--query', "SELECT ipv4_str(saddr) as source_ip, ipv4_str(daddr) as dest_ip, COUNT(*) as transitions FROM inet_sock_set_state GROUP BY source_ip, dest_ip ORDER BY transitions DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Check for IPv4 dotted decimal format in output
+        if std == 'stdout' and '|' in line and 'source_ip' not in line and line.strip() and '---' not in line:
+            parts = line.split('|')
+            if len(parts) >= 2:
+                source_ip = parts[0].strip()
+                dest_ip = parts[1].strip()
+                # Valid formats: "x.x.x.x" or "??"
+                if source_ip and source_ip != '??':
+                    # Should have dots for IPv4
+                    assert '.' in source_ip and ':' not in source_ip, f"Expected IPv4 format (x.x.x.x), got: {source_ip}"
+                if dest_ip and dest_ip != '??':
+                    assert '.' in dest_ip and ':' not in dest_ip, f"Expected IPv4 format (x.x.x.x), got: {dest_ip}"
+
+def test_sql_ipv6_str_inet_sock(runtime, memleak_check):
+    """Test ipv6_str() function with sock:inet_sock_set_state event"""
+    # perf-prof sql -e sock:inet_sock_set_state -i 2000 --query "SELECT ipv6_str(saddr_v6) as source_ipv6, ipv6_str(daddr_v6) as dest_ipv6, COUNT(*) FROM inet_sock_set_state WHERE family=10 GROUP BY source_ipv6, dest_ipv6"
+    prof = PerfProf(['sql', '-e', 'sock:inet_sock_set_state/family==10/', '-i', '2000', '-m', '64',
+                     '--query', "SELECT ipv6_str(saddr_v6) as source_ipv6, ipv6_str(daddr_v6) as dest_ipv6, COUNT(*) as transitions FROM inet_sock_set_state GROUP BY source_ipv6, dest_ipv6 ORDER BY transitions DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Check for IPv6 format in output (may not have events if no IPv6 traffic)
+        if std == 'stdout' and '|' in line and 'source_ipv6' not in line and line.strip() and '---' not in line:
+            parts = line.split('|')
+            if len(parts) >= 2:
+                source_ipv6 = parts[0].strip()
+                dest_ipv6 = parts[1].strip()
+                # Valid formats: IPv6 address (contains colons) or "??"
+                if source_ipv6 and source_ipv6 != '??':
+                    # IPv6 addresses contain colons, not just dots
+                    assert ':' in source_ipv6, f"Expected IPv6 format (contains :), got: {source_ipv6}"
+                if dest_ipv6 and dest_ipv6 != '??':
+                    assert ':' in dest_ipv6, f"Expected IPv6 format (contains :), got: {dest_ipv6}"

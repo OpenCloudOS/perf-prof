@@ -124,7 +124,7 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
   - `sample_count`: 采样总数
   - `first_sample_time`: 首次采样时间（perf时间戳，纳秒，非Unix时间）
   - `last_sample_time`: 最后采样时间（perf时间戳，纳秒，非Unix时间）
-  - `function_list`: 该事件可用的SQL内置函数列表（逗号分隔），例如: `"symbolic('softirq_entry.vec', vec)"`
+  - `function_list`: 该事件可用的SQL内置函数列表（逗号分隔），例如: `"symbolic('softirq_entry.vec', vec), ksymbol(function)"`
 
 **数据模型**
 ```
@@ -203,96 +203,234 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 
 ## SQL 内置函数
 
+所有内置函数在事件的 `print_fmt` 包含对应格式符时**自动注册**，可通过 `event_metadata.function_list` 查询可用函数。
+
+### 函数一览
+
+| 函数 | 功能 | 触发格式 | 参数类型 | 返回值 |
+|------|------|----------|----------|--------|
+| `symbolic(field, value)` | 数值转符号字符串 | `__print_symbolic()` | TEXT, INTEGER | 符号名或 `"UNKNOWN"` |
+| `ksymbol(addr)` | 内核地址转符号 | `%pS`, `%ps`, `%pF`, `%pf` | INTEGER | 符号名或 `"??"` |
+| `ipv4_str(blob)` | IPv4地址转换（网络序） | `%pI4`, `%pi4` | BLOB(4) | `"x.x.x.x"` 或 `"??"` |
+| `ipv4_hstr(blob)` | IPv4地址转换（主机序） | `%pI4h`, `%pi4h` | BLOB(4) | `"x.x.x.x"` 或 `"??"` |
+| `ipv6_str(blob)` | IPv6地址转换 | `%pI6`, `%pi6` | BLOB(16) | IPv6字符串或 `"??"` |
+| `ipsa_str(blob)` | sockaddr转换（网络序） | `%pIS`, `%piS` | BLOB | `"IP:port"` 或 `"??"` |
+| `ipsa_hstr(blob)` | sockaddr转换（主机序） | `%pISh`, `%piSh` | BLOB | `"IP:port"` 或 `"??"` |
+| `uuid_str(blob)` | UUID转换（大端序） | `%pU`, `%pUB` | BLOB(16) | UUID字符串或 `"??"` |
+| `guid_str(blob)` | GUID转换（小端序） | `%pUL`, `%pUl` | BLOB(16) | GUID字符串或 `"??"` |
+| `mac_str(blob)` | MAC地址转换 | `%pM`, `%pm` | BLOB(6) | `"xx:xx:xx:xx:xx:xx"` 或 `"??"` |
+
 ### symbolic() - 符号转换函数
 
-**功能**: 将事件字段的数值转换为对应的符号字符串，基于内核 `__print_symbolic()` 宏定义。
+- **功能**: 将事件字段的数值转换为对应的符号字符串，基于内核 `__print_symbolic()` 宏定义。
+- **语法**:
+  ```sql
+  symbolic('field_name', field_value)
+  symbolic('table_name.field_name', field_value)
+  ```
+- **参数**:
+  - `field_name`: 字段名称（支持所有表）
+  - `table_name.field_name`: 完整字段名（指定特定表）
+  - `field_value`: 需要转换的数值
+- **返回值**:
+  - 成功：返回对应的符号字符串
+  - 失败：返回 `"UNKNOWN"`
 
-**语法**:
-```sql
-symbolic('field_name', field_value)
-symbolic('table_name.field_name', field_value)
-```
+- **工作原理**:
+  1. 启动时自动解析事件的 `print_fmt` 格式定义
+  2. 提取 `__print_symbolic()` 宏中的值到字符串映射
+  3. 构建内存查找表（红黑树）：`(event_id, field_offset, value) -> string`
+  4. SQL 查询时实时转换数值为符号字符串
 
-**参数**:
-- `field_name`: 字段名称（支持所有表）
-- `table_name.field_name`: 完整字段名（指定特定表）
-- `field_value`: 需要转换的数值
+- **支持的事件类型**:
+  - ✅ 简单字段引用：`__print_symbolic(REC->vec, {0, "HI"}, {1, "TIMER"}, ...)`
+  - ✅ 条件表达式（KVM）：`(REC->isa == 1) ? __print_symbolic(...) : __print_symbolic(...)`
+  - ❌ 复杂表达式：`__print_symbolic((REC->dm >> 8 & 0x7), ...)` （不支持）
+  - ⚠️  每个事件的每个字段只能有一个 `__print_symbolic` 定义
 
-**返回值**:
-- 成功：返回对应的符号字符串
-- 失败：返回 `"UNKNOWN"`
+- **注意事项**:
+  1. **自动注册**：只有包含 `__print_symbolic` 的事件才会注册该函数
+  2. **平台差异**：KVM 事件会根据 CPU vendor（Intel/AMD/Hygon）自动选择正确的符号表
 
-**工作原理**:
-1. 启动时自动解析事件的 `print_fmt` 格式定义
-2. 提取 `__print_symbolic()` 宏中的值到字符串映射
-3. 构建内存查找表（红黑树）：`(event_id, field_offset, value) -> string`
-4. SQL 查询时实时转换数值为符号字符串
+### ksymbol() - 内核符号解析函数
 
-**支持的事件类型**:
-- ✅ 简单字段引用：`__print_symbolic(REC->vec, {0, "HI"}, {1, "TIMER"}, ...)`
-- ✅ 条件表达式（KVM）：`(REC->isa == 1) ? __print_symbolic(...) : __print_symbolic(...)`
-- ❌ 复杂表达式：`__print_symbolic((REC->dm >> 8 & 0x7), ...)` （不支持）
-- ⚠️  每个事件的每个字段只能有一个 `__print_symbolic` 定义
+- **功能**: 将内核函数指针地址转换为人类可读的内核符号名称。
+- **语法**: `ksymbol(kernel_address)`
+- **参数**: `kernel_address`: 内核地址（INTEGER类型）
+- **返回值**:
+  - 成功：返回内核符号名称（如 `schedule`, `do_sys_open`）
+  - 失败：返回 `"??"`（未知地址）
 
-**使用示例**:
+- **工作原理**:
+  1. 启动时自动解析事件的 `print_fmt` 格式定义
+  2. 检测使用 `%pS`、`%ps`、`%pF`、`%pf` 格式的指针字段
+  3. 自动注册 ksymbol() 函数（仅在需要时）
+  4. 运行时调用 `function_resolver()` 解析内核符号
+  5. 使用 `/proc/kallsyms` 和内核符号表进行地址到符号映射
+
+- **支持的指针格式**:
+  - `%pS`: 带偏移的符号（如 `schedule+0x10/0x50`）
+  - `%ps`: 不带偏移的符号（如 `schedule`）
+  - `%pF`: 带偏移的函数符号（已弃用，等同于 `%pS`）
+  - `%pf`: 不带偏移的函数符号（已弃用，等同于 `%ps`）
+
+- **自动检测**: 只有事件的 print_fmt 包含上述格式时，ksymbol() 函数才会被注册。
+
+- **注意事项**:
+  1. **自动注册**：只有包含 `%pS/%ps/%pF/%pf` 格式的事件才会注册该函数
+  2. **性能**：符号解析有一定开销，建议配合 GROUP BY 减少解析次数
+  3. **权限**：需要读取 `/proc/kallsyms`，可能需要 root 权限
+
+### IP地址转换函数
+
+**概述**: 一组用于处理IP地址和网络地址的标量函数，支持IPv4、IPv6以及sockaddr结构体的格式化输出。
+
+#### ipv4_str() - IPv4地址转换（网络字节序）
+
+- **功能**: 将IPv4地址从网络字节序（大端）的BLOB格式转换为点分十进制字符串。
+- **语法**: `ipv4_str(ipv4_blob)`
+- **参数**: `ipv4_blob`: IPv4地址BLOB（必须为4字节）
+- **返回值**:
+  - 成功：返回点分十进制格式（如 `"192.168.1.1"`）
+  - 失败：返回 `"??"`（无效输入或大小错误）
+- **支持的格式**: `%pI4`, `%pi4`
+
+#### ipv4_hstr() - IPv4地址转换（主机字节序）
+
+- **功能**: 将IPv4地址从主机字节序（小端）的BLOB格式转换为点分十进制字符串。
+- **语法**: `ipv4_hstr(ipv4_blob)`
+- **参数**: `ipv4_blob`: IPv4地址BLOB（必须为4字节）
+- **返回值**:
+  - 成功：返回点分十进制格式（如 `"192.168.1.1"`）
+  - 失败：返回 `"??"`（无效输入或大小错误）
+- **支持的格式**: `%pI4h`, `%pI4l`, `%pi4h`, `%pi4l`
+
+#### ipv6_str() - IPv6地址转换
+
+- **功能**: 将IPv6地址的BLOB格式转换为标准IPv6字符串表示。
+- **语法**: `ipv6_str(ipv6_blob)`
+- **参数**: `ipv6_blob`: IPv6地址BLOB（必须为16字节）
+- **返回值**:
+  - 成功：返回IPv6地址字符串（如 `"2001:db8::1"`, `"fe80::1"`）
+  - 失败：返回 `"??"`（无效输入或大小错误）
+- **支持的格式**: `%pI6`, `%pi6`, `%pI6c`
+
+#### ipsa_str() - sockaddr地址转换（网络字节序）
+
+- **功能**: 将sockaddr结构体转换为 "IP:port" 格式字符串，自动识别IPv4和IPv6。
+- **语法**: `ipsa_str(sockaddr_blob)`
+- **参数**: `sockaddr_blob`: sockaddr结构体BLOB
+- **返回值**:
+  - 成功（IPv4）：返回 `"192.168.1.1:8080"`
+  - 成功（IPv6）：返回 `"[2001:db8::1]:8080"`
+  - 失败：返回 `"??"`（无效输入或不支持的地址族）
+- **支持的格式**: `%pIS`, `%piS`, `%pISc`, `%pISpc`
+
+#### ipsa_hstr() - sockaddr地址转换（主机字节序）
+
+- **功能**: 将sockaddr结构体转换为 "IP:port" 格式字符串，使用主机字节序。
+- **语法**: `ipsa_hstr(sockaddr_blob)`
+- **参数**: `sockaddr_blob`: sockaddr结构体BLOB
+- **返回值**:
+  - 成功（IPv4）：返回 `"192.168.1.1:8080"`
+  - 成功（IPv6）：返回 `"[2001:db8::1]:8080"`
+  - 失败：返回 `"??"`（无效输入或不支持的地址族）
+- **支持的格式**: `%pISh`, `%pISl`, `%piSh`, `%piSl`
+
+#### 注意事项
+
+1. **自动注册**: 只有包含相应格式符（%pI4/%pI6/%pIS）的事件才会注册对应函数
+2. **边界检查**: 所有函数都进行严格的输入大小验证
+3. **字节序**:
+   - 网络字节序函数（ipv4_str, ipsa_str）: 用于直接从网络抓取的数据
+   - 主机字节序函数（ipv4_hstr, ipsa_hstr）: 用于内核处理后的数据
+4. **端口显示**: sockaddr函数自动包含端口号，格式为 "IP:port"
+5. **IPv6格式**: IPv6地址自动使用方括号包围，如 `[::1]:8080`
+
+### UUID/GUID转换函数
+
+**概述**: 用于将16字节的UUID/GUID二进制数据转换为标准字符串格式。
+
+#### uuid_str() - UUID转换（大端序）
+
+- **功能**: 将16字节的UUID BLOB转换为标准UUID字符串格式（大端序/网络字节序）。
+- **语法**: `uuid_str(uuid_blob)`
+- **参数**: `uuid_blob`: UUID BLOB（必须为16字节）
+- **返回值**:
+  - 成功：返回标准UUID格式（如 `"550e8400-e29b-41d4-a716-446655440000"`）
+  - 失败：返回 `"??"`（无效输入或大小错误）
+- **支持的格式**: `%pU`, `%pUB`, `%pUb`
+- **字节序说明**:
+  - 大端序（Big-endian）：字节按原始顺序输出
+  - 适用于RFC 4122标准UUID
+
+#### guid_str() - GUID转换（小端序）
+
+- **功能**: 将16字节的GUID BLOB转换为标准GUID字符串格式（小端序/Intel字节序）。
+- **语法**: `guid_str(guid_blob)`
+- **参数**: `guid_blob`: GUID BLOB（必须为16字节）
+- **返回值**:
+  - 成功：返回标准GUID格式（如 `"00844e55-9be2-d441-a716-446655440000"`）
+  - 失败：返回 `"??"`（无效输入或大小错误）
+- **支持的格式**: `%pUL`, `%pUl`
+- **字节序说明**:
+  - 小端序（Little-endian）：前3组字节反转
+  - 适用于Windows/UEFI使用的GUID格式
+  - 字节转换规则：
+    - 第1组（4字节）：反转
+    - 第2组（2字节）：反转
+    - 第3组（2字节）：反转
+    - 第4、5组（2+6字节）：保持原序
+
+#### 注意事项
+
+1. **自动注册**: 只有包含 `%pU` 格式符的事件才会注册对应函数
+2. **大小验证**: 输入必须恰好为16字节，否则返回 `"??"`
+3. **格式选择**:
+   - `uuid_str()`: 用于标准UUID（大端序，如Linux内核、网络协议）
+   - `guid_str()`: 用于Windows/UEFI GUID（小端序）
+4. **输出格式**: 统一输出为小写十六进制，格式为 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+
+### mac_str() - MAC地址转换函数
+
+- **功能**: 将6字节的MAC地址BLOB转换为标准MAC地址字符串格式。
+- **语法**: `mac_str(mac_blob)`
+- **参数**:
+  - `mac_blob`: MAC地址BLOB（必须为6字节）
+- **返回值**:
+  - 成功：返回标准MAC地址格式（如 `"00:1a:2b:3c:4d:5e"`）
+  - 失败：返回 `"??"`（无效输入或大小错误）
+- **支持的格式**: `%pM`, `%pm`
+- **注意事项**:
+1. **自动注册**: 只有包含 `%pM` 或 `%pm` 格式符的事件才会注册该函数
+2. **大小验证**: 输入必须恰好为6字节，否则返回 `"??"`
+3. **输出格式**: 小写十六进制，冒号分隔，格式为 `xx:xx:xx:xx:xx:xx`
+
+### 综合示例
 
 ```bash
-# 将软中断向量号转换为名称
+# 示例1：软中断和定时器统计（symbolic + ksymbol）
+perf-prof sql -e irq:softirq_entry,timer:hrtimer_expire_entry -i 1000 \
+  --query "
+    SELECT 'softirq' as type, symbolic('vec', vec) as name, COUNT(*) as count
+    FROM softirq_entry GROUP BY vec
+    UNION ALL
+    SELECT 'timer' as type, ksymbol(function) as name, COUNT(*) as count
+    FROM hrtimer_expire_entry GROUP BY function
+    ORDER BY count DESC LIMIT 10"
+
+# 示例2：TCP连接统计（ipsa_str）
+perf-prof sql -e tcp:tcp_probe -i 2000 \
+  --query "
+    SELECT ipsa_str(saddr) as src, ipsa_str(daddr) as dst,
+           COUNT(*) as packets, AVG(srtt) as avg_rtt
+    FROM tcp_probe
+    GROUP BY src, dst ORDER BY packets DESC LIMIT 10"
+
+# 查询事件可用的内置函数
 perf-prof sql -e irq:softirq_entry -i 1000 \
-  --query "SELECT symbolic('vec', vec) as irq_name, COUNT(*) as count
-           FROM softirq_entry
-           GROUP BY vec
-           ORDER BY count DESC"
-
-# 输出示例:
-# irq_name  | count
-# ----------|-------
-# NET_RX    | 15234
-# TIMER     | 8901
-
-# 将 KVM 退出原因转换为字符串（自动检测 Intel/AMD）
-perf-prof sql -e kvm:kvm_exit -i 1000 \
-  --query "SELECT symbolic('exit_reason', exit_reason) as reason,
-                  COUNT(*) as exits
-           FROM kvm_exit
-           GROUP BY exit_reason
-           ORDER BY exits DESC
-           LIMIT 10"
-
-# 输出示例（Intel VMX）:
-# reason              | exits
-# --------------------|--------
-# EXTERNAL_INTERRUPT  | 45623
-# IO_INSTRUCTION      | 8934
-# CPUID               | 5432
-
-# 使用表名前缀（多表场景）
-perf-prof sql -e irq:softirq_entry,irq:softirq_exit -i 1000 \
-  --query "SELECT symbolic('softirq_entry.vec', e.vec) as irq_name,
-                  COUNT(*) as enter_count
-           FROM softirq_entry e
-           GROUP BY e.vec"
+  --query "SELECT table_name, function_list FROM event_metadata"
 ```
-
-**注意事项**:
-1. **自动注册**：只有包含 `__print_symbolic` 的事件才会注册该函数
-2. **性能**：查找使用红黑树，时间复杂度 O(log n)，适合高频查询
-3. **内存**：符号字符串不复制，直接引用内核 TEP 数据结构
-4. **平台差异**：KVM 事件会根据 CPU vendor（Intel/AMD/Hygon）自动选择正确的符号表
-
-**错误处理**:
-```sql
--- 字段不存在或没有符号定义
-SELECT symbolic("non_existent_field", 123)  -- 返回 "UNKNOWN"
-
--- 值没有对应的符号
-SELECT symbolic("vec", 999)  -- 返回 "UNKNOWN"
-
--- 参数错误
-SELECT symbolic("vec")  -- 错误：需要2个参数
-SELECT symbolic(123, 456)  -- 错误：第一个参数必须是字符串
-```
-
 
 ## SQLite版本兼容性
 
@@ -577,12 +715,25 @@ perf-prof sql -e irq:softirq_entry,sched:sched_wakeup -i 1000 \
 
 **使用内置函数**:
 ```bash
-# 查看事件的 print_fmt 定义（确认是否有 __print_symbolic）
+# 查看事件的 print_fmt 定义（确认是否有 __print_symbolic 或指针格式）
 perf-prof trace -e irq:softirq_entry help
+perf-prof trace -e timer:hrtimer_expire_entry help
 
 # 验证 symbolic 函数是否可用
 perf-prof sql -e irq:softirq_entry -i 1000 \
   --query 'SELECT vec, symbolic("vec", vec) FROM softirq_entry LIMIT 5'
+
+# 验证 ksymbol 函数是否可用
+perf-prof sql -e timer:hrtimer_expire_entry -i 1000 \
+  --query 'SELECT function, ksymbol(function) FROM hrtimer_expire_entry LIMIT 5'
+
+# 组合使用多个内置函数
+perf-prof sql -e irq:softirq_entry,timer:hrtimer_expire_entry -i 1000 \
+  --query '
+    SELECT "softirq" as type, symbolic("vec", vec) as name, COUNT(*) FROM softirq_entry GROUP BY vec
+    UNION ALL
+    SELECT "timer" as type, ksymbol(function) as name, COUNT(*) FROM hrtimer_expire_entry GROUP BY function
+    ORDER BY COUNT(*) DESC LIMIT 10'
 ```
 
 ### 性能优化
