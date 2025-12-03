@@ -44,7 +44,8 @@ struct tp_private {
     FUNC(IPSA_STR, "ipsa_str"), \
     FUNC(IPSA_HSTR, "ipsa_hstr"), \
     FUNC(UUID_STR, "uuid_str"), \
-    FUNC(GUID_STR, "guid_str") \
+    FUNC(GUID_STR, "guid_str"), \
+    FUNC(MAC_STR, "mac_str")
 
 #define FUNC(enum_name, func_name) enum_name
 enum {
@@ -426,6 +427,8 @@ static void arg_pointer_register(struct sql_ctx *ctx)
                         func = (format[1] == 'L' || format[1] == 'l') ? GUID_STR : UUID_STR;
                         data_type = SQLITE_BLOB;
                         break;
+                    case 'M': // %pM %pMR %pMF %pm %pmR
+                    case 'm': func = MAC_STR; data_type = SQLITE_BLOB; break;
                     default: break;
                 }
 
@@ -637,6 +640,12 @@ static void sqlite_blob(sqlite3_context *context, int argc, sqlite3_value **argv
             u = value;
             len = snprintf(buf, sizeof(buf), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
                     u[3], u[2], u[1], u[0], u[5], u[4], u[7], u[6], u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+            if (len > 0) symbol = buf;
+            break;
+        case MAC_STR:
+            if (bytes != 6) break;
+            u = value;
+            len = snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x", u[0], u[1], u[2], u[3], u[4], u[5]);
             if (len > 0) symbol = buf;
             break;
         default: break;
