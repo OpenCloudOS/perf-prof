@@ -447,6 +447,11 @@ static void arg_pointer_register(struct sql_ctx *ctx)
                         ctx->sqlite_funcs[func].data_type = data_type;
                         ctx->sqlite_funcs[func].func_name = arg_pointer_func[func];
                     }
+                    if (data_type == SQLITE_BLOB) {
+                        struct tep_format_field *field = tep_find_field(event, field_name);
+                        if (field)
+                            field->flags &= ~TEP_FIELD_IS_STRING;
+                    }
                 }
             }
             parse = parse->next;
@@ -889,22 +894,25 @@ static int sql_create_table(struct prof_dev *dev)
         while (fields && fields[j]) {
             /* Field type mapping to SQLite types:
              *
-             * 1. TEXT: String fields (char arrays) with signed=1
-             *    - char comm[16];            offset:8;  size:16; signed:1;  -> TEXT
-             *    - __data_loc char[] cmd;    offset:40; size:4;  signed:1;  -> TEXT
-             *    Only SIGNED string fields are treated as TEXT to ensure they represent
-             *    printable character data, not raw byte arrays.
+             * 1. TEXT: String fields (IS_STRING flag)
+             *    - char comm[16];            offset:8;  size:16; -> TEXT
+             *    - __data_loc char[] cmd;    offset:40; size:4;  -> TEXT
+             *    Note: Fields requiring special format (e.g., %pI4, %pM) have IS_STRING
+             *    flag cleared during arg_pointer_register() to be treated as BLOB.
+             *    Note: IS_SIGNED flag is no longer reliable for char arrays because:
+             *    - arm64 kernel: char is unsigned by default
+             *    - kernel commit 3bc753c06dd0 ("kbuild: treat char as always unsigned")
              *
-             * 2. BLOB: Array fields regardless of signed flag
-             *    - __u8 saddr[4];            offset:28; size:4;  signed:0;  -> BLOB
-             *    - long sysctl_mem[3];       offset:40; size:24; signed:1;  -> BLOB
+             * 2. BLOB: Array fields (IS_ARRAY flag, without IS_STRING)
+             *    - __u8 saddr[4];            offset:28; size:4;  -> BLOB
+             *    - long sysctl_mem[3];       offset:40; size:24; -> BLOB
              *    Arrays without string semantics are stored as binary data.
              *
              * 3. INTEGER: All other fields (numeric types)
-             *    - int pid;                  offset:24; size:4;  signed:1;  -> INTEGER
-             *    - unsigned int flags;       offset:32; size:4;  signed:0;  -> INTEGER
+             *    - int pid;                  offset:24; size:4;  -> INTEGER
+             *    - unsigned int flags;       offset:32; size:4;  -> INTEGER
              */
-            if ((fields[j]->flags & TEP_FIELD_IS_STRING) && (fields[j]->flags & TEP_FIELD_IS_SIGNED))
+            if ((fields[j]->flags & TEP_FIELD_IS_STRING))
                 col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len,
                                 ", %s TEXT", fields[j]->name);
             else if (fields[j]->flags & TEP_FIELD_IS_ARRAY)
@@ -1240,16 +1248,16 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
              *
              * Field type handling must match the SQLite type mapping in sql_create_table():
              *
-             * 1. TEXT binding: String fields (IS_STRING && IS_SIGNED)
-             *    - char comm[16];         signed:1  -> sqlite3_bind_text()
-             *    - __data_loc char[] cmd; signed:1  -> sqlite3_bind_text() with dynamic offset
+             * 1. TEXT binding: String fields (IS_STRING flag)
+             *    - char comm[16];         -> sqlite3_bind_text()
+             *    - __data_loc char[] cmd; -> sqlite3_bind_text() with dynamic offset
              *
-             * 2. BLOB binding: Array fields (IS_ARRAY)
-             *    - __u8 saddr[4];         signed:0  -> sqlite3_bind_blob()
-             *    - __data_loc __u8[] buf  signed:0  -> sqlite3_bind_blob() with dynamic offset
+             * 2. BLOB binding: Array fields (IS_ARRAY flag, without IS_STRING)
+             *    - __u8 saddr[4];         -> sqlite3_bind_blob()
+             *    - __data_loc __u8[] buf  -> sqlite3_bind_blob() with dynamic offset
              *
              * 3. INTEGER binding: Numeric fields (default)
-             *    - int pid;               signed:1  -> sqlite3_bind_int() or sqlite3_bind_int64()
+             *    - int pid;               -> sqlite3_bind_int64()
              */
             for (j = 0; priv->fields && priv->fields[j]; j++) {
                 struct tep_format_field *field = priv->fields[j];
@@ -1258,8 +1266,8 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
                 void *ptr;
                 int len;
 
-                if ((field->flags & TEP_FIELD_IS_STRING) && (field->flags & TEP_FIELD_IS_SIGNED)) {
-                    // TEXT: String fields with signed=1
+                if ((field->flags & TEP_FIELD_IS_STRING)) {
+                    // TEXT: String fields (IS_STRING flag)
                     if (field->flags & TEP_FIELD_IS_DYNAMIC) {
                         // Dynamic string: __data_loc char[] field
                         ptr = base + *(unsigned short *)(base + field->offset);
