@@ -22,6 +22,9 @@
 #define USE_SQLITE_PREPARE_V3 1
 #endif
 
+extern const char *syscalls_table[];
+extern const int syscalls_table_size;
+
 struct tp_private {
     sqlite3_stmt *insert_stmt;
     struct tep_format_field **fields;
@@ -45,7 +48,8 @@ struct tp_private {
     FUNC(IPSA_HSTR, "ipsa_hstr"), \
     FUNC(UUID_STR, "uuid_str"), \
     FUNC(GUID_STR, "guid_str"), \
-    FUNC(MAC_STR, "mac_str")
+    FUNC(MAC_STR, "mac_str"), \
+    FUNC(SYSCALL, "syscall")
 
 #define FUNC(enum_name, func_name) enum_name
 enum {
@@ -554,6 +558,10 @@ static void sqlite_ksymbol(sqlite3_context *context, int argc, sqlite3_value **a
     value = sqlite3_value_int64(argv[0]);
     if (func == KSYMBOL)
         symbol = function_resolver(NULL, (unsigned long long *)&value, NULL);
+    else if (func == SYSCALL) {
+        if (value >= 0 && value < syscalls_table_size && syscalls_table[value])
+            symbol = syscalls_table[value];
+    }
 
     if (symbol)
         sqlite3_result_text(context, symbol, -1, SQLITE_STATIC);
@@ -743,6 +751,13 @@ static int monitor_ctx_init(struct prof_dev *dev)
         }
         priv->fields = fields;
         priv->table_name = tp->alias ? tp->alias : tp->name;
+        if (strcmp(tp->sys, "raw_syscalls") == 0 || strcmp(tp->sys, "syscalls") == 0) {
+            ctx->sqlite_funcs[SYSCALL].data_type = SQLITE_INTEGER;
+            ctx->sqlite_funcs[SYSCALL].func_name = arg_pointer_func[SYSCALL];
+            priv->function_list = strdup(strcmp(tp->sys, "raw_syscalls") == 0 ?
+                                         "syscall(id)" : "syscall(__syscall_nr)");
+        }
+
         tp->private = priv;
     }
 
