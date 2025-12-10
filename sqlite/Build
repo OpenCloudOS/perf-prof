@@ -1,0 +1,1 @@
+perf-prof-y += perf_tp.o
