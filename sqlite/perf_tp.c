@@ -36,6 +36,7 @@
 #include <monitor.h>
 #include <tep.h>
 #include <linux/rblist.h>
+#include <linux/bitmap.h>
 #include <event-parse-local.h>
 #include <stack_helpers.h>
 #include <arpa/inet.h>
@@ -1021,9 +1022,25 @@ struct perf_tp_table {
 /* Cursor for iterating over events in the linked list */
 struct perf_tp_cursor {
     sqlite3_vtab_cursor base;       /* Base class. Must be first */
-    struct list_head *event_list;   /* Points to tp_private->event_list */
+    struct tp_event *start;         /* List head (sentinel), its next is a real tp_event */
     struct tp_event *curr;          /* Current event in iteration */
+    /*
+     * Constraint filter table built from xBestIndex decisions.
+     * Each entry represents one WHERE clause condition on an INTEGER column.
+     */
+    struct one_op {
+        int field;                  /* Column index (0-7: system cols, 8+: event fields) */
+        int op;                     /* Comparison operator (EQ, GT, LE, LT, GE, NE) */
+        sqlite3_int64 value;        /* Comparison value from sqlite3_value_int64() */
+    } *op_table;
+    int nr_ops;                     /* Number of active constraints */
 };
+
+/* Internal operator codes for constraint filtering */
+enum {
+    EQ, GT, LE, LT, GE, NE          /* Maps to SQLITE_INDEX_CONSTRAINT_* */
+};
+
 
 static int perf_tp_xConnect(sqlite3 *db, void *pAux, int argc, const char *const*argv,
                             sqlite3_vtab **ppVtab, char **pzErr)
@@ -1190,27 +1207,102 @@ static const char *ColumnName(struct perf_tp_table *table, int i)
 }
 
 /*
+ * Check if column i is an INTEGER type (suitable for constraint filtering).
+ * System columns (0-7) are always integers. Event fields depend on TEP flags.
+ */
+static inline bool Column_isInt(struct perf_tp_table *table, int i)
+{
+    if (i < 8) return 1;
+    else {
+        struct tp_private *priv = table->tp->private;
+        struct tep_format_field *field = i < priv->nr_fields ? priv->fields[i - 8] : NULL;
+        if (field && !(field->flags & TEP_FIELD_IS_STRING) &&
+                     !(field->flags & TEP_FIELD_IS_ARRAY))
+            return 1;
+        else
+            return 0;
+    }
+}
+
+/*
  * xBestIndex: Query planner interface.
  *
- * Currently returns a fixed cost (full table scan). Future optimization:
- * - Support _time range constraints for binary search
- * - Support key field constraints for event correlation
+ * Analyzes WHERE clause constraints and communicates filtering strategy to xFilter:
+ * - idxNum: Number of usable INTEGER constraints
+ * - idxStr: Encoded constraint info as "column,op;column,op;..." string
+ * - argvIndex: Maps constraint values to xFilter's argv[] array
+ * - omit=1: Tells SQLite we handle filtering (no double-check needed)
+ *
+ * Only INTEGER columns support constraint pushdown (EQ, GT, LE, LT, GE, NE).
+ * STRING/BLOB columns are filtered by SQLite after xColumn returns.
  */
 static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
 {
     struct perf_tp_table *table = (void *)pVtab;
+    int i, column, op;
+    int idx_num = 0;
+    char *idx_str = NULL;
 
     if (table->verbose) {
-        int i;
-        for (i = 0; i < pIdxInfo->nConstraint; i++) {
-            if (pIdxInfo->aConstraint[i].usable)
-                printf("Constraint[%d]: %s %s ?\n", i,
-                        ColumnName(table, pIdxInfo->aConstraint[i].iColumn),
-                        IndexOpName(pIdxInfo->aConstraint[i].op));
+    #if SQLITE_VERSION_NUMBER > 3010000
+        printf("colUsed: 0x%016llx, ", pIdxInfo->colUsed);
+        for_each_set_bit(i, (unsigned long *)&pIdxInfo->colUsed, 64) {
+            printf("%s ", ColumnName(table, i));
+        }
+        printf("\n");
+    #endif
+        for (i = 0; i < pIdxInfo->nOrderBy; i++) {
+            printf("OrderBy[%d]: %s %s\n", i,
+                        ColumnName(table, pIdxInfo->aOrderBy[i].iColumn),
+                        pIdxInfo->aOrderBy[i].desc ? "DESC" : "ASC");
         }
     }
 
-    pIdxInfo->estimatedCost = 100;
+    for (i = 0; i < pIdxInfo->nConstraint; i++) {
+        if (!pIdxInfo->aConstraint[i].usable)
+            continue;
+
+        if (table->verbose)
+            printf("Constraint[%d]: %s %s ?\n", i,
+                        ColumnName(table, pIdxInfo->aConstraint[i].iColumn),
+                        IndexOpName(pIdxInfo->aConstraint[i].op));
+
+        column = pIdxInfo->aConstraint[i].iColumn;
+        switch(pIdxInfo->aConstraint[i].op) {
+            case SQLITE_INDEX_CONSTRAINT_EQ: op = EQ; break;
+            case SQLITE_INDEX_CONSTRAINT_GT: op = GT; break;
+            case SQLITE_INDEX_CONSTRAINT_LE: op = LE; break;
+            case SQLITE_INDEX_CONSTRAINT_LT: op = LT; break;
+            case SQLITE_INDEX_CONSTRAINT_GE: op = GE; break;
+        #if SQLITE_VERSION_NUMBER > 3021000
+            case SQLITE_INDEX_CONSTRAINT_NE: op = NE; break;
+        #endif
+            default: continue;
+        }
+        if (Column_isInt(table, column)) {
+            if (!idx_str) {
+                idx_str = sqlite3_mprintf("%d,%d;", column, op);
+                if (!idx_str) continue;
+            } else {
+                char *tmp = sqlite3_mprintf("%s%d,%d;", idx_str, column, op);
+                if (tmp) {
+                    sqlite3_free(idx_str);
+                    idx_str = tmp;
+                } else continue;
+            }
+            idx_num++;
+            pIdxInfo->aConstraintUsage[i].argvIndex = idx_num;
+            pIdxInfo->aConstraintUsage[i].omit = 1;
+        }
+    }
+
+    if (idx_num) {
+        pIdxInfo->idxNum = idx_num;
+        pIdxInfo->idxStr = idx_str;
+        pIdxInfo->needToFreeIdxStr = 1;
+        pIdxInfo->estimatedCost = 100;
+    } else
+        pIdxInfo->estimatedCost = 1000;
     return SQLITE_OK;
 }
 
@@ -1231,36 +1323,174 @@ static int perf_tp_xOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor)
         return SQLITE_NOMEM;
 
     memset (cursor, 0, sizeof(*cursor));
-    cursor->event_list = &priv->event_list;
+    cursor->start = list_entry(&priv->event_list, struct tp_event, link);
     *ppCursor = &cursor->base;
     return SQLITE_OK;
 }
 
 static int perf_tp_xClose(sqlite3_vtab_cursor *pCursor)
 {
+    struct perf_tp_cursor *cursor = (void *)pCursor;
+    if (cursor->op_table)
+        sqlite3_free(cursor->op_table);
     sqlite3_free(pCursor);
     return SQLITE_OK;
 }
 
+/*
+ * Extract INTEGER field value from event for constraint comparison.
+ * Used by xNext to filter events against op_table conditions.
+ * Only called for INTEGER columns (validated by Column_isInt in xBestIndex).
+ */
+static inline sqlite3_int64 perf_tp_field(struct perf_tp_table *table, struct tp_event *e, int i)
+{
+    struct sql_sample_type *data = (void *)e->event.sample.array;
+    switch (i) {
+        // common fields
+        case 0: return data->tid_entry.pid;
+        case 1: return data->tid_entry.tid;
+        case 2: return data->time;
+        case 3: return data->cpu_entry.cpu;
+        case 4: return data->period;
+
+        // common_* (common_type removed - use event_id from event_metadata table)
+        case 5: return data->raw.common.common_flags;
+        case 6: return data->raw.common.common_preempt_count;
+        case 7: return data->raw.common.common_pid;
+        // event-specific fields
+        default: {
+            struct tp_private *priv = table->tp->private;
+            struct tep_format_field *field = priv->fields[i - 8];
+            void *base = data->raw.data;
+            sqlite3_int64 val = 0;
+            // INTEGER: Numeric fields
+            bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
+            if (field->size == 1)
+                val = is_signed ? *(char *)(base + field->offset)
+                                : *(unsigned char *)(base + field->offset);
+            else if (field->size == 2)
+                val = is_signed ? *(short *)(base + field->offset)
+                                : *(unsigned short *)(base + field->offset);
+            else if (field->size == 4)
+                val = is_signed ? *(int *)(base + field->offset)
+                                : *(unsigned int *)(base + field->offset);
+            else if (field->size == 8)
+                val = is_signed ? *(long long *)(base + field->offset)
+                                : *(unsigned long long *)(base + field->offset);
+
+            return val;
+        }
+    }
+    return -1;
+}
+
+/*
+ * xNext: Advance cursor to next matching event.
+ *
+ * If op_table is set (constraints from xBestIndex), filter events by evaluating
+ * all conditions. Event must satisfy ALL constraints (AND logic) to be returned.
+ * Skips non-matching events until a match is found or list exhausted.
+ */
+static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
+{
+    struct perf_tp_cursor *cursor = (void *)pCursor;
+    sqlite3_int64 value;
+    int i;
+
+    while (1) {
+        cursor->curr = list_next_entry(cursor->curr, link);
+
+        /* No constraints or reached end of list */
+        if (!cursor->nr_ops ||
+            cursor->curr == cursor->start)
+            break;
+
+        /* Check all constraints (AND logic) */
+        for (i = 0; i < cursor->nr_ops; i++) {
+            value = perf_tp_field((void *)pCursor->pVtab, cursor->curr, cursor->op_table[i].field);
+            switch (cursor->op_table[i].op) {
+                case EQ: if (value == cursor->op_table[i].value) break; else goto next;
+                case GT: if (value >  cursor->op_table[i].value) break; else goto next;
+                case LE: if (value <= cursor->op_table[i].value) break; else goto next;
+                case LT: if (value <  cursor->op_table[i].value) break; else goto next;
+                case GE: if (value >= cursor->op_table[i].value) break; else goto next;
+                case NE: if (value != cursor->op_table[i].value) break; else goto next;
+                default: goto next;
+            }
+        }
+        break; /* all conditions met */
+    next:
+        continue;
+    }
+    return SQLITE_OK;
+}
+
+static inline void dump_op_table(struct perf_tp_cursor *cursor)
+{
+    int i;
+    const char *op_str[] = {"==", ">", "<=", "<", ">=", "!="};
+    struct perf_tp_table *table = (void *)cursor->base.pVtab;
+
+    if (table->verbose) {
+        for (i = 0; i < cursor->nr_ops; i++) {
+            printf("FILTER[%d]: %s %s %lld\n", i,
+                    ColumnName((void *)cursor->base.pVtab, cursor->op_table[i].field),
+                    op_str[cursor->op_table[i].op], cursor->op_table[i].value);
+        }
+    }
+}
+
+/*
+ * xFilter: Initialize cursor and build constraint filter table.
+ *
+ * Parses idxStr ("column,op;column,op;...") from xBestIndex and binds
+ * actual values from argv[] to build op_table for xNext filtering.
+ * Then calls xNext to position cursor at first matching event.
+ */
 static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
                            int argc, sqlite3_value **argv)
 {
     struct perf_tp_cursor *cursor = (void *)pCursor;
-    cursor->curr = list_first_entry(cursor->event_list, struct tp_event, link);
-    return SQLITE_OK;
-}
+    cursor->curr = cursor->start;
 
-static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
-{
-    struct perf_tp_cursor *cursor = (void *)pCursor;
-    cursor->curr = list_next_entry(cursor->curr, link);
-    return SQLITE_OK;
+    /* Reset previous filter state */
+    if (cursor->op_table) {
+        sqlite3_free(cursor->op_table);
+        cursor->op_table = NULL;
+        cursor->nr_ops = 0;
+    }
+
+    /* Parse idxStr and bind constraint values from argv[] */
+    if (idxNum && idxStr && argc == idxNum) {
+        int column, op, i = 0;
+        const char *ptr = idxStr;
+
+        cursor->op_table = sqlite3_malloc(idxNum * sizeof(*cursor->op_table));
+        if (cursor->op_table) {
+            while (sscanf(ptr, "%d,%d;", &column, &op) == 2) {
+                cursor->op_table[i].field = column;
+                cursor->op_table[i].op = op;
+                cursor->op_table[i].value = sqlite3_value_int64(argv[i]);
+                while (*ptr && *ptr != ';') ptr++;
+                if (*ptr == ';') ptr++;
+                i++;
+            }
+            if (i != idxNum) {
+                sqlite3_free(cursor->op_table);
+                cursor->op_table = NULL;
+            } else
+                cursor->nr_ops = i;
+            dump_op_table(cursor);
+        }
+    }
+    /* Position cursor at first matching event */
+    return perf_tp_xNext(pCursor);
 }
 
 static int perf_tp_xEof(sqlite3_vtab_cursor *pCursor)
 {
     struct perf_tp_cursor *cursor = (void *)pCursor;
-    return &cursor->curr->link == cursor->event_list;
+    return cursor->curr == cursor->start;
 }
 
 static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int i)
