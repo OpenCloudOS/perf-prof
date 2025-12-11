@@ -73,6 +73,7 @@ struct tp_private {
      * init:     True during initialization to enable colUsed collection in xBestIndex.
      */
     uint64_t col_used;
+    char *ftrace_filter;
     bool init;
 
     /* File mode: events inserted via prepared statement */

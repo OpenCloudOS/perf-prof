@@ -1240,7 +1240,7 @@ static inline bool Column_isInt(struct perf_tp_table *table, int i)
 static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
 {
     struct perf_tp_table *table = (void *)pVtab;
-    struct tp_private *priv;
+    struct tp_private * __maybe_unused priv;
     int i, column, op;
     int idx_num = 0;
     char *idx_str = NULL;
@@ -1440,17 +1440,73 @@ static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
     return SQLITE_OK;
 }
 
-static inline void dump_op_table(struct perf_tp_cursor *cursor)
+/*
+ * Convert SQL query planner constraints to kernel trace event filter.
+ *
+ * During initialization (priv->init), generate ftrace_filter from op_table.
+ * Supports multiple xFilter calls with logical OR relationships between constraints.
+ *
+ * Only fields supported by kernel ftrace filter are included:
+ *   - field == 3 (_cpu)  -> "CPU" (ftrace built-in variable)
+ *   - field > 4          -> event fields (common_*, event-specific)
+ *
+ * Excluded fields (no kernel filter equivalent):
+ *   - field 0 (_pid), field 1 (_tid), field 2 (_time), field 4 (_period)
+ *
+ * Multiple constraints from different xFilter calls are combined with || operator:
+ *   - First call: pid > 1000 -> filter = "pid>1000"
+ *   - Second call: prio == 120 -> filter = "(pid>1000)||(prio==120)"
+ *
+ * The filter is stored in priv->ftrace_filter and applied later by tp_list_apply_filter().
+ */
+static inline void perf_tp_op_to_filter(struct perf_tp_cursor *cursor)
 {
     int i;
     const char *op_str[] = {"==", ">", "<=", "<", ">=", "!="};
     struct perf_tp_table *table = (void *)cursor->base.pVtab;
+    struct tp_private *priv = table->tp->private;
 
     if (table->verbose) {
         for (i = 0; i < cursor->nr_ops; i++) {
             printf("FILTER[%d]: %s %s %lld\n", i,
                     ColumnName((void *)cursor->base.pVtab, cursor->op_table[i].field),
                     op_str[cursor->op_table[i].op], cursor->op_table[i].value);
+        }
+    }
+
+    /* Generate kernel filter only during init and if not already set */
+    if (priv->init && !table->tp->filter) {
+        char *filter = NULL;
+        for (i = 0; i < cursor->nr_ops; i++) {
+            /* Only include fields supported by kernel ftrace filter */
+            if (cursor->op_table[i].field > 4 ||
+                cursor->op_table[i].field == 3) {
+                char *tmp;
+                const char *name;
+
+                if (cursor->op_table[i].field == 3) name = "CPU";
+                else name = ColumnName((void *)cursor->base.pVtab, cursor->op_table[i].field);
+
+                tmp = sqlite3_mprintf("%s%s%s%s%lld", filter ?: "", filter ? "&&" : "",
+                        name, op_str[cursor->op_table[i].op], cursor->op_table[i].value);
+                if (tmp) {
+                    if (filter) sqlite3_free(filter);
+                    filter = tmp;
+                }
+            }
+        }
+        if (filter) {
+            if (!priv->ftrace_filter)
+                priv->ftrace_filter = filter;
+            else {
+                const char *fmt = priv->ftrace_filter[0] == '(' ? "%s||(%s)" : "(%s)||(%s)";
+                char *tmp = sqlite3_mprintf(fmt, priv->ftrace_filter, filter);
+                if (tmp) {
+                    sqlite3_free(priv->ftrace_filter);
+                    priv->ftrace_filter = tmp;
+                }
+                sqlite3_free(filter);
+            }
         }
     }
 }
@@ -1495,7 +1551,7 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
                 cursor->op_table = NULL;
             } else
                 cursor->nr_ops = i;
-            dump_op_table(cursor);
+            perf_tp_op_to_filter(cursor);
         }
     }
     /* Position cursor at first matching event */
@@ -1976,6 +2032,10 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
         for_each_real_tp(ctx->tp_list, tp, i) {
             struct tp_private *priv = (struct tp_private *)tp->private;
             priv->init = 0;
+            if (!tp->filter && priv->ftrace_filter) {
+                tp->filter = strdup(priv->ftrace_filter);
+                printf("%s:%s SQL Query planner filter: %s\n", tp->sys, tp->name, tp->filter);
+            }
         }
 
         ctx->sample = sql_tp_mem_sample;
@@ -2001,6 +2061,8 @@ void sql_tp_free(struct sql_tp_ctx *ctx)
                 free(priv->fields);
             if (priv->function_list)
                 free(priv->function_list);
+            if (priv->ftrace_filter)
+                sqlite3_free(priv->ftrace_filter);
             list_for_each_entry_safe(e, n, &priv->event_list, link) {
                 __list_del_entry(&e->link);
                 free(e);
