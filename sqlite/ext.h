@@ -66,6 +66,14 @@ struct tp_private {
     /* Memory mode: events stored in linked list */
     uint64_t rowid;
     struct list_head event_list; // struct tp_event;
+    /*
+     * Query planner optimization:
+     * col_used: Bitmask of columns needed by --query (from xBestIndex colUsed).
+     *           0 means use Virtual Table, non-0 creates regular table with only those columns.
+     * init:     True during initialization to enable colUsed collection in xBestIndex.
+     */
+    uint64_t col_used;
+    bool init;
 
     /* File mode: events inserted via prepared statement */
     sqlite3_stmt *insert_stmt;
@@ -92,7 +100,7 @@ struct sql_tp_ctx {
 };
 
 struct sql_tp_ctx *sql_tp_file(sqlite3 *sql, struct tp_list *tp_list);
-struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list);
+struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char *query);
 void sql_tp_free(struct sql_tp_ctx *ctx);
 
 #endif

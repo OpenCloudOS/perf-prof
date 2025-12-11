@@ -119,7 +119,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
         sqlite3_exec(ctx->sql, "PRAGMA cache_size = -65536;", NULL, NULL, NULL);   /* 64MB cache */
     }
 
-    ctx->tp_ctx = (env->output2 ? sql_tp_file : sql_tp_mem)(ctx->sql, ctx->tp_list);
+    if (env->output2)
+        ctx->tp_ctx = sql_tp_file(ctx->sql, ctx->tp_list);
+    else
+        ctx->tp_ctx = sql_tp_mem(ctx->sql, ctx->tp_list, env->query);
     if (!ctx->tp_ctx)
         goto failed;
 
@@ -208,6 +211,7 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     /* Create metadata table */
     if (sqlite3_exec(ctx->sql, metadata_table_fmt, NULL, NULL, &errmsg) != SQLITE_OK) {
         fprintf(stderr, "Failed to create metadata table: %s\n", errmsg);
+        sqlite3_free(errmsg);
         return -1;
     }
 

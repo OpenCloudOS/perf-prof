@@ -828,6 +828,7 @@ static int sql_create_table(struct sql_tp_ctx *ctx)
             printf("CREATE SQL: %s\n", buf);
         if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
             fprintf(stderr, "Failed to create table %s: %s\n", priv->table_name, errmsg);
+            sqlite3_free(errmsg);
             return -1;
         }
         priv->created_time = time(NULL);
@@ -1239,6 +1240,7 @@ static inline bool Column_isInt(struct perf_tp_table *table, int i)
 static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
 {
     struct perf_tp_table *table = (void *)pVtab;
+    struct tp_private *priv;
     int i, column, op;
     int idx_num = 0;
     char *idx_str = NULL;
@@ -1303,6 +1305,19 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
         pIdxInfo->estimatedCost = 100;
     } else
         pIdxInfo->estimatedCost = 1000;
+
+    /*
+     * Collect colUsed during initialization phase (priv->init == true).
+     * OR accumulates columns from multi-statement queries like:
+     *   --query "select pid from sched_wakeup; select comm from sched_wakeup;"
+     * After init, col_used determines whether to use Virtual Table (col_used==0)
+     * or create a regular table with only the needed columns (col_used!=0).
+     */
+    #if SQLITE_VERSION_NUMBER > 3010000
+    priv = table->tp->private;
+    if (priv->init)
+        priv->col_used |= pIdxInfo->colUsed;
+    #endif
     return SQLITE_OK;
 }
 
@@ -1616,27 +1631,235 @@ static sqlite3_module perf_tp_module = {
 };
 
 /*
- * Memory mode sample handler: store event in linked list.
- * Just memcpy the entire event - no field parsing at insert time.
+ * Create regular tables for events where col_used != 0.
+ *
+ * Performance optimization: Virtual Table xNext/xEof/xColumn calls have overhead.
+ * When query only needs specific columns (col_used != 0), create a regular table
+ * with only those columns and use INSERT for better performance.
+ *
+ * col_used == 0 cases (continue using Virtual Table):
+ *   - "select * from sched_wakeup" (all columns)
+ *   - "select COUNT(*) from sched_wakeup" (no specific columns)
+ *   - "select * from event_metadata" (different table)
+ *   - SQLite < 3.10.0 (colUsed not available)
+ */
+static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
+{
+    struct tp *tp;
+    int i;
+    const char *table_fmt = "DROP TABLE IF EXISTS %s; CREATE TABLE %s (%s);";
+    const char *insert_fmt = "INSERT INTO %s VALUES(%s);";
+    char buf[1024 + strlen(table_fmt)];
+    char *errmsg = NULL;
+
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        struct tp_private *priv = (struct tp_private *)tp->private;
+        struct tep_format_field **fields = priv->fields;
+        char col_buf[1024];
+        char ins_buf[512];
+        int j, col_len = 0, ins_len = 0;
+
+        /* If all columns selected or too many fields, fall back to Virtual Table */
+        if (priv->nr_fields > BITS_PER_LONG ||
+            priv->col_used == GENMASK(priv->nr_fields-1, 0))
+            priv->col_used = 0;
+
+        /* col_used == 0: continue using Virtual Table for this event */
+        if (priv->col_used == 0)
+            continue;
+
+        #define COLUMN(i, name) \
+        if (test_bit(i, &priv->col_used)) { \
+            col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len, "%s INTEGER, ", name); \
+            if (!priv->insert_stmt) \
+                ins_len += snprintf(ins_buf + ins_len, sizeof(ins_buf) - ins_len, "?, "); \
+        }
+        COLUMN(0, "_pid");
+        COLUMN(1, "_tid");
+        COLUMN(2, "_time");
+        COLUMN(3, "_cpu");
+        COLUMN(4, "_period");
+        COLUMN(5, "common_flags");
+        COLUMN(6, "common_preempt_count");
+        COLUMN(7, "common_pid");
+        #undef COLUMN
+
+        for (j = 0; fields && fields[j]; j++) {
+            if (!test_bit(8 + j, &priv->col_used))
+                continue;
+
+            if ((fields[j]->flags & TEP_FIELD_IS_STRING))
+                col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len,
+                                "%s TEXT, ", fields[j]->name);
+            else if (fields[j]->flags & TEP_FIELD_IS_ARRAY)
+                col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len,
+                                "%s BLOB, ", fields[j]->name);
+            else
+                col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len,
+                                "%s INTEGER, ", fields[j]->name);
+            if (!priv->insert_stmt)
+                ins_len += snprintf(ins_buf + ins_len, sizeof(ins_buf) - ins_len,
+                                "?, ");
+        }
+        if (col_len) col_len -= 2; // remove ", "
+        if (ins_len) ins_len -= 2; // remove ", "
+        col_buf[col_len] = '\0';
+        ins_buf[ins_len] = '\0';
+
+        snprintf(buf, sizeof(buf), table_fmt, priv->table_name, priv->table_name, col_buf);
+        if (tp->dev->env->verbose)
+            printf("CREATE SQL: %s\n", buf);
+        if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
+            fprintf(stderr, "Failed to create table %s: %s\n", priv->table_name, errmsg);
+            sqlite3_free(errmsg);
+            return -1;
+        }
+        priv->created_time = time(NULL);
+
+        if (priv->insert_stmt)
+            continue;
+
+        snprintf(buf, sizeof(buf), insert_fmt, priv->table_name, ins_buf);
+        if (tp->dev->env->verbose)
+            printf("INSERT SQL: %s\n", buf);
+
+    #ifdef USE_SQLITE_PREPARE_V3
+        if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
+    #else
+        if (sqlite3_prepare_v2(ctx->sql, buf, -1, &priv->insert_stmt, NULL) != SQLITE_OK) {
+    #endif
+            fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Memory mode sample handler.
+ *
+ * Two paths based on col_used:
+ *   col_used == 0: Store raw event in linked list (Virtual Table access)
+ *   col_used != 0: Parse and INSERT only needed columns (regular table)
  */
 static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_event *event)
 {
     struct tp_private *priv = tp->private;
     struct sql_sample_type *data = (void *)event->sample.array;
-    struct tp_event *e = malloc(offsetof(struct tp_event, event) + event->header.size);
-    if (e) {
-        e->rowid = priv->rowid++;
-        memcpy(&e->event, event, event->header.size);
-        list_add_tail(&e->link, &priv->event_list);
+    int idx = 1;
+    int i, ret = -1;
 
+    if (priv->col_used == 0) {
+        /* Virtual Table path: store raw event for on-demand field extraction */
+        struct tp_event *e = malloc(offsetof(struct tp_event, event) + event->header.size);
+        if (e) {
+            e->rowid = priv->rowid++;
+            memcpy(&e->event, event, event->header.size);
+            list_add_tail(&e->link, &priv->event_list);
+            ret = 0;
+        }
+    } else {
+        /* Regular table path: parse and bind only needed columns */
+        sqlite3_reset(priv->insert_stmt);
+
+        // Bind common fields
+        if (test_bit(0, &priv->col_used))
+            sqlite3_bind_int(priv->insert_stmt, idx++, data->tid_entry.pid);
+        if (test_bit(1, &priv->col_used))
+            sqlite3_bind_int(priv->insert_stmt, idx++, data->tid_entry.tid);
+        if (test_bit(2, &priv->col_used))
+            sqlite3_bind_int64(priv->insert_stmt, idx++, data->time);
+        if (test_bit(3, &priv->col_used))
+            sqlite3_bind_int(priv->insert_stmt, idx++, data->cpu_entry.cpu);
+        if (test_bit(4, &priv->col_used))
+            sqlite3_bind_int64(priv->insert_stmt, idx++, data->period);
+
+        // common_* (common_type removed - use event_id from event_metadata table)
+        if (test_bit(5, &priv->col_used))
+            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_flags);
+        if (test_bit(6, &priv->col_used))
+            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_preempt_count);
+        if (test_bit(7, &priv->col_used))
+            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_pid);
+
+        /* Parse and bind event-specific fields */
+        for (i = 0; priv->fields && priv->fields[i]; i++) {
+            struct tep_format_field *field = priv->fields[i];
+            void *base = data->raw.data;
+            long long val = 0;
+            void *ptr;
+            int len;
+
+            if (!test_bit(8 + i, &priv->col_used))
+                continue;
+
+            if ((field->flags & TEP_FIELD_IS_STRING)) {
+                // TEXT: String fields (IS_STRING flag)
+                if (field->flags & TEP_FIELD_IS_DYNAMIC) {
+                    // Dynamic string: __data_loc char[] field
+                    ptr = base + *(unsigned short *)(base + field->offset);
+                    len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
+                } else {
+                    // Fixed string: char field[N]
+                    ptr = base + field->offset;
+                    len = -1;
+                }
+                // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
+                sqlite3_bind_text(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
+            } else if (field->flags & TEP_FIELD_IS_ARRAY) {
+                // BLOB: Array fields without string semantics
+                if (field->flags & TEP_FIELD_IS_DYNAMIC) {
+                    // Dynamic array: __data_loc __u8[] buf
+                    ptr = base + *(unsigned short *)(base + field->offset);
+                    len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
+                } else {
+                    // Fixed array: __u8 saddr[4], long sysctl_mem[3]
+                    ptr = base + field->offset;
+                    len = field->size;
+                }
+                // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
+                sqlite3_bind_blob(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
+            } else {
+                // INTEGER: Numeric fields
+                bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
+                if (field->size == 1)
+                    val = is_signed ? *(char *)(base + field->offset)
+                                    : *(unsigned char *)(base + field->offset);
+                else if (field->size == 2)
+                    val = is_signed ? *(short *)(base + field->offset)
+                                    : *(unsigned short *)(base + field->offset);
+                else if (field->size == 4)
+                    val = is_signed ? *(int *)(base + field->offset)
+                                    : *(unsigned int *)(base + field->offset);
+                else if (field->size == 8)
+                    val = is_signed ? *(long long *)(base + field->offset)
+                                    : *(unsigned long long *)(base + field->offset);
+
+                if (field->size <= 8)
+                    sqlite3_bind_int64(priv->insert_stmt, idx++, val);
+                else
+                    sqlite3_bind_null(priv->insert_stmt, idx++);
+            }
+        }
+
+        // Execute the insert statement
+        if (sqlite3_step(priv->insert_stmt) != SQLITE_DONE) {
+            if (tp->dev->env->verbose) {
+                fprintf(stderr, "Failed to insert record into %s: %s\n",
+                        priv->table_name, sqlite3_errmsg(ctx->sql));
+            }
+        } else
+            ret = 0;
+    }
+
+    if (ret == 0) {
         priv->sample_count++;
         if (priv->first_sample_time == 0 || data->time < priv->first_sample_time)
             priv->first_sample_time = data->time;
         if (data->time > priv->last_sample_time)
             priv->last_sample_time = data->time;
-        return 0;
     }
-    return -1;
+    return ret;
 }
 
 /* Memory mode reset: free all events from linked lists after each interval */
@@ -1653,19 +1876,66 @@ static void sql_tp_mem_reset(struct sql_tp_ctx *ctx)
             __list_del_entry(&e->link);
             free(e);
         }
+        if (priv->insert_stmt) {
+            sqlite3_finalize(priv->insert_stmt);
+            priv->insert_stmt = NULL;
+        }
         priv->rowid = 0;
         priv->created_time = time(NULL);
         priv->sample_count = 0;
         priv->first_sample_time = 0;
         priv->last_sample_time = 0;
     }
+
+    // Recreate tables
+    if (sql_tp_mem_create_table(ctx) < 0)
+        fprintf(stderr, "Failed to recreate tables\n");
+}
+
+/*
+ * Try to execute query to trigger xBestIndex and collect colUsed.
+ *
+ * Supports multi-statement queries separated by ';'. Failures are ignored
+ * because some tables (like event_metadata) don't exist yet during init,
+ * but event Virtual Tables are already available for colUsed collection.
+ */
+static int sql_tp_mem_try_exec(sqlite3 *sql, const char *query)
+{
+    sqlite3_stmt *stmt;
+    const char *next_query;
+    int ret = -1;
+
+    while (1) {
+    #ifdef USE_SQLITE_PREPARE_V3
+        if (sqlite3_prepare_v3(sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
+    #else
+        if (sqlite3_prepare_v2(sql, query, -1, &stmt, &next_query) == SQLITE_OK) {
+    #endif
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            ret = 0;
+        }
+        /* Continue to next statement even if current one failed */
+        if (*next_query) query = next_query;
+        else break;
+    }
+    return ret;
 }
 
 /*
  * Initialize memory mode: events stored in linked list, accessed via Virtual Table.
  * Used when no --output2 is specified (in-memory database).
+ *
+ * Initialization flow:
+ *   1. Create Virtual Tables for all events (enables xBestIndex calls)
+ *   2. Set priv->init = 1 to enable colUsed collection
+ *   3. Execute --query to trigger xBestIndex and collect colUsed
+ *   4. Create regular tables for events with col_used != 0
+ *   5. Set priv->init = 0 to stop colUsed collection
+ *
+ * After init, col_used is fixed for the session (--query doesn't change).
  */
-struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list)
+struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char *query)
 {
     struct sql_tp_ctx *ctx = sql_tp_common_init(sql, tp_list);
     const char *vtable_fmt = "CREATE VIRTUAL TABLE IF NOT EXISTS %s USING perf_tp";
@@ -1680,7 +1950,7 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list)
             fprintf(stderr, "Failed to create perf_tp module: %s\n", sqlite3_errmsg(ctx->sql));
             goto failed;
         }
-        /* Create a virtual table for each tracepoint */
+        /* Step 1-2: Create Virtual Tables and enable colUsed collection */
         for_each_real_tp(ctx->tp_list, tp, i) {
             struct tp_private *priv = (struct tp_private *)tp->private;
 
@@ -1689,8 +1959,23 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list)
                 printf("CREATE VTABLE SQL: %s\n", buf);
             if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
                 fprintf(stderr, "Failed to create vtable %s: %s\n", priv->table_name, errmsg);
+                sqlite3_free(errmsg);
                 goto failed;
             }
+            priv->init = 1;  /* Enable colUsed collection in xBestIndex */
+        }
+
+        /* Step 3-4: Execute query to collect colUsed, then create optimized tables */
+        if (query && query[0]) {
+            sql_tp_mem_try_exec(ctx->sql, query);
+            if (sql_tp_mem_create_table(ctx) < 0)
+                goto failed;
+        }
+
+        /* Step 5: Disable colUsed collection */
+        for_each_real_tp(ctx->tp_list, tp, i) {
+            struct tp_private *priv = (struct tp_private *)tp->private;
+            priv->init = 0;
         }
 
         ctx->sample = sql_tp_mem_sample;
