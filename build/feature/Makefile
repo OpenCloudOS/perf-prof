@@ -78,8 +78,7 @@ FILES=                                          \
          test-file-handle.bin			\
          test-libpfm4.bin			\
          test-libtcmalloc.bin			\
-         test-rpmalloc.bin			\
-         test-libsqlite3.bin
+         test-rpmalloc.bin
 
 FILES := $(addprefix $(OUTPUT),$(FILES))
 
@@ -387,9 +386,6 @@ $(OUTPUT)test-libtcmalloc.bin:
 
 $(OUTPUT)test-rpmalloc.bin:
 	$(BUILD) -I../../lib/ -lpthread
-
-$(OUTPUT)test-libsqlite3.bin:
-	$(BUILD) -lsqlite3
 
 $(OUTPUT)test-btf-vmlinux.bin: /sys/kernel/btf/vmlinux
 	@:
