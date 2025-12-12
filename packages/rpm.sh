@@ -42,8 +42,7 @@ if [ -n "$glibc_217" ]; then
     fcntl_ver=$(sym_ver_le_217 fcntl)
     sed -i -e "s/fmemopen@GLIBC_/$fmemopen_ver/" -e "s/fcntl@GLIBC_/$fcntl_ver/" $src/glibc_2.17.patch
     rpmbuild -bb perf-prof.spec \
-        --define "version $version" --define "tag $tag" --define "glibc_217 1" \
-        --define "EXTRA_CFLAGS -DSQLITE_COMPAT"
+        --define "version $version" --define "tag $tag" --define "glibc_217 1"
 else
     rpmbuild -bb perf-prof.spec \
         --define "version $version" --define "tag $tag"

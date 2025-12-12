@@ -46,7 +46,6 @@ Kernel profiler based on perf_event and ebpf
 %endif
 
 %build
-export CFLAGS="%{?EXTRA_CFLAGS}"
 make
 strip -g %{name}
 
