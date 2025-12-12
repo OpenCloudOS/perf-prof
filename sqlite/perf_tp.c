@@ -840,11 +840,7 @@ static int sql_create_table(struct sql_tp_ctx *ctx)
         if (tp->dev->env->verbose)
             printf("INSERT SQL: %s\n", buf);
 
-    #ifdef USE_SQLITE_PREPARE_V3
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
-    #else
-        if (sqlite3_prepare_v2(ctx->sql, buf, -1, &priv->insert_stmt, NULL) != SQLITE_OK) {
-    #endif
             fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
             return -1;
         }
@@ -1159,25 +1155,17 @@ static const char *IndexOpName(unsigned char op)
         case SQLITE_INDEX_CONSTRAINT_LT:        return "LT";
         case SQLITE_INDEX_CONSTRAINT_GE:        return "GE";
         case SQLITE_INDEX_CONSTRAINT_MATCH:     return "MATCH";
-    #if SQLITE_VERSION_NUMBER > 3010000
         case SQLITE_INDEX_CONSTRAINT_LIKE:      return "LIKE";
         case SQLITE_INDEX_CONSTRAINT_GLOB:      return "GLOB";
         case SQLITE_INDEX_CONSTRAINT_REGEXP:    return "REGEXP";
-    #endif
-    #if SQLITE_VERSION_NUMBER > 3021000
         case SQLITE_INDEX_CONSTRAINT_NE:        return "NE";
         case SQLITE_INDEX_CONSTRAINT_ISNOT:     return "ISNOT";
         case SQLITE_INDEX_CONSTRAINT_ISNOTNULL: return "ISNOTNULL";
         case SQLITE_INDEX_CONSTRAINT_ISNULL:    return "ISNULL";
         case SQLITE_INDEX_CONSTRAINT_IS:        return "IS";
-    #endif
-    #if SQLITE_VERSION_NUMBER > 3038000
         case SQLITE_INDEX_CONSTRAINT_LIMIT:     return "LIMIT";
         case SQLITE_INDEX_CONSTRAINT_OFFSET:    return "OFFSET";
-    #endif
-    #ifdef SQLITE_INDEX_CONSTRAINT_FUNCTION
         case SQLITE_INDEX_CONSTRAINT_FUNCTION:  return "FUNCTION";
-    #endif
         default: break;
     }
     return "UNKNOWN";
@@ -1246,13 +1234,12 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
     char *idx_str = NULL;
 
     if (table->verbose) {
-    #if SQLITE_VERSION_NUMBER > 3010000
         printf("colUsed: 0x%016llx, ", pIdxInfo->colUsed);
         for_each_set_bit(i, (unsigned long *)&pIdxInfo->colUsed, 64) {
             printf("%s ", ColumnName(table, i));
         }
         printf("\n");
-    #endif
+
         for (i = 0; i < pIdxInfo->nOrderBy; i++) {
             printf("OrderBy[%d]: %s %s\n", i,
                         ColumnName(table, pIdxInfo->aOrderBy[i].iColumn),
@@ -1276,9 +1263,7 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
             case SQLITE_INDEX_CONSTRAINT_LE: op = LE; break;
             case SQLITE_INDEX_CONSTRAINT_LT: op = LT; break;
             case SQLITE_INDEX_CONSTRAINT_GE: op = GE; break;
-        #if SQLITE_VERSION_NUMBER > 3021000
             case SQLITE_INDEX_CONSTRAINT_NE: op = NE; break;
-        #endif
             default: continue;
         }
         if (Column_isInt(table, column)) {
@@ -1313,11 +1298,9 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
      * After init, col_used determines whether to use Virtual Table (col_used==0)
      * or create a regular table with only the needed columns (col_used!=0).
      */
-    #if SQLITE_VERSION_NUMBER > 3010000
     priv = table->tp->private;
     if (priv->init)
         priv->col_used |= pIdxInfo->colUsed;
-    #endif
     return SQLITE_OK;
 }
 
@@ -1779,11 +1762,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
         if (tp->dev->env->verbose)
             printf("INSERT SQL: %s\n", buf);
 
-    #ifdef USE_SQLITE_PREPARE_V3
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
-    #else
-        if (sqlite3_prepare_v2(ctx->sql, buf, -1, &priv->insert_stmt, NULL) != SQLITE_OK) {
-    #endif
             fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
             return -1;
         }
@@ -1962,11 +1941,7 @@ static int sql_tp_mem_try_exec(sqlite3 *sql, const char *query)
     int ret = -1;
 
     while (1) {
-    #ifdef USE_SQLITE_PREPARE_V3
         if (sqlite3_prepare_v3(sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
-    #else
-        if (sqlite3_prepare_v2(sql, query, -1, &stmt, &next_query) == SQLITE_OK) {
-    #endif
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
             ret = 0;

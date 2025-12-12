@@ -10,17 +10,6 @@
 #include <linux/rblist.h>
 
 #include <sqlite3.h>
-/*
- * SQLite compatibility mode:
- * Define SQLITE_COMPAT to force using sqlite3_prepare_v2 instead of v3.
- * This is useful for old systems where sqlite3_prepare_v3 is not available.
- *
- * Usage: export CFLAGS=-DSQLITE_COMPAT; make
- */
-#if defined(SQLITE_PREPARE_PERSISTENT) && !defined(SQLITE_COMPAT)
-#define USE_SQLITE_PREPARE_V3 1
-#endif
-
 
 /*
  * Perf event sample layout matching the sample_type configuration:

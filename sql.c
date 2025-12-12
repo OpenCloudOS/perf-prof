@@ -31,6 +31,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     struct env *env = dev->env;
     struct sql_ctx *ctx;
 
+    if (env->verbose)
+        printf("SQLite %s %s\n", SQLITE_VERSION, SQLITE_SOURCE_ID);
+
     if (!env->event)
         return -1;
 
@@ -95,9 +98,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     ctx->tp_list = tp_list_new(dev, env->event);
     if (!ctx->tp_list)
-        goto failed;
-
-    if (sqlite3_config(SQLITE_CONFIG_SINGLETHREAD) != SQLITE_OK)
         goto failed;
 
     if (sqlite3_open(env->output2 ? : ":memory:", &ctx->sql) != SQLITE_OK)
@@ -216,12 +216,8 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     }
 
     /* Prepare insert statement */
-#ifdef USE_SQLITE_PREPARE_V3
     if (sqlite3_prepare_v3(ctx->sql, insert_metadata_fmt, -1,
                           SQLITE_PREPARE_PERSISTENT, &stmt, NULL) != SQLITE_OK) {
-#else
-    if (sqlite3_prepare_v2(ctx->sql, insert_metadata_fmt, -1, &stmt, NULL) != SQLITE_OK) {
-#endif
         fprintf(stderr, "Failed to prepare metadata insert statement: %s\n",
                 sqlite3_errmsg(ctx->sql));
         return -1;
@@ -256,12 +252,8 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     sqlite3_finalize(stmt);
 
     /* Prepare update statement */
-#ifdef USE_SQLITE_PREPARE_V3
     if (sqlite3_prepare_v3(ctx->sql, update_metadata_fmt, -1,
                           SQLITE_PREPARE_PERSISTENT, &ctx->update_metadata_stmt, NULL) != SQLITE_OK) {
-#else
-    if (sqlite3_prepare_v2(ctx->sql, update_metadata_fmt, -1, &ctx->update_metadata_stmt, NULL) != SQLITE_OK) {
-#endif
         fprintf(stderr, "Failed to prepare metadata update statement: %s\n",
                 sqlite3_errmsg(ctx->sql));
         return -1;
@@ -449,11 +441,7 @@ static void sql_interval(struct prof_dev *dev)
         sqlite3_stmt *stmt;
         const char *next_query;
 
-    #ifdef USE_SQLITE_PREPARE_V3
         if (sqlite3_prepare_v3(ctx->sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
-    #else
-        if (sqlite3_prepare_v2(ctx->sql, query, -1, &stmt, &next_query) == SQLITE_OK) {
-    #endif
             int column_count = sqlite3_column_count(stmt);
             int *col_widths = ctx->col_widths[nr_query];
             int j, k, width, step_result;
