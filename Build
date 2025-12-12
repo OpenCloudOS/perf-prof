@@ -5,7 +5,7 @@ perf-prof-y += monitor.o tep.o timer.o convert.o net.o event-spread.o vcpu_info.
 perf-prof-y += sched.o comm.o perfeval.o ptrace.o pystack.o
 CFLAGS_pystack.o := -Wno-address-of-packed-member
 perf-prof-$(CONFIG_LIBBPF) += bpf-skel/
-perf-prof-$(CONFIG_LIBSQLITE3) += sqlite/
+perf-prof-y += sqlite/
 
 perf-prof-y += split-lock.o
 perf-prof-y += profile.o
@@ -41,7 +41,7 @@ perf-prof-y += list.o
 perf-prof-y += kcore.o
 perf-prof-$(CONFIG_LIBBPF) += bpf_kvm_exit.o
 perf-prof-y += misc.o
-perf-prof-$(CONFIG_LIBSQLITE3) += sql.o
+perf-prof-y += sql.o
 
 bin-y += perf-prof
 
@@ -52,7 +52,6 @@ perf-prof-libs-$(CONFIG_LIBBPF)     += lib/bpf/libbpf.a
 LIBS_perf-prof-$(CONFIG_CPLUS_DEMANGLE) += -liberty
 LIBS_perf-prof-$(CONFIG_CXX_DEMANGLE)   += -lstdc++
 LIBS_perf-prof-$(CONFIG_LIBTCMALLOC)    += -ltcmalloc
-LIBS_perf-prof-$(CONFIG_LIBSQLITE3)     += -lsqlite3
 
 perf-prof-libs += lib/perf/libperf.a lib/api/libapi.a
 perf-prof-libs += lib/traceevent/libtraceevent.a lib/subcmd/libsubcmd.a

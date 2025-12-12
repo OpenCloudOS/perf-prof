@@ -29,6 +29,7 @@ INCLUDES = \
 -I$(srctree)/lib/traceevent \
 -I$(srctree)/lib/subcmd \
 -I$(srctree)/lib/ \
+-I$(srctree)/sqlite/ \
 -I$(srctree)/include \
 -I$(srctree)/include/uapi \
 -I$(srctree)/arch/$(SRCARCH)/include \
@@ -44,7 +45,7 @@ override CFLAGS += $(INCLUDES)
 override CFLAGS += -fvisibility=hidden
 override CXXFLAGS += $(EXTRA_CFLAGS) $(INCLUDES)
 
-export srctree OUTPUT CFLAGS CXXFLAGS V EXTRA_CFLAGS SRCARCH INCLUDES
+export srctree OUTPUT CFLAGS CXXFLAGS V EXTRA_CFLAGS SRCARCH INCLUDES EXTRA_WARNINGS
 
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
 include $(srctree)/Makefile.config
