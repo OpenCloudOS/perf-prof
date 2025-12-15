@@ -37,9 +37,41 @@ struct sql_sample_type {
     } raw;
 };
 
+/* Constraint usage tracking: where the constraint is applied */
+enum {
+    USED_BY_NONE,       /* Not used for optimization */
+    USED_BY_FTRACE      /* Converted to kernel ftrace filter */
+};
+
+/*
+ * SQL WHERE clause constraint collected from xBestIndex.
+ * Used for: (1) ftrace filter generation, (2) index field selection.
+ */
+struct constraint {
+    int field;              /* Column index (see constraint_can_ftrace() for layout) */
+    unsigned char op;       /* Operator: EQ, GT, LE, LT, GE, NE */
+    unsigned char used_by;  /* USED_BY_NONE or USED_BY_FTRACE */
+    bool value_set;         /* True if RHS value was available at planning time */
+    sqlite3_int64 value;    /* RHS value (valid only if value_set is true) */
+};
+
+/* Constraint set from a single xBestIndex call */
+struct BestIndex {
+    struct constraint *constraints;
+    int nr_constraints;
+    int cost;               /* Estimated query cost for this constraint set */
+};
+
+#define for_each_constraint(tp_priv, constraint, i, j) \
+    for (i = 0; i < tp_priv->best_index_num; i++) \
+        for (j = 0; j < tp_priv->best_index[i].nr_constraints; j++) \
+            if ((constraint = &tp_priv->best_index[i].constraints[j]))
+
+
 /* Event node for memory mode linked list */
 struct tp_event {
-    struct list_head link;
+    struct list_head link;       // link to tp_private::event_list
+    struct list_head link_index; // link to IndexNode::event_list
     uint64_t rowid;
     union perf_event event;
 };
@@ -51,15 +83,28 @@ struct tp_private {
     const char *table_name;
     char *function_list;  /* Comma-separated list of available SQL functions for this event */
     time_t created_time;
+    enum {
+        FILE_MODE,
+        MEM_VIRTUAL_TABLE_MODE,
+        MEM_REGULAR_TABLE_MODE,
+    } mode;
 
     /* Memory mode: events stored in linked list */
     uint64_t rowid;
-    struct list_head event_list; // struct tp_event;
+    struct list_head event_list; /* struct tp_event linked via tp_event::link */
+    struct rb_root index_tree;   /* struct IndexNode for O(log n) lookup */
+
+    /* Query planner constraint collection (populated during init phase) */
+    struct BestIndex *best_index;   /* Array of constraint sets from xBestIndex calls */
+    int best_index_num;             /* Number of constraint sets collected */
+    int have_index;                 /* True if index field was selected */
+    int index_field;                /* Column index chosen for indexing */
     /*
-     * Query planner optimization:
-     * col_used: Bitmask of columns needed by --query (from xBestIndex colUsed).
-     *           0 means use Virtual Table, non-0 creates regular table with only those columns.
-     * init:     True during initialization to enable colUsed collection in xBestIndex.
+     * Query planner optimization (collected during init phase):
+     * col_used:      Bitmask of columns needed by --query (from xBestIndex colUsed).
+     * ftrace_filter: Kernel filter expression generated from SQL WHERE constraints.
+     *                Applied via tp_list_apply_filter() before perf_event_open().
+     * init:          True during initialization to enable optimization data collection.
      */
     uint64_t col_used;
     char *ftrace_filter;
@@ -67,6 +112,15 @@ struct tp_private {
 
     /* File mode: events inserted via prepared statement */
     sqlite3_stmt *insert_stmt;
+
+    /* Index statistics */
+    uint64_t xFilter;
+    uint64_t xEof;
+    uint64_t xNext;
+    uint64_t xColumn, xRowid;
+    uint64_t scan_list;
+    uint64_t do_index;
+    uint64_t do_filter;
 
     /* Event statistics */
     uint64_t sample_count;
@@ -84,6 +138,7 @@ struct sql_tp_ctx {
         const char *func_name;
     } *sqlite_funcs;
     int ksymbol;
+    int verbose;
 
     int (*sample)(struct sql_tp_ctx *ctx, struct tp *tp, union perf_event *event);
     void (*reset)(struct sql_tp_ctx *ctx);

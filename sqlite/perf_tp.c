@@ -726,9 +726,12 @@ static struct sql_tp_ctx *sql_tp_common_init(sqlite3 *sql, struct tp_list *tp_li
             priv->function_list = strdup(strcmp(tp->sys, "raw_syscalls") == 0 ?
                                          "syscall(id)" : "syscall(__syscall_nr)");
         }
+        priv->mode = FILE_MODE;
         INIT_LIST_HEAD(&priv->event_list);
+        priv->index_tree = RB_ROOT;
 
         tp->private = priv;
+        ctx->verbose = tp->dev->env->verbose;
     }
 
     /* Register symbolic() function */
@@ -824,7 +827,7 @@ static int sql_create_table(struct sql_tp_ctx *ctx)
         ins_buf[ins_len] = '\0';
 
         snprintf(buf, sizeof(buf), table_fmt, priv->table_name, priv->table_name, col_buf);
-        if (tp->dev->env->verbose)
+        if (ctx->verbose)
             printf("CREATE SQL: %s\n", buf);
         if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
             fprintf(stderr, "Failed to create table %s: %s\n", priv->table_name, errmsg);
@@ -837,7 +840,7 @@ static int sql_create_table(struct sql_tp_ctx *ctx)
             continue;
 
         snprintf(buf, sizeof(buf), insert_fmt, priv->table_name, ins_buf);
-        if (tp->dev->env->verbose)
+        if (ctx->verbose)
             printf("INSERT SQL: %s\n", buf);
 
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
@@ -947,7 +950,7 @@ static int sql_tp_file_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_
 
     // Execute the insert statement
     if (sqlite3_step(priv->insert_stmt) != SQLITE_DONE) {
-        if (tp->dev->env->verbose) {
+        if (ctx->verbose) {
             fprintf(stderr, "Failed to insert record into %s: %s\n",
                     priv->table_name, sqlite3_errmsg(ctx->sql));
         }
@@ -1013,12 +1016,21 @@ struct perf_tp_table {
     sqlite3_vtab base;              /* Base class. Must be first */
     struct sql_tp_ctx *ctx;
     struct tp *tp;                  /* Associated tracepoint */
+    struct tp_private *priv;
     int verbose;
+};
+
+struct IndexNode {
+    struct rb_node node;
+    int64_t value;
+    struct list_head event_list; // struct tp_event::link_index
 };
 
 /* Cursor for iterating over events in the linked list */
 struct perf_tp_cursor {
     sqlite3_vtab_cursor base;       /* Base class. Must be first */
+    struct rb_root *index_tree;     /* Index tree for indexed access */
+    struct IndexNode *index_node;   /* Current index node in indexed access */
     struct tp_event *start;         /* List head (sentinel), its next is a real tp_event */
     struct tp_event *curr;          /* Current event in iteration */
     /*
@@ -1038,6 +1050,60 @@ enum {
     EQ, GT, LE, LT, GE, NE          /* Maps to SQLITE_INDEX_CONSTRAINT_* */
 };
 
+/*
+ * Find or create an index node in the red-black tree.
+ *
+ * Each IndexNode maintains a list of events with the same indexed field value,
+ * enabling O(log n) lookup instead of O(n) full list scan.
+ */
+static struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value, int create)
+{
+    struct IndexNode *new;
+	struct rb_node **p = &root->rb_node;
+	struct rb_node *parent = NULL;
+
+	while (*p != NULL) {
+		parent = *p;
+		new = rb_entry(parent, struct IndexNode, node);
+		if (value < new->value)
+			p = &parent->rb_left;
+		else if (value > new->value)
+			p = &parent->rb_right;
+		else
+			return new;
+	}
+
+    if (!create)
+        return NULL;
+
+    new = malloc(sizeof(*new));
+    if (!new)
+        return NULL;
+
+    new->value = value;
+    INIT_LIST_HEAD(&new->event_list);
+
+    rb_link_node(&new->node, parent, p);
+    rb_insert_color(&new->node, root);
+    return new;
+}
+
+/*
+ * Delete all nodes in the index tree using post-order traversal.
+ *
+ * Post-order traversal (left -> right -> root) ensures children are freed
+ * before their parent, allowing safe deletion without rb_erase() calls.
+ * This is more efficient than iterative deletion when clearing the entire tree.
+ *
+ * Stack depth concern: With 32 levels of recursion, this can handle 2^32 nodes.
+ * In practice, a single interval period cannot generate that many events.
+ */
+static void del_IndexTree(struct rb_root *root, struct rb_node *p)
+{
+    if (p->rb_left) del_IndexTree(root, p->rb_left);
+    if (p->rb_right) del_IndexTree(root, p->rb_right);
+    free(rb_entry(p, struct IndexNode, node));
+}
 
 static int perf_tp_xConnect(sqlite3 *db, void *pAux, int argc, const char *const*argv,
                             sqlite3_vtab **ppVtab, char **pzErr)
@@ -1059,7 +1125,8 @@ static int perf_tp_xConnect(sqlite3 *db, void *pAux, int argc, const char *const
         priv = tp->private;
         if (strcmp(priv->table_name, argv[2]) == 0) {
             table->tp = tp;
-            table->verbose = tp->dev->env->verbose;
+            table->priv = priv;
+            table->verbose = ctx->verbose;
             break;
         }
     }
@@ -1146,7 +1213,17 @@ static int perf_tp_xCreate(sqlite3 *db, void *pAux, int argc, const char *const*
     return rc;
 }
 
-static const char *IndexOpName(unsigned char op)
+static inline const char *OpStr(int op)
+{
+    // EQ, GT, LE, LT, GE, NE
+    const char *op_str[] = {"==", ">", "<=", "<", ">=", "!="};
+    if (op < sizeof(op_str) / sizeof(op_str[0]))
+        return op_str[op];
+    else
+        return "NON";
+}
+
+static inline const char *IndexOpName(unsigned char op)
 {
     switch(op) {
         case SQLITE_INDEX_CONSTRAINT_EQ:        return "EQ";
@@ -1171,7 +1248,7 @@ static const char *IndexOpName(unsigned char op)
     return "UNKNOWN";
 }
 
-static const char *ColumnName(struct perf_tp_table *table, int i)
+static const char *ColumnName(struct tp_private *priv, int i)
 {
     switch (i) {
         // common fields
@@ -1185,7 +1262,6 @@ static const char *ColumnName(struct perf_tp_table *table, int i)
         case 6: return "common_preempt_count";
         case 7: return "common_pid";
         default: {
-            struct tp_private *priv = table->tp->private;
             struct tep_format_field *field = i < priv->nr_fields ? priv->fields[i - 8] : NULL;
             if (field)
                 return field->name;
@@ -1203,7 +1279,7 @@ static inline bool Column_isInt(struct perf_tp_table *table, int i)
 {
     if (i < 8) return 1;
     else {
-        struct tp_private *priv = table->tp->private;
+        struct tp_private *priv = table->priv;
         struct tep_format_field *field = i < priv->nr_fields ? priv->fields[i - 8] : NULL;
         if (field && !(field->flags & TEP_FIELD_IS_STRING) &&
                      !(field->flags & TEP_FIELD_IS_ARRAY))
@@ -1214,13 +1290,78 @@ static inline bool Column_isInt(struct perf_tp_table *table, int i)
 }
 
 /*
- * xBestIndex: Query planner interface.
+ * Check if a constraint can be pushed down to kernel ftrace filter.
+ * Only _cpu (column 3) and event fields (column > 4) can be converted
+ * to kernel ftrace filter expressions.
+ */
+static inline bool constraint_can_ftrace(int column)
+{
+    return column > 4 || column == 3;
+}
+
+static void dump_pIdxInfo(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
+{
+    struct perf_tp_table *table = (void *)pVtab;
+    struct tp_private *priv = table->priv;
+    sqlite3_value *value;
+    int i;
+
+    printf("%s: %d %d\n", priv->table_name, pIdxInfo->nConstraint, pIdxInfo->nOrderBy);
+
+    for (i = 0; i < pIdxInfo->nConstraint; i++) {
+        bool col_not_used = pIdxInfo->aConstraint[i].op == SQLITE_INDEX_CONSTRAINT_LIMIT ||
+                            pIdxInfo->aConstraint[i].op == SQLITE_INDEX_CONSTRAINT_OFFSET;
+
+        printf("    Constraint[%d]: %s%s%s ", i,
+                    col_not_used ? "" : ColumnName(priv, pIdxInfo->aConstraint[i].iColumn),
+                    col_not_used ? "" : " ",
+                    IndexOpName(pIdxInfo->aConstraint[i].op));
+
+        if (sqlite3_vtab_rhs_value(pIdxInfo, i, &value) == SQLITE_OK) {
+            switch (sqlite3_value_type(value)) {
+                case SQLITE_INTEGER: printf("%lld", sqlite3_value_int64(value)); break;
+                case SQLITE_FLOAT: printf("%.3f", sqlite3_value_double(value)); break;
+                case SQLITE_TEXT: printf("%s", sqlite3_value_text(value)); break;
+                case SQLITE_BLOB: printf("BLOB[%d]", sqlite3_value_bytes(value)); break;
+                case SQLITE_NULL: printf("NULL"); break;
+                default: printf("?"); break;
+            }
+        } else
+            printf("?");
+
+        printf("%s\n", pIdxInfo->aConstraint[i].usable ? "" : " (not usable)");
+    }
+
+    for (i = 0; i < pIdxInfo->nOrderBy; i++)
+        printf("    OrderBy[%d]: %s %s\n", i,
+                    ColumnName(priv, pIdxInfo->aOrderBy[i].iColumn),
+                    pIdxInfo->aOrderBy[i].desc ? "DESC" : "ASC");
+
+    printf("    colUsed: 0x%016llx, ", pIdxInfo->colUsed);
+    for_each_set_bit(i, (unsigned long *)&pIdxInfo->colUsed, 64) {
+        printf("%s ", ColumnName(priv, i));
+    }
+    printf("\n");
+}
+
+/*
+ * xBestIndex: Query planner interface for Virtual Table optimization.
  *
- * Analyzes WHERE clause constraints and communicates filtering strategy to xFilter:
- * - idxNum: Number of usable INTEGER constraints
- * - idxStr: Encoded constraint info as "column,op;column,op;..." string
- * - argvIndex: Maps constraint values to xFilter's argv[] array
- * - omit=1: Tells SQLite we handle filtering (no double-check needed)
+ * Called by SQLite during query planning to:
+ *   1. Communicate filtering strategy to xFilter via idxNum/idxStr/argvIndex
+ *   2. Report estimated cost to help SQLite choose optimal query plan
+ *   3. Collect optimization data during init phase (priv->init == true)
+ *
+ * Output to SQLite:
+ *   - idxNum: Number of usable INTEGER constraints
+ *   - idxStr: Encoded constraint info as "column,op;column,op;..." string
+ *   - argvIndex: Maps constraint values to xFilter's argv[] array
+ *   - omit=1: Tells SQLite we handle filtering (skip double-check)
+ *   - estimatedCost: Average cost of all constraints (lower = better)
+ *
+ * During init phase (priv->init == true), also collects:
+ *   - col_used: Bitmask of columns needed by query
+ *   - best_index[]: Array of constraint sets for index field selection
  *
  * Only INTEGER columns support constraint pushdown (EQ, GT, LE, LT, GE, NE).
  * STRING/BLOB columns are filtered by SQLite after xColumn returns.
@@ -1228,35 +1369,32 @@ static inline bool Column_isInt(struct perf_tp_table *table, int i)
 static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
 {
     struct perf_tp_table *table = (void *)pVtab;
-    struct tp_private * __maybe_unused priv;
+    struct tp_private *priv = table->priv;
     int i, column, op;
     int idx_num = 0;
     char *idx_str = NULL;
+    sqlite3_value *value;
+    sqlite3_int64 rhs_value;
+    bool rhs_available;
+    int cost = 0;
+    int nr_cost = 0;
+    struct constraint *curr = NULL;
+    int c = 0;
 
-    if (table->verbose) {
-        printf("colUsed: 0x%016llx, ", pIdxInfo->colUsed);
-        for_each_set_bit(i, (unsigned long *)&pIdxInfo->colUsed, 64) {
-            printf("%s ", ColumnName(table, i));
-        }
-        printf("\n");
+    if (table->verbose)
+        dump_pIdxInfo(pVtab, pIdxInfo);
 
-        for (i = 0; i < pIdxInfo->nOrderBy; i++) {
-            printf("OrderBy[%d]: %s %s\n", i,
-                        ColumnName(table, pIdxInfo->aOrderBy[i].iColumn),
-                        pIdxInfo->aOrderBy[i].desc ? "DESC" : "ASC");
-        }
+    if (priv->init && pIdxInfo->nConstraint > 0) {
+        curr = sqlite3_malloc(pIdxInfo->nConstraint * sizeof(*curr));
+        if (!curr)
+            return SQLITE_NOMEM;
+        memset(curr, 0, pIdxInfo->nConstraint * sizeof(*curr));
     }
 
     for (i = 0; i < pIdxInfo->nConstraint; i++) {
         if (!pIdxInfo->aConstraint[i].usable)
             continue;
 
-        if (table->verbose)
-            printf("Constraint[%d]: %s %s ?\n", i,
-                        ColumnName(table, pIdxInfo->aConstraint[i].iColumn),
-                        IndexOpName(pIdxInfo->aConstraint[i].op));
-
-        column = pIdxInfo->aConstraint[i].iColumn;
         switch(pIdxInfo->aConstraint[i].op) {
             case SQLITE_INDEX_CONSTRAINT_EQ: op = EQ; break;
             case SQLITE_INDEX_CONSTRAINT_GT: op = GT; break;
@@ -1264,8 +1402,9 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
             case SQLITE_INDEX_CONSTRAINT_LT: op = LT; break;
             case SQLITE_INDEX_CONSTRAINT_GE: op = GE; break;
             case SQLITE_INDEX_CONSTRAINT_NE: op = NE; break;
-            default: continue;
+            default: goto unsupported;
         }
+        column = pIdxInfo->aConstraint[i].iColumn;
         if (Column_isInt(table, column)) {
             if (!idx_str) {
                 idx_str = sqlite3_mprintf("%d,%d;", column, op);
@@ -1280,27 +1419,103 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
             idx_num++;
             pIdxInfo->aConstraintUsage[i].argvIndex = idx_num;
             pIdxInfo->aConstraintUsage[i].omit = 1;
+
+            /* Try to get RHS value at planning time */
+            rhs_available = sqlite3_vtab_rhs_value(pIdxInfo, i, &value) == SQLITE_OK;
+            if (rhs_available)
+                rhs_value = sqlite3_value_int64(value);
+            else
+                rhs_value = 0;
+
+            /*
+             * Cost model for query planning (lower is better):
+             *   10:   ftrace-compatible constraint with known value (kernel filtering)
+             *   50:   EQ/NE on integer field (good for user-space index lookup)
+             *   200:  Range operators (GT/LT/GE/LE) on integer field
+             *   1000: Non-integer field or unsupported operator (no optimization)
+             *
+             * Final cost = average of all constraint costs.
+             */
+            if (rhs_available && constraint_can_ftrace(column)) {
+                cost += 10;   /* Best: kernel ftrace filter */
+            } else {
+                if (op == EQ || op == NE)
+                    cost += 50;   /* Good: index-friendly equality check */
+                else
+                    cost += 200;  /* Moderate: range scan required */
+            }
+            nr_cost++;
+
+            /* Track constraint details for best index selection */
+            if (curr) {
+                curr[c].field = column;
+                curr[c].op = op;
+                curr[c].used_by = USED_BY_NONE;
+                curr[c].value_set = rhs_available;
+                curr[c].value = rhs_value;
+                c++;
+            }
+            continue;
         }
+
+    unsupported:
+        cost += 1000;
+        nr_cost++;
     }
 
     if (idx_num) {
         pIdxInfo->idxNum = idx_num;
         pIdxInfo->idxStr = idx_str;
         pIdxInfo->needToFreeIdxStr = 1;
-        pIdxInfo->estimatedCost = 100;
-    } else
-        pIdxInfo->estimatedCost = 1000;
+    }
 
-    /*
-     * Collect colUsed during initialization phase (priv->init == true).
-     * OR accumulates columns from multi-statement queries like:
-     *   --query "select pid from sched_wakeup; select comm from sched_wakeup;"
-     * After init, col_used determines whether to use Virtual Table (col_used==0)
-     * or create a regular table with only the needed columns (col_used!=0).
-     */
-    priv = table->tp->private;
-    if (priv->init)
+    /* Calculate estimated cost */
+    cost = nr_cost ? cost / nr_cost : 1000;
+    pIdxInfo->estimatedCost = cost;
+    if (table->verbose)
+        printf("    Cost: %d\n", cost);
+
+
+    if (priv->init) {
+        /*
+         * Collect colUsed during initialization phase
+         * OR accumulates columns from multi-statement queries like:
+         *   --query "select pid from sched_wakeup; select comm from sched_wakeup;"
+         */
         priv->col_used |= pIdxInfo->colUsed;
+
+        if (curr && c == 0) {
+            sqlite3_free(curr);
+            curr = NULL;
+        }
+
+        // Check if this constraint set is already recorded
+        if (curr && priv->best_index_num) {
+            for (i = 0; i < priv->best_index_num; i++) {
+                if (priv->best_index[i].nr_constraints == c &&
+                    memcmp(priv->best_index[i].constraints, curr, c * sizeof(*curr)) == 0) {
+                    /* Already recorded this constraint set */
+                    sqlite3_free(curr);
+                    curr = NULL;
+                    break;
+                }
+            }
+        }
+
+        if (curr) {
+            int size = (priv->best_index_num + 1) * sizeof(*priv->best_index);
+            void *new_best_index = sqlite3_realloc(priv->best_index, size);
+            if (!new_best_index) {
+                sqlite3_free(curr);
+                return SQLITE_NOMEM;
+            }
+            priv->best_index = new_best_index;
+            priv->best_index[priv->best_index_num] = (struct BestIndex) {
+                .constraints = curr, .nr_constraints = c, .cost = cost,
+            };
+            priv->best_index_num++;
+        }
+    }
     return SQLITE_OK;
 }
 
@@ -1312,8 +1527,6 @@ static int perf_tp_xDisconnect(sqlite3_vtab *pVtab)
 
 static int perf_tp_xOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor)
 {
-    struct perf_tp_table *table = (void *)pVtab;
-    struct tp_private *priv = table->tp->private;
     struct perf_tp_cursor *cursor;
 
     cursor = sqlite3_malloc(sizeof(*cursor));
@@ -1321,7 +1534,6 @@ static int perf_tp_xOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor)
         return SQLITE_NOMEM;
 
     memset (cursor, 0, sizeof(*cursor));
-    cursor->start = list_entry(&priv->event_list, struct tp_event, link);
     *ppCursor = &cursor->base;
     return SQLITE_OK;
 }
@@ -1340,7 +1552,7 @@ static int perf_tp_xClose(sqlite3_vtab_cursor *pCursor)
  * Used by xNext to filter events against op_table conditions.
  * Only called for INTEGER columns (validated by Column_isInt in xBestIndex).
  */
-static inline sqlite3_int64 perf_tp_field(struct perf_tp_table *table, struct tp_event *e, int i)
+static inline sqlite3_int64 perf_tp_field(struct tp_private *priv, struct tp_event *e, int i)
 {
     struct sql_sample_type *data = (void *)e->event.sample.array;
     switch (i) {
@@ -1350,14 +1562,12 @@ static inline sqlite3_int64 perf_tp_field(struct perf_tp_table *table, struct tp
         case 2: return data->time;
         case 3: return data->cpu_entry.cpu;
         case 4: return data->period;
-
         // common_* (common_type removed - use event_id from event_metadata table)
         case 5: return data->raw.common.common_flags;
         case 6: return data->raw.common.common_preempt_count;
         case 7: return data->raw.common.common_pid;
         // event-specific fields
         default: {
-            struct tp_private *priv = table->tp->private;
             struct tep_format_field *field = priv->fields[i - 8];
             void *base = data->raw.data;
             sqlite3_int64 val = 0;
@@ -1391,21 +1601,27 @@ static inline sqlite3_int64 perf_tp_field(struct perf_tp_table *table, struct tp
  */
 static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
 {
+    struct tp_private *priv = ((struct perf_tp_table *)pCursor->pVtab)->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
     sqlite3_int64 value;
     int i;
 
+    priv->xNext++;
     while (1) {
-        cursor->curr = list_next_entry(cursor->curr, link);
+        if (cursor->index_node)
+            cursor->curr = list_next_entry(cursor->curr, link_index);
+        else
+            cursor->curr = list_next_entry(cursor->curr, link);
 
         /* No constraints or reached end of list */
         if (!cursor->nr_ops ||
             cursor->curr == cursor->start)
             break;
 
+        priv->do_filter++;
         /* Check all constraints (AND logic) */
         for (i = 0; i < cursor->nr_ops; i++) {
-            value = perf_tp_field((void *)pCursor->pVtab, cursor->curr, cursor->op_table[i].field);
+            value = perf_tp_field(priv, cursor->curr, cursor->op_table[i].field);
             switch (cursor->op_table[i].op) {
                 case EQ: if (value == cursor->op_table[i].value) break; else goto next;
                 case GT: if (value >  cursor->op_table[i].value) break; else goto next;
@@ -1427,54 +1643,50 @@ static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
  * Convert SQL query planner constraints to kernel trace event filter.
  *
  * During initialization (priv->init), generate ftrace_filter from op_table.
- * Supports multiple xFilter calls with logical OR relationships between constraints.
+ * Only fields supported by kernel ftrace filter are included.
  *
- * Only fields supported by kernel ftrace filter are included:
- *   - field == 3 (_cpu)  -> "CPU" (ftrace built-in variable)
- *   - field > 4          -> event fields (common_*, event-specific)
- *
- * Excluded fields (no kernel filter equivalent):
- *   - field 0 (_pid), field 1 (_tid), field 2 (_time), field 4 (_period)
- *
- * Multiple constraints from different xFilter calls are combined with || operator:
- *   - First call: pid > 1000 -> filter = "pid>1000"
- *   - Second call: prio == 120 -> filter = "(pid>1000)||(prio==120)"
+ * Filter combination logic:
+ *   - Within single xFilter call: constraints are combined with && (AND)
+ *     Example: WHERE pid > 1000 AND prio < 10 -> "pid>1000&&prio<10"
+ *   - Across multiple xFilter calls: filters are combined with || (OR)
+ *     Example: First call "pid>1000", second call "prio==120"
+ *              -> "(pid>1000)||(prio==120)"
  *
  * The filter is stored in priv->ftrace_filter and applied later by tp_list_apply_filter().
  */
-static inline void perf_tp_op_to_filter(struct perf_tp_cursor *cursor)
+static inline void perf_tp_ftrace_filter(struct perf_tp_cursor *cursor)
 {
-    int i;
-    const char *op_str[] = {"==", ">", "<=", "<", ">=", "!="};
     struct perf_tp_table *table = (void *)cursor->base.pVtab;
-    struct tp_private *priv = table->tp->private;
-
-    if (table->verbose) {
-        for (i = 0; i < cursor->nr_ops; i++) {
-            printf("FILTER[%d]: %s %s %lld\n", i,
-                    ColumnName((void *)cursor->base.pVtab, cursor->op_table[i].field),
-                    op_str[cursor->op_table[i].op], cursor->op_table[i].value);
-        }
-    }
+    struct tp_private *priv = table->priv;
+    struct constraint *c;
+    int i, j, k;
 
     /* Generate kernel filter only during init and if not already set */
     if (priv->init && !table->tp->filter) {
         char *filter = NULL;
         for (i = 0; i < cursor->nr_ops; i++) {
             /* Only include fields supported by kernel ftrace filter */
-            if (cursor->op_table[i].field > 4 ||
-                cursor->op_table[i].field == 3) {
+            if (constraint_can_ftrace(cursor->op_table[i].field)) {
                 char *tmp;
                 const char *name;
 
                 if (cursor->op_table[i].field == 3) name = "CPU";
-                else name = ColumnName((void *)cursor->base.pVtab, cursor->op_table[i].field);
+                else name = ColumnName(priv, cursor->op_table[i].field);
 
                 tmp = sqlite3_mprintf("%s%s%s%s%lld", filter ?: "", filter ? "&&" : "",
-                        name, op_str[cursor->op_table[i].op], cursor->op_table[i].value);
+                        name, OpStr(cursor->op_table[i].op), cursor->op_table[i].value);
                 if (tmp) {
                     if (filter) sqlite3_free(filter);
                     filter = tmp;
+
+                    // Mark constraint as used by ftrace filter
+                    for_each_constraint(priv, c, j, k) {
+                        if (c->field == cursor->op_table[i].field &&
+                            c->op == cursor->op_table[i].op &&
+                            c->used_by == USED_BY_NONE &&
+                            c->value_set && c->value == cursor->op_table[i].value)
+                            c->used_by = USED_BY_FTRACE;
+                    }
                 }
             }
         }
@@ -1495,6 +1707,50 @@ static inline void perf_tp_op_to_filter(struct perf_tp_cursor *cursor)
 }
 
 /*
+ * Decide whether to use index lookup or full list scan.
+ *
+ * Current limitation: Only single EQ constraint can use index.
+ * Future extension: Support multiple constraints where one matches the index,
+ * or support range queries (GT, LT, GE, LE) on indexed field.
+ */
+static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
+{
+    struct perf_tp_table *table = (void *)cursor->base.pVtab;
+    struct tp_private *priv = table->priv;
+    int i;
+
+    if (table->verbose > VERBOSE_NOTICE) {
+        printf("%s:\n", priv->table_name);
+        for (i = 0; i < cursor->nr_ops; i++) {
+            printf("    Filter[%d]: %s %s %lld\n", i, ColumnName(priv, cursor->op_table[i].field),
+                        OpStr(cursor->op_table[i].op), cursor->op_table[i].value);
+        }
+    }
+
+    /* Index lookup: single EQ constraint on indexed field */
+    if (cursor->nr_ops == 1 && priv->have_index &&
+        cursor->op_table[0].field == priv->index_field &&
+        cursor->op_table[0].op == EQ) {
+        cursor->index_node = get_IndexNode(cursor->index_tree, cursor->op_table[0].value, 0);
+        if (cursor->index_node) {
+            cursor->start = list_entry(&cursor->index_node->event_list, struct tp_event, link_index);
+            cursor->curr = cursor->start;
+        } else {
+            cursor->start = NULL;
+            cursor->curr = NULL;
+        }
+        priv->do_index++;
+        if (table->verbose > VERBOSE_NOTICE)
+            printf("    Index on '%s'%s\n", ColumnName(priv, cursor->op_table[0].field),
+                        cursor->start ? "" : " (NULL)");
+    } else {
+        priv->scan_list++;
+        if (table->verbose > VERBOSE_NOTICE)
+            printf("    Scan list\n");
+    }
+}
+
+/*
  * xFilter: Initialize cursor and build constraint filter table.
  *
  * Parses idxStr ("column,op;column,op;...") from xBestIndex and binds
@@ -1504,7 +1760,13 @@ static inline void perf_tp_op_to_filter(struct perf_tp_cursor *cursor)
 static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
                            int argc, sqlite3_value **argv)
 {
+    struct perf_tp_table *table = (void *)pCursor->pVtab;
+    struct tp_private *priv = table->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
+
+    cursor->index_tree = &priv->index_tree;
+    cursor->index_node = NULL;
+    cursor->start = list_entry(&priv->event_list, struct tp_event, link);
     cursor->curr = cursor->start;
 
     /* Reset previous filter state */
@@ -1532,28 +1794,37 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
             if (i != idxNum) {
                 sqlite3_free(cursor->op_table);
                 cursor->op_table = NULL;
-            } else
+            } else {
                 cursor->nr_ops = i;
-            perf_tp_op_to_filter(cursor);
+                perf_tp_ftrace_filter(cursor);
+                perf_tp_do_filter(cursor);
+                priv->xFilter++;
+            }
         }
     }
     /* Position cursor at first matching event */
-    return perf_tp_xNext(pCursor);
+    if (cursor->start)
+        perf_tp_xNext(pCursor);
+
+    return SQLITE_OK;
 }
 
 static int perf_tp_xEof(sqlite3_vtab_cursor *pCursor)
 {
+    struct tp_private *priv = ((struct perf_tp_table *)pCursor->pVtab)->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
+    priv->xEof++;
     return cursor->curr == cursor->start;
 }
 
 static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int i)
 {
-    struct perf_tp_table *table = (void *)pCursor->pVtab;
+    struct tp_private *priv = ((struct perf_tp_table *)pCursor->pVtab)->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
     struct tp_event *e = cursor->curr;
     struct sql_sample_type *data = (void *)e->event.sample.array;
 
+    priv->xColumn++;
     switch (i) {
         // common fields
         case 0: sqlite3_result_int(ctx, data->tid_entry.pid); break;
@@ -1569,7 +1840,6 @@ static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, i
 
         // event-specific fields
         default: {
-            struct tp_private *priv = table->tp->private;
             struct tep_format_field *field = i < priv->nr_fields ? priv->fields[i - 8] : NULL;
             void *base = data->raw.data;
             long long val = 0;
@@ -1590,7 +1860,6 @@ static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, i
                     ptr = base + field->offset;
                     len = -1;
                 }
-                // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
                 sqlite3_result_text(ctx, ptr, len, SQLITE_STATIC);
             } else if (field->flags & TEP_FIELD_IS_ARRAY) {
                 // BLOB: Array fields without string semantics
@@ -1603,14 +1872,9 @@ static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, i
                     ptr = base + field->offset;
                     len = field->size;
                 }
-                // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
                 sqlite3_result_blob(ctx, ptr, len, SQLITE_STATIC);
             } else {
                 // INTEGER: Numeric fields
-                // Must respect signedness to correctly bind values to SQLite:
-                //   - unsigned char 255 should bind as 255, not -1
-                //   - signed char -1 should bind as -1, not 255
-                // Using proper type casts ensures correct sign/zero extension to int64.
                 bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
                 if (field->size == 1)
                     val = is_signed ? *(char *)(base + field->offset)
@@ -1638,8 +1902,10 @@ static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, i
 
 static int perf_tp_xRowid(sqlite3_vtab_cursor *pCursor, sqlite_int64 *pRowid)
 {
+    struct tp_private *priv = ((struct perf_tp_table *)pCursor->pVtab)->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
     *pRowid = cursor->curr->rowid;
+    priv->xRowid++;
     return SQLITE_OK;
 }
 
@@ -1670,17 +1936,18 @@ static sqlite3_module perf_tp_module = {
 };
 
 /*
- * Create regular tables for events where col_used != 0.
+ * Create regular tables for events using MEM_REGULAR_TABLE_MODE.
  *
- * Performance optimization: Virtual Table xNext/xEof/xColumn calls have overhead.
- * When query only needs specific columns (col_used != 0), create a regular table
- * with only those columns and use INSERT for better performance.
+ * Called after mode selection to replace Virtual Tables with regular tables
+ * for events where INSERT is more efficient than Virtual Table callbacks.
  *
- * col_used == 0 cases (continue using Virtual Table):
- *   - "select * from sched_wakeup" (all columns)
- *   - "select COUNT(*) from sched_wakeup" (no specific columns)
- *   - "select * from event_metadata" (different table)
- *   - SQLite < 3.10.0 (colUsed not available)
+ * For MEM_REGULAR_TABLE_MODE events:
+ *   - DROP the Virtual Table (same name)
+ *   - CREATE regular table with only columns specified in col_used bitmask
+ *   - Prepare INSERT statement for sql_tp_mem_sample()
+ *
+ * For MEM_VIRTUAL_TABLE_MODE events:
+ *   - Skip (continue using Virtual Table for on-demand field extraction)
  */
 static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
 {
@@ -1698,13 +1965,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
         char ins_buf[512];
         int j, col_len = 0, ins_len = 0;
 
-        /* If all columns selected or too many fields, fall back to Virtual Table */
-        if (priv->nr_fields > BITS_PER_LONG ||
-            priv->col_used == GENMASK(priv->nr_fields-1, 0))
-            priv->col_used = 0;
-
-        /* col_used == 0: continue using Virtual Table for this event */
-        if (priv->col_used == 0)
+        if (priv->mode == MEM_VIRTUAL_TABLE_MODE)
             continue;
 
         #define COLUMN(i, name) \
@@ -1724,7 +1985,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
         #undef COLUMN
 
         for (j = 0; fields && fields[j]; j++) {
-            if (!test_bit(8 + j, &priv->col_used))
+            if (8 + j < BITS_PER_LONG && !test_bit(8 + j, &priv->col_used))
                 continue;
 
             if ((fields[j]->flags & TEP_FIELD_IS_STRING))
@@ -1746,7 +2007,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
         ins_buf[ins_len] = '\0';
 
         snprintf(buf, sizeof(buf), table_fmt, priv->table_name, priv->table_name, col_buf);
-        if (tp->dev->env->verbose)
+        if (ctx->verbose)
             printf("CREATE SQL: %s\n", buf);
         if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
             fprintf(stderr, "Failed to create table %s: %s\n", priv->table_name, errmsg);
@@ -1759,7 +2020,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
             continue;
 
         snprintf(buf, sizeof(buf), insert_fmt, priv->table_name, ins_buf);
-        if (tp->dev->env->verbose)
+        if (ctx->verbose)
             printf("INSERT SQL: %s\n", buf);
 
         if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
@@ -1773,9 +2034,10 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
 /*
  * Memory mode sample handler.
  *
- * Two paths based on col_used:
- *   col_used == 0: Store raw event in linked list (Virtual Table access)
- *   col_used != 0: Parse and INSERT only needed columns (regular table)
+ * Two paths based on storage mode:
+ *   MEM_VIRTUAL_TABLE_MODE: Store raw event in linked list for on-demand field extraction.
+ *                           If index is enabled, also add to index tree.
+ *   MEM_REGULAR_TABLE_MODE: Parse event and INSERT only needed columns to regular table.
  */
 static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_event *event)
 {
@@ -1784,13 +2046,20 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
     int idx = 1;
     int i, ret = -1;
 
-    if (priv->col_used == 0) {
+    if (priv->mode == MEM_VIRTUAL_TABLE_MODE) {
         /* Virtual Table path: store raw event for on-demand field extraction */
         struct tp_event *e = malloc(offsetof(struct tp_event, event) + event->header.size);
         if (e) {
             e->rowid = priv->rowid++;
             memcpy(&e->event, event, event->header.size);
             list_add_tail(&e->link, &priv->event_list);
+            /* Index maintenance: add event to index tree */
+            if (priv->have_index) {
+                int64_t value = perf_tp_field(priv, e, priv->index_field);
+                struct IndexNode *node = get_IndexNode(&priv->index_tree, value, 1);
+                if (node)
+                    list_add_tail(&e->link_index, &node->event_list);
+            }
             ret = 0;
         }
     } else {
@@ -1825,7 +2094,7 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
             void *ptr;
             int len;
 
-            if (!test_bit(8 + i, &priv->col_used))
+            if (8 + i < BITS_PER_LONG && !test_bit(8 + i, &priv->col_used))
                 continue;
 
             if ((field->flags & TEP_FIELD_IS_STRING)) {
@@ -1879,7 +2148,7 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
 
         // Execute the insert statement
         if (sqlite3_step(priv->insert_stmt) != SQLITE_DONE) {
-            if (tp->dev->env->verbose) {
+            if (ctx->verbose) {
                 fprintf(stderr, "Failed to insert record into %s: %s\n",
                         priv->table_name, sqlite3_errmsg(ctx->sql));
             }
@@ -1907,6 +2176,10 @@ static void sql_tp_mem_reset(struct sql_tp_ctx *ctx)
         struct tp_private *priv = tp->private;
         struct tp_event *e, *n;
 
+        if (!RB_EMPTY_ROOT(&priv->index_tree)) {
+            del_IndexTree(&priv->index_tree, priv->index_tree.rb_node);
+            priv->index_tree = RB_ROOT;
+        }
         list_for_each_entry_safe(e, n, &priv->event_list, link) {
             __list_del_entry(&e->link);
             free(e);
@@ -1915,8 +2188,14 @@ static void sql_tp_mem_reset(struct sql_tp_ctx *ctx)
             sqlite3_finalize(priv->insert_stmt);
             priv->insert_stmt = NULL;
         }
+        if (ctx->verbose)
+            printf("%s: xFilter %lu xEof %lu xNext %lu xColumn %lu xRowid %lu scan_list %lu do_index %lu do_filter %lu\n",
+                    priv->table_name, priv->xFilter, priv->xEof, priv->xNext, priv->xColumn, priv->xRowid,
+                    priv->scan_list, priv->do_index, priv->do_filter);
         priv->rowid = 0;
         priv->created_time = time(NULL);
+        priv->xFilter = priv->xEof = priv->xNext = priv->xColumn = priv->xRowid = 0;
+        priv->scan_list = priv->do_index = priv->do_filter = 0;
         priv->sample_count = 0;
         priv->first_sample_time = 0;
         priv->last_sample_time = 0;
@@ -1928,11 +2207,24 @@ static void sql_tp_mem_reset(struct sql_tp_ctx *ctx)
 }
 
 /*
- * Try to execute query to trigger xBestIndex and collect colUsed.
+ * Execute query on empty Virtual Tables to collect query planner info.
+ *
+ * Called during initialization to trigger SQLite query planning on empty tables.
+ * This collects critical optimization data without processing any real events:
+ *
+ *   1. sqlite3_prepare_v3() triggers xBestIndex:
+ *      - Collects colUsed bitmask (which columns the query needs)
+ *      - Collects WHERE clause constraints for ftrace filter and index selection
+ *      - Builds cost model for query optimization
+ *
+ *   2. sqlite3_step() triggers xFilter on empty table:
+ *      - Converts constraints to ftrace filter expression
+ *      - Since table is empty, xFilter iterates all filter conditions without early exit
+ *      - This ensures all query patterns are captured for index field selection
  *
  * Supports multi-statement queries separated by ';'. Failures are ignored
  * because some tables (like event_metadata) don't exist yet during init,
- * but event Virtual Tables are already available for colUsed collection.
+ * but event Virtual Tables are already available for data collection.
  */
 static int sql_tp_mem_try_exec(sqlite3 *sql, const char *query)
 {
@@ -1954,17 +2246,23 @@ static int sql_tp_mem_try_exec(sqlite3 *sql, const char *query)
 }
 
 /*
- * Initialize memory mode: events stored in linked list, accessed via Virtual Table.
+ * sql_tp_mem: Initialize memory mode for SQL event storage.
  * Used when no --output2 is specified (in-memory database).
  *
  * Initialization flow:
  *   1. Create Virtual Tables for all events (enables xBestIndex calls)
- *   2. Set priv->init = 1 to enable colUsed collection
- *   3. Execute --query to trigger xBestIndex and collect colUsed
- *   4. Create regular tables for events with col_used != 0
- *   5. Set priv->init = 0 to stop colUsed collection
+ *   2. Set priv->init = 1 to enable optimization data collection
+ *   3. Execute --query on empty tables via sql_tp_mem_try_exec():
+ *      - sqlite3_prepare_v3() triggers xBestIndex: collects colUsed, constraints, cost
+ *      - sqlite3_step() triggers xFilter: generates ftrace_filter from constraints
+ *   4. Set priv->init = 0 to stop optimization data collection
+ *   5. Analyze collected data and select optimizations:
+ *      - Choose storage mode (Virtual Table vs Regular Table)
+ *      - Select index field (most referenced field in constraints)
+ *      - Apply ftrace_filter to tp->filter for kernel-level filtering
+ *   6. Create regular tables for events using MEM_REGULAR_TABLE_MODE
  *
- * After init, col_used is fixed for the session (--query doesn't change).
+ * After init, optimization settings are fixed for the session.
  */
 struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char *query)
 {
@@ -1981,37 +2279,95 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
             fprintf(stderr, "Failed to create perf_tp module: %s\n", sqlite3_errmsg(ctx->sql));
             goto failed;
         }
-        /* Step 1-2: Create Virtual Tables and enable colUsed collection */
+        /* Step 1-2 */
         for_each_real_tp(ctx->tp_list, tp, i) {
             struct tp_private *priv = (struct tp_private *)tp->private;
 
             snprintf(buf, sizeof(buf), vtable_fmt, priv->table_name);
-            if (tp->dev->env->verbose)
+            if (ctx->verbose)
                 printf("CREATE VTABLE SQL: %s\n", buf);
             if (sqlite3_exec(ctx->sql, buf, NULL, NULL, &errmsg) != SQLITE_OK) {
                 fprintf(stderr, "Failed to create vtable %s: %s\n", priv->table_name, errmsg);
                 sqlite3_free(errmsg);
                 goto failed;
             }
-            priv->init = 1;  /* Enable colUsed collection in xBestIndex */
+            priv->init = 1;
         }
 
-        /* Step 3-4: Execute query to collect colUsed, then create optimized tables */
-        if (query && query[0]) {
+        /* Step 3 */
+        if (query && query[0])
             sql_tp_mem_try_exec(ctx->sql, query);
-            if (sql_tp_mem_create_table(ctx) < 0)
-                goto failed;
-        }
 
-        /* Step 5: Disable colUsed collection */
+        /*
+         * Step 4-5: Analyze constraints and select storage mode + index field.
+         *
+         * Storage mode selection:
+         *   - MEM_REGULAR_TABLE_MODE: Query uses >50% of fields, INSERT is more efficient
+         *   - MEM_VIRTUAL_TABLE_MODE: Query uses few fields, or has ftrace filter/index
+         *
+         * Index field selection: Choose the field referenced most often in constraints.
+         * This maximizes index hit rate across different query patterns.
+         */
         for_each_real_tp(ctx->tp_list, tp, i) {
             struct tp_private *priv = (struct tp_private *)tp->private;
+            struct constraint *c;
+            int *fields_refs = NULL;
+            int j, k, max_refs = 0;
+
             priv->init = 0;
+
+            /* Mode selection: based on column usage ratio */
+            if (priv->nr_fields > BITS_PER_LONG ||
+                hweight64(priv->col_used) > priv->nr_fields/2)
+                priv->mode = MEM_REGULAR_TABLE_MODE;
+            else
+                priv->mode = MEM_VIRTUAL_TABLE_MODE;
+
+            /* Ftrace filter available: force Virtual Table for kernel-level filtering */
             if (!tp->filter && priv->ftrace_filter) {
+                priv->mode = MEM_VIRTUAL_TABLE_MODE;
                 tp->filter = strdup(priv->ftrace_filter);
                 printf("%s:%s SQL Query planner filter: %s\n", tp->sys, tp->name, tp->filter);
             }
+
+            if (priv->best_index_num == 0)
+                continue;
+
+            /* Index field selection: count references, pick the most referenced field */
+            fields_refs = calloc(priv->nr_fields, sizeof(int));
+            if (!fields_refs)
+                goto failed;
+            for_each_constraint(priv, c, j, k)
+                fields_refs[c->field]++;
+            for (j = 0; j < priv->nr_fields; j++) {
+                if (fields_refs[j] > max_refs) {
+                    max_refs = fields_refs[j];
+                    priv->have_index = 1;
+                    priv->index_field = j;
+                }
+            }
+            free(fields_refs);
+
+            /* Index available: force Virtual Table */
+            if (priv->have_index) {
+                priv->mode = MEM_VIRTUAL_TABLE_MODE;
+                printf("%s: Chosen '%s' field for indexing\n", priv->table_name,
+                        ColumnName(priv, priv->index_field));
+            }
+            if (ctx->verbose) {
+                for_each_constraint(priv, c, j, k) {
+                    printf("%s: Constraint[%d][%d]: %s %s ", priv->table_name, j, k,
+                            ColumnName(priv, c->field), OpStr(c->op));
+                    if (c->value_set) printf("%lld\t", c->value);
+                    else printf("?\t");
+                    printf("%s\n", c->used_by == USED_BY_FTRACE ? "FTRACE" : "");
+                }
+            }
         }
+
+        /* Step 6 */
+        if (sql_tp_mem_create_table(ctx) < 0)
+            goto failed;
 
         ctx->sample = sql_tp_mem_sample;
         ctx->reset = sql_tp_mem_reset;
@@ -2027,7 +2383,7 @@ failed:
 void sql_tp_free(struct sql_tp_ctx *ctx)
 {
     struct tp *tp;
-    int i;
+    int i, j;
     for_each_real_tp(ctx->tp_list, tp, i) {
         struct tp_private *priv = tp->private;
         struct tp_event *e, *n;
@@ -2038,6 +2394,12 @@ void sql_tp_free(struct sql_tp_ctx *ctx)
                 free(priv->function_list);
             if (priv->ftrace_filter)
                 sqlite3_free(priv->ftrace_filter);
+            if (priv->best_index) {
+                for (j = 0; j < priv->best_index_num; j++)
+                    if (priv->best_index[j].constraints)
+                        sqlite3_free(priv->best_index[j].constraints);
+                sqlite3_free(priv->best_index);
+            }
             list_for_each_entry_safe(e, n, &priv->event_list, link) {
                 __list_del_entry(&e->link);
                 free(e);
