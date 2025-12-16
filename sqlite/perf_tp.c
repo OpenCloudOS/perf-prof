@@ -1030,17 +1030,27 @@ struct IndexNode {
 struct perf_tp_cursor {
     sqlite3_vtab_cursor base;       /* Base class. Must be first */
     struct rb_root *index_tree;     /* Index tree for indexed access */
-    struct IndexNode *index_node;   /* Current index node in indexed access */
     struct tp_event *start;         /* List head (sentinel), its next is a real tp_event */
     struct tp_event *curr;          /* Current event in iteration */
     /*
+     * Index segment boundaries for range queries.
+     * leftmost/rightmost define the current segment of IndexNodes being iterated.
+     * left_op_value/right_op_value track the constraint range for segment iteration.
+     */
+    struct IndexNode *leftmost;     /* First IndexNode in current segment (>= left_op_value) */
+    struct IndexNode *rightmost;    /* Last IndexNode in current segment (<= right_op_value) */
+    int64_t left_op_value;          /* Lower bound for next segment query */
+    int64_t right_op_value;         /* Upper bound for current segment */
+    int scan_list;                  /* 1: full list scan, 0: index-based iteration */
+    /*
      * Constraint filter table built from xBestIndex decisions.
      * Each entry represents one WHERE clause condition on an INTEGER column.
+     * Sorted by value for NE segment splitting (see query_op_table).
      */
     struct one_op {
         int field;                  /* Column index (0-7: system cols, 8+: event fields) */
         int op;                     /* Comparison operator (EQ, GT, LE, LT, GE, NE) */
-        sqlite3_int64 value;        /* Comparison value from sqlite3_value_int64() */
+        int64_t value;              /* Comparison value from sqlite3_value_int64() */
     } *op_table;
     int nr_ops;                     /* Number of active constraints */
 };
@@ -1050,13 +1060,22 @@ enum {
     EQ, GT, LE, LT, GE, NE          /* Maps to SQLITE_INDEX_CONSTRAINT_* */
 };
 
+/* Comparator for qsort: sort op_table by value ascending (required for NE handling) */
+static int one_op_cmp(const void *aa, const void *bb)
+{
+    const struct one_op *a = aa, *b = bb;
+    if (a->value < b->value) return -1;
+    else if (a->value > b->value) return 1;
+    else return 0;
+}
+
 /*
  * Find or create an index node in the red-black tree.
  *
  * Each IndexNode maintains a list of events with the same indexed field value,
  * enabling O(log n) lookup instead of O(n) full list scan.
  */
-static struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value, int create)
+static inline struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value, int create)
 {
     struct IndexNode *new;
 	struct rb_node **p = &root->rb_node;
@@ -1089,6 +1108,54 @@ static struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value, int 
 }
 
 /*
+ * Find an IndexNode in the red-black tree based on comparison operator.
+ *
+ * During tree traversal, we track three potential results:
+ *   - match: node with exact value match (node->value == value)
+ *   - left:  rightmost node with value < search value (predecessor candidate)
+ *   - right: leftmost node with value > search value (successor candidate)
+ *
+ * Return value based on operator:
+ *   - EQ: exact match only
+ *   - GT: first node > value (match's successor if exact match, else right)
+ *   - LT: last node < value (match's predecessor if exact match, else left)
+ *   - GE: first node >= value (match if exists, else right)
+ *   - LE: last node <= value (match if exists, else left)
+ *   - NE: exact match (for exclusion checks)
+ */
+static inline struct IndexNode *find_IndexNode(struct rb_root *root, int op, int64_t value)
+{
+    struct rb_node *node = root->rb_node;
+    struct IndexNode *cmp;
+    struct IndexNode *match = NULL;  /* Exact match: node->value == value */
+    struct IndexNode *left = NULL;   /* Rightmost node with value < search value */
+    struct IndexNode *right = NULL;  /* Leftmost node with value > search value */
+
+    while (node) {
+        cmp = rb_entry(node, struct IndexNode, node);
+        if (value < cmp->value) {
+            right = cmp;  /* cmp is a candidate for "first node > value" */
+            node = node->rb_left;
+        } else if (value > cmp->value) {
+            left = cmp;   /* cmp is a candidate for "last node < value" */
+            node = node->rb_right;
+        } else {
+            match = cmp;
+            break;
+        }
+    }
+    switch (op) {
+        case EQ: return match;
+        case GT: return match ? rb_entry_safe(rb_next(&match->node), struct IndexNode, node) : right;
+        case LE: return match ? match : left;
+        case LT: return match ? rb_entry_safe(rb_prev(&match->node), struct IndexNode, node) : left;
+        case GE: return match ? match : right;
+        case NE: return match;
+        default: return NULL;
+    }
+}
+
+/*
  * Delete all nodes in the index tree using post-order traversal.
  *
  * Post-order traversal (left -> right -> root) ensures children are freed
@@ -1098,7 +1165,7 @@ static struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value, int 
  * Stack depth concern: With 32 levels of recursion, this can handle 2^32 nodes.
  * In practice, a single interval period cannot generate that many events.
  */
-static void del_IndexTree(struct rb_root *root, struct rb_node *p)
+static inline void del_IndexTree(struct rb_root *root, struct rb_node *p)
 {
     if (p->rb_left) del_IndexTree(root, p->rb_left);
     if (p->rb_right) del_IndexTree(root, p->rb_right);
@@ -1593,7 +1660,161 @@ static inline sqlite3_int64 perf_tp_field(struct tp_private *priv, struct tp_eve
 }
 
 /*
+ * Query op_table to compute the value range [left_value, right_value] for indexed field.
+ *
+ * This function processes constraints on the indexed field and narrows down the search
+ * range. It handles NE (!=) by splitting the range into multiple segments that are
+ * iterated one at a time.
+ *
+ * The op_table MUST be sorted by value in ascending order before calling this function.
+ * This ordering is critical for NE handling: each call processes one segment, and
+ * the next segment starts from (right_value + 1).
+ *
+ * Constraint to range mapping (multiple constraints use AND logic):
+ *   - EQ (==): [value, value]
+ *   - GE (>=): [value, +inf)      -> left_value = max(left_value, value)
+ *   - LE (<=): (-inf, value]      -> right_value = min(right_value, value)
+ *   - GT (>):  [value+1, +inf)    -> left_value = max(left_value, value+1)
+ *   - LT (<):  (-inf, value-1]    -> right_value = min(right_value, value-1)
+ *   - NE (!=): splits range at value, returns segment before or after value
+ *
+ * Example: "pid > 10 AND pid < 100 AND pid != 50"
+ *   Sorted op_table: [{GT,10}, {NE,50}, {LT,100}]
+ *   First call:  [INT64_MIN, INT64_MAX] -> [11, 49] (stops at NE 50)
+ *   Second call: [50, INT64_MAX] -> [51, 99] (skips past NE 50, then LT 100)
+ */
+static inline void query_op_table(struct one_op *table, int nr_ops, int field,
+                                  int64_t *left_value, int64_t *right_value)
+{
+    int i, op;
+    int64_t op_value;
+    for (i = 0; i < nr_ops; i++) {
+        if (table[i].field != field) continue;
+        op = table[i].op;
+        op_value = table[i].value;
+        switch (op) {
+            case EQ: /* EQ: constrain to [value, value], fallthrough to set both bounds */
+            case GE: *left_value = max(*left_value, op_value); if (op == GE) break; /* fallthrough */
+            case LE: *right_value = min(*right_value, op_value); break;
+            case GT: *left_value = max(*left_value, op_value + 1); break;
+            case LT: *right_value = min(*right_value, op_value - 1); break;
+            case NE:
+                /*
+                 * NE splits the range into segments. Since op_table is sorted by value,
+                 * we process segments left-to-right. If current left bound is before
+                 * the NE value, end this segment just before it. Otherwise, start
+                 * next segment just after it.
+                 */
+                if (*left_value < op_value)
+                    *right_value = min(*right_value, op_value - 1);
+                else
+                    *left_value = max(*left_value, op_value + 1);
+                break;
+            default: break;
+        }
+    }
+}
+
+/*
+ * Index iteration states:
+ *   INDEX_DONE:     No more segments to iterate, cursor exhausted
+ *   INDEX_CONT:     Found a valid segment, continue iteration
+ *   INDEX_ALL_NODE: No index constraints, fall back to full list scan
+ */
+enum {INDEX_DONE, INDEX_CONT, INDEX_ALL_NODE};
+
+/*
+ * Compute and iterate through index segments based on WHERE constraints.
+ *
+ * This function implements segment-based index iteration. Each call finds the
+ * next valid segment of IndexNodes that satisfy the constraints. NE constraints
+ * may split the search space into multiple disjoint segments.
+ *
+ * Iteration flow:
+ *   1. Call query_op_table() to compute [left_op_value, right_op_value] range
+ *   2. Find leftmost and rightmost IndexNodes within this range
+ *   3. Validate that actual nodes exist within the computed range
+ *   4. Update left_op_value for next segment (right_op_value + 1)
+ *   5. Return INDEX_CONT if valid segment found, INDEX_DONE otherwise
+ *
+ * The cursor iterates: segment1[leftmost..rightmost] -> segment2[...] -> ...
+ *
+ * Returns:
+ *   INDEX_CONT:     Valid segment found, cursor->leftmost/rightmost are set
+ *   INDEX_DONE:     No more valid segments
+ *   INDEX_ALL_NODE: No effective constraints on indexed field, use full scan
+ */
+static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
+{
+    struct perf_tp_table *table = (void *)cursor->base.pVtab;
+    struct tp_private *priv = table->priv;
+    int64_t left_value, right_value;
+    const char *index_field_name = "";
+    int ret = INDEX_DONE;
+
+    if (unlikely(table->verbose))
+        index_field_name = ColumnName(priv, priv->index_field);
+
+    /* Iterate through segments until a valid one is found or exhausted */
+    while (cursor->left_op_value != INT64_MAX) {
+        cursor->right_op_value = INT64_MAX;
+        query_op_table(cursor->op_table, cursor->nr_ops, priv->index_field,
+                        &cursor->left_op_value, &cursor->right_op_value);
+        if (unlikely(table->verbose))
+            printf("%s: Index '%s' IN [%ld, %ld]\n", priv->table_name, index_field_name,
+                        cursor->left_op_value, cursor->right_op_value);
+
+        /* No constraints on indexed field, fall back to full scan */
+        if (cursor->left_op_value == INT64_MIN && cursor->right_op_value == INT64_MAX)
+            return INDEX_ALL_NODE;
+
+        if (cursor->left_op_value <= cursor->right_op_value) {
+            /* Find boundary nodes: first node >= left, last node <= right */
+            cursor->leftmost = find_IndexNode(cursor->index_tree, GE, cursor->left_op_value);
+            cursor->rightmost = find_IndexNode(cursor->index_tree, LE, cursor->right_op_value);
+            left_value = cursor->leftmost ? cursor->leftmost->value : INT64_MAX;
+            right_value = cursor->rightmost ? cursor->rightmost->value : INT64_MIN;
+
+            /* Validate: actual nodes must exist within the constraint range */
+            if (left_value <= right_value && left_value >= cursor->left_op_value &&
+                right_value <= cursor->right_op_value) {
+                if (unlikely(table->verbose))
+                    printf("%s: '%s' IN [%ld, %ld]\n", priv->table_name, index_field_name,
+                            left_value, right_value);
+                if (unlikely(!cursor->leftmost || !cursor->rightmost)) {
+                    fprintf(stderr, "%s: Indexing BUG: [%ld, %ld] NOT IN [%ld, %ld]\n", priv->table_name,
+                            left_value, right_value, cursor->left_op_value, cursor->right_op_value);
+                    cursor->left_op_value = INT64_MAX;
+                    return INDEX_DONE;
+                }
+                ret = INDEX_CONT;
+            }
+
+            /* Advance to next segment: start from (right_op_value + 1) */
+            if (cursor->right_op_value == INT64_MAX)
+                cursor->left_op_value = INT64_MAX;
+            else
+                cursor->left_op_value = cursor->right_op_value + 1;
+
+            if (ret) return ret;
+        } else
+            return INDEX_DONE;  /* Invalid range: left > right */
+    }
+    return INDEX_DONE;
+}
+
+/*
  * xNext: Advance cursor to next matching event.
+ *
+ * Two iteration modes:
+ *   1. scan_list=1: Full list scan via link, checking all constraints
+ *   2. scan_list=0: Index-based iteration via link_index
+ *
+ * Index iteration structure:
+ *   - Each IndexNode contains a list of events with the same indexed field value
+ *   - Iterate through events in current IndexNode (via link_index)
+ *   - When exhausted, move to next IndexNode (leftmost -> rightmost within segment)
+ *   - When segment exhausted, call perf_tp_do_index() for next segment
  *
  * If op_table is set (constraints from xBestIndex), filter events by evaluating
  * all conditions. Event must satisfy ALL constraints (AND logic) to be returned.
@@ -1601,17 +1822,43 @@ static inline sqlite3_int64 perf_tp_field(struct tp_private *priv, struct tp_eve
  */
 static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
 {
-    struct tp_private *priv = ((struct perf_tp_table *)pCursor->pVtab)->priv;
+    struct perf_tp_table *table = (void *)pCursor->pVtab;
+    struct tp_private *priv = table->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
     sqlite3_int64 value;
     int i;
 
     priv->xNext++;
     while (1) {
-        if (cursor->index_node)
-            cursor->curr = list_next_entry(cursor->curr, link_index);
-        else
+        if (cursor->scan_list) {
+            /* Full list scan: iterate through all events via global link */
             cursor->curr = list_next_entry(cursor->curr, link);
+        } else {
+            /* Index-based iteration: iterate through events in IndexNode */
+            cursor->curr = list_next_entry(cursor->curr, link_index);
+            if (cursor->curr == cursor->start) {
+                /* Current IndexNode exhausted, move to next node or segment */
+                if (cursor->leftmost != cursor->rightmost) {
+                    /* More nodes in current segment: advance to next IndexNode */
+                    cursor->leftmost = rb_entry_safe(rb_next(&cursor->leftmost->node), struct IndexNode, node);
+                    if (unlikely(!cursor->leftmost)) {
+                        fprintf(stderr, "%s: Indexing BUG: got NULL before reaching rightmost\n", priv->table_name);
+                        break;
+                    }
+                } else {
+                    /* Current segment exhausted: try next segment (for NE splits) */
+                    if (perf_tp_do_index(cursor) == INDEX_DONE)
+                        break;
+                }
+
+                if (unlikely(table->verbose > VERBOSE_NOTICE))
+                    printf("%s: '%s' = %ld\n", priv->table_name, ColumnName(priv, priv->index_field),
+                            cursor->leftmost->value);
+                /* Set up iteration for new IndexNode's event list */
+                cursor->start = list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
+                cursor->curr = list_next_entry(cursor->start, link_index);
+            }
+        }
 
         /* No constraints or reached end of list */
         if (!cursor->nr_ops ||
@@ -1719,33 +1966,50 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
     struct tp_private *priv = table->priv;
     int i;
 
-    if (table->verbose > VERBOSE_NOTICE) {
+    if (unlikely(table->verbose > VERBOSE_NOTICE)) {
         printf("%s:\n", priv->table_name);
         for (i = 0; i < cursor->nr_ops; i++) {
-            printf("    Filter[%d]: %s %s %lld\n", i, ColumnName(priv, cursor->op_table[i].field),
+            printf("    Filter[%d]: %s %s %ld\n", i, ColumnName(priv, cursor->op_table[i].field),
                         OpStr(cursor->op_table[i].op), cursor->op_table[i].value);
         }
     }
 
-    /* Index lookup: single EQ constraint on indexed field */
-    if (cursor->nr_ops == 1 && priv->have_index &&
-        cursor->op_table[0].field == priv->index_field &&
-        cursor->op_table[0].op == EQ) {
-        cursor->index_node = get_IndexNode(cursor->index_tree, cursor->op_table[0].value, 0);
-        if (cursor->index_node) {
-            cursor->start = list_entry(&cursor->index_node->event_list, struct tp_event, link_index);
-            cursor->curr = cursor->start;
-        } else {
-            cursor->start = NULL;
-            cursor->curr = NULL;
+    /*
+     * Index lookup: use red-black tree index if available.
+     * Supports all integer comparison operators (EQ, GT, GE, LT, LE, NE).
+     * Falls back to full list scan if no index or no constraints on indexed field.
+     */
+    if (priv->have_index) {
+        cursor->index_tree = &priv->index_tree;
+        cursor->left_op_value = INT64_MIN;  /* Start with full range */
+        cursor->right_op_value = INT64_MAX;
+
+        switch (perf_tp_do_index(cursor)) {
+            case INDEX_DONE:
+                /* No matching nodes found in any segment */
+                cursor->start = NULL;
+                cursor->curr = NULL;
+                if (unlikely(table->verbose > VERBOSE_NOTICE))
+                    printf("    NULL\n");
+                break;
+            case INDEX_CONT:
+                /* Valid segment found, set up iteration from leftmost node */
+                cursor->start = list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
+                cursor->curr = cursor->start;
+                if (unlikely(table->verbose > VERBOSE_NOTICE))
+                    printf("%s: '%s' = %ld\n", priv->table_name, ColumnName(priv, priv->index_field),
+                            cursor->leftmost->value);
+                break;
+            case INDEX_ALL_NODE:
+            default: goto scan_list;  /* No index constraints, fall back to scan */
         }
+        cursor->scan_list = 0;  /* Use index-based iteration */
         priv->do_index++;
-        if (table->verbose > VERBOSE_NOTICE)
-            printf("    Index on '%s'%s\n", ColumnName(priv, cursor->op_table[0].field),
-                        cursor->start ? "" : " (NULL)");
     } else {
+    scan_list:
+        /* Full list scan: no index available or not applicable */
         priv->scan_list++;
-        if (table->verbose > VERBOSE_NOTICE)
+        if (unlikely(table->verbose > VERBOSE_NOTICE))
             printf("    Scan list\n");
     }
 }
@@ -1764,8 +2028,7 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
     struct tp_private *priv = table->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
 
-    cursor->index_tree = &priv->index_tree;
-    cursor->index_node = NULL;
+    cursor->scan_list = 1;
     cursor->start = list_entry(&priv->event_list, struct tp_event, link);
     cursor->curr = cursor->start;
 
@@ -1796,6 +2059,7 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
                 cursor->op_table = NULL;
             } else {
                 cursor->nr_ops = i;
+                qsort(cursor->op_table, cursor->nr_ops, sizeof(*cursor->op_table), one_op_cmp);
                 perf_tp_ftrace_filter(cursor);
                 perf_tp_do_filter(cursor);
                 priv->xFilter++;
