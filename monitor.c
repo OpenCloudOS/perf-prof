@@ -509,6 +509,7 @@ struct option main_options[] = {
                                                                 "      pull=[IP:]PORT: pull events from server IP:PORT\n"
                                                                 "      pull=chardev: pull events from chardev\n"
                                                                 "      pull=file: pull events from file\n"
+                                                                "      index=field: sql, set the index field to replace the default\n"
                                                                 "  EXPR:\n"
                                                                 "      C expression. See `"PROGRAME" expr -h` for more information."
                                                                 ),

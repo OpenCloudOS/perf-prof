@@ -526,7 +526,8 @@ static void sql_interval(struct prof_dev *dev)
             break;
     }
 
-    ctx->tp_ctx->reset(ctx->tp_ctx);
+    if (ctx->tp_ctx->reset)
+        ctx->tp_ctx->reset(ctx->tp_ctx);
 }
 
 static void sql_print_dev(struct prof_dev *dev, int indent)

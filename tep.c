@@ -969,6 +969,8 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                         perf_cpu_map__put(tp->cpus);
                         tp->cpus = NULL;
                     }
+                } else if (strcmp(attr, "index") == 0) {
+                    tp->index = value;
                 } else if (*attr) {
                     fprintf(stderr, "Syntax error: Unknown attr %s\n", attr);
                     goto err_out;

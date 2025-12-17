@@ -102,6 +102,9 @@ struct tp {
     struct expr_prog *exec_prog;
     const char *exec;
 
+    // sql index field
+    const char *index;
+
     // cpus
     struct perf_cpu_map *cpus;
 

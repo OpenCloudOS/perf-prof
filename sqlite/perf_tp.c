@@ -1075,7 +1075,7 @@ static int one_op_cmp(const void *aa, const void *bb)
  * Each IndexNode maintains a list of events with the same indexed field value,
  * enabling O(log n) lookup instead of O(n) full list scan.
  */
-static inline struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value, int create)
+static inline struct IndexNode *get_IndexNode(struct rb_root *root, int64_t value)
 {
     struct IndexNode *new;
 	struct rb_node **p = &root->rb_node;
@@ -1091,9 +1091,6 @@ static inline struct IndexNode *get_IndexNode(struct rb_root *root, int64_t valu
 		else
 			return new;
 	}
-
-    if (!create)
-        return NULL;
 
     new = malloc(sizeof(*new));
     if (!new)
@@ -1752,8 +1749,13 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
     const char *index_field_name = "";
     int ret = INDEX_DONE;
 
-    if (unlikely(table->verbose))
+    if (RB_EMPTY_ROOT(cursor->index_tree))
+        return INDEX_DONE;
+
+    if (unlikely(table->verbose)) {
+        printf("%s:\n", priv->table_name);
         index_field_name = ColumnName(priv, priv->index_field);
+    }
 
     /* Iterate through segments until a valid one is found or exhausted */
     while (cursor->left_op_value != INT64_MAX) {
@@ -1761,7 +1763,7 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
         query_op_table(cursor->op_table, cursor->nr_ops, priv->index_field,
                         &cursor->left_op_value, &cursor->right_op_value);
         if (unlikely(table->verbose))
-            printf("%s: Index '%s' IN [%ld, %ld]\n", priv->table_name, index_field_name,
+            printf("    Index '%s' IN [%ld, %ld]\n", index_field_name,
                         cursor->left_op_value, cursor->right_op_value);
 
         /* No constraints on indexed field, fall back to full scan */
@@ -1779,8 +1781,7 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
             if (left_value <= right_value && left_value >= cursor->left_op_value &&
                 right_value <= cursor->right_op_value) {
                 if (unlikely(table->verbose))
-                    printf("%s: '%s' IN [%ld, %ld]\n", priv->table_name, index_field_name,
-                            left_value, right_value);
+                    printf("          '%s' IN [%ld, %ld]\n", index_field_name, left_value, right_value);
                 if (unlikely(!cursor->leftmost || !cursor->rightmost)) {
                     fprintf(stderr, "%s: Indexing BUG: [%ld, %ld] NOT IN [%ld, %ld]\n", priv->table_name,
                             left_value, right_value, cursor->left_op_value, cursor->right_op_value);
@@ -1966,7 +1967,7 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
     struct tp_private *priv = table->priv;
     int i;
 
-    if (unlikely(table->verbose > VERBOSE_NOTICE)) {
+    if (unlikely(table->verbose)) {
         printf("%s:\n", priv->table_name);
         for (i = 0; i < cursor->nr_ops; i++) {
             printf("    Filter[%d]: %s %s %ld\n", i, ColumnName(priv, cursor->op_table[i].field),
@@ -1989,10 +1990,13 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
                 /* No matching nodes found in any segment */
                 cursor->start = NULL;
                 cursor->curr = NULL;
-                if (unlikely(table->verbose > VERBOSE_NOTICE))
+                if (unlikely(table->verbose))
                     printf("    NULL\n");
                 break;
             case INDEX_CONT:
+                if (&cursor->leftmost->node == rb_first(cursor->index_tree) &&
+                    &cursor->rightmost->node == rb_last(cursor->index_tree))
+                    goto scan_list;
                 /* Valid segment found, set up iteration from leftmost node */
                 cursor->start = list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
                 cursor->curr = cursor->start;
@@ -2009,7 +2013,7 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
     scan_list:
         /* Full list scan: no index available or not applicable */
         priv->scan_list++;
-        if (unlikely(table->verbose > VERBOSE_NOTICE))
+        if (unlikely(table->verbose))
             printf("    Scan list\n");
     }
 }
@@ -2320,7 +2324,7 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
             /* Index maintenance: add event to index tree */
             if (priv->have_index) {
                 int64_t value = perf_tp_field(priv, e, priv->index_field);
-                struct IndexNode *node = get_IndexNode(&priv->index_tree, value, 1);
+                struct IndexNode *node = get_IndexNode(&priv->index_tree, value);
                 if (node)
                     list_add_tail(&e->link_index, &node->event_list);
             }
@@ -2591,7 +2595,7 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
             if (!tp->filter && priv->ftrace_filter) {
                 priv->mode = MEM_VIRTUAL_TABLE_MODE;
                 tp->filter = strdup(priv->ftrace_filter);
-                printf("%s:%s SQL Query planner filter: %s\n", tp->sys, tp->name, tp->filter);
+                printf("%s:%s: SQL Query planner filter: %s\n", tp->sys, tp->name, tp->filter);
             }
 
             if (priv->best_index_num == 0)
@@ -2615,8 +2619,21 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
             /* Index available: force Virtual Table */
             if (priv->have_index) {
                 priv->mode = MEM_VIRTUAL_TABLE_MODE;
-                printf("%s: Chosen '%s' field for indexing\n", priv->table_name,
-                        ColumnName(priv, priv->index_field));
+                if (tp->index) {
+                    int found = 0;
+                    for (j = 0; j < priv->nr_fields; j++)
+                        if (strcmp(tp->index, ColumnName(priv, j)) == 0) {
+                            priv->index_field = j;
+                            found = 1;
+                            break;
+                        }
+                    if (!found)
+                        fprintf(stderr, "%s:%s: Warning: index field '%s' not found, using '%s'\n",
+                                tp->sys, tp->name, tp->index, ColumnName(priv, priv->index_field));
+                }
+                printf("%s:%s: Chosen '%s' field%s for indexing\n", tp->sys, tp->name,
+                        ColumnName(priv, priv->index_field),
+                        (priv->col_used & (1<<priv->index_field)) ? "" : " (not used)");
             }
             if (ctx->verbose) {
                 for_each_constraint(priv, c, j, k) {
