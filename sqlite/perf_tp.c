@@ -290,6 +290,12 @@ static void tep_symbolic(struct tep_print_arg *arg, struct symbolic_ctx *sym_ctx
                                     symbols->value, symbols->str);
                     symbols = symbols->next;
                 }
+                sym_ctx->ctx->nr_symbolic++;
+                if (sym_ctx->ctx->nr_symbolic == 1) {
+                    sym_ctx->ctx->event_id = sym_ctx->event_id;
+                    sym_ctx->ctx->field_offset = field_offset;
+                    sym_ctx->ctx->field_name = sym_ctx->field_name;
+                }
             }
         }
         break;
@@ -471,9 +477,20 @@ static void sqlite_symbolic(sqlite3_context *context, int argc, sqlite3_value **
     int i, j;
 
     /* Validate argument count */
-    if (argc != 2) {
-        sqlite3_result_error(context, "symbolic() requires exactly 2 arguments", -1);
+    if (argc > 2) {
+        sqlite3_result_error(context, "symbolic() requires exactly 1 or 2 arguments", -1);
         return;
+    }
+
+    if (argc == 1) {
+        /* Validate first argument type (value) */
+        if (sqlite3_value_type(argv[0]) != SQLITE_INTEGER) {
+            sqlite3_result_error(context, "symbolic() argument must be INTEGER", -1);
+            return;
+        }
+        value = sqlite3_value_int64(argv[0]);
+        symbol = symbolic_lookup(ctx, ctx->event_id, ctx->field_offset, value);
+        goto found;
     }
 
     /* Validate first argument type (table_field_name) */
@@ -740,10 +757,32 @@ static struct sql_tp_ctx *sql_tp_common_init(sqlite3 *sql, struct tp_list *tp_li
     /* Register arg pointer functions */
     arg_pointer_register(ctx);
 
-    if (rblist__nr_entries(&ctx->symbolic_table) > 0 &&
+    if (ctx->nr_symbolic > 0 &&
         sqlite3_create_function(ctx->sql, "symbolic", 2, SQLITE_UTF8, ctx,
                                 sqlite_symbolic, NULL, NULL) != SQLITE_OK)
         goto failed;
+
+    if (ctx->nr_symbolic == 1) {
+        if (sqlite3_create_function(ctx->sql, "symbolic", 1, SQLITE_UTF8, ctx,
+                                sqlite_symbolic, NULL, NULL) != SQLITE_OK)
+            goto failed;
+
+        for_each_real_tp(ctx->tp_list, tp, i) {
+            struct tp_private *priv = tp->private;
+            if (tp->id == ctx->event_id) {
+                char *function_list = NULL;
+                const char *prefix = priv->function_list ? : "";
+                const char *separator = priv->function_list ? ", " : "";
+                if (asprintf(&function_list, "%s%ssymbolic(%s)", prefix, separator,
+                            ctx->field_name) > 0) {
+                    if (priv->function_list)
+                        free(priv->function_list);
+                    priv->function_list = function_list;
+                }
+                break;
+            }
+        }
+    }
 
     for (i = 0; i < ARG_POINTER_MAX; i++) {
         if (ctx->sqlite_funcs[i].func_name) {

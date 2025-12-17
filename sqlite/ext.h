@@ -133,6 +133,10 @@ struct sql_tp_ctx {
     struct tp_list *tp_list;
     struct tep_handle *tep;
     struct rblist symbolic_table;
+    int nr_symbolic;
+    int event_id;   // nr_symbolic==1
+    int field_offset;
+    const char *field_name;
     struct sqlite_func {
         int data_type; // SQLITE_INTEGER, SQLITE_BLOB
         const char *func_name;
