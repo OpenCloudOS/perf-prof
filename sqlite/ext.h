@@ -102,11 +102,14 @@ struct tp_private {
     /*
      * Query planner optimization (collected during init phase):
      * col_used:      Bitmask of columns needed by --query (from xBestIndex colUsed).
+     * col_refs:      Reference count per column from WHERE + ORDER BY constraints.
+     *                Used to auto-select the most referenced INTEGER field for indexing.
      * ftrace_filter: Kernel filter expression generated from SQL WHERE constraints.
      *                Applied via tp_list_apply_filter() before perf_event_open().
      * init:          True during initialization to enable optimization data collection.
      */
     uint64_t col_used;
+    int *col_refs;
     char *ftrace_filter;
     bool init;
 

@@ -1092,19 +1092,47 @@ struct perf_tp_cursor {
         int64_t value;              /* Comparison value from sqlite3_value_int64() */
     } *op_table;
     int nr_ops;                     /* Number of active constraints */
+    int order_by;                   /* True if ORDER BY was consumed by index */
+    int desc;                       /* True if ORDER BY DESC (descending order) */
 };
+
+/*
+ * ORDER BY optimization flags encoded in idxNum (bits 16-17).
+ * Lower 16 bits reserved for constraint count.
+ *
+ * These flags allow each cursor to independently handle different ORDER BY
+ * directions, supporting multiple queries within a single --query option.
+ */
+#define ORDER_BY_CONSUMED (1 << 16) /* Index provides sorted output */
+#define ORDER_BY_DESC     (1 << 17) /* Descending order requested */
 
 /* Internal operator codes for constraint filtering */
 enum {
     EQ, GT, LE, LT, GE, NE          /* Maps to SQLITE_INDEX_CONSTRAINT_* */
 };
 
-/* Comparator for qsort: sort op_table by value ascending (required for NE handling) */
-static int one_op_cmp(const void *aa, const void *bb)
+/*
+ * Comparators for qsort: sort op_table by value.
+ *
+ * NE (not-equal) constraints split the index range into segments. The op_table
+ * must be sorted by value so that query_op_table() can process segments in the
+ * correct order:
+ *   - Ascending:  process segments left-to-right (smallest values first)
+ *   - Descending: process segments right-to-left (largest values first)
+ */
+static int one_op_cmp_asc(const void *aa, const void *bb)
 {
     const struct one_op *a = aa, *b = bb;
     if (a->value < b->value) return -1;
     else if (a->value > b->value) return 1;
+    else return 0;
+}
+
+static int one_op_cmp_desc(const void *aa, const void *bb)
+{
+    const struct one_op *a = aa, *b = bb;
+    if (a->value < b->value) return 1;
+    else if (a->value > b->value) return -1;
     else return 0;
 }
 
@@ -1378,11 +1406,10 @@ static const char *ColumnName(struct tp_private *priv, int i)
  * Check if column i is an INTEGER type (suitable for constraint filtering).
  * System columns (0-7) are always integers. Event fields depend on TEP flags.
  */
-static inline bool Column_isInt(struct perf_tp_table *table, int i)
+static inline bool Column_isInt(struct tp_private *priv, int i)
 {
     if (i < 8) return 1;
     else {
-        struct tp_private *priv = table->priv;
         struct tep_format_field *field = i < priv->nr_fields ? priv->fields[i - 8] : NULL;
         if (field && !(field->flags & TEP_FIELD_IS_STRING) &&
                      !(field->flags & TEP_FIELD_IS_ARRAY))
@@ -1439,6 +1466,8 @@ static void dump_pIdxInfo(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
         printf("    OrderBy[%d]: %s %s\n", i,
                     ColumnName(priv, pIdxInfo->aOrderBy[i].iColumn),
                     pIdxInfo->aOrderBy[i].desc ? "DESC" : "ASC");
+    if (pIdxInfo->nOrderBy)
+        printf("    DISTINCT: %d\n", sqlite3_vtab_distinct(pIdxInfo));
 
     printf("    colUsed: 0x%016llx, ", pIdxInfo->colUsed);
     for_each_set_bit(i, (unsigned long *)&pIdxInfo->colUsed, 64) {
@@ -1484,7 +1513,7 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
     struct constraint *curr = NULL;
     int c = 0;
 
-    if (table->verbose)
+    if (unlikely(table->verbose))
         dump_pIdxInfo(pVtab, pIdxInfo);
 
     if (priv->init && pIdxInfo->nConstraint > 0) {
@@ -1508,7 +1537,7 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
             default: goto unsupported;
         }
         column = pIdxInfo->aConstraint[i].iColumn;
-        if (Column_isInt(table, column)) {
+        if (Column_isInt(priv, column)) {
             if (!idx_str) {
                 idx_str = sqlite3_mprintf("%d,%d;", column, op);
                 if (!idx_str) continue;
@@ -1522,6 +1551,8 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
             idx_num++;
             pIdxInfo->aConstraintUsage[i].argvIndex = idx_num;
             pIdxInfo->aConstraintUsage[i].omit = 1;
+            if (priv->init)
+                priv->col_refs[column]++;
 
             /* Try to get RHS value at planning time */
             rhs_available = sqlite3_vtab_rhs_value(pIdxInfo, i, &value) == SQLITE_OK;
@@ -1566,18 +1597,49 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
         nr_cost++;
     }
 
-    if (idx_num) {
-        pIdxInfo->idxNum = idx_num;
-        pIdxInfo->idxStr = idx_str;
-        pIdxInfo->needToFreeIdxStr = 1;
+    /*
+     * ORDER BY optimization: count column references during init phase,
+     * or consume ORDER BY if index field matches.
+     */
+    if (priv->init) {
+        /*
+         * Init phase: count ORDER BY column references.
+         * Combined with WHERE constraint refs, the most referenced INTEGER
+         * column will be chosen as the index field.
+         */
+        for (i = 0; i < pIdxInfo->nOrderBy; i++) {
+            column = pIdxInfo->aOrderBy[i].iColumn;
+            if (Column_isInt(priv, column))
+                priv->col_refs[column]++;
+        }
+    } else
+    if (pIdxInfo->nOrderBy == 1 && priv->have_index &&
+        pIdxInfo->aOrderBy[0].iColumn == priv->index_field) {
+        /*
+         * Query phase: if ORDER BY matches our index field, we can provide
+         * sorted output directly from index traversal (ascending or descending).
+         * This avoids SQLite's sorting overhead.
+         */
+        pIdxInfo->orderByConsumed = 1;
+        idx_num |= ORDER_BY_CONSUMED;
+        if (pIdxInfo->aOrderBy[0].desc)
+            idx_num |= ORDER_BY_DESC;
     }
+
+    pIdxInfo->idxNum = idx_num;
+    pIdxInfo->idxStr = idx_str;
+    pIdxInfo->needToFreeIdxStr = idx_str ? 1 : 0;
 
     /* Calculate estimated cost */
     cost = nr_cost ? cost / nr_cost : 1000;
     pIdxInfo->estimatedCost = cost;
-    if (table->verbose)
-        printf("    Cost: %d\n", cost);
 
+    if (unlikely(table->verbose)) {
+        printf("    idxNum: 0x%x\n", pIdxInfo->idxNum);
+        printf("    idxStr: \"%s\"\n", pIdxInfo->idxStr ? : "");
+        printf("    orderByConsumed: %d\n", pIdxInfo->orderByConsumed);
+        printf("    estimatedCost: %d\n", cost);
+    }
 
     if (priv->init) {
         /*
@@ -1714,16 +1776,32 @@ static inline sqlite3_int64 perf_tp_field(struct tp_private *priv, struct tp_eve
  *   - LT (<):  (-inf, value-1]    -> right_value = min(right_value, value-1)
  *   - NE (!=): splits range at value, returns segment before or after value
  *
- * Example: "pid > 10 AND pid < 100 AND pid != 50"
+ * Two-pass algorithm (critical for correctness):
+ *   Pass 1: Process EQ/GE/LE/GT/LT to establish base range boundaries
+ *   Pass 2: Process NE within the established boundaries
+ *
+ * This two-pass approach fixes a bug where NE constraints outside the valid
+ * range would incorrectly affect boundary calculation. For example:
+ *   "pid != 5 AND pid > 10 AND pid != 20 AND pid < 100 AND pid != 200"
+ *   Pass 1: GT(10), LT(100) -> base range [11, 99]
+ *   Pass 2: NE(5) ignored (outside), NE(20) splits range, NE(200) ignored
+ *   Result: First segment [11, 19], second segment [21, 99]
+ *
+ * Example: "pid > 10 AND pid < 100 AND pid != 50" (ascending order)
  *   Sorted op_table: [{GT,10}, {NE,50}, {LT,100}]
  *   First call:  [INT64_MIN, INT64_MAX] -> [11, 49] (stops at NE 50)
  *   Second call: [50, INT64_MAX] -> [51, 99] (skips past NE 50, then LT 100)
  */
-static inline void query_op_table(struct one_op *table, int nr_ops, int field,
+static inline void query_op_table(struct one_op *table, int nr_ops, int field, int desc,
                                   int64_t *left_value, int64_t *right_value)
 {
     int i, op;
     int64_t op_value;
+
+    /*
+     * Pass 1: Establish base range from EQ/GE/LE/GT/LT constraints.
+     * These operators define the fundamental boundaries before NE splitting.
+     */
     for (i = 0; i < nr_ops; i++) {
         if (table[i].field != field) continue;
         op = table[i].op;
@@ -1734,19 +1812,43 @@ static inline void query_op_table(struct one_op *table, int nr_ops, int field,
             case LE: *right_value = min(*right_value, op_value); break;
             case GT: *left_value = max(*left_value, op_value + 1); break;
             case LT: *right_value = min(*right_value, op_value - 1); break;
-            case NE:
-                /*
-                 * NE splits the range into segments. Since op_table is sorted by value,
-                 * we process segments left-to-right. If current left bound is before
-                 * the NE value, end this segment just before it. Otherwise, start
-                 * next segment just after it.
-                 */
-                if (*left_value < op_value)
-                    *right_value = min(*right_value, op_value - 1);
-                else
-                    *left_value = max(*left_value, op_value + 1);
-                break;
             default: break;
+        }
+    }
+
+    /*
+     * Pass 2: Process NE constraints within established boundaries.
+     * NE splits the range into segments. Since op_table is sorted by value,
+     * we process segments in order based on iteration direction:
+     *   - Ascending (desc=0):  left-to-right, find leftmost segment first
+     *   - Descending (desc=1): right-to-left, find rightmost segment first
+     */
+    for (i = 0; i < nr_ops; i++) {
+        if (table[i].field != field) continue;
+        op = table[i].op;
+        op_value = table[i].value;
+        if (op == NE) {
+            if (desc) {
+                /*
+                 * Descending: gradually approach rightmost segment.
+                 * If NE value is before the right boundary, start current
+                 * segment after NE value. Otherwise, just skip it.
+                 */
+                if (op_value < *right_value)
+                    *left_value = max(*left_value, op_value + 1);
+                else
+                    *right_value = min(*right_value, op_value - 1);
+            } else {
+                /*
+                 * Ascending: gradually approach leftmost segment.
+                 * If NE value is at or before left boundary, skip past it.
+                 * Otherwise, end current segment just before NE value.
+                 */
+                if (op_value <= *left_value)
+                    *left_value = max(*left_value, op_value + 1);
+                else
+                    *right_value = min(*right_value, op_value - 1);
+            }
         }
     }
 }
@@ -1791,22 +1893,23 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
     if (RB_EMPTY_ROOT(cursor->index_tree))
         return INDEX_DONE;
 
-    if (unlikely(table->verbose)) {
-        printf("%s:\n", priv->table_name);
+    if (unlikely(table->verbose))
         index_field_name = ColumnName(priv, priv->index_field);
-    }
 
     /* Iterate through segments until a valid one is found or exhausted */
-    while (cursor->left_op_value != INT64_MAX) {
-        cursor->right_op_value = INT64_MAX;
-        query_op_table(cursor->op_table, cursor->nr_ops, priv->index_field,
+    while (cursor->left_op_value != cursor->right_op_value) {
+        if (unlikely(table->verbose))
+            printf("    Query '%s' IN [%ld, %ld]\n", index_field_name,
+                        cursor->left_op_value, cursor->right_op_value);
+        query_op_table(cursor->op_table, cursor->nr_ops, priv->index_field, cursor->desc,
                         &cursor->left_op_value, &cursor->right_op_value);
         if (unlikely(table->verbose))
             printf("    Index '%s' IN [%ld, %ld]\n", index_field_name,
                         cursor->left_op_value, cursor->right_op_value);
 
         /* No constraints on indexed field, fall back to full scan */
-        if (cursor->left_op_value == INT64_MIN && cursor->right_op_value == INT64_MAX)
+        if (!cursor->order_by &&
+            cursor->left_op_value == INT64_MIN && cursor->right_op_value == INT64_MAX)
             return INDEX_ALL_NODE;
 
         if (cursor->left_op_value <= cursor->right_op_value) {
@@ -1830,13 +1933,29 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
                 ret = INDEX_CONT;
             }
 
-            /* Advance to next segment: start from (right_op_value + 1) */
-            if (cursor->right_op_value == INT64_MAX)
-                cursor->left_op_value = INT64_MAX;
-            else
-                cursor->left_op_value = cursor->right_op_value + 1;
+            /*
+             * Advance to next segment based on iteration direction.
+             * Termination condition: left == right (INT64_MAX for asc, INT64_MIN for desc)
+             */
+            if (cursor->desc) {
+                /*
+                 * Descending: move from right to left.
+                 * Current segment [L, R] processed, next search range: [INT64_MIN, L-1]
+                 */
+                cursor->right_op_value = cursor->left_op_value == INT64_MIN ? INT64_MIN :
+                                         cursor->left_op_value - 1;
+                cursor->left_op_value = INT64_MIN;
+            } else {
+                /*
+                 * Ascending: move from left to right.
+                 * Current segment [L, R] processed, next search range: [R+1, INT64_MAX]
+                 */
+                cursor->left_op_value = cursor->right_op_value == INT64_MAX ? INT64_MAX :
+                                        cursor->right_op_value + 1;
+                cursor->right_op_value = INT64_MAX;
+            }
 
-            if (ret) return ret;
+            if (ret == INDEX_CONT) return ret;
         } else
             return INDEX_DONE;  /* Invalid range: left > right */
     }
@@ -1879,10 +1998,20 @@ static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
             if (cursor->curr == cursor->start) {
                 /* Current IndexNode exhausted, move to next node or segment */
                 if (cursor->leftmost != cursor->rightmost) {
-                    /* More nodes in current segment: advance to next IndexNode */
-                    cursor->leftmost = rb_entry_safe(rb_next(&cursor->leftmost->node), struct IndexNode, node);
-                    if (unlikely(!cursor->leftmost)) {
-                        fprintf(stderr, "%s: Indexing BUG: got NULL before reaching rightmost\n", priv->table_name);
+                    /*
+                     * More nodes in current segment: advance to next IndexNode.
+                     * Direction depends on ORDER BY:
+                     *   - Ascending:  leftmost++ (traverse left to right)
+                     *   - Descending: rightmost-- (traverse right to left)
+                     */
+                    if (cursor->desc)
+                        cursor->rightmost = rb_entry_safe(rb_prev(&cursor->rightmost->node), struct IndexNode, node);
+                    else
+                        cursor->leftmost = rb_entry_safe(rb_next(&cursor->leftmost->node), struct IndexNode, node);
+
+                    if (unlikely(!cursor->leftmost || !cursor->rightmost)) {
+                        fprintf(stderr, "%s: Indexing BUG: got NULL before reaching %s\n", priv->table_name,
+                                        cursor->desc ? "leftmost" : "rightmost");
                         break;
                     }
                 } else {
@@ -1893,9 +2022,10 @@ static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
 
                 if (unlikely(table->verbose > VERBOSE_NOTICE))
                     printf("%s: '%s' = %ld\n", priv->table_name, ColumnName(priv, priv->index_field),
-                            cursor->leftmost->value);
+                            cursor->desc ? cursor->rightmost->value : cursor->leftmost->value);
                 /* Set up iteration for new IndexNode's event list */
-                cursor->start = list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
+                cursor->start = cursor->desc ? list_entry(&cursor->rightmost->event_list, struct tp_event, link_index) :
+                                               list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
                 cursor->curr = list_next_entry(cursor->start, link_index);
             }
         }
@@ -2007,11 +2137,15 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
     int i;
 
     if (unlikely(table->verbose)) {
-        printf("%s:\n", priv->table_name);
+        if (cursor->nr_ops)
+            printf("%s:\n", priv->table_name);
         for (i = 0; i < cursor->nr_ops; i++) {
             printf("    Filter[%d]: %s %s %ld\n", i, ColumnName(priv, cursor->op_table[i].field),
                         OpStr(cursor->op_table[i].op), cursor->op_table[i].value);
         }
+        printf("%s:%s", priv->table_name, cursor->order_by ? "" : "\n");
+        if (cursor->order_by)
+            printf(" order by '%s' %s\n", ColumnName(priv, priv->index_field), cursor->desc ? "DESC" : "ASC");
     }
 
     /*
@@ -2033,15 +2167,18 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
                     printf("    NULL\n");
                 break;
             case INDEX_CONT:
-                if (&cursor->leftmost->node == rb_first(cursor->index_tree) &&
+                if (!cursor->order_by &&
+                    &cursor->leftmost->node == rb_first(cursor->index_tree) &&
                     &cursor->rightmost->node == rb_last(cursor->index_tree))
                     goto scan_list;
-                /* Valid segment found, set up iteration from leftmost node */
-                cursor->start = list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
-                cursor->curr = cursor->start;
+
                 if (unlikely(table->verbose > VERBOSE_NOTICE))
                     printf("%s: '%s' = %ld\n", priv->table_name, ColumnName(priv, priv->index_field),
-                            cursor->leftmost->value);
+                            cursor->desc ? cursor->rightmost->value : cursor->leftmost->value);
+                /* Valid segment found, set up iteration from leftmost node */
+                cursor->start = cursor->desc ? list_entry(&cursor->rightmost->event_list, struct tp_event, link_index) :
+                                               list_entry(&cursor->leftmost->event_list, struct tp_event, link_index);
+                cursor->curr = cursor->start;
                 break;
             case INDEX_ALL_NODE:
             default: goto scan_list;  /* No index constraints, fall back to scan */
@@ -2082,6 +2219,15 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
         cursor->nr_ops = 0;
     }
 
+    /*
+     * Extract ORDER BY flags from idxNum (bits 16-17).
+     * These flags are per-cursor, allowing different queries in the same
+     * --query option to have independent ascending/descending requirements.
+     */
+    cursor->order_by = !!(idxNum & ORDER_BY_CONSUMED);
+    cursor->desc = !!(idxNum & ORDER_BY_DESC);
+    idxNum = idxNum & (ORDER_BY_CONSUMED - 1);  /* Mask off ORDER BY bits */
+
     /* Parse idxStr and bind constraint values from argv[] */
     if (idxNum && idxStr && argc == idxNum) {
         int column, op, i = 0;
@@ -2102,13 +2248,22 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
                 cursor->op_table = NULL;
             } else {
                 cursor->nr_ops = i;
-                qsort(cursor->op_table, cursor->nr_ops, sizeof(*cursor->op_table), one_op_cmp);
+                /*
+                 * Sort op_table by value based on iteration direction.
+                 * This is required for correct NE constraint handling:
+                 *   - Ascending:  sort ascending to process leftmost segments first
+                 *   - Descending: sort descending to process rightmost segments first
+                 */
+                qsort(cursor->op_table, cursor->nr_ops, sizeof(*cursor->op_table),
+                      cursor->desc ? one_op_cmp_desc : one_op_cmp_asc);
                 perf_tp_ftrace_filter(cursor);
-                perf_tp_do_filter(cursor);
-                priv->xFilter++;
             }
         }
     }
+
+    perf_tp_do_filter(cursor);
+    priv->xFilter++;
+
     /* Position cursor at first matching event */
     if (cursor->start)
         perf_tp_xNext(pCursor);
@@ -2590,6 +2745,10 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
         for_each_real_tp(ctx->tp_list, tp, i) {
             struct tp_private *priv = (struct tp_private *)tp->private;
 
+            priv->col_refs = calloc(priv->nr_fields, sizeof(*priv->col_refs));
+            if (!priv->col_refs)
+                goto failed;
+
             snprintf(buf, sizeof(buf), vtable_fmt, priv->table_name);
             if (ctx->verbose)
                 printf("CREATE VTABLE SQL: %s\n", buf);
@@ -2618,7 +2777,6 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
         for_each_real_tp(ctx->tp_list, tp, i) {
             struct tp_private *priv = (struct tp_private *)tp->private;
             struct constraint *c;
-            int *fields_refs = NULL;
             int j, k, max_refs = 0;
 
             priv->init = 0;
@@ -2637,39 +2795,44 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
                 printf("%s:%s: SQL Query planner filter: %s\n", tp->sys, tp->name, tp->filter);
             }
 
-            if (priv->best_index_num == 0)
-                continue;
-
-            /* Index field selection: count references, pick the most referenced field */
-            fields_refs = calloc(priv->nr_fields, sizeof(int));
-            if (!fields_refs)
-                goto failed;
-            for_each_constraint(priv, c, j, k)
-                fields_refs[c->field]++;
+            /*
+             * Index field auto-selection: pick the INTEGER field with most references.
+             * References are counted from both WHERE constraints and ORDER BY columns.
+             * This heuristic maximizes index effectiveness for common query patterns.
+             */
             for (j = 0; j < priv->nr_fields; j++) {
-                if (fields_refs[j] > max_refs) {
-                    max_refs = fields_refs[j];
+                if (priv->col_refs[j] > max_refs) {
+                    max_refs = priv->col_refs[j];
                     priv->have_index = 1;
                     priv->index_field = j;
                 }
             }
-            free(fields_refs);
+
+            /*
+             * User-specified index field (via index=field attribute) overrides auto-selection.
+             * Validates that the specified field exists and is an INTEGER type.
+             */
+            if (tp->index) {
+                int found = 0;
+                for (j = 0; j < priv->nr_fields; j++)
+                    if (strcmp(tp->index, ColumnName(priv, j)) == 0) {
+                        if (Column_isInt(priv, j)) {
+                            priv->have_index = 1;
+                            priv->index_field = j;
+                            found = 2;  /* Found and is INTEGER */
+                        } else
+                            found = 1;  /* Found but not INTEGER */
+                        break;
+                    }
+                if (found != 2)
+                    fprintf(stderr, "%s:%s: Warning: index field '%s' not %s, using '%s'\n",
+                            tp->sys, tp->name, tp->index, found == 1 ? "integer" : "found",
+                            priv->have_index ? ColumnName(priv, priv->index_field) : "");
+            }
 
             /* Index available: force Virtual Table */
             if (priv->have_index) {
                 priv->mode = MEM_VIRTUAL_TABLE_MODE;
-                if (tp->index) {
-                    int found = 0;
-                    for (j = 0; j < priv->nr_fields; j++)
-                        if (strcmp(tp->index, ColumnName(priv, j)) == 0) {
-                            priv->index_field = j;
-                            found = 1;
-                            break;
-                        }
-                    if (!found)
-                        fprintf(stderr, "%s:%s: Warning: index field '%s' not found, using '%s'\n",
-                                tp->sys, tp->name, tp->index, ColumnName(priv, priv->index_field));
-                }
                 printf("%s:%s: Chosen '%s' field%s for indexing\n", tp->sys, tp->name,
                         ColumnName(priv, priv->index_field),
                         (priv->col_used & (1<<priv->index_field)) ? "" : " (not used)");
@@ -2712,6 +2875,8 @@ void sql_tp_free(struct sql_tp_ctx *ctx)
                 free(priv->fields);
             if (priv->function_list)
                 free(priv->function_list);
+            if (priv->col_refs)
+                free(priv->col_refs);
             if (priv->ftrace_filter)
                 sqlite3_free(priv->ftrace_filter);
             if (priv->best_index) {
