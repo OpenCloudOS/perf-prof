@@ -758,13 +758,13 @@ static struct sql_tp_ctx *sql_tp_common_init(sqlite3 *sql, struct tp_list *tp_li
     arg_pointer_register(ctx);
 
     if (ctx->nr_symbolic > 0 &&
-        sqlite3_create_function(ctx->sql, "symbolic", 2, SQLITE_UTF8, ctx,
-                                sqlite_symbolic, NULL, NULL) != SQLITE_OK)
+        sqlite3_create_function(ctx->sql, "symbolic", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_DIRECTONLY,
+                                ctx, sqlite_symbolic, NULL, NULL) != SQLITE_OK)
         goto failed;
 
     if (ctx->nr_symbolic == 1) {
-        if (sqlite3_create_function(ctx->sql, "symbolic", 1, SQLITE_UTF8, ctx,
-                                sqlite_symbolic, NULL, NULL) != SQLITE_OK)
+        if (sqlite3_create_function(ctx->sql, "symbolic", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_DIRECTONLY,
+                                    ctx, sqlite_symbolic, NULL, NULL) != SQLITE_OK)
             goto failed;
 
         for_each_real_tp(ctx->tp_list, tp, i) {
@@ -787,7 +787,8 @@ static struct sql_tp_ctx *sql_tp_common_init(sqlite3 *sql, struct tp_list *tp_li
     for (i = 0; i < ARG_POINTER_MAX; i++) {
         if (ctx->sqlite_funcs[i].func_name) {
             void *func = ctx->sqlite_funcs[i].data_type == SQLITE_BLOB ? sqlite_blob : sqlite_ksymbol;
-            if (sqlite3_create_function(ctx->sql, ctx->sqlite_funcs[i].func_name, 1, SQLITE_UTF8,
+            if (sqlite3_create_function(ctx->sql, ctx->sqlite_funcs[i].func_name, 1,
+                                        SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_DIRECTONLY,
                                        (void *)(unsigned long)i, func, NULL, NULL) != SQLITE_OK)
                 goto failed;
         }

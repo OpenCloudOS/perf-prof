@@ -12,7 +12,11 @@ struct sql_ctx {
     struct tep_handle *tep;
     struct sql_tp_ctx *tp_ctx;
     int nr_query;
-    int **col_widths;
+    struct query_ctx {
+        sqlite3_stmt *stmt;
+        int *col_widths;
+        const char *next_query;
+    } *query;
 
     sqlite3_stmt *update_metadata_stmt;
 
@@ -24,7 +28,19 @@ struct sql_ctx {
     /* Performance statistics */
     uint64_t total_inserts;
     uint64_t total_commits;
+    uint64_t total_sql_exec_cost; // ns
+    uint64_t sql_exec_cost; // ns
 };
+
+static int sqlite_profile(unsigned trace, void *context, void *stmt, void *elapse)
+{
+    struct sql_ctx *ctx = context;
+    if (trace == SQLITE_TRACE_PROFILE) {
+        ctx->sql_exec_cost += *(uint64_t *)elapse;
+        ctx->total_sql_exec_cost += *(uint64_t *)elapse;
+    }
+    return 0;
+}
 
 static int monitor_ctx_init(struct prof_dev *dev)
 {
@@ -89,8 +105,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     }
 
     if (ctx->nr_query) {
-        ctx->col_widths = calloc(ctx->nr_query, sizeof(*ctx->col_widths));
-        if (!ctx->col_widths)
+        ctx->query = calloc(ctx->nr_query, sizeof(*ctx->query));
+        if (!ctx->query)
             goto failed;
     }
 
@@ -126,12 +142,15 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->tp_ctx)
         goto failed;
 
+    sqlite3_trace_v2(ctx->sql, SQLITE_TRACE_PROFILE, sqlite_profile, ctx);
+
     ctx->in_transaction = false;
     ctx->pending_inserts = 0;
     ctx->batch_size = env->output2 ? 2000 : INT_MAX;  /* Very Larger batch for memory db */
 
     ctx->total_inserts = 0;
     ctx->total_commits = 0;
+    ctx->total_sql_exec_cost = 0;
 
     dev->private = ctx;
     return 0;
@@ -143,8 +162,8 @@ failed:
         tp_list_free(ctx->tp_list);
     if (ctx->tep)
         tep__unref();
-    if (ctx->col_widths)
-        free(ctx->col_widths);
+    if (ctx->query)
+        free(ctx->query);
     free(ctx);
     return -1;
 }
@@ -159,11 +178,14 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 
     if (ctx->update_metadata_stmt)
         sqlite3_finalize(ctx->update_metadata_stmt);
-    if (ctx->col_widths) {
-        for (i = 0; i < ctx->nr_query; i++)
-            if (ctx->col_widths[i])
-                free(ctx->col_widths[i]);
-        free(ctx->col_widths);
+    if (ctx->query) {
+        for (i = 0; i < ctx->nr_query; i++) {
+            if (ctx->query[i].stmt)
+                sqlite3_finalize(ctx->query[i].stmt);
+            if (ctx->query[i].col_widths)
+                free(ctx->query[i].col_widths);
+        }
+        free(ctx->query);
     }
     sqlite3_close(ctx->sql);
     tp_list_free(ctx->tp_list);
@@ -422,6 +444,7 @@ static void sql_interval(struct prof_dev *dev)
     struct sql_ctx *ctx = dev->private;
     const char *query = env->query;
     int nr_query = 0;
+    uint64_t fullscan_step = 0, sort = 0, vm_step = 0;
 
     /* Update metadata table */
     sql_update_metadata_table(dev);
@@ -438,25 +461,29 @@ static void sql_interval(struct prof_dev *dev)
     printf("\n");
 
     while (1) {
-        sqlite3_stmt *stmt;
-        const char *next_query;
+        sqlite3_stmt *stmt = ctx->query[nr_query].stmt;
+        const char *next_query = ctx->query[nr_query].next_query;
 
-        if (sqlite3_prepare_v3(ctx->sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
+        if (stmt ||
+            sqlite3_prepare_v3(ctx->sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
             int column_count = sqlite3_column_count(stmt);
-            int *col_widths = ctx->col_widths[nr_query];
+            int *col_widths = ctx->query[nr_query].col_widths;
             int j, k, width, step_result;
 
             printf("=== %.*s ===\n", (int)(next_query - query), query);
 
             // Allocate memory and initialize column widths
             if (!col_widths) {
+                ctx->query[nr_query].stmt = stmt;
+                ctx->query[nr_query].next_query = next_query;
+
                 col_widths = malloc(column_count * sizeof(int));
                 if (!col_widths)
                     goto cleanup;
 
                 for (j = 0; j < column_count; j++)
                     col_widths[j] = strlen(sqlite3_column_name(stmt, j));
-                ctx->col_widths[nr_query] = col_widths;
+                ctx->query[nr_query].col_widths = col_widths;
             }
 
             // Print column headers with proper alignment
@@ -514,16 +541,30 @@ static void sql_interval(struct prof_dev *dev)
 
             printf("\n");
 
+            if (env->verbose) {
+                fullscan_step += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_FULLSCAN_STEP, 1);
+                sort += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_SORT, 1);
+                vm_step += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_VM_STEP, 1);
+            }
+
         cleanup:
-            sqlite3_finalize(stmt);
-        } else
+            sqlite3_reset(stmt);
+        } else {
             fprintf(stderr, "Failed to prepare query: %s\n", sqlite3_errmsg(ctx->sql));
+            break;
+        }
 
         nr_query ++;
         if (*next_query)
             query = next_query;
         else
             break;
+    }
+
+    if (env->verbose) {
+        printf("SQL query cost: %lu ms\n", ctx->sql_exec_cost/1000000);
+        printf("SQL stmt status: fullscan_step %lu sort %lu vm_step %lu\n", fullscan_step, sort, vm_step);
+        ctx->sql_exec_cost = 0;
     }
 
     if (ctx->tp_ctx->reset)
@@ -535,6 +576,7 @@ static void sql_print_dev(struct prof_dev *dev, int indent)
     struct sql_ctx *ctx = dev->private;
     dev_printf("Total Inserts: %lu\n", ctx->total_inserts);
     dev_printf("Total Commits: %lu\n", ctx->total_commits);
+    dev_printf("Total SQL Cost: %lu ms\n", ctx->total_sql_exec_cost / 1000000);
 }
 
 static const char *sql_desc[] = PROFILER_DESC("sql",
