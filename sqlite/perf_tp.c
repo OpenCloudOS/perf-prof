@@ -1126,19 +1126,11 @@ enum {
  *   - Ascending:  process segments left-to-right (smallest values first)
  *   - Descending: process segments right-to-left (largest values first)
  */
-static int one_op_cmp_asc(const void *aa, const void *bb)
+static int one_op_cmp(const void *aa, const void *bb)
 {
     const struct one_op *a = aa, *b = bb;
     if (a->value < b->value) return -1;
     else if (a->value > b->value) return 1;
-    else return 0;
-}
-
-static int one_op_cmp_desc(const void *aa, const void *bb)
-{
-    const struct one_op *a = aa, *b = bb;
-    if (a->value < b->value) return 1;
-    else if (a->value > b->value) return -1;
     else return 0;
 }
 
@@ -1766,130 +1758,181 @@ static inline sqlite3_int64 perf_tp_field(struct tp_private *priv, struct tp_eve
     return -1;
 }
 
-/*
- * Query op_table to compute the value range [left_value, right_value] for indexed field.
+/**
+ * query_op_table - Compute the next valid segment [left, right] from WHERE constraints.
  *
- * This function processes constraints on the indexed field and narrows down the search
- * range. It handles NE (!=) by splitting the range into multiple segments that are
- * iterated one at a time.
+ * @table:       Array of constraints, MUST be sorted by value in ascending order.
+ * @nr_ops:      Number of constraints in the table.
+ * @field:       The field index to filter on (only process constraints matching this field).
+ * @desc:        Iteration direction: 0 = ascending (left-to-right), 1 = descending (right-to-left).
+ * @left_value:  IN/OUT: Current search window's lower bound.
+ * @right_value: IN/OUT: Current search window's upper bound.
  *
- * The op_table MUST be sorted by value in ascending order before calling this function.
- * This ordering is critical for NE handling: each call processes one segment, and
- * the next segment starts from (right_value + 1).
+ * Return: 0 if a valid segment is found, -1 if no valid segment exists (empty set).
  *
- * Constraint to range mapping (multiple constraints use AND logic):
- *   - EQ (==): [value, value]
- *   - GE (>=): [value, +inf)      -> left_value = max(left_value, value)
- *   - LE (<=): (-inf, value]      -> right_value = min(right_value, value)
- *   - GT (>):  [value+1, +inf)    -> left_value = max(left_value, value+1)
- *   - LT (<):  (-inf, value-1]    -> right_value = min(right_value, value-1)
- *   - NE (!=): splits range at value, returns segment before or after value
+ * OVERVIEW
+ * --------
+ * This function processes SQL WHERE constraints on an indexed field and computes the
+ * next valid integer segment. NE (!=) constraints may split the range into multiple
+ * disjoint segments, which are returned one at a time across successive calls.
  *
- * Two-pass algorithm (critical for correctness):
- *   Pass 1: Process EQ/GE/LE/GT/LT to establish base range boundaries
- *   Pass 2: Process NE within the established boundaries
+ * CONSTRAINT MAPPING (all constraints use AND logic)
+ * --------------------------------------------------
+ *   Operator  | Range Effect              | Implementation
+ *   ----------|---------------------------|-------------------------------------
+ *   EQ (==)   | [value, value]            | left = max(left, value); right = min(right, value)
+ *   GE (>=)   | [value, +inf)             | left = max(left, value)
+ *   LE (<=)   | (-inf, value]             | right = min(right, value)
+ *   GT (>)    | [value+1, +inf)           | left = max(left, value+1)
+ *   LT (<)    | (-inf, value-1]           | right = min(right, value-1)
+ *   NE (!=)   | Excludes 'value'          | Splits range, handled in Pass 2
  *
- * This two-pass approach fixes a bug where NE constraints outside the valid
- * range would incorrectly affect boundary calculation. For example:
- *   "pid != 5 AND pid > 10 AND pid != 20 AND pid < 100 AND pid != 200"
- *   Pass 1: GT(10), LT(100) -> base range [11, 99]
- *   Pass 2: NE(5) ignored (outside), NE(20) splits range, NE(200) ignored
- *   Result: First segment [11, 19], second segment [21, 99]
+ * TWO-PASS ALGORITHM
+ * ------------------
+ * Pass 1: Establish base range [L, R]
+ *   - Process EQ/GE/LE/GT/LT to find the intersection of all range constraints.
+ *   - If constraints conflict (e.g., pid > 100 AND pid < 50), returns -1 immediately.
  *
- * Example: "pid > 10 AND pid < 100 AND pid != 50" (ascending order)
- *   Sorted op_table: [{GT,10}, {NE,50}, {LT,100}]
- *   First call:  [INT64_MIN, INT64_MAX] -> [11, 49] (stops at NE 50)
- *   Second call: [50, INT64_MAX] -> [51, 99] (skips past NE 50, then LT 100)
+ * Pass 2: Split range by NE constraints
+ *   - The op_table is sorted by value, so NE values appear in order.
+ *   - Ascending (desc=0):  Scan left-to-right, find the first NE that cuts [L, R].
+ *   - Descending (desc=1): Scan right-to-left, find the first NE that cuts [L, R].
+ *   - NE values outside [L, R] are ignored.
+ *   - NE values at the boundary shrink the boundary (e.g., L++ or R--), and prevent INT64 overflow.
+ *   - NE values inside [L, R] split the range and return the first sub-segment.
+ *
+ * WHY TWO-PASS?
+ * -------------
+ * Single-pass would let NE values outside the valid range incorrectly affect boundaries.
+ * Example: "pid != 5 AND pid > 10 AND pid != 20 AND pid < 100 AND pid != 200"
+ *   - Pass 1: GT(10), LT(100) -> base range [11, 99]
+ *   - Pass 2: NE(5) ignored (< 11), NE(20) splits [11,99] -> [11,19], NE(200) ignored (> 99)
+ *   - Result: First call returns [11, 19], second call returns [21, 99]
+ *
  */
-static inline void query_op_table(struct one_op *table, int nr_ops, int field, int desc,
-                                  int64_t *left_value, int64_t *right_value)
+static inline int query_op_table(struct one_op *table, int nr_ops, int field, int desc,
+                                 int64_t *left_value, int64_t *right_value)
 {
-    int i, op;
+    int i, op, op_ne = 0;
     int64_t op_value;
 
-    /*
-     * Pass 1: Establish base range from EQ/GE/LE/GT/LT constraints.
-     * These operators define the fundamental boundaries before NE splitting.
-     */
+    /* Pass 1: Compute base range [L, R] from EQ/GE/LE/GT/LT constraints */
     for (i = 0; i < nr_ops; i++) {
         if (table[i].field != field) continue;
         op = table[i].op;
         op_value = table[i].value;
         switch (op) {
-            case EQ: /* EQ: constrain to [value, value], fallthrough to set both bounds */
-            case GE: *left_value = max(*left_value, op_value); if (op == GE) break; /* fallthrough */
+            case EQ: *left_value = max(*left_value, op_value);
+                     *right_value = min(*right_value, op_value); break;
+            case GE: *left_value = max(*left_value, op_value); break;
             case LE: *right_value = min(*right_value, op_value); break;
             case GT: *left_value = max(*left_value, op_value + 1); break;
             case LT: *right_value = min(*right_value, op_value - 1); break;
+            case NE: op_ne++; break;
             default: break;
         }
     }
 
+    /* Conflicting constraints result in empty set */
+    if (*left_value > *right_value)
+        return -1;
+
+    /* No NE constraints: the entire base range is the result */
+    if (op_ne == 0)
+        return 0;
+
     /*
-     * Pass 2: Process NE constraints within established boundaries.
-     * NE splits the range into segments. Since op_table is sorted by value,
-     * we process segments in order based on iteration direction:
-     *   - Ascending (desc=0):  left-to-right, find leftmost segment first
-     *   - Descending (desc=1): right-to-left, find rightmost segment first
+     * Pass 2: Split range by NE constraints.
+     * Table is sorted ascending, so we scan in the appropriate direction.
      */
-    for (i = 0; i < nr_ops; i++) {
-        if (table[i].field != field) continue;
-        op = table[i].op;
-        op_value = table[i].value;
-        if (op == NE) {
-            if (desc) {
-                /*
-                 * Descending: gradually approach rightmost segment.
-                 * If NE value is before the right boundary, start current
-                 * segment after NE value. Otherwise, just skip it.
-                 */
-                if (op_value < *right_value)
+    if (desc) {
+        /* Descending: scan from largest to smallest NE value */
+        for (i = nr_ops - 1; i >= 0; i--) {
+            if (table[i].field != field) continue;
+            if (table[i].op == NE) {
+                op_value = table[i].value;
+
+                if (op_value > *right_value)
+                    continue;           /* NE outside window (right side), skip */
+
+                if (op_value == *right_value) {
+                    if (*right_value == INT64_MIN)
+                        return -1;      /* Overflow protection */
+                    (*right_value)--;   /* NE at boundary, shrink and continue */
+                } else {
+                    /* NE inside window: segment is [NE+1, R], done */
                     *left_value = max(*left_value, op_value + 1);
-                else
+                    break;
+                }
+            }
+        }
+    } else {
+        /* Ascending: scan from smallest to largest NE value */
+        for (i = 0; i < nr_ops; i++) {
+            if (table[i].field != field) continue;
+            if (table[i].op == NE) {
+                op_value = table[i].value;
+
+                if (op_value < *left_value)
+                    continue;           /* NE outside window (left side), skip */
+
+                if (op_value == *left_value) {
+                    if (*left_value == INT64_MAX)
+                        return -1;      /* Overflow protection */
+                    (*left_value)++;    /* NE at boundary, shrink and continue */
+                } else {
+                    /* NE inside window: segment is [L, NE-1], done */
                     *right_value = min(*right_value, op_value - 1);
-            } else {
-                /*
-                 * Ascending: gradually approach leftmost segment.
-                 * If NE value is at or before left boundary, skip past it.
-                 * Otherwise, end current segment just before NE value.
-                 */
-                if (op_value <= *left_value)
-                    *left_value = max(*left_value, op_value + 1);
-                else
-                    *right_value = min(*right_value, op_value - 1);
+                    break;
+                }
             }
         }
     }
+
+    /* NE processing may have collapsed the segment */
+    if (*left_value > *right_value)
+        return -1;
+
+    return 0;
 }
 
-/*
- * Index iteration states:
- *   INDEX_DONE:     No more segments to iterate, cursor exhausted
- *   INDEX_CONT:     Found a valid segment, continue iteration
- *   INDEX_ALL_NODE: No index constraints, fall back to full list scan
- */
-enum {INDEX_DONE, INDEX_CONT, INDEX_ALL_NODE};
+/* Return values for perf_tp_do_index() */
+enum {
+    INDEX_DONE,     /* No more segments, iteration complete */
+    INDEX_CONT,     /* Valid segment found in [leftmost, rightmost] */
+    INDEX_ALL_NODE  /* No index constraints, use full table scan */
+};
 
-/*
- * Compute and iterate through index segments based on WHERE constraints.
+/**
+ * perf_tp_do_index - Find the next valid index segment for cursor iteration.
  *
- * This function implements segment-based index iteration. Each call finds the
- * next valid segment of IndexNodes that satisfy the constraints. NE constraints
- * may split the search space into multiple disjoint segments.
+ * This function locates IndexNodes that satisfy WHERE constraints on the indexed
+ * field. NE (!=) constraints may split the value space into disjoint segments,
+ * so this function is called repeatedly until all segments are exhausted.
  *
- * Iteration flow:
- *   1. Call query_op_table() to compute [left_op_value, right_op_value] range
- *   2. Find leftmost and rightmost IndexNodes within this range
- *   3. Validate that actual nodes exist within the computed range
- *   4. Update left_op_value for next segment (right_op_value + 1)
- *   5. Return INDEX_CONT if valid segment found, INDEX_DONE otherwise
+ * ITERATION MODEL
+ * ---------------
+ * The index tree maps field values to IndexNodes. Each segment [L, R] defines
+ * a contiguous range of values to search. The cursor walks through segments:
  *
- * The cursor iterates: segment1[leftmost..rightmost] -> segment2[...] -> ...
+ *   Ascending:  [L1, R1] -> [R1+1, ...] -> [L2, R2] -> ... -> exhausted
+ *   Descending: [L1, R1] -> [..., L1-1] -> [L2, R2] -> ... -> exhausted
  *
- * Returns:
- *   INDEX_CONT:     Valid segment found, cursor->leftmost/rightmost are set
- *   INDEX_DONE:     No more valid segments
- *   INDEX_ALL_NODE: No effective constraints on indexed field, use full scan
+ * ALGORITHM
+ * ---------
+ * 1. query_op_table(): Compute segment [left_op_value, right_op_value]
+ * 2. find_IndexNode():  Locate actual nodes within the segment
+ *      - leftmost  = first node with value >= left_op_value
+ *      - rightmost = last node with value <= right_op_value
+ * 3. Validate: Ensure nodes exist and fall within constraints
+ * 4. Advance: Move search window to next segment for subsequent call
+ *
+ * TERMINATION
+ * -----------
+ * - Ascending:  terminates when left_op_value == right_op_value == INT64_MAX
+ * - Descending: terminates when left_op_value == right_op_value == INT64_MIN
+ *
+ * Return: INDEX_CONT (segment found), INDEX_DONE (exhausted), INDEX_ALL_NODE (no constraints)
  */
 static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
 {
@@ -1911,8 +1954,9 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
         if (unlikely(table->verbose))
             printf("    Query '%s' IN [%ld, %ld]\n", index_field_name,
                         cursor->left_op_value, cursor->right_op_value);
-        query_op_table(cursor->op_table, cursor->nr_ops, priv->index_field, ii->desc,
-                        &cursor->left_op_value, &cursor->right_op_value);
+        if (query_op_table(cursor->op_table, cursor->nr_ops, priv->index_field, ii->desc,
+                        &cursor->left_op_value, &cursor->right_op_value) < 0)
+            return INDEX_DONE;
         if (unlikely(table->verbose))
             printf("    Index '%s' IN [%ld, %ld]\n", index_field_name,
                         cursor->left_op_value, cursor->right_op_value);
@@ -1922,52 +1966,49 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
             cursor->left_op_value == INT64_MIN && cursor->right_op_value == INT64_MAX)
             return INDEX_ALL_NODE;
 
-        if (cursor->left_op_value <= cursor->right_op_value) {
-            /* Find boundary nodes: first node >= left, last node <= right */
-            cursor->leftmost = find_IndexNode(cursor->index_tree, GE, cursor->left_op_value);
-            cursor->rightmost = find_IndexNode(cursor->index_tree, LE, cursor->right_op_value);
-            left_value = cursor->leftmost ? cursor->leftmost->value : INT64_MAX;
-            right_value = cursor->rightmost ? cursor->rightmost->value : INT64_MIN;
+        /* Find boundary nodes: first node >= left, last node <= right */
+        cursor->leftmost = find_IndexNode(cursor->index_tree, GE, cursor->left_op_value);
+        cursor->rightmost = find_IndexNode(cursor->index_tree, LE, cursor->right_op_value);
+        left_value = cursor->leftmost ? cursor->leftmost->value : INT64_MAX;
+        right_value = cursor->rightmost ? cursor->rightmost->value : INT64_MIN;
 
-            /* Validate: actual nodes must exist within the constraint range */
-            if (left_value <= right_value && left_value >= cursor->left_op_value &&
-                right_value <= cursor->right_op_value) {
-                if (unlikely(table->verbose))
-                    printf("          '%s' IN [%ld, %ld]\n", index_field_name, left_value, right_value);
-                if (unlikely(!cursor->leftmost || !cursor->rightmost)) {
-                    fprintf(stderr, "%s: Indexing BUG: [%ld, %ld] NOT IN [%ld, %ld]\n", priv->table_name,
-                            left_value, right_value, cursor->left_op_value, cursor->right_op_value);
-                    cursor->left_op_value = INT64_MAX;
-                    return INDEX_DONE;
-                }
-                ret = INDEX_CONT;
+        /* Validate: actual nodes must exist within the constraint range */
+        if (left_value <= right_value && left_value >= cursor->left_op_value &&
+            right_value <= cursor->right_op_value) {
+            if (unlikely(table->verbose))
+                printf("          '%s' IN [%ld, %ld]\n", index_field_name, left_value, right_value);
+            if (unlikely(!cursor->leftmost || !cursor->rightmost)) {
+                fprintf(stderr, "%s: Indexing BUG: [%ld, %ld] NOT IN [%ld, %ld]\n", priv->table_name,
+                        left_value, right_value, cursor->left_op_value, cursor->right_op_value);
+                cursor->left_op_value = INT64_MAX;
+                return INDEX_DONE;
             }
+            ret = INDEX_CONT;
+        }
 
+        /*
+         * Advance to next segment based on iteration direction.
+         * Termination condition: left == right (INT64_MAX for asc, INT64_MIN for desc)
+         */
+        if (ii->desc) {
             /*
-             * Advance to next segment based on iteration direction.
-             * Termination condition: left == right (INT64_MAX for asc, INT64_MIN for desc)
+             * Descending: move from right to left.
+             * Current segment [L, R] processed, next search range: [INT64_MIN, L-1]
              */
-            if (ii->desc) {
-                /*
-                 * Descending: move from right to left.
-                 * Current segment [L, R] processed, next search range: [INT64_MIN, L-1]
-                 */
-                cursor->right_op_value = cursor->left_op_value == INT64_MIN ? INT64_MIN :
-                                         cursor->left_op_value - 1;
-                cursor->left_op_value = INT64_MIN;
-            } else {
-                /*
-                 * Ascending: move from left to right.
-                 * Current segment [L, R] processed, next search range: [R+1, INT64_MAX]
-                 */
-                cursor->left_op_value = cursor->right_op_value == INT64_MAX ? INT64_MAX :
-                                        cursor->right_op_value + 1;
-                cursor->right_op_value = INT64_MAX;
-            }
+            cursor->right_op_value = cursor->left_op_value == INT64_MIN ? INT64_MIN :
+                                        cursor->left_op_value - 1;
+            cursor->left_op_value = INT64_MIN;
+        } else {
+            /*
+             * Ascending: move from left to right.
+             * Current segment [L, R] processed, next search range: [R+1, INT64_MAX]
+             */
+            cursor->left_op_value = cursor->right_op_value == INT64_MAX ? INT64_MAX :
+                                    cursor->right_op_value + 1;
+            cursor->right_op_value = INT64_MAX;
+        }
 
-            if (ret == INDEX_CONT) return ret;
-        } else
-            return INDEX_DONE;  /* Invalid range: left > right */
+        if (ret == INDEX_CONT) return ret;
     }
     return INDEX_DONE;
 }
@@ -2258,14 +2299,8 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
                 cursor->op_table[i].value = sqlite3_value_int64(argv[i]);
 
             if (!priv->init) {
-                /*
-                 * Sort op_table by value based on iteration direction.
-                 * This is required for correct NE constraint handling:
-                 *   - Ascending:  sort ascending to process leftmost segments first
-                 *   - Descending: sort descending to process rightmost segments first
-                 */
-                qsort(cursor->op_table, cursor->nr_ops, sizeof(*cursor->op_table),
-                        ii->desc ? one_op_cmp_desc : one_op_cmp_asc);
+                /* Sort op_table by value (ascending) for query_op_table() */
+                qsort(cursor->op_table, cursor->nr_ops, sizeof(*cursor->op_table), one_op_cmp);
             }
             perf_tp_ftrace_filter(cursor);
         }
