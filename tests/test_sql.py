@@ -385,3 +385,264 @@ def test_sql_ipv6_str_inet_sock(runtime, memleak_check):
                     assert ':' in source_ipv6, f"Expected IPv6 format (contains :), got: {source_ipv6}"
                 if dest_ipv6 and dest_ipv6 != '??':
                     assert ':' in dest_ipv6, f"Expected IPv6 format (contains :), got: {dest_ipv6}"
+
+def test_sql_index_attribute(runtime, memleak_check):
+    """Test index= attribute to manually specify index field"""
+    # perf-prof sql -e 'sched:sched_wakeup//index=pid/' -i 1000 --query 'SELECT target_cpu, COUNT(*) as count FROM sched_wakeup WHERE target_cpu < 4 GROUP BY target_cpu'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup//index=pid/', '-i', '1000', '-m', '64',
+                     '--query', 'SELECT target_cpu, COUNT(*) as count FROM sched_wakeup WHERE target_cpu < 4 GROUP BY target_cpu'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        if std == 'stdout' and 'for indexing' in line:
+            assert 'pid' in line and '(not used)' in line, f"Should show indexing in metadata, got: {line}"
+        # Verify CPU numbers are in expected range
+        if std == 'stdout' and '|' in line and 'target_cpu' not in line and line.strip() and '---' not in line:
+            cpu_val = line.split('|')[0].strip()
+            if cpu_val.isdigit():
+                assert int(cpu_val) < 4, f"CPU {cpu_val} should be < 4"
+
+def test_sql_symbolic_single_param_kvm(runtime, memleak_check):
+    """Test single-parameter symbolic() function with KVM exit events"""
+    # perf-prof sql -e kvm:kvm_exit -i 1000 --query "SELECT symbolic(exit_reason) as reason, COUNT(*) FROM kvm_exit GROUP BY exit_reason"
+    prof = PerfProf(['sql', '-e', 'kvm:kvm_exit', '-i', '1000', '-m', '64',
+                     '--query', "SELECT symbolic(exit_reason) as reason, COUNT(*) as count FROM kvm_exit GROUP BY exit_reason ORDER BY count DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Should see symbolic names instead of just numbers
+        if std == 'stdout' and '|' in line and 'reason' not in line and line.strip() and '---' not in line:
+            reason = line.split('|')[0].strip()
+            # Known KVM exit reasons include: HLT, IO, MSR, CPUID, etc.
+            if reason and reason != 'UNKNOWN' and reason != '??':
+                # Should be a readable name, not just a number
+                assert not reason.isdigit(), f"Expected symbolic name, got numeric: {reason}"
+
+def test_sql_symbolic_single_param_softirq(runtime, memleak_check):
+    """Test single-parameter symbolic() function with softirq_entry events"""
+    # perf-prof sql -e irq:softirq_entry -i 1000 --query "SELECT symbolic(vec) as irq_type, COUNT(*) FROM softirq_entry GROUP BY vec"
+    prof = PerfProf(['sql', '-e', 'irq:softirq_entry', '-i', '1000', '-m', '64',
+                     '--query', "SELECT symbolic(vec) as irq_type, COUNT(*) as count FROM softirq_entry GROUP BY vec ORDER BY count DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Should see softirq names: TIMER, NET_RX, SCHED, RCU, etc.
+        if std == 'stdout' and '|' in line and 'irq_type' not in line and line.strip() and '---' not in line:
+            irq_type = line.split('|')[0].strip()
+            if irq_type and irq_type != 'UNKNOWN' and irq_type != '??':
+                # Should be a known softirq name
+                known_softirqs = ['HI', 'TIMER', 'NET_TX', 'NET_RX', 'BLOCK', 'BLOCK_IOPOLL',
+                                 'TASKLET', 'SCHED', 'HRTIMER', 'RCU']
+                assert irq_type in known_softirqs, f"Expected known softirq name, got: {irq_type}"
+
+def test_sql_event_metadata(runtime, memleak_check):
+    """Test event_metadata to check available single-parameter symbolic functions"""
+    # perf-prof sql -e kvm:kvm_exit -i 1000 --query "SELECT table_name, function_list FROM event_metadata"
+    prof = PerfProf(['sql', '-e', 'kvm:kvm_exit', '-i', '1000', '-m', '64',
+                     '--query', "SELECT table_name, function_list FROM event_metadata"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify we see event metadata including symbolic function info
+        if std == 'stdout' and 'kvm_exit' in line:
+            assert 'symbolic(exit_reason)' in line, f"Should show symbolic functions in metadata, got: {line}"
+
+def test_sql_syscall_raw_syscalls(runtime, memleak_check):
+    """Test syscall() function with raw_syscalls:sys_enter event"""
+    # perf-prof sql -e raw_syscalls:sys_enter -i 1000 --query "SELECT syscall(id) as sys_name, COUNT(*) FROM sys_enter GROUP BY id"
+    prof = PerfProf(['sql', '-e', 'raw_syscalls:sys_enter', '-i', '1000', '-m', '512',
+                     '--query', "SELECT syscall(id) as sys_name, COUNT(*) as count FROM sys_enter GROUP BY id ORDER BY count DESC LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Should see syscall names: read, write, open, close, etc.
+        if std == 'stdout' and '|' in line and 'sys_name' not in line and line.strip() and '---' not in line:
+            sys_name = line.split('|')[0].strip()
+            if sys_name and sys_name != '??':
+                # Should be a known syscall name, not a number
+                assert not sys_name.isdigit(), f"Expected syscall name, got numeric: {sys_name}"
+                # Verify it looks like a syscall (common syscalls)
+                common_syscalls = ['read', 'write', 'open', 'openat', 'close', 'pread64', 'pwrite64',
+                                 'readv', 'writev', 'access', 'pipe', 'select', 'sched_yield',
+                                 'mmap', 'mprotect', 'munmap', 'brk', 'rt_sigaction', 'rt_sigprocmask',
+                                 'ioctl', 'pread64', 'pwrite64', 'readv', 'writev', 'access',
+                                 'pipe', 'select', 'sched_yield', 'mremap', 'msync', 'mincore',
+                                 'madvise', 'shmget', 'shmat', 'shmctl', 'dup', 'dup2', 'pause']
+                # Note: We don't require it to be in common_syscalls as there are many syscalls
+                # but it should be a valid identifier
+                assert sys_name.replace('_', '').isalnum(), f"Invalid syscall name: {sys_name}"
+
+def test_sql_syscall_sysevents(runtime, memleak_check):
+    """Test syscall() function with syscalls:sys_enter_* events"""
+    # perf-prof sql -e syscalls:sys_enter_openat -i 1000 --query "SELECT syscall(__syscall_nr) as sys_name, COUNT(*) FROM sys_enter_openat"
+    prof = PerfProf(['sql', '-e', 'syscalls:sys_enter_openat', '-i', '1000', '-m', '64',
+                     '--query', "SELECT syscall(__syscall_nr) as sys_name, COUNT(*) as count FROM sys_enter_openat"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Should see 'openat' as the syscall name
+        if std == 'stdout' and '|' in line and 'sys_name' not in line and line.strip() and '---' not in line:
+            sys_name = line.split('|')[0].strip()
+            if sys_name and sys_name != '??':
+                assert sys_name == 'openat', f"Expected 'openat', got: {sys_name}"
+
+def test_sql_virtual_table_constraint_pushdown(runtime, memleak_check):
+    """Test Virtual Table constraint pushdown with WHERE clause"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT pid, comm FROM sched_wakeup WHERE pid > 100 AND prio = 120"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, comm, COUNT(*) as count FROM sched_wakeup WHERE pid > 100 AND prio = 120 GROUP BY pid LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        if std == 'stdout' and 'SQL Query planner filter' in line:
+            assert 'pid>100&&prio==120' in line, f"Should show filter in metadata, got: {line}"
+        # Verify pid > 100 constraint is satisfied
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            if pid_val.isdigit():
+                assert int(pid_val) > 100, f"PID {pid_val} should be > 100"
+
+def test_sql_virtual_table_various_operators(runtime, memleak_check):
+    """Test Virtual Table with various comparison operators"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT pid FROM sched_wakeup WHERE pid < 100 OR pid > 2000"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, comm, COUNT(*) as count FROM sched_wakeup WHERE pid < 100 OR pid > 2000 GROUP BY pid"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        if std == 'stdout' and 'SQL Query planner filter' in line:
+            assert '(pid<100)||(pid>2000)' in line, f"Should show filter in metadata, got: {line}"
+        # Verify pid range constraint is satisfied
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            if pid_val.isdigit():
+                pid_int = int(pid_val)
+                assert pid_int < 100 or pid_int > 2000, f"PID {pid_int} should be in range [0, 100] [2000, ]"
+
+def test_sql_index_optimization_eq(runtime, memleak_check):
+    """Test index optimization with equality operator"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT * FROM sched_wakeup WHERE pid = 1"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, comm, COUNT(*) as count FROM sched_wakeup WHERE pid = 1 GROUP BY pid, comm LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        if std == 'stdout' and 'field for indexing' in line:
+            assert 'pid' in line, f"Should show indexing in metadata, got: {line}"
+        # Verify pid = 1 constraint is satisfied
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            assert pid_val == '1', f"PID should be exactly 1, got: {pid_val}"
+
+def test_sql_index_optimization_range(runtime, memleak_check):
+    """Test index optimization with range queries"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT pid, COUNT(*) FROM sched_wakeup WHERE pid > 100 AND pid < 2000 GROUP BY pid"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, COUNT(*) as count FROM sched_wakeup WHERE pid > 100 AND pid < 2000 GROUP BY pid"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        if std == 'stdout' and 'field for indexing' in line:
+            assert 'pid' in line, f"Should show indexing in metadata, got: {line}"
+        # Verify range constraints are satisfied
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            if pid_val.isdigit():
+                pid_int = int(pid_val)
+                assert 100 < pid_int < 2000, f"PID {pid_int} should be in range (100, 2000)"
+
+def test_sql_orderby_optimization_asc(runtime, memleak_check):
+    """Test ORDER BY optimization with ASC order using index"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT _time FROM sched_wakeup ORDER BY _time ASC LIMIT 5"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT _time, COUNT(*) as count FROM sched_wakeup GROUP BY _time ORDER BY _time ASC LIMIT 10"])
+    prev_time = None
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify ascending order
+        if std == 'stdout' and '|' in line and '_time' not in line and line.strip() and '---' not in line:
+            time_val = line.split('|')[0].strip()
+            try:
+                time_int = int(time_val)
+                if prev_time is not None:
+                    assert time_int >= prev_time, f"Time should be in ascending order: {prev_time} > {time_int}"
+                prev_time = time_int
+            except ValueError:
+                pass  # Skip if not a number
+
+def test_sql_orderby_optimization_desc(runtime, memleak_check):
+    """Test ORDER BY optimization with DESC order using index"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT _time FROM sched_wakeup ORDER BY _time DESC LIMIT 5"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT _time, COUNT(*) as count FROM sched_wakeup GROUP BY _time ORDER BY _time DESC LIMIT 10"])
+    prev_time = None
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify descending order
+        if std == 'stdout' and '|' in line and '_time' not in line and line.strip() and '---' not in line:
+            time_val = line.split('|')[0].strip()
+            try:
+                time_int = int(time_val)
+                if prev_time is not None:
+                    assert time_int <= prev_time, f"Time should be in descending order: {prev_time} < {time_int}"
+                prev_time = time_int
+            except ValueError:
+                pass  # Skip if not a number
+
+def test_sql_orderby_with_where(runtime, memleak_check):
+    """Test ORDER BY with WHERE clause using index"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT _time, COUNT(*) as count FROM sched_wakeup WHERE pid < 1000 GROUP BY _time ORDER BY _time DESC"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT _time, COUNT(*) as count FROM sched_wakeup WHERE pid < 1000 GROUP BY _time ORDER BY _time DESC LIMIT 10"])
+    prev_time = None
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify descending order and constraint
+        if std == 'stdout' and '|' in line and '_time' not in line and line.strip() and '---' not in line:
+            time_val = line.split('|')[0].strip()
+            try:
+                time_int = int(time_val)
+                assert time_int > 0, f"Time should be > 0 (WHERE constraint), got: {time_int}"
+                if prev_time is not None:
+                    assert time_int <= prev_time, f"Time should be in descending order: {prev_time} < {time_int}"
+                prev_time = time_int
+            except ValueError:
+                pass  # Skip if not a number
+
+def test_sql_ne_constraint_segmentation(runtime, memleak_check):
+    """Test NE (!=) constraint with segmented iteration"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT pid FROM sched_wakeup WHERE pid != 0 AND pid > 10 AND pid < 100"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, COUNT(*) as count FROM sched_wakeup WHERE pid != 0 AND pid > 10 AND pid < 100 GROUP BY pid"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify NE and range constraints are satisfied
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            if pid_val.isdigit():
+                pid_int = int(pid_val)
+                assert pid_int != 0, f"PID should not be 0 (NE constraint), got: {pid_int}"
+                assert 10 < pid_int < 100, f"PID {pid_int} should be in range (10, 100)"
+
+def test_sql_ne_boundary_cases(runtime, memleak_check):
+    """Test NE constraint with values outside the range boundaries"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT pid FROM sched_wakeup WHERE pid > 100 AND pid <= 500 AND pid != 200 AND pid != 10 AND pid != 500"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, COUNT(*) as count FROM sched_wakeup WHERE pid > 100 AND pid <= 500 AND pid != 200 AND pid != 10 AND pid != 500 GROUP BY pid"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify range and NE constraints
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            if pid_val.isdigit():
+                pid_int = int(pid_val)
+                assert 100 < pid_int < 300, f"PID {pid_int} should be in range (100, 500)"
+                assert pid_int != 200, f"PID should not be 200 (NE constraint), got: {pid_int}"
+
+def test_sql_group_by_order_optimization(runtime, memleak_check):
+    """Test ORDER BY optimization with GROUP BY using index"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --query "SELECT pid, COUNT(*) FROM sched_wakeup WHERE pid > 0 GROUP BY pid ORDER BY pid"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64',
+                     '--query', "SELECT pid, COUNT(*) as count FROM sched_wakeup WHERE pid > 0 GROUP BY pid ORDER BY pid LIMIT 20"])
+    prev_pid = None
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Verify GROUP BY with ORDER BY works correctly
+        if std == 'stdout' and '|' in line and 'pid' not in line and line.strip() and '---' not in line:
+            pid_val = line.split('|')[0].strip()
+            if pid_val.isdigit():
+                pid_int = int(pid_val)
+                assert pid_int > 0, f"PID should be > 0 (WHERE constraint), got: {pid_int}"
+                if prev_pid is not None:
+                    assert pid_int > prev_pid, f"PIDs should be in ascending order: {prev_pid} >= {pid_int}"
+                prev_pid = pid_int
