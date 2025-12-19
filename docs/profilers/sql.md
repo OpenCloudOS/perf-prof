@@ -11,7 +11,6 @@
   - 按分析技术：**聚合分析** - 支持事件统计和数据挖掘
 - **最低内核版本**: 需要内核支持 perf_event 子系统 (Linux 2.6.31+)
 - **依赖库**:
-  - libsqlite3 (SQLite数据库引擎，支持3.3.9+版本，推荐3.20.0+)
   - libtraceevent (事件解析)
   - libelf (符号解析)
 - **平台支持**: x86, ARM, ARM64, RISC-V, PowerPC 等主流架构
@@ -21,11 +20,16 @@
   - 使用 `--query` 时如无 `--output2`，必须指定 `-i` 周期间隔
 - **参与联合分析**: 不参与联合分析，作为独立的数据分析工具使用
 - **核心技术**:
-  - SQLite嵌入式数据库
+  - SQLite 3.51.1 嵌入式数据库
   - 事件字段自动映射为SQL列
+  - 双存储模式：文件模式和内存模式
   - 事务批处理优化
-  - 内存数据库与文件数据库双模式
   - 预编译SQL语句复用
+  - Virtual Table约束下推
+  - 基于colUsed的自适应存储模式选择
+  - 单字段红黑树索引
+  - ORDER BY索引优化
+  - 自动注册SQL内置函数
 
 ## 基础用法
 ```bash
@@ -39,9 +43,9 @@ OPTION:
 
 PROFILER OPTION:
 - `-e, --event <EVENT,...>` - 事件选择器，事件名称作为SQL表名（必需）
-  - 支持 `alias=` 属性指定表别名：`-e 'event//alias=table_name/'`
-  - 有多个相同事件时必须使用别名区分
-  - 示例：`-e 'sched:sched_wakeup//alias=wakeup1/',sched:sched_wakeup//alias=wakeup2/'`
+  - 支持 `alias=` 属性指定表别名：`-e 'event//alias=table_name/'` 有多个相同事件时必须使用别名区分
+  - 支持 `index=` 属性手动选择索引字段，必须为INTEGER类型
+  - 示例：`-e 'sched:sched_wakeup//alias=wakeup1/index=pid/',sched:sched_wakeup//alias=wakeup2/'`
 
 - `--query <SQL>` - 执行的SQL查询语句，支持多条语句用 `;` 分隔
   - 查询语句将在周期间隔（`-i`）或程序退出时执行
@@ -150,38 +154,233 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
     - trace event过滤器失败时在用户态执行过滤
   - **属性**:
     - `alias=name`: 设置表别名（默认使用事件名）
+    - `index=field`: 指定索引字段（覆盖自动选择的索引字段，仅内存模式有效）
 
 ### 事件处理
 
-**表结构创建**
-1. 程序启动时自动分析事件结构
-2. 通过 `tep_event_fields()` 获取所有字段定义
-3. 根据字段类型（数值/字符串/数组）生成CREATE TABLE语句
-4. 预编译INSERT语句并持久化复用
+事件处理分为**文件模式**和**内存模式**两种，由`--output2`决定。
 
-**数据插入流程**
+#### 文件模式（`--output2`）
+
+文件模式使用传统的SQLite表存储事件，适合数据持久化和离线分析。
+
+**初始化流程**:
+1. 调用`sql_tp_common_init()`完成通用初始化（字段解析、函数注册）
+2. 通过`tep_event_fields()`获取所有字段定义
+3. 根据字段类型（数值/字符串/数组）生成CREATE TABLE语句
+4. 预编译INSERT语句并标记为PERSISTENT复用
+
+**数据插入流程**:
 1. 接收到perf事件样本
 2. 解析样本数据，提取系统字段和事件字段
 3. 绑定参数到预编译语句（零拷贝绑定）
 4. 执行INSERT语句
-5. 批量提交优化（见性能优化章节）
+5. 批量提交优化（2000条/事务）
 
-**查询执行与清理**
+**查询执行与清理**:
 1. 到达周期间隔或程序退出时触发
 2. 提交未完成的事务
 3. 执行用户指定的SQL查询语句
 4. 输出查询结果（表格格式，自适应列宽）
-5. 清理数据:
-   - 内存数据库：DROP TABLE + CREATE TABLE
-   - 文件数据库：DROP TABLE + CREATE TABLE（保留在文件中）
+5. 清理数据：DROP TABLE + CREATE TABLE（数据保留在文件中）
 
-**性能优化策略**
+#### 内存模式（无`--output2`）
+
+内存模式使用Virtual Table实现零拷贝事件访问，支持查询优化自动推导。
+
+**初始化流程**（`sql_tp_mem()`）:
+1. 调用`sql_tp_common_init()`完成通用初始化
+2. 为所有事件创建Virtual Table（启用`xBestIndex`调用）
+3. 设置`priv->init = 1`开启优化数据收集
+4. 在空表上执行`--query`触发查询规划（`sql_tp_mem_try_exec()`）:
+   - `sqlite3_prepare_v3()`触发`xBestIndex`：收集`colUsed`、WHERE约束、ORDER BY
+   - `sqlite3_step()`触发`xFilter`：从约束生成ftrace filter表达式
+5. 设置`priv->init = 0`停止收集
+6. 分析收集的数据，选择优化策略:
+   - 选择存储模式（Virtual Table vs Regular Table）
+   - 选择索引字段（约束中引用最多的字段）
+   - 将ftrace filter应用到`tp->filter`实现内核态过滤
+7. 为`MEM_REGULAR_TABLE_MODE`的事件创建普通表
+
+**存储模式选择**:
+- `MEM_VIRTUAL_TABLE_MODE`: 事件存储在链表中，按需提取字段
+- `MEM_REGULAR_TABLE_MODE`: 只存储`colUsed`指定的列，通过INSERT插入
+
+**模式选择逻辑**:
+1. **默认选择**（基于`colUsed`字段使用比例）:
+   - `colUsed > 50%` 字段 → `MEM_REGULAR_TABLE_MODE`（INSERT更高效）
+   - `colUsed <= 50%` 字段 → `MEM_VIRTUAL_TABLE_MODE`（按需提取更高效）
+2. **强制使用Virtual Table**:
+   - 有ftrace filter可用时（利用内核态过滤）
+   - 有index可用时（利用索引加速查询）
+
+**数据插入流程**（`sql_tp_mem_sample()`）:
+- `MEM_VIRTUAL_TABLE_MODE`: 将原始事件存入链表，如有索引则同时加入红黑树
+- `MEM_REGULAR_TABLE_MODE`: 解析事件并INSERT所需列到普通表
+
+**查询执行与清理**:
+1. 到达周期间隔或程序退出时触发
+2. 执行用户指定的SQL查询语句
+3. 清理数据：释放链表中所有事件，清空索引树
+
+#### 性能优化策略
+
 - **事务批处理**:
-  - 内存数据库：5000条插入/事务
+  - 内存数据库：不限制事务
   - 文件数据库：2000条插入/事务
 - **预编译语句**: INSERT语句预编译并标记为PERSISTENT复用
 - **零拷贝绑定**: 字符串和BLOB使用SQLITE_STATIC标志，避免数据拷贝
 - **无排序依赖**: 事件按到达顺序直接插入，无需排序
+- **colUsed收集**: 支持`;`分隔的多条SQL语句，所需列会累积
+  ```bash
+  --query "SELECT pid FROM sched_wakeup; SELECT comm FROM sched_wakeup"
+  # colUsed 会包含 pid 和 comm 两列
+  ```
+
+#### Virtual Table约束下推
+
+内存模式的Virtual Table支持WHERE子句约束下推，实现两级过滤优化：
+
+**两级过滤架构**:
+1. **内核态过滤（ftrace filter）**: 在perf_event采样时过滤，最高效
+2. **用户态过滤（op_table）**: 在Virtual Table遍历时过滤，次高效
+
+**ftrace filter生成**（初始化阶段）:
+- 初始化时（`priv->init=1`），`xFilter`将约束转换为ftrace filter表达式
+- 只有内核支持的字段和运算符才能生成ftrace filter
+- 单次`xFilter`内的约束用`&&`组合：`WHERE pid>1000 AND prio<10` → `"pid>1000&&prio<10"`
+- 多次`xFilter`调用的filter用`||`组合：`"(pid>1000)||(prio==120)"`
+- 生成的filter存入`priv->ftrace_filter`，后续应用到`tp->filter`实现内核态过滤
+
+**运行时约束过滤**:
+- **支持的运算符**: `=`, `>`, `<`, `>=`, `<=`, `!=`（仅INTEGER列）
+- **约束传递机制**:
+  - `xBestIndex`: 分析WHERE约束，构建`struct index_info`结构体传递给`xFilter`
+    - 结构体头部为字符串`"perf_tp:<address>"`，EXPLAIN时可显示
+    - 包含约束表（字段、运算符、RHS值）、ORDER BY标志、distinct、colUsed等信息
+  - `xFilter`: 从`idxStr`获取`index_info`指针，复制约束表并绑定argv[]运行时值
+  - `xNext`: 遍历时检查所有约束（AND逻辑），跳过不匹配的事件
+
+- **约束示例**:
+  ```sql
+  SELECT * FROM sched_wakeup WHERE pid = 1234; SELECT * FROM sched_wakeup WHERE prio < 10
+  -- 如果pid和prio是ftrace支持的字段，生成内核过滤器"pid==1234||prio<10"
+  -- 同时在Virtual Table遍历时，为每条查询进行不同的用户态过滤。
+  ```
+
+- **不支持下推的情况**:
+  - STRING/BLOB类型列的约束（由SQLite在`xColumn`返回后过滤）
+  - LIKE、GLOB等模式匹配运算符
+  - 复杂表达式（如`pid + 1 > 100`）
+  - 内核不支持的字段（仅用户态过滤）
+
+#### 单字段索引优化
+
+内存模式支持单字段索引，将 WHERE 查询从 O(n) 全表扫描优化为 O(log n) 索引查找。支持所有整数比较运算符：`=`、`>`、`>=`、`<`、`<=`、`!=`。同时支持 ORDER BY 优化，利用索引的有序性直接提供排序结果，避免 SQLite 的排序开销。
+
+- **索引选择机制**:
+  1. 初始化时在空表上执行 `--query`，触发 SQLite 查询规划
+  2. `xBestIndex` 收集所有 WHERE 约束条件、ORDER BY 列、GROUP BY 列
+  3. 统计每个 INTEGER 字段被引用的次数（WHERE + ORDER BY + GROUP BY），选择引用最多的字段作为索引字段
+  4. 运行时为该字段建立红黑树索引
+  5. 用户可通过 `index=field` 属性覆盖自动选择的索引字段
+
+- **手动指定索引字段**:
+  ```bash
+  # 使用 index= 属性指定索引字段
+  perf-prof sql -e 'sched:sched_wakeup//index=target_cpu/' -i 1000 \
+    --query 'SELECT target_cpu, COUNT(*) FROM sched_wakeup WHERE target_cpu < 4 GROUP BY target_cpu'
+  ```
+  - 如果指定的字段不存在，会输出警告并使用自动选择的字段
+
+- **支持的运算符**:
+  | 运算符 | 索引范围计算 | 说明 |
+  |--------|-------------|------|
+  | `=` (EQ) | [value, value] | 精确匹配 |
+  | `>=` (GE) | left = max(left, value) | 下界约束 |
+  | `>` (GT) | left = max(left, value+1) | 下界约束（不含边界） |
+  | `<=` (LE) | right = min(right, value) | 上界约束 |
+  | `<` (LT) | right = min(right, value-1) | 上界约束（不含边界） |
+  | `!=` (NE) | 分段迭代 | 将范围分割为多个不连续段 |
+
+- **NE (!=) 分段迭代**:
+  当查询包含 `!=` 约束时，索引会将搜索范围分割为多个不连续的段，依次迭代每个段。采用两遍算法确保正确性：
+  1. **Pass 1**: 处理 EQ/GE/LE/GT/LT 建立基础边界
+  2. **Pass 2**: 在已建立的边界内处理 NE 约束
+
+  示例：
+  ```sql
+  SELECT * FROM sched_wakeup WHERE pid > 10 AND pid < 100 AND pid != 50
+  -- Pass 1: GT(10), LT(100) -> 基础范围 [11, 99]
+  -- Pass 2: NE(50) 分割范围
+  -- 索引分段: [11, 49] -> [51, 99]
+  ```
+
+  复杂示例（边界外 NE 被正确忽略）：
+  ```sql
+  SELECT * FROM sched_wakeup WHERE pid != 5 AND pid > 10 AND pid != 20 AND pid < 100 AND pid != 200
+  -- Pass 1: GT(10), LT(100) -> 基础范围 [11, 99]
+  -- Pass 2: NE(5) 忽略（边界外），NE(20) 分割，NE(200) 忽略（边界外）
+  -- 索引分段: [11, 19] -> [21, 99]
+  ```
+
+- **ORDER BY 优化**:
+  当 ORDER BY 的字段与索引字段相同时，索引可以直接提供排序结果，避免 SQLite 的排序开销。
+
+  - **升序 (ASC)**: 从红黑树左侧向右遍历，先输出最小值
+  - **降序 (DESC)**: 从红黑树右侧向左遍历，先输出最大值
+  - **每个 cursor 独立**: 同一个 `--query` 中的多条查询可以有不同的排序方向
+
+  示例：
+  ```sql
+  -- 假设 _time 字段被选为索引字段
+  SELECT * FROM sched_wakeup ORDER BY _time ASC   -- 升序遍历索引
+  SELECT * FROM sched_wakeup ORDER BY _time DESC  -- 降序遍历索引
+
+  -- 同时指定 WHERE 和 ORDER BY
+  SELECT * FROM sched_wakeup WHERE _time > 1000000 ORDER BY _time DESC
+  -- 先用索引定位范围 [1000001, MAX]，再按降序输出
+  ```
+
+  **限制**:
+  - 仅支持单字段 ORDER BY（多字段排序无法优化）
+  - ORDER BY 字段必须与索引字段相同
+
+- **GROUP BY 优化**:
+  同 ORDER BY 优化，SQLite核心会自动选择升序还是降序排列。
+
+- **索引使用示例**:
+  ```sql
+  -- 假设 pid 字段被选为索引字段
+  SELECT * FROM sched_wakeup WHERE pid = 1234              -- 使用索引 O(log n)
+  SELECT * FROM sched_wakeup WHERE pid > 1000              -- 使用索引（范围扫描）
+  SELECT * FROM sched_wakeup WHERE pid >= 100 AND pid < 200  -- 使用索引（范围 [100, 199]）
+  SELECT * FROM sched_wakeup WHERE pid != 0                -- 使用索引（分段迭代）
+  SELECT * FROM sched_wakeup WHERE pid > 10 AND pid < 100 AND prio < 10
+    -- 使用索引扫描 pid 范围 [11, 99]，再过滤 prio < 10
+  ```
+
+- **Cost 模型**（用于查询规划器选择最优方案）:
+  | 约束类型 | Cost | 说明 |
+  |---------|------|------|
+  | ftrace 兼容约束 | 10 | 可下推到内核过滤，最优 |
+  | EQ/NE 整数约束 | 50 | 适合索引查找 |
+  | 范围约束 (GT/LT/GE/LE) | 200 | 需要范围扫描 |
+  | 非整数/不支持约束 | 1000 | 无法优化 |
+
+- **运行时统计**（使用 `-v` 选项查看）:
+  ```
+  SQL query cost: 1 ms
+  SQL stmt status: fullscan_step 0 sort 0 vm_step 6753
+  sched_wakeup: xFilter 2 xEof 1002 xNext 1002 xColumn 1061 xRowid 0 scan_list 1 do_index 1 do_filter 0
+  ```
+  - `SQL query cost`: 查询语句执行耗时
+  - `SQL stmt status`: 查询语句的性能统计
+  - `xFilter, xEof, xNext, xColumn, xRowid`: 对应函数的执行次数
+  - `scan_list`: 全表扫描的次数
+  - `do_index`: 使用索引查找的次数
+  - `do_filter`: 用户态过滤器执行次数
+
 
 ### 参数调优
 
@@ -200,6 +399,7 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 - **统计信息**
   - Total Inserts: 总插入事件数
   - Total Commits: 总事务提交次数
+  - Total SQL Cost: 总查询耗时
 
 ## SQL 内置函数
 
@@ -209,8 +409,10 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 
 | 函数 | 功能 | 触发格式 | 参数类型 | 返回值 |
 |------|------|----------|----------|--------|
-| `symbolic(field, value)` | 数值转符号字符串 | `__print_symbolic()` | TEXT, INTEGER | 符号名或 `"UNKNOWN"` |
+| `symbolic(value)` | 数值转符号字符串（单参数） | `__print_symbolic()` | INTEGER | 符号名或 `"UNKNOWN"` |
+| `symbolic(field, value)` | 数值转符号字符串（双参数） | `__print_symbolic()` | TEXT, INTEGER | 符号名或 `"UNKNOWN"` |
 | `ksymbol(addr)` | 内核地址转符号 | `%pS`, `%ps`, `%pF`, `%pf` | INTEGER | 符号名或 `"??"` |
+| `syscall(nr)` | 系统调用号转名称 | `raw_syscalls:*`, `syscalls:*` | INTEGER | 系统调用名或 `"??"` |
 | `ipv4_str(blob)` | IPv4地址转换（网络序） | `%pI4`, `%pi4` | BLOB(4) | `"x.x.x.x"` 或 `"??"` |
 | `ipv4_hstr(blob)` | IPv4地址转换（主机序） | `%pI4h`, `%pi4h` | BLOB(4) | `"x.x.x.x"` 或 `"??"` |
 | `ipv6_str(blob)` | IPv6地址转换 | `%pI6`, `%pi6` | BLOB(16) | IPv6字符串或 `"??"` |
@@ -225,16 +427,23 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 - **功能**: 将事件字段的数值转换为对应的符号字符串，基于内核 `__print_symbolic()` 宏定义。
 - **语法**:
   ```sql
-  symbolic('field_name', field_value)
-  symbolic('table_name.field_name', field_value)
+  symbolic(field_value)                           -- 单参数形式（仅当只有一个 __print_symbolic 定义时）
+  symbolic('field_name', field_value)             -- 双参数形式
+  symbolic('table_name.field_name', field_value)  -- 带表名的双参数形式
   ```
 - **参数**:
+  - `field_value`: 需要转换的数值（单参数形式）
   - `field_name`: 字段名称（支持所有表）
   - `table_name.field_name`: 完整字段名（指定特定表）
-  - `field_value`: 需要转换的数值
 - **返回值**:
   - 成功：返回对应的符号字符串
   - 失败：返回 `"UNKNOWN"`
+
+- **单参数形式**:
+  - 当所有事件中只有一个 `__print_symbolic` 定义时，可以省略字段名参数
+  - 系统自动使用唯一的符号表进行查找
+  - 可通过 `event_metadata.function_list` 查看可用的单参数形式（如 `symbolic(exit_reason)`）
+  - 示例场景：只监控 `kvm:kvm_exit` 事件时，可直接使用 `symbolic(exit_reason)`
 
 - **工作原理**:
   1. 启动时自动解析事件的 `print_fmt` 格式定义
@@ -280,6 +489,23 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
   1. **自动注册**：只有包含 `%pS/%ps/%pF/%pf` 格式的事件才会注册该函数
   2. **性能**：符号解析有一定开销，建议配合 GROUP BY 减少解析次数
   3. **权限**：需要读取 `/proc/kallsyms`，可能需要 root 权限
+
+### syscall() - 系统调用名称转换函数
+
+- **功能**: 将系统调用号转换为人类可读的系统调用名称。
+- **语法**: `syscall(syscall_nr)`
+- **参数**: `syscall_nr`: 系统调用号（INTEGER类型）
+- **返回值**:
+  - 成功：返回系统调用名称（如 `read`, `write`, `openat`）
+  - 失败：返回 `"??"`（无效的系统调用号）
+
+- **自动注册**: 该函数为以下事件系统自动注册：
+  - `raw_syscalls` 事件：使用 `syscall(id)` 字段
+  - `syscalls` 事件：使用 `syscall(__syscall_nr)` 字段
+
+- **注意事项**:
+  1. **O(1) 查找**：使用内置的 syscalls_table 数组进行快速查找
+  2. **架构相关**：系统调用号与 CPU 架构相关，当前支持 x86, arm 架构
 
 ### IP地址转换函数
 
@@ -419,7 +645,14 @@ perf-prof sql -e irq:softirq_entry,timer:hrtimer_expire_entry -i 1000 \
     FROM hrtimer_expire_entry GROUP BY function
     ORDER BY count DESC LIMIT 10"
 
-# 示例2：TCP连接统计（ipsa_str）
+# 示例2：KVM退出原因统计（单参数 symbolic）
+# 当只有一个 __print_symbolic 定义时，可省略字段名参数
+perf-prof sql -e kvm:kvm_exit -i 1000 \
+  --query "
+    SELECT symbolic(exit_reason) as reason, COUNT(*) as count
+    FROM kvm_exit GROUP BY exit_reason ORDER BY count DESC"
+
+# 示例3：TCP连接统计（ipsa_str）
 perf-prof sql -e tcp:tcp_probe -i 2000 \
   --query "
     SELECT ipsa_str(saddr) as src, ipsa_str(daddr) as dst,
@@ -427,59 +660,26 @@ perf-prof sql -e tcp:tcp_probe -i 2000 \
     FROM tcp_probe
     GROUP BY src, dst ORDER BY packets DESC LIMIT 10"
 
-# 查询事件可用的内置函数
-perf-prof sql -e irq:softirq_entry -i 1000 \
+# 查询事件可用的内置函数（包括单参数 symbolic 的可用性）
+perf-prof sql -e kvm:kvm_exit -i 1000 \
   --query "SELECT table_name, function_list FROM event_metadata"
+# 输出示例: kvm_exit | symbolic(exit_reason)
 ```
 
-## SQLite版本兼容性
+## SQLite版本
 
-perf-prof sql支持新旧两个版本的SQLite库，自动适配不同的系统环境。
+perf-prof 内嵌 SQLite 3.51.1 源码，无需外部依赖库。
 
-### 版本差异
+**编译优化配置**:
+- `SQLITE_THREADSAFE=0`: 单线程模式，禁用互斥锁
+- `SQLITE_DEFAULT_MEMSTATUS=0`: 禁用内存统计
+- `SQLITE_OMIT_DEPRECATED`: 移除废弃接口
+- `SQLITE_OMIT_PROGRESS_CALLBACK`: 移除进度回调
+- `SQLITE_OMIT_SHARED_CACHE`: 移除共享缓存
+- `SQLITE_DEFAULT_LOCKING_MODE=1`: 默认独占锁模式
+- `SQLITE_DEFAULT_SYNCHRONOUS=0`: 默认关闭同步写入
 
-**新版本 (sqlite3_prepare_v3)**:
-- 支持 `SQLITE_PREPARE_PERSISTENT` 标志
-- 预编译语句可复用，性能更好
-- 查询语句自动解析多条SQL（通过pzTail参数）
-- 推荐使用：SQLite 3.20.0+ (2017年8月发布)
-
-**旧版本 (sqlite3_prepare_v2)**:
-- 不支持 `SQLITE_PREPARE_PERSISTENT` 标志
-- 预编译语句仍然可复用，但优化较少
-- 同样支持多条SQL解析（通过pzTail参数）
-- 兼容：SQLite 3.3.9+ (2006年8月发布)
-
-### 自动检测机制
-
-perf-prof在编译时自动检测SQLite版本：
-
-```c
-#if defined(SQLITE_PREPARE_PERSISTENT) && !defined(SQLITE_COMPAT)
-#define USE_SQLITE_PREPARE_V3 1
-#endif
-```
-
-**检测逻辑**:
-1. 如果定义了 `SQLITE_PREPARE_PERSISTENT` 宏 → 使用 v3
-2. 如果同时定义了 `SQLITE_COMPAT` 环境变量 → 强制使用 v2
-3. 否则使用 v2 兼容模式
-
-### 强制兼容模式
-
-如果需要在新版本SQLite上强制使用v2接口（用于测试或兼容性验证）：
-
-```bash
-export CFLAGS=-DSQLITE_COMPAT
-make
-```
-
-### 性能影响
-
-**v3模式性能优势**:
-- 预编译语句标记为PERSISTENT，SQLite可以进行更激进的内部优化
-- 减少语句重新准备的开销
-
+**调试信息**: 使用 `-v` 选项可显示 SQLite 版本信息。
 
 ## 输出
 
