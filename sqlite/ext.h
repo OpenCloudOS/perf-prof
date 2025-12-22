@@ -99,6 +99,7 @@ struct tp_private {
     int best_index_num;             /* Number of constraint sets collected */
     int have_index;                 /* True if index field was selected */
     int index_field;                /* Column index chosen for indexing */
+    bool index_is_str;              /* True if index column is a string type */
     /*
      * Query planner optimization (collected during init phase):
      * col_used:      Bitmask of columns needed by --query (from xBestIndex colUsed).
