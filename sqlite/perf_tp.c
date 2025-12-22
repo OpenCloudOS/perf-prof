@@ -1117,6 +1117,7 @@ struct perf_tp_cursor {
     int nr_ops;                     /* Number of active constraints */
     struct one_op *op_index;        /* Index field constraints only, sorted by value for query_op_boundary() */
     int nr_idx;                     /* Number of index field constraints */
+    int nr_filter_ops;              /* Number of filter operations */
 };
 
 /* Internal operator codes for constraint filtering */
@@ -1486,7 +1487,7 @@ static void dump_pIdxInfo(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
             switch (sqlite3_value_type(value)) {
                 case SQLITE_INTEGER: printf("%lld (INTEGER)", sqlite3_value_int64(value)); break;
                 case SQLITE_FLOAT: printf("%.3f (FLOAT)", sqlite3_value_double(value)); break;
-                case SQLITE_TEXT: printf("%s (TEXT)", sqlite3_value_text(value)); break;
+                case SQLITE_TEXT: printf("'%s' (TEXT)", sqlite3_value_text(value)); break;
                 case SQLITE_BLOB: printf("BLOB[%d]", sqlite3_value_bytes(value)); break;
                 case SQLITE_NULL: printf("NULL"); break;
                 default: printf("?"); break;
@@ -1763,8 +1764,6 @@ static int perf_tp_xClose(sqlite3_vtab_cursor *pCursor)
                 sqlite3_free(VOID_PTR(cursor->op_table[i].value));
         sqlite3_free(cursor->op_table);
     }
-    if (cursor->op_index)
-        sqlite3_free(cursor->op_index);
     sqlite3_free(pCursor);
     return SQLITE_OK;
 }
@@ -2255,7 +2254,7 @@ static inline int perf_tp_do_index(struct perf_tp_cursor *cursor)
          */
         if (!cursor->left.valid && !cursor->right.valid) {
             cursor->index_done = 1;
-            if (table->verbose)
+            if (unlikely(table->verbose))
                 printf("    -> Index DONE\n");
         }
 
@@ -2339,13 +2338,13 @@ static int perf_tp_xNext(sqlite3_vtab_cursor *pCursor)
         }
 
         /* No constraints or reached end of list */
-        if (!cursor->nr_ops ||
+        if (!cursor->nr_filter_ops ||
             cursor->curr == cursor->start)
             break;
 
         priv->do_filter++;
         /* Check all constraints (AND logic) */
-        for (i = 0; i < cursor->nr_ops; i++) {
+        for (i = 0; i < cursor->nr_filter_ops; i++) {
             value = perf_tp_field(priv, cursor->curr, cursor->op_table[i].field);
             op_value = cursor->op_table[i].value;
             switch (cursor->op_table[i].op) {
@@ -2463,7 +2462,7 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
 
     if (unlikely(table->verbose)) {
         if (cursor->nr_ops)
-            printf("%s: %p\n", priv->table_name, ii);
+            printf("%s: %p nr_filter_ops %d nr_idx %d\n", priv->table_name, ii, cursor->nr_filter_ops, cursor->nr_idx);
         for (i = 0; i < cursor->nr_ops; i++) {
             printf("    Filter[%d]: %s %s ", i, ColumnName(priv, cursor->op_table[i].field),
                         OpStr(cursor->op_table[i].op));
@@ -2538,11 +2537,13 @@ static inline void perf_tp_do_filter(struct perf_tp_cursor *cursor)
  * This function is called by SQLite to initialize a cursor for a query.
  * It receives the index_info structure (serialized in idxStr) that was
  * constructed in xBestIndex. It then:
- * 1. Resets any previous cursor state.
+ * 1. Resets any previous cursor state and frees old constraint tables.
  * 2. Binds the actual runtime values from argv[] to the operator table
  *    (op_table) used for filtering in xNext.
- * 3. Handles any index-specific optimizations if available.
- * 4. Advances the cursor to the first matching record by calling xNext.
+ * 3. Separates constraints into index field constraints (op_index) and
+ *    non-index field constraints (filter operations).
+ * 4. Sorts index constraints for efficient boundary queries.
+ * 5. Advances the cursor to the first matching record by calling xNext.
  */
 static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
                            int argc, sqlite3_value **argv)
@@ -2551,7 +2552,7 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
     struct tp_private *priv = table->priv;
     struct perf_tp_cursor *cursor = (void *)pCursor;
     const struct index_info *ii;
-    int i, nr_idx = 0, value_type;
+    int i, text, idx, value_type;
 
     /* Reset previous filter state */
     cursor->scan_list = 1;
@@ -2566,11 +2567,9 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
         sqlite3_free(cursor->op_table);
         cursor->op_table = NULL;
         cursor->nr_ops = 0;
-    }
-    if (cursor->op_index) {
-        sqlite3_free(cursor->op_index);
         cursor->op_index = NULL;
         cursor->nr_idx = 0;
+        cursor->nr_filter_ops = 0;
     }
 
     if (idxStr && argc == idxNum) {
@@ -2589,36 +2588,47 @@ static int perf_tp_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char 
                 return SQLITE_NOMEM;
 
             cursor->nr_ops = argc;
-            memcpy(cursor->op_table, ii->op_table, argc * sizeof(*cursor->op_table));
+            cursor->nr_idx = 0;
+            cursor->nr_filter_ops = 0;
             for (i = 0; i < argc; i++) {
+                text = ii->op_table[i].op & TEXT;
                 value_type = sqlite3_value_type(argv[i]);
-                if (cursor->op_table[i].op & TEXT) {
-                    if (value_type != SQLITE_TEXT)
-                        fprintf(stderr, "value type BUG\n");
-                    cursor->op_table[i].value = (int64_t)(void *)sqlite3_mprintf("%s",  sqlite3_value_text(argv[i]));
-                } else {
-                    if (value_type != SQLITE_INTEGER)
-                        fprintf(stderr, "value type BUG\n");
-                    cursor->op_table[i].value = sqlite3_value_int64(argv[i]);
+
+                if (unlikely(value_type != (text ? SQLITE_TEXT : SQLITE_INTEGER))) {
+                    fprintf(stderr, "ERROR: Filter[%d]: %s %s", i, ColumnName(priv, ii->op_table[i].field),
+                            OpStr(ii->op_table[i].op));
+                    switch (value_type) {
+                        case SQLITE_INTEGER: fprintf(stderr, "%lld (INTEGER)", sqlite3_value_int64(argv[i])); break;
+                        case SQLITE_FLOAT: fprintf(stderr, "%.3f (FLOAT)", sqlite3_value_double(argv[i])); break;
+                        case SQLITE_TEXT: fprintf(stderr, "'%s' (TEXT)", sqlite3_value_text(argv[i])); break;
+                        case SQLITE_BLOB: fprintf(stderr, "BLOB[%d]", sqlite3_value_bytes(argv[i])); break;
+                        case SQLITE_NULL: fprintf(stderr, "NULL"); break;
+                        default: fprintf(stderr, "?"); break;
+                    }
+                    fprintf(stderr, ", Not %s value type\n", text ? "TEXT" : "INTEGER");
                 }
 
                 if (priv->have_index &&
-                    cursor->op_table[i].field == priv->index_field)
-                    nr_idx++;
-            }
+                    ii->op_table[i].field == priv->index_field &&
+                    (ii->op_table[i].op & ~TEXT) < GLOB) {
+                    cursor->nr_idx++;
+                    idx = cursor->nr_ops - cursor->nr_idx;
+                } else
+                    idx = cursor->nr_filter_ops++;
 
+                cursor->op_table[idx].field = ii->op_table[i].field;
+                cursor->op_table[idx].op = ii->op_table[i].op;
+                cursor->op_table[idx].value = !text ? sqlite3_value_int64(argv[i]) :
+                    (int64_t)(void *)sqlite3_mprintf("%s",  sqlite3_value_text(argv[i]));
+            }
+            if (cursor->nr_idx)
+                cursor->op_index = cursor->op_table + cursor->nr_filter_ops;
             /*
-             * Copy the index field constraints to a separate op_index table and
-             * sort the table for NE constraint handling.
+             * Index field constraints are stored in the second half of op_table
+             * (starting at nr_filter_ops offset). Sort them by value for efficient
+             * boundary queries and NE constraint handling.
              */
-            if (!priv->init && priv->have_index && nr_idx != 0) {
-                cursor->op_index = sqlite3_malloc(nr_idx * sizeof(*cursor->op_index));
-                if (!cursor->op_index)
-                    return SQLITE_NOMEM;
-                cursor->nr_idx = 0;
-                for (i = 0; i < cursor->nr_ops; i++)
-                    if (cursor->op_table[i].field == priv->index_field)
-                        cursor->op_index[cursor->nr_idx++] = cursor->op_table[i];
+            if (!priv->init && cursor->nr_idx) {
                 /* Sort op_index by value (ascending) for query_op_boundary() */
                 qsort(cursor->op_index, cursor->nr_idx, sizeof(*cursor->op_index),
                         priv->index_is_str ? one_op_strcmp : one_op_cmp);
