@@ -717,38 +717,44 @@ static struct sql_tp_ctx *sql_tp_common_init(sqlite3 *sql, struct tp_list *tp_li
     for_each_real_tp(ctx->tp_list, tp, i) {
         struct tep_event *event = tep_find_event(ctx->tep, tp->id);
         struct tep_format_field **fields;
-        struct tp_private *priv;
+        struct tp_private *priv = tp->private;
 
-        fields = event ? tep_event_fields(event) : NULL;
-        priv = calloc(1, sizeof(struct tp_private));
         if (!priv) {
-            if (fields) free (fields);
-            goto failed;
+            fields = event ? tep_event_fields(event) : NULL;
+            priv = calloc(1, sizeof(struct tp_private));
+            if (!priv) {
+                if (fields) free (fields);
+                goto failed;
+            }
+            priv->fields = fields;
+
+            for (j = 0; priv->fields && priv->fields[j]; j++);
+            /*
+            * nr_fields = 8 system columns + j event-specific columns
+            * System columns: _pid, _tid, _time, _cpu, _period,
+            *                 common_flags, common_preempt_count, common_pid
+            */
+            priv->nr_fields = 8 + j;
+            priv->table_name = tp->alias ? tp->alias : tp->name;
+            priv->mode = FILE_MODE;
+            INIT_LIST_HEAD(&priv->event_list);
+            priv->index_tree = RB_ROOT;
+
+            tp->private = priv;
+        } else {
+            if (priv->function_list) {
+                free(priv->function_list);
+                priv->function_list = NULL;
+            }
         }
-        priv->fields = fields;
 
-        for (j = 0; priv->fields && priv->fields[j]; j++);
-        /*
-         * nr_fields = 8 system columns + j event-specific columns
-         * System columns: _pid, _tid, _time, _cpu, _period,
-         *                 common_flags, common_preempt_count, common_pid
-         */
-        priv->nr_fields = 8 + j;
-
-        priv->table_name = tp->alias ? tp->alias : tp->name;
-
+        ctx->verbose = tp->dev->env->verbose;
         if (strcmp(tp->sys, "raw_syscalls") == 0 || strcmp(tp->sys, "syscalls") == 0) {
             ctx->sqlite_funcs[SYSCALL].data_type = SQLITE_INTEGER;
             ctx->sqlite_funcs[SYSCALL].func_name = arg_pointer_func[SYSCALL];
             priv->function_list = strdup(strcmp(tp->sys, "raw_syscalls") == 0 ?
                                          "syscall(id)" : "syscall(__syscall_nr)");
         }
-        priv->mode = FILE_MODE;
-        INIT_LIST_HEAD(&priv->event_list);
-        priv->index_tree = RB_ROOT;
-
-        tp->private = priv;
-        ctx->verbose = tp->dev->env->verbose;
     }
 
     /* Register symbolic() function */
@@ -995,11 +1001,13 @@ static int sql_tp_file_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_
                     priv->table_name, sqlite3_errmsg(ctx->sql));
         }
     } else {
-        priv->sample_count++;
-        if (priv->first_sample_time == 0 || data->time < priv->first_sample_time)
-            priv->first_sample_time = data->time;
-        if (data->time > priv->last_sample_time)
-            priv->last_sample_time = data->time;
+        if (priv->mode == FILE_MODE) {
+            priv->sample_count++;
+            if (priv->first_sample_time == 0 || data->time < priv->first_sample_time)
+                priv->first_sample_time = data->time;
+            if (data->time > priv->last_sample_time)
+                priv->last_sample_time = data->time;
+        }
         ret = 0;
     }
 
@@ -1035,14 +1043,18 @@ static void sql_tp_file_reset(struct sql_tp_ctx *ctx)
 struct sql_tp_ctx *sql_tp_file(sqlite3 *sql, struct tp_list *tp_list)
 {
     struct sql_tp_ctx *ctx = sql_tp_common_init(sql, tp_list);
-    if (ctx && sql_create_table(ctx) < 0) {
-        sql_tp_free(ctx);
-        return NULL;
+    if (ctx) {
+        if (sql_create_table(ctx) < 0)
+            goto failed;
+        ctx->sample = sql_tp_file_sample;
+        ctx->reset = sql_tp_file_reset;
+        return ctx;
     }
 
-    ctx->sample = sql_tp_file_sample;
-    ctx->reset = sql_tp_file_reset;
-    return ctx;
+failed:
+    if (ctx)
+        sql_tp_free(ctx);
+    return NULL;
 }
 
 /*
@@ -2808,7 +2820,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
         #define COLUMN(i, name) \
         if (test_bit(i, &priv->col_used)) { \
             col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len, "%s INTEGER, ", name); \
-            if (!priv->insert_stmt) \
+            if (!priv->mem_insert_stmt) \
                 ins_len += snprintf(ins_buf + ins_len, sizeof(ins_buf) - ins_len, "?, "); \
         }
         COLUMN(0, "_pid");
@@ -2834,7 +2846,7 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
             else
                 col_len += snprintf(col_buf + col_len, sizeof(col_buf) - col_len,
                                 "%s INTEGER, ", fields[j]->name);
-            if (!priv->insert_stmt)
+            if (!priv->mem_insert_stmt)
                 ins_len += snprintf(ins_buf + ins_len, sizeof(ins_buf) - ins_len,
                                 "?, ");
         }
@@ -2853,14 +2865,14 @@ static int sql_tp_mem_create_table(struct sql_tp_ctx *ctx)
         }
         priv->created_time = time(NULL);
 
-        if (priv->insert_stmt)
+        if (priv->mem_insert_stmt)
             continue;
 
         snprintf(buf, sizeof(buf), insert_fmt, priv->table_name, ins_buf);
         if (ctx->verbose)
             printf("INSERT SQL: %s\n", buf);
 
-        if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->insert_stmt, NULL) != SQLITE_OK) {
+        if (sqlite3_prepare_v3(ctx->sql, buf, -1, SQLITE_PREPARE_PERSISTENT, &priv->mem_insert_stmt, NULL) != SQLITE_OK) {
             fprintf(stderr, "Failed to prepare insert statement for %s: %s\n", priv->table_name, sqlite3_errmsg(ctx->sql));
             return -1;
         }
@@ -2901,27 +2913,27 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
         }
     } else {
         /* Regular table path: parse and bind only needed columns */
-        sqlite3_reset(priv->insert_stmt);
+        sqlite3_reset(priv->mem_insert_stmt);
 
         // Bind common fields
         if (test_bit(0, &priv->col_used))
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->tid_entry.pid);
+            sqlite3_bind_int(priv->mem_insert_stmt, idx++, data->tid_entry.pid);
         if (test_bit(1, &priv->col_used))
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->tid_entry.tid);
+            sqlite3_bind_int(priv->mem_insert_stmt, idx++, data->tid_entry.tid);
         if (test_bit(2, &priv->col_used))
-            sqlite3_bind_int64(priv->insert_stmt, idx++, data->time);
+            sqlite3_bind_int64(priv->mem_insert_stmt, idx++, data->time);
         if (test_bit(3, &priv->col_used))
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->cpu_entry.cpu);
+            sqlite3_bind_int(priv->mem_insert_stmt, idx++, data->cpu_entry.cpu);
         if (test_bit(4, &priv->col_used))
-            sqlite3_bind_int64(priv->insert_stmt, idx++, data->period);
+            sqlite3_bind_int64(priv->mem_insert_stmt, idx++, data->period);
 
         // common_* (common_type removed - use event_id from event_metadata table)
         if (test_bit(5, &priv->col_used))
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_flags);
+            sqlite3_bind_int(priv->mem_insert_stmt, idx++, data->raw.common.common_flags);
         if (test_bit(6, &priv->col_used))
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_preempt_count);
+            sqlite3_bind_int(priv->mem_insert_stmt, idx++, data->raw.common.common_preempt_count);
         if (test_bit(7, &priv->col_used))
-            sqlite3_bind_int(priv->insert_stmt, idx++, data->raw.common.common_pid);
+            sqlite3_bind_int(priv->mem_insert_stmt, idx++, data->raw.common.common_pid);
 
         /* Parse and bind event-specific fields */
         for (i = 0; priv->fields && priv->fields[i]; i++) {
@@ -2946,7 +2958,7 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
                     len = -1;
                 }
                 // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
-                sqlite3_bind_text(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
+                sqlite3_bind_text(priv->mem_insert_stmt, idx++, ptr, len, SQLITE_STATIC);
             } else if (field->flags & TEP_FIELD_IS_ARRAY) {
                 // BLOB: Array fields without string semantics
                 if (field->flags & TEP_FIELD_IS_DYNAMIC) {
@@ -2959,7 +2971,7 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
                     len = field->size;
                 }
                 // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
-                sqlite3_bind_blob(priv->insert_stmt, idx++, ptr, len, SQLITE_STATIC);
+                sqlite3_bind_blob(priv->mem_insert_stmt, idx++, ptr, len, SQLITE_STATIC);
             } else {
                 // INTEGER: Numeric fields
                 bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
@@ -2977,14 +2989,14 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
                                     : *(unsigned long long *)(base + field->offset);
 
                 if (field->size <= 8)
-                    sqlite3_bind_int64(priv->insert_stmt, idx++, val);
+                    sqlite3_bind_int64(priv->mem_insert_stmt, idx++, val);
                 else
-                    sqlite3_bind_null(priv->insert_stmt, idx++);
+                    sqlite3_bind_null(priv->mem_insert_stmt, idx++);
             }
         }
 
         // Execute the insert statement
-        if (sqlite3_step(priv->insert_stmt) != SQLITE_DONE) {
+        if (sqlite3_step(priv->mem_insert_stmt) != SQLITE_DONE) {
             if (ctx->verbose) {
                 fprintf(stderr, "Failed to insert record into %s: %s\n",
                         priv->table_name, sqlite3_errmsg(ctx->sql));
@@ -3021,9 +3033,9 @@ static void sql_tp_mem_reset(struct sql_tp_ctx *ctx)
             __list_del_entry(&e->link);
             free(e);
         }
-        if (priv->insert_stmt) {
-            sqlite3_finalize(priv->insert_stmt);
-            priv->insert_stmt = NULL;
+        if (priv->mem_insert_stmt) {
+            sqlite3_finalize(priv->mem_insert_stmt);
+            priv->mem_insert_stmt = NULL;
         }
         if (ctx->verbose)
             printf("%s: xFilter %lu xEof %lu xNext %lu xColumn %lu xRowid %lu scan_list %lu do_index %lu do_filter %lu\n",
@@ -3265,9 +3277,12 @@ void sql_tp_free(struct sql_tp_ctx *ctx)
                 __list_del_entry(&e->link);
                 free(e);
             }
+            if (priv->mem_insert_stmt)
+                sqlite3_finalize(priv->mem_insert_stmt);
             if (priv->insert_stmt)
                 sqlite3_finalize(priv->insert_stmt);
             free(priv);
+            tp->private = NULL;
         }
     }
     if (ctx->ksymbol)

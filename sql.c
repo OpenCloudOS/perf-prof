@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <monitor.h>
 #include <tep.h>
 
@@ -14,11 +15,16 @@ struct sql_ctx {
     int nr_query;
     struct query_ctx {
         sqlite3_stmt *stmt;
+        sqlite3_stmt *verify_stmt;
         int *col_widths;
         const char *next_query;
     } *query;
 
     sqlite3_stmt *update_metadata_stmt;
+
+    sqlite3 *verify_sql;
+    struct sql_tp_ctx *verify_tp_ctx;
+    sqlite3_stmt *verify_update_metadata_stmt;
 
     /* Transaction optimization fields */
     bool in_transaction;
@@ -40,6 +46,31 @@ static int sqlite_profile(unsigned trace, void *context, void *stmt, void *elaps
         ctx->total_sql_exec_cost += *(uint64_t *)elapse;
     }
     return 0;
+}
+
+static sqlite3 *open_db(const char *filename)
+{
+    sqlite3 *sql;
+
+    if (sqlite3_open(filename ? : ":memory:", &sql) != SQLITE_OK)
+        return NULL;
+
+    /* Single-threaded serial write optimization */
+    sqlite3_exec(sql, "PRAGMA page_size = 65536;", NULL, NULL, NULL);
+    sqlite3_exec(sql, "PRAGMA journal_mode = OFF;", NULL, NULL, NULL);
+    sqlite3_exec(sql, "PRAGMA synchronous = OFF;", NULL, NULL, NULL);
+    sqlite3_exec(sql, "PRAGMA locking_mode = EXCLUSIVE;", NULL, NULL, NULL);
+    sqlite3_exec(sql, "PRAGMA temp_store = MEMORY;", NULL, NULL, NULL);
+
+    if (filename) {
+        /* File database: aggressive optimization for maximum performance */
+        sqlite3_exec(sql, "PRAGMA cache_size = -131072;", NULL, NULL, NULL);  /* 128MB cache */
+        sqlite3_exec(sql, "PRAGMA mmap_size = 536870912;", NULL, NULL, NULL); /* 512MB mmap */
+    } else {
+        /* Memory database: lighter configuration */
+        sqlite3_exec(sql, "PRAGMA cache_size = -65536;", NULL, NULL, NULL);   /* 64MB cache */
+    }
+    return sql;
 }
 
 static int monitor_ctx_init(struct prof_dev *dev)
@@ -116,24 +147,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->tp_list)
         goto failed;
 
-    if (sqlite3_open(env->output2 ? : ":memory:", &ctx->sql) != SQLITE_OK)
+    ctx->sql = open_db(env->output2);
+    if (!ctx->sql)
         goto failed;
-
-    /* Single-threaded serial write optimization */
-    sqlite3_exec(ctx->sql, "PRAGMA page_size = 65536;", NULL, NULL, NULL);
-    sqlite3_exec(ctx->sql, "PRAGMA journal_mode = OFF;", NULL, NULL, NULL);
-    sqlite3_exec(ctx->sql, "PRAGMA synchronous = OFF;", NULL, NULL, NULL);
-    sqlite3_exec(ctx->sql, "PRAGMA locking_mode = EXCLUSIVE;", NULL, NULL, NULL);
-    sqlite3_exec(ctx->sql, "PRAGMA temp_store = MEMORY;", NULL, NULL, NULL);
-
-    if (env->output2) {
-        /* File database: aggressive optimization for maximum performance */
-        sqlite3_exec(ctx->sql, "PRAGMA cache_size = -131072;", NULL, NULL, NULL);  /* 128MB cache */
-        sqlite3_exec(ctx->sql, "PRAGMA mmap_size = 536870912;", NULL, NULL, NULL); /* 512MB mmap */
-    } else {
-        /* Memory database: lighter configuration */
-        sqlite3_exec(ctx->sql, "PRAGMA cache_size = -65536;", NULL, NULL, NULL);   /* 64MB cache */
-    }
 
     if (env->output2)
         ctx->tp_ctx = sql_tp_file(ctx->sql, ctx->tp_list);
@@ -144,9 +160,27 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     sqlite3_trace_v2(ctx->sql, SQLITE_TRACE_PROFILE, sqlite_profile, ctx);
 
+    if (env->verify) {
+        if (!env->output2) {
+            const char *verify_filename = "verify_temp.db";
+            printf("Creating verification database: %s\n", verify_filename);
+            ctx->verify_sql = open_db(verify_filename);
+            if (!ctx->verify_sql)
+                goto failed;
+            unlink(verify_filename);
+
+            ctx->verify_tp_ctx = sql_tp_file(ctx->verify_sql, ctx->tp_list);
+            if (!ctx->verify_tp_ctx)
+                goto failed;
+
+            sqlite3_trace_v2(ctx->verify_sql, SQLITE_TRACE_PROFILE, sqlite_profile, ctx);
+        } else
+            printf("--verify disabled: cannot verify when SQL output is saved to file\n");
+    }
+
     ctx->in_transaction = false;
     ctx->pending_inserts = 0;
-    ctx->batch_size = env->output2 ? 2000 : INT_MAX;  /* Very Larger batch for memory db */
+    ctx->batch_size = (env->output2 || ctx->verify_sql) ? 2000 : INT_MAX;  /* Very Larger batch for memory db */
 
     ctx->total_inserts = 0;
     ctx->total_commits = 0;
@@ -156,6 +190,10 @@ static int monitor_ctx_init(struct prof_dev *dev)
     return 0;
 
 failed:
+    if (ctx->verify_sql)
+        sqlite3_close(ctx->verify_sql);
+    if (ctx->tp_ctx)
+        sql_tp_free(ctx->tp_ctx);
     if (ctx->sql)
         sqlite3_close(ctx->sql);
     if (ctx->tp_list)
@@ -182,20 +220,29 @@ static void monitor_ctx_exit(struct prof_dev *dev)
         for (i = 0; i < ctx->nr_query; i++) {
             if (ctx->query[i].stmt)
                 sqlite3_finalize(ctx->query[i].stmt);
+            if (ctx->query[i].verify_stmt)
+                sqlite3_finalize(ctx->query[i].verify_stmt);
             if (ctx->query[i].col_widths)
                 free(ctx->query[i].col_widths);
         }
         free(ctx->query);
     }
+
+    if (ctx->verify_tp_ctx)
+        sql_tp_free(ctx->verify_tp_ctx);
+    if (ctx->verify_update_metadata_stmt)
+        sqlite3_finalize(ctx->verify_update_metadata_stmt);
+    if (ctx->verify_sql)
+        sqlite3_close(ctx->verify_sql);
+
     sqlite3_close(ctx->sql);
     tp_list_free(ctx->tp_list);
     tep__unref();
     free(ctx);
 }
 
-static int sql_create_metadata_table(struct prof_dev *dev)
+static int create_metadata_table(struct sql_ctx *ctx, sqlite3 *sql, sqlite3_stmt **update_metadata_stmt)
 {
-    struct sql_ctx *ctx = dev->private;
     struct tp *tp;
     int i;
     const char *metadata_table_fmt =
@@ -231,17 +278,17 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     char *errmsg = NULL;
 
     /* Create metadata table */
-    if (sqlite3_exec(ctx->sql, metadata_table_fmt, NULL, NULL, &errmsg) != SQLITE_OK) {
+    if (sqlite3_exec(sql, metadata_table_fmt, NULL, NULL, &errmsg) != SQLITE_OK) {
         fprintf(stderr, "Failed to create metadata table: %s\n", errmsg);
         sqlite3_free(errmsg);
         return -1;
     }
 
     /* Prepare insert statement */
-    if (sqlite3_prepare_v3(ctx->sql, insert_metadata_fmt, -1,
-                          SQLITE_PREPARE_PERSISTENT, &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v3(sql, insert_metadata_fmt, -1,
+                           SQLITE_PREPARE_PERSISTENT, &stmt, NULL) != SQLITE_OK) {
         fprintf(stderr, "Failed to prepare metadata insert statement: %s\n",
-                sqlite3_errmsg(ctx->sql));
+                sqlite3_errmsg(sql));
         return -1;
     }
 
@@ -265,7 +312,7 @@ static int sql_create_metadata_table(struct prof_dev *dev)
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             fprintf(stderr, "Failed to insert metadata for %s: %s\n",
-                    priv->table_name, sqlite3_errmsg(ctx->sql));
+                    priv->table_name, sqlite3_errmsg(sql));
         }
 
         sqlite3_reset(stmt);
@@ -274,21 +321,33 @@ static int sql_create_metadata_table(struct prof_dev *dev)
     sqlite3_finalize(stmt);
 
     /* Prepare update statement */
-    if (sqlite3_prepare_v3(ctx->sql, update_metadata_fmt, -1,
-                          SQLITE_PREPARE_PERSISTENT, &ctx->update_metadata_stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v3(sql, update_metadata_fmt, -1,
+                           SQLITE_PREPARE_PERSISTENT, update_metadata_stmt, NULL) != SQLITE_OK) {
         fprintf(stderr, "Failed to prepare metadata update statement: %s\n",
-                sqlite3_errmsg(ctx->sql));
+                sqlite3_errmsg(sql));
         return -1;
     }
     return 0;
 }
 
-static int sql_update_metadata_table(struct prof_dev *dev)
+static int sql_create_metadata_table(struct prof_dev *dev)
 {
     struct sql_ctx *ctx = dev->private;
+
+    if (create_metadata_table(ctx, ctx->sql, &ctx->update_metadata_stmt) < 0)
+        return -1;
+
+    if (unlikely(ctx->verify_sql) &&
+        create_metadata_table(ctx, ctx->verify_sql, &ctx->verify_update_metadata_stmt) < 0)
+        return -1;
+
+    return 0;
+}
+
+static int update_metadata_table(struct sql_ctx *ctx, sqlite3 *sql, sqlite3_stmt *update_stmt)
+{
     struct tp *tp;
     int i;
-    sqlite3_stmt *update_stmt = ctx->update_metadata_stmt;
 
     /* Update metadata statistics */
     for_each_real_tp(ctx->tp_list, tp, i) {
@@ -303,10 +362,22 @@ static int sql_update_metadata_table(struct prof_dev *dev)
 
         if (sqlite3_step(update_stmt) != SQLITE_DONE) {
             fprintf(stderr, "Failed to insert metadata for %s: %s\n",
-                    priv->table_name, sqlite3_errmsg(ctx->sql));
+                    priv->table_name, sqlite3_errmsg(sql));
         }
     }
     return 0;
+}
+
+static int sql_update_metadata_table(struct prof_dev *dev)
+{
+    struct sql_ctx *ctx = dev->private;
+    int ret, verify_ret = 0;
+
+    ret = update_metadata_table(ctx, ctx->sql, ctx->update_metadata_stmt);
+    if (unlikely(ctx->verify_sql))
+        verify_ret = update_metadata_table(ctx, ctx->verify_sql, ctx->verify_update_metadata_stmt);
+
+    return (ret == 0 && verify_ret == 0) ? 0 : -1;
 }
 
 static int sql_init(struct prof_dev *dev)
@@ -394,9 +465,14 @@ static void commit_transaction(struct sql_ctx *ctx, bool new_transaction)
     if (ctx->in_transaction) {
         if (!new_transaction) {
              sqlite3_exec(ctx->sql, "COMMIT;", NULL, NULL, NULL);
+             if (unlikely(ctx->verify_sql))
+                sqlite3_exec(ctx->verify_sql, "COMMIT;", NULL, NULL, NULL);
              ctx->in_transaction = false;
-        } else if (ctx->pending_inserts > 0)
+        } else if (ctx->pending_inserts > 0) {
              sqlite3_exec(ctx->sql, "COMMIT; BEGIN IMMEDIATE TRANSACTION;", NULL, NULL, NULL);
+             if (unlikely(ctx->verify_sql))
+                sqlite3_exec(ctx->verify_sql, "COMMIT; BEGIN IMMEDIATE TRANSACTION;", NULL, NULL, NULL);
+        }
 
         ctx->total_commits++;
         ctx->pending_inserts = 0;
@@ -407,6 +483,8 @@ static void ensure_transaction(struct sql_ctx *ctx)
 {
     if (!ctx->in_transaction) {
         sqlite3_exec(ctx->sql, "BEGIN IMMEDIATE TRANSACTION;", NULL, NULL, NULL);
+        if (unlikely(ctx->verify_sql))
+            sqlite3_exec(ctx->verify_sql, "BEGIN IMMEDIATE TRANSACTION;", NULL, NULL, NULL);
         ctx->in_transaction = true;
         ctx->pending_inserts = 0;
     }
@@ -429,6 +507,8 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
                 ctx->total_inserts++;
                 ctx->pending_inserts++;
             }
+            if (unlikely(ctx->verify_tp_ctx))
+                ctx->verify_tp_ctx->sample(ctx->verify_tp_ctx, tp, event);
             break;
         }
     }
@@ -436,6 +516,189 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
     /* Optimized commit strategy: batch size only (no time check for single-threaded) */
     if (ctx->pending_inserts >= ctx->batch_size)
         commit_transaction(ctx, true);
+}
+
+static void sql_verify_interval(struct prof_dev *dev)
+{
+    struct env *env = dev->env;
+    struct sql_ctx *ctx = dev->private;
+    const char *query = env->query;
+    int nr_query = 0;
+    uint64_t fullscan_step = 0, sort = 0, vm_step = 0;
+
+    while (1) {
+        sqlite3_stmt *stmt = ctx->query[nr_query].stmt;
+        sqlite3_stmt *verify_stmt = ctx->query[nr_query].verify_stmt;
+        const char *next_query = ctx->query[nr_query].next_query;
+        int err = SQLITE_OK, verify_err = SQLITE_OK;
+
+        if ((stmt && verify_stmt) ||
+            ((err = sqlite3_prepare_v3(ctx->sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query)) == SQLITE_OK &&
+             (verify_err = sqlite3_prepare_v3(ctx->verify_sql, query, -1, SQLITE_PREPARE_PERSISTENT, &verify_stmt, &next_query)) == SQLITE_OK)) {
+            int column_count = sqlite3_column_count(stmt);
+            int *col_widths = ctx->query[nr_query].col_widths;
+            int j, k, width, step_result, verify_step_result = 0;
+
+            printf("=== %.*s ===\n", (int)(next_query - query), query);
+
+            if (column_count != sqlite3_column_count(verify_stmt))
+                fprintf(stderr, "Column count mismatch: main=%d, verify=%d\n",
+                        column_count, sqlite3_column_count(verify_stmt));
+
+            // Allocate memory and initialize column widths
+            if (!col_widths) {
+                ctx->query[nr_query].stmt = stmt;
+                ctx->query[nr_query].verify_stmt = verify_stmt;
+                ctx->query[nr_query].next_query = next_query;
+
+                col_widths = malloc(column_count * sizeof(int));
+                if (!col_widths)
+                    goto cleanup;
+
+                for (j = 0; j < column_count; j++)
+                    col_widths[j] = strlen(sqlite3_column_name(stmt, j));
+                ctx->query[nr_query].col_widths = col_widths;
+            }
+
+            // Print column headers with proper alignment
+            for (j = 0; j < column_count; j++) {
+                if (j > 0) printf(" | ");
+                printf("%-*s", col_widths[j], sqlite3_column_name(stmt, j));
+            }
+            if (column_count) printf("\n");
+
+            // Print separator
+            for (j = 0; j < column_count; j++) {
+                if (j > 0) printf("-+-");
+                for (k = 0; k < col_widths[j]; k++)
+                    printf("-");
+            }
+            if (column_count) printf("\n");
+
+            for (j = 0; j < column_count; j++) {
+                if (strcmp(sqlite3_column_name(stmt, j), sqlite3_column_name(verify_stmt, j)) != 0)
+                    fprintf(stderr, "Column %d name mismatch: main='%s', verify='%s'\n", j,
+                            sqlite3_column_name(stmt, j), sqlite3_column_name(verify_stmt, j));
+            }
+
+            // Print rows data
+            while ((step_result = sqlite3_step(stmt)) == SQLITE_ROW &&
+                   (verify_step_result = sqlite3_step(verify_stmt)) == SQLITE_ROW) {
+                for (j = 0; j < column_count; j++) {
+                    if (j > 0) printf(" | ");
+                    switch (sqlite3_column_type(stmt, j)) {
+                    case SQLITE_INTEGER:
+                        width = printf("%-*lld", col_widths[j], sqlite3_column_int64(stmt, j));
+                        break;
+                    case SQLITE_FLOAT:
+                        width = printf("%-*.6f", col_widths[j], sqlite3_column_double(stmt, j));
+                        break;
+                    case SQLITE_TEXT:
+                        width = printf("%-*s", col_widths[j], sqlite3_column_text(stmt, j));
+                        break;
+                    case SQLITE_BLOB:
+                        width = printf("[BLOB:%d]", sqlite3_column_bytes(stmt, j));
+                        break;
+                    case SQLITE_NULL:
+                        width = printf("NULL");
+                        break;
+                    default:
+                        width = printf("?");
+                        break;
+                    }
+
+                    if (width < col_widths[j])
+                        printf("%-*s", col_widths[j] - width, "");
+                    else
+                        col_widths[j] = width;
+                }
+                printf("\n");
+
+                for (j = 0; j < column_count; j++) {
+                    if (sqlite3_column_type(stmt, j) != sqlite3_column_type(verify_stmt, j))
+                            fprintf(stderr, "Column %d type mismatch: main=%d, verify=%d\n", j,
+                                    sqlite3_column_type(stmt, j), sqlite3_column_type(verify_stmt, j));
+
+                    switch (sqlite3_column_type(stmt, j)) {
+                    case SQLITE_INTEGER:
+                        if (sqlite3_column_int64(stmt, j) != sqlite3_column_int64(verify_stmt, j))
+                            fprintf(stderr, "Column %d INTEGER mismatch: main=%lld, verify=%lld\n", j,
+                                    sqlite3_column_int64(stmt, j), sqlite3_column_int64(verify_stmt, j));
+                        break;
+                    case SQLITE_FLOAT:
+                        if (sqlite3_column_double(stmt, j) != sqlite3_column_double(verify_stmt, j))
+                            fprintf(stderr, "Column %d FLOAT mismatch: main=%.6f, verify=%.6f\n", j,
+                                    sqlite3_column_double(stmt, j), sqlite3_column_double(verify_stmt, j));
+                        break;
+                    case SQLITE_TEXT:
+                        if (sqlite3_column_text(stmt, j) && sqlite3_column_text(verify_stmt, j) &&
+                            strcmp((const char *)sqlite3_column_text(stmt, j), (const char *)sqlite3_column_text(verify_stmt, j)) != 0)
+                            fprintf(stderr, "Column %d TEXT mismatch: main='%s', verify='%s'\n", j,
+                                    (const char *)sqlite3_column_text(stmt, j), (const char *)sqlite3_column_text(verify_stmt, j));
+                        break;
+                    case SQLITE_BLOB:
+                        if (sqlite3_column_bytes(stmt, j) != sqlite3_column_bytes(verify_stmt, j))
+                            fprintf(stderr, "Column %d BLOB size mismatch: main=%d, verify=%d\n", j,
+                                    sqlite3_column_bytes(stmt, j), sqlite3_column_bytes(verify_stmt, j));
+                        if (memcmp(sqlite3_column_blob(stmt, j), sqlite3_column_blob(verify_stmt, j),
+                                   sqlite3_column_bytes(stmt, j)) != 0)
+                            fprintf(stderr, "Column %d BLOB data mismatch\n", j);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+            printf("\n");
+
+            /* Check if loop ended due to error */
+            if (step_result != SQLITE_DONE) {
+                fprintf(stderr, "Main query execution failed: %s\n", sqlite3_errmsg(ctx->sql));
+            } else
+                verify_step_result = sqlite3_step(verify_stmt);
+
+            if (verify_step_result != SQLITE_DONE) {
+                fprintf(stderr, "Verify query execution failed: %s\n", sqlite3_errmsg(ctx->verify_sql));
+            }
+
+            if (env->verbose) {
+                fullscan_step += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_FULLSCAN_STEP, 1);
+                sort += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_SORT, 1);
+                vm_step += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_VM_STEP, 1);
+            }
+
+        cleanup:
+            sqlite3_reset(stmt);
+            sqlite3_reset(verify_stmt);
+        } else {
+            if (err != SQLITE_OK)
+                fprintf(stderr, "Failed to prepare main query: %s\n", sqlite3_errmsg(ctx->sql));
+            else if (stmt)
+                sqlite3_finalize(stmt);
+            if (verify_err != SQLITE_OK)
+                fprintf(stderr, "Failed to prepare verify query: %s\n", sqlite3_errmsg(ctx->verify_sql));
+            else if (verify_stmt)
+                sqlite3_finalize(verify_stmt);
+            break;
+        }
+
+        nr_query ++;
+        if (*next_query)
+            query = next_query;
+        else
+            break;
+    }
+
+    if (env->verbose) {
+        printf("SQL query cost: %lu ms\n", ctx->sql_exec_cost/1000000);
+        printf("SQL stmt status: fullscan_step %lu sort %lu vm_step %lu\n", fullscan_step, sort, vm_step);
+        ctx->sql_exec_cost = 0;
+    }
+
+    if (ctx->tp_ctx->reset)
+        ctx->tp_ctx->reset(ctx->tp_ctx);
+    if (ctx->verify_tp_ctx->reset)
+        ctx->verify_tp_ctx->reset(ctx->verify_tp_ctx);
 }
 
 static void sql_interval(struct prof_dev *dev)
@@ -459,6 +722,9 @@ static void sql_interval(struct prof_dev *dev)
 
     print_time(stdout);
     printf("\n");
+
+    if (unlikely(ctx->verify_sql))
+        return sql_verify_interval(dev);
 
     while (1) {
         sqlite3_stmt *stmt = ctx->query[nr_query].stmt;
@@ -593,7 +859,7 @@ static const char *sql_desc[] = PROFILER_DESC("sql",
     "    "PROGRAME" sql -e sched:sched_wakeup --output2 events.db -i 10000");
 static const char *sql_argv[] = PROFILER_ARGV("sql",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event", "query", "output2\nSpecify DB file path");
+    PROFILER_ARGV_PROFILER, "event", "query", "output2\nSpecify DB file path", "verify");
 static profiler sql = {
     .name = "sql",
     .desc = sql_desc,

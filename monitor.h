@@ -193,6 +193,7 @@ struct env {
 
     /* sql */
     char *query;
+    bool verify;
 
     /* workload */
     struct workload workload;

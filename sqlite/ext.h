@@ -114,6 +114,9 @@ struct tp_private {
     char *ftrace_filter;
     bool init;
 
+    /* Memory mode: events inserted via prepared statement */
+    sqlite3_stmt *mem_insert_stmt;
+
     /* File mode: events inserted via prepared statement */
     sqlite3_stmt *insert_stmt;
 

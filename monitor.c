@@ -569,6 +569,7 @@ struct option main_options[] = {
     OPT_STRDUP_NONEG( 0 ,         "output2", &env.output2,             "file",  "Nonstandard output file name"),
     OPT_STRDUP_NONEG( 0 ,            "prio", &env.prio_map, "prio[-prio],...",  "Specify the priority range for real-time and normal scheduling"),
     OPT_STRDUP_NONEG( 0 ,           "query", &env.query,                "SQL",  "Execute SQL query on collected events"),
+    OPT_BOOL_NONEG  ( 0 ,          "verify", &env.verify,                       "Validate SQL virtual table implementation and indexing integrity"),
 
     OPT_END()
 };
@@ -657,6 +658,9 @@ struct env *clone_env(struct env *p)
     CLONE (kvmclock);
     CLONE (perfeval_cpus);
     CLONE (perfeval_pids);
+    CLONE (output2);
+    CLONE (prio_map);
+    CLONE (query);
 
     if (p->workload.pid && !e->pids) {
         asprintf(&e->pids, "%d", p->workload.pid);
