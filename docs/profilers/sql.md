@@ -57,6 +57,14 @@ PROFILER OPTION:
   - 文件数据库可持久化数据，供后续分析
   - 文件数据库性能优化更激进（128MB缓存，512MB内存映射）
 
+- `--verify` - 验证Virtual Table实现的正确性
+  - 同时创建内存Virtual Table和临时文件数据库
+  - 相同事件同时插入两个数据库
+  - 执行查询时比较两个数据库的结果，验证列数、类型、值是否一致
+  - 不一致的结果输出到stderr，便于调试
+  - 仅在内存模式下有效（无`--output2`时）
+  - 指定`--output2`时自动禁用并提示
+
 ### 使用场景矩阵
 
 | `-i` | `--query` | `--output2` | 行为说明 |
@@ -245,15 +253,26 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 1. **内核态过滤（ftrace filter）**: 在perf_event采样时过滤，最高效
 2. **用户态过滤（op_table）**: 在Virtual Table遍历时过滤，次高效
 
-**ftrace filter生成**（初始化阶段）:
+**内核态过滤：ftrace filter生成**（初始化阶段）:
 - 初始化时（`priv->init=1`），`xFilter`将约束转换为ftrace filter表达式
 - 只有内核支持的字段和运算符才能生成ftrace filter
-- 单次`xFilter`内的约束用`&&`组合：`WHERE pid>1000 AND prio<10` → `"pid>1000&&prio<10"`
-- 多次`xFilter`调用的filter用`||`组合：`"(pid>1000)||(prio==120)"`
+  - `INTEGER` 列: 支持 `=`, `>`, `<`, `>=`, `<=`, `!=`
+  - `TEXT` 列：支持 `=`, `!=`, `GLOB`，分别转换为 `==`, `!=`, `~` 内核运算符。
+- 单次`xFilter`内的约束用`&&`组合：`WHERE pid>1000 AND prio<10` → `pid>1000&&prio<10`
+- 多次`xFilter`调用的filter用`||`组合：`(pid>1000)||(comm~"perf*")`
 - 生成的filter存入`priv->ftrace_filter`，后续应用到`tp->filter`实现内核态过滤
+- **多查询语句限制**: 当`--query`包含多条SQL语句时，只有当某个表的**所有**查询语句都有WHERE约束时，才会应用ftrace filter。否则，没有WHERE约束的查询会因为内核过滤而丢失事件。
+  ```sql
+  -- 示例：以下情况不会应用ftrace filter
+  SELECT * FROM sched_wakeup WHERE pid > 1000;  -- 有WHERE
+  SELECT * FROM sched_wakeup;                    -- 无WHERE，需要全部事件
+  -- 因为第二条查询需要全部事件，所以不能在内核态过滤pid>1000
+  ```
 
-**运行时约束过滤**:
-- **支持的运算符**: `=`, `>`, `<`, `>=`, `<=`, `!=`（仅INTEGER列）
+**用户态过滤**:
+- **支持的运算符**:
+  - `INTEGER` 列: `=`, `>`, `<`, `>=`, `<=`, `!=`
+  - `TEXT` 列: `=`, `>`, `<`, `>=`, `<=`, `!=`, `GLOB`
 - **约束传递机制**:
   - `xBestIndex`: 分析WHERE约束，构建`struct index_info`结构体传递给`xFilter`
     - 结构体头部为字符串`"perf_tp:<address>"`，EXPLAIN时可显示
@@ -263,110 +282,143 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 
 - **约束示例**:
   ```sql
+  -- 约束下推到内核过滤器
   SELECT * FROM sched_wakeup WHERE pid = 1234; SELECT * FROM sched_wakeup WHERE prio < 10
-  -- 如果pid和prio是ftrace支持的字段，生成内核过滤器"pid==1234||prio<10"
+  -- pid = 和 prio < 是ftrace支持的字段和运算符，生成内核过滤器"pid==1234||prio<10"
   -- 同时在Virtual Table遍历时，为每条查询进行不同的用户态过滤。
+
+  -- 混合整数和字符串约束（字符串范围约束仅用户态过滤）
+  SELECT * FROM sched_wakeup WHERE pid > 10 AND comm GLOB 'perf*'
+  -- pid > 和 comm GLOB 是内核支持的字段和运算符，生成的内核过滤器'pid>10&&comm~"perf*"'
   ```
 
 - **不支持下推的情况**:
-  - STRING/BLOB类型列的约束（由SQLite在`xColumn`返回后过滤）
-  - LIKE、GLOB等模式匹配运算符
+  - BLOB类型列的约束（由SQLite在`xColumn`返回后过滤）
+  - LIKE等模式匹配运算符（GLOB 对字符串索引字段支持下推）
   - 复杂表达式（如`pid + 1 > 100`）
   - 内核不支持的字段（仅用户态过滤）
 
-#### 单字段索引优化
+#### 单字段索引优化（支持整数和字符串）
 
-内存模式支持单字段索引，将 WHERE 查询从 O(n) 全表扫描优化为 O(log n) 索引查找。支持所有整数比较运算符：`=`、`>`、`>=`、`<`、`<=`、`!=`。同时支持 ORDER BY 优化，利用索引的有序性直接提供排序结果，避免 SQLite 的排序开销。
+内存模式支持对单个字段建立索引，将 WHERE 查询从 O(n) 全表扫描优化为 O(log n) 索引查找。支持所有 `INTEGER` 和 `TEXT` 类型的字段，以及所有比较运算符：`=`、`>`、`>=`、`<`、`<=`、`!=`、`GLOB`。同时支持 `ORDER BY` 和 `GROUP BY` 优化，利用索引的有序性直接提供排序结果，避免 SQLite 的额外排序开销。
 
 - **索引选择机制**:
-  1. 初始化时在空表上执行 `--query`，触发 SQLite 查询规划
-  2. `xBestIndex` 收集所有 WHERE 约束条件、ORDER BY 列、GROUP BY 列
-  3. 统计每个 INTEGER 字段被引用的次数（WHERE + ORDER BY + GROUP BY），选择引用最多的字段作为索引字段
-  4. 运行时为该字段建立红黑树索引
-  5. 用户可通过 `index=field` 属性覆盖自动选择的索引字段
+  1. 初始化时在空表上执行 `--query`，触发 SQLite 查询规划。
+  2. `xBestIndex` 收集所有 `WHERE` 约束条件以及 `ORDER BY` 和 `GROUP BY` 子句中的列。
+     - `INTEGER` 字段支持 `EQ`、`GT`、`LE`、`LT`、`GE`、`NE` 运算符。
+     - `TEXT` 字段支持 `EQ`、`GT`、`LE`、`LT`、`GE`、`NE`、`GLOB` 运算符。
+     - 通过内部的 `TEXT` 位标记区分字符串和整数运算，支持混合过滤条件（如 `WHERE pid > 10 AND comm GLOB 'perf*'`）。
+  3. 统计每个 `INTEGER` 和 `TEXT` 字段被引用的次数（`col_refs`），选择引用最多的字段作为索引字段。
+     - 单字段 `ORDER BY` 或 `GROUP BY` 也会增加该字段的引用计数。
+  4. 运行时为该字段建立红黑树索引：
+     - `INTEGER` 字段：直接存储整数值，使用整数比较。
+     - `TEXT` 字段：存储字符串指针（转换为 `int64_t`），使用 `strcmp` 比较。字符串来自 perf_event 内部，无需拷贝。
+  5. 用户可通过 `index=field` 属性覆盖自动选择的索引字段。
 
 - **手动指定索引字段**:
   ```bash
-  # 使用 index= 属性指定索引字段
-  perf-prof sql -e 'sched:sched_wakeup//index=target_cpu/' -i 1000 \
-    --query 'SELECT target_cpu, COUNT(*) FROM sched_wakeup WHERE target_cpu < 4 GROUP BY target_cpu'
+  # 手动为字符串字段 comm 建立索引
+  perf-prof sql -e 'sched:sched_wakeup//index=comm/' -i 1000 \
+    --query "SELECT comm, COUNT(*) FROM sched_wakeup WHERE comm GLOB 'perf*' GROUP BY comm"
   ```
-  - 如果指定的字段不存在，会输出警告并使用自动选择的字段
+  - 如果指定的字段不存在，或不是 `INTEGER` 或 `TEXT` 类型，会输出警告并退回到自动选择。
 
-- **支持的运算符**:
-  | 运算符 | 索引范围计算 | 说明 |
-  |--------|-------------|------|
-  | `=` (EQ) | [value, value] | 精确匹配 |
-  | `>=` (GE) | left = max(left, value) | 下界约束 |
-  | `>` (GT) | left = max(left, value+1) | 下界约束（不含边界） |
-  | `<=` (LE) | right = min(right, value) | 上界约束 |
-  | `<` (LT) | right = min(right, value-1) | 上界约束（不含边界） |
-  | `!=` (NE) | 分段迭代 | 将范围分割为多个不连续段 |
+- **ftrace 过滤器集成**:
+  初始化阶段在空表上执行 `--query` 时，会触发 `xFilter` 调用。`xFilter` 内部调用 `perf_tp_ftrace_filter()` 尝试为支持的约束生成 ftrace 过滤器。
+  - Linux 内核对字符串字段的 ftrace filter 仅支持 `EQ`、`NE`、`GLOB` 运算符。
+  - 不支持的运算符（如字符串的 `GT`、`LT` 等）只能在用户态过滤。
+
+- **核心算法：边界运算**:
+  为了同时支持整数和字符串等无法简单执行 `+1`/`-1` 运算的类型，索引采用了一种更通用的边界 (`struct boundary`) 运算算法，由 `query_op_boundary()` 函数实现。
+  - **边界表示**: 每个边界由 **值** (`value`) 和 **运算符** (`op`) 共同定义。初始边界 `valid=0` 表示无穷大（无约束）。
+    - `(10, GE)` 表示 `>= 10`，即 `[10, ...)`
+    - `(10, GT)` 表示 `> 10`，即 `(10, ...)`
+    - `(20, LE)` 表示 `<= 20`，即 `(..., 20]`
+    - `(20, LT)` 表示 `< 20`，即 `(..., 20)`
+    - `('perf', LT)` 表示 `< 'perf'`，即 `(..., 'perf')`
+    - 这种设计取代了过去对整数值执行 `+1`/`-1` 来表示开闭区间的做法。
+  - **两遍算法**:
+    - **Pass 1: 建立基础范围** - 处理 `EQ/GE/LE/GT/LT` 约束：
+      - `EQ`: 同时设置左边界为 `GE` 和右边界为 `LE`（即单点 `[value, value]`）
+      - `GE/GT`: 更新左边界，仅当新值更大，或值相同但更严格（`GT` 覆盖 `GE`）
+      - `LE/LT`: 更新右边界，仅当新值更小，或值相同但更严格（`LT` 覆盖 `LE`）
+    - **冲突检测**: Pass 1 后检查范围是否为空：
+      - 左边界值 > 右边界值：冲突，无结果
+      - 左右边界值相同，但非闭区间 `[value, value]`：冲突，无结果
+    - **Pass 2: 应用 NE 约束** - 按遍历方向扫描已排序的约束表：
+      - `NE` 在范围外：忽略
+      - `NE` 在边界上：将闭合边界转换为开放边界（`GE` → `GT` 或 `LE` → `LT`）
+      - `NE` 在范围内：成为新边界，将范围切分为两段
+  - **类型无关**: 整个算法不直接修改边界值（无 `+1`/`-1` 运算），只操作边界的运算符，从而天然支持字符串和未来可能的浮点数等类型。
+  - **查询流程** (`perf_tp_do_index`):
+    1. 使用 `struct boundary left, right` 初始化左右边界（`valid=0` 表示无穷）。
+    2. 调用 `query_op_boundary()` 按升/降序从 `op_index` 表查询约束，确定左右边界。
+    3. 调用 `find_IndexNode()` 在红黑树中查找边界范围内的事件。
+
+- **GLOB 运算符优化**:
+  `GLOB` 运算符通过与 `GE` 和 `LT` 协同工作实现高效索引。当 SQLite 遇到 `comm GLOB 'perf*'` 这样的约束时，它会自动生成三个独立的约束：
+  1. `comm GE 'perf'`：确立查询的起始边界。
+  2. `comm LT 'perg'`：确立查询的结束边界（`g` 是 `f` 的下一个字符）。
+  3. `comm GLOB 'perf*'`：真正的模式匹配，由 `xNext` 阶段处理。
+
+  索引利用前两个约束 `[GE 'perf', LT 'perg')` 快速锁定一个很小的扫描范围，然后 `xNext` 阶段仅对这个范围内的事件应用 `GLOB` 模式匹配，极大地提高了查询效率。
 
 - **NE (!=) 分段迭代**:
-  当查询包含 `!=` 约束时，索引会将搜索范围分割为多个不连续的段，依次迭代每个段。采用两遍算法确保正确性：
-  1. **Pass 1**: 处理 EQ/GE/LE/GT/LT 建立基础边界
-  2. **Pass 2**: 在已建立的边界内处理 NE 约束
+  当查询包含 `!=` 约束时，`query_op_boundary()` 会将搜索范围分割为多个不连续的段，通过多次调用依次返回每个段。
+
+  示例：`WHERE pid != 5 AND pid > 10 AND pid != 20 AND pid < 100 AND pid != 200`
+  ```
+  Pass 1: 建立基础范围 (GT 10, LT 100)，即 (10, 100)
+  Pass 2 (升序): NE 5 在范围外忽略，NE 20 在范围内切分
+    → 第一次调用返回 (GT 10, LT 20)，即 (10, 20)
+    → 下一次调用从 (GT 20, LT 100) 继续
+  Pass 2 (继续): NE 200 在范围外忽略
+    → 第二次调用返回 (GT 20, LT 100)，即 (20, 100)
+  ```
+
+- **ORDER BY / GROUP BY 优化**:
+  当 `ORDER BY` 或 `GROUP BY` 的字段与索引字段相同时，索引可以直接提供排序结果，避免 SQLite 的排序开销。
+  - **升序 (ASC)**: 从红黑树左侧向右遍历，先输出最小值。
+  - **降序 (DESC)**: 从红黑树右侧向左遍历，先输出最大值。
+  - 这同样适用于字符串字段，会按字典序排序。
 
   示例：
   ```sql
-  SELECT * FROM sched_wakeup WHERE pid > 10 AND pid < 100 AND pid != 50
-  -- Pass 1: GT(10), LT(100) -> 基础范围 [11, 99]
-  -- Pass 2: NE(50) 分割范围
-  -- 索引分段: [11, 49] -> [51, 99]
-  ```
+  -- 按进程名升序排序，利用 comm 字段的索引
+  SELECT comm, COUNT(*) FROM sched_wakeup GROUP BY comm ORDER BY comm ASC
 
-  复杂示例（边界外 NE 被正确忽略）：
-  ```sql
-  SELECT * FROM sched_wakeup WHERE pid != 5 AND pid > 10 AND pid != 20 AND pid < 100 AND pid != 200
-  -- Pass 1: GT(10), LT(100) -> 基础范围 [11, 99]
-  -- Pass 2: NE(5) 忽略（边界外），NE(20) 分割，NE(200) 忽略（边界外）
-  -- 索引分段: [11, 19] -> [21, 99]
-  ```
-
-- **ORDER BY 优化**:
-  当 ORDER BY 的字段与索引字段相同时，索引可以直接提供排序结果，避免 SQLite 的排序开销。
-
-  - **升序 (ASC)**: 从红黑树左侧向右遍历，先输出最小值
-  - **降序 (DESC)**: 从红黑树右侧向左遍历，先输出最大值
-  - **每个 cursor 独立**: 同一个 `--query` 中的多条查询可以有不同的排序方向
-
-  示例：
-  ```sql
-  -- 假设 _time 字段被选为索引字段
-  SELECT * FROM sched_wakeup ORDER BY _time ASC   -- 升序遍历索引
-  SELECT * FROM sched_wakeup ORDER BY _time DESC  -- 降序遍历索引
-
-  -- 同时指定 WHERE 和 ORDER BY
+  -- 按时间戳降序，利用 _time 字段的索引
   SELECT * FROM sched_wakeup WHERE _time > 1000000 ORDER BY _time DESC
-  -- 先用索引定位范围 [1000001, MAX]，再按降序输出
   ```
 
   **限制**:
-  - 仅支持单字段 ORDER BY（多字段排序无法优化）
-  - ORDER BY 字段必须与索引字段相同
-
-- **GROUP BY 优化**:
-  同 ORDER BY 优化，SQLite核心会自动选择升序还是降序排列。
+  - 仅支持单字段 `ORDER BY`（多字段排序无法优化）。
+  - `ORDER BY` 字段必须与索引字段相同。
 
 - **索引使用示例**:
   ```sql
-  -- 假设 pid 字段被选为索引字段
-  SELECT * FROM sched_wakeup WHERE pid = 1234              -- 使用索引 O(log n)
-  SELECT * FROM sched_wakeup WHERE pid > 1000              -- 使用索引（范围扫描）
-  SELECT * FROM sched_wakeup WHERE pid >= 100 AND pid < 200  -- 使用索引（范围 [100, 199]）
-  SELECT * FROM sched_wakeup WHERE pid != 0                -- 使用索引（分段迭代）
-  SELECT * FROM sched_wakeup WHERE pid > 10 AND pid < 100 AND prio < 10
-    -- 使用索引扫描 pid 范围 [11, 99]，再过滤 prio < 10
+  -- 假设 comm 字段被选为索引字段
+  SELECT * FROM sched_wakeup WHERE comm = 'perf-prof'        -- 使用索引 O(log n)
+  SELECT * FROM sched_wakeup WHERE comm GLOB 'perf*'          -- 使用索引（范围扫描 + GLOB）
+  SELECT * FROM sched_wakeup WHERE comm > 'bash'              -- 使用索引（范围扫描）
+  SELECT * FROM sched_wakeup WHERE comm != 'systemd'          -- 使用索引（分段迭代）
+
+  -- 混合类型查询
+  SELECT * FROM sched_wakeup WHERE pid > 100 AND comm = 'bash'
+    -- 若 comm 是索引，则先用索引找到 'bash'，再过滤 pid > 100
+    -- 若 pid 是索引，则先用索引找到 pid > 100 的范围，再过滤 comm = 'bash'
   ```
 
 - **Cost 模型**（用于查询规划器选择最优方案）:
   | 约束类型 | Cost | 说明 |
   |---------|------|------|
   | ftrace 兼容约束 | 10 | 可下推到内核过滤，最优 |
-  | EQ/NE 整数约束 | 50 | 适合索引查找 |
-  | 范围约束 (GT/LT/GE/LE) | 200 | 需要范围扫描 |
-  | 非整数/不支持约束 | 1000 | 无法优化 |
+  | EQ/NE 整数约束 | 50 | 适合索引精确查找 |
+  | EQ/NE 字符串约束 | 50 | 适合索引精确查找 |
+  | 范围约束 (GT/LT/GE/LE) 整数 | 200 | 需要范围扫描 |
+  | 范围约束 (GT/LT/GE/LE) 字符串 | 200 | 需要范围扫描 |
+  | GLOB 约束 | 200 | 字符串模式匹配，需要范围扫描 |
+  | 非整数/字符串或不支持约束 | 1000 | 无法优化 |
 
 - **运行时统计**（使用 `-v` 选项查看）:
   ```
@@ -969,6 +1021,48 @@ perf-prof sql -e 'sched:sched_wakeup/pid>1000 && target_cpu<4/' \
   - 优点: 数据持久化，可后续分析
   - 缺点: 稍慢（2000条/批次），占用磁盘
   - 适用: 需要保存原始数据，离线分析
+
+### 调试与验证
+
+**使用 --verify 验证 Virtual Table 实现**:
+
+`--verify` 选项用于验证内存模式下 Virtual Table 实现的正确性，通过对比 Virtual Table 和传统文件表的查询结果来检测潜在问题。
+
+```bash
+# 验证简单查询的正确性
+perf-prof sql -e sched:sched_wakeup -i 1000 --verify \
+  --query 'SELECT comm, COUNT(*) as count FROM sched_wakeup GROUP BY comm ORDER BY count DESC'
+
+# 验证带索引的查询
+perf-prof sql -e 'sched:sched_wakeup//index=pid/' -i 1000 --verify \
+  --query 'SELECT * FROM sched_wakeup WHERE pid > 1000 ORDER BY pid'
+
+# 验证字符串索引和 GLOB 查询
+perf-prof sql -e 'sched:sched_wakeup//index=comm/' -i 1000 --verify \
+  --query 'SELECT comm, COUNT(*) FROM sched_wakeup WHERE comm GLOB "perf*" GROUP BY comm'
+
+# 验证多条查询语句
+perf-prof sql -e sched:sched_wakeup -i 1000 --verify \
+  --query 'SELECT COUNT(*) FROM sched_wakeup; SELECT comm, AVG(prio) FROM sched_wakeup GROUP BY comm'
+```
+
+**验证输出说明**:
+- 正常情况：只输出查询结果表格
+- 发现不一致时：在 stderr 输出错误信息
+  - `Column count mismatch`: 列数不一致
+  - `Column N type mismatch`: 第N列类型不一致
+  - `Column N INTEGER/FLOAT/TEXT/BLOB mismatch`: 第N列值不一致
+
+**工作原理**:
+1. 创建临时文件数据库（`verify_temp.db`，立即 unlink）
+2. 事件同时插入 Virtual Table（内存）和普通表（文件）
+3. 对两个数据库执行相同的查询
+4. 逐行逐列比较结果，报告不一致
+
+**使用场景**:
+- 开发新的 Virtual Table 优化功能后验证正确性
+- 调试索引或约束下推问题
+- 确认复杂查询的结果符合预期
 
 ### 组合使用
 

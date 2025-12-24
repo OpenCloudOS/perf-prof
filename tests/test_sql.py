@@ -646,3 +646,174 @@ def test_sql_group_by_order_optimization(runtime, memleak_check):
                 if prev_pid is not None:
                     assert pid_int > prev_pid, f"PIDs should be in ascending order: {prev_pid} >= {pid_int}"
                 prev_pid = pid_int
+
+# ============================================================================
+# --verify option tests: Validate Virtual Table implementation correctness
+# ============================================================================
+
+def test_sql_verify_basic_count(runtime, memleak_check):
+    """Test --verify with basic COUNT query"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT COUNT(*) FROM sched_wakeup'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT COUNT(*) as count FROM sched_wakeup'])
+    found_verify_msg = False
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        if 'Creating verification database' in line:
+            found_verify_msg = True
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+    assert found_verify_msg, "Should show verification database creation message"
+
+def test_sql_verify_group_by(runtime, memleak_check):
+    """Test --verify with GROUP BY query"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT comm, COUNT(*) FROM sched_wakeup GROUP BY comm'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT comm, COUNT(*) as count FROM sched_wakeup GROUP BY comm ORDER BY count DESC LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_with_where(runtime, memleak_check):
+    """Test --verify with WHERE clause"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT pid, comm FROM sched_wakeup WHERE pid > 100'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT pid, comm, COUNT(*) as count FROM sched_wakeup WHERE pid > 100 GROUP BY pid, comm LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_with_index(runtime, memleak_check):
+    """Test --verify with index attribute"""
+    # perf-prof sql -e 'sched:sched_wakeup//index=pid/' -i 1000 --verify --query 'SELECT * FROM sched_wakeup WHERE pid > 1000 ORDER BY pid'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup//index=pid/', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT pid, comm, COUNT(*) as count FROM sched_wakeup WHERE pid > 1000 GROUP BY pid ORDER BY pid LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_with_string_index(runtime, memleak_check):
+    """Test --verify with string index and GLOB query"""
+    # perf-prof sql -e 'sched:sched_wakeup//index=comm/' -i 1000 --verify --query "SELECT comm, COUNT(*) FROM sched_wakeup WHERE comm GLOB 'perf*' GROUP BY comm"
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup//index=comm/', '-i', '1000', '-m', '64', '--verify',
+                     '--query', "SELECT comm, COUNT(*) as count FROM sched_wakeup WHERE comm GLOB '*' GROUP BY comm ORDER BY comm LIMIT 10"])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_multi_queries(runtime, memleak_check):
+    """Test --verify with multiple SQL queries"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT COUNT(*) FROM sched_wakeup; SELECT comm, AVG(prio) FROM sched_wakeup GROUP BY comm'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT COUNT(*) as total FROM sched_wakeup; SELECT comm, AVG(prio) as avg_prio FROM sched_wakeup GROUP BY comm LIMIT 5'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_aggregation(runtime, memleak_check):
+    """Test --verify with various aggregation functions"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT MIN(prio), MAX(prio), AVG(prio), SUM(prio), COUNT(*) FROM sched_wakeup'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT MIN(prio) as min_p, MAX(prio) as max_p, AVG(prio) as avg_p, COUNT(*) as total FROM sched_wakeup'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_order_by_asc(runtime, memleak_check):
+    """Test --verify with ORDER BY ASC"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT _time, pid FROM sched_wakeup ORDER BY _time ASC LIMIT 10'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT _time, pid FROM sched_wakeup ORDER BY _time ASC LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_order_by_desc(runtime, memleak_check):
+    """Test --verify with ORDER BY DESC"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT _time, pid FROM sched_wakeup ORDER BY _time DESC LIMIT 10'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT _time, pid FROM sched_wakeup ORDER BY _time DESC LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_ne_constraint(runtime, memleak_check):
+    """Test --verify with NE (!=) constraint"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT pid, COUNT(*) FROM sched_wakeup WHERE pid != 0 AND pid > 10 AND pid < 1000 GROUP BY pid'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT pid, COUNT(*) as count FROM sched_wakeup WHERE pid != 0 AND pid > 10 AND pid < 1000 GROUP BY pid LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_multi_events(runtime, memleak_check):
+    """Test --verify with multiple events"""
+    # perf-prof sql -e sched:sched_wakeup,sched:sched_switch -i 1000 --verify --query 'SELECT COUNT(*) FROM sched_wakeup; SELECT COUNT(*) FROM sched_switch'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup,sched:sched_switch', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT COUNT(*) as wakeups FROM sched_wakeup; SELECT COUNT(*) as switches FROM sched_switch'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_disabled_with_output2(runtime, memleak_check):
+    """Test --verify is disabled when --output2 is specified"""
+    db_file = 'test_verify_disabled.db'
+    if os.path.exists(db_file):
+        os.remove(db_file)
+
+    try:
+        # perf-prof sql -e sched:sched_wakeup --output2 test.db --verify -i 1000 --query 'SELECT COUNT(*) FROM sched_wakeup'
+        prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '--output2', db_file, '--verify', '-i', '1000', '-m', '64',
+                         '--query', 'SELECT COUNT(*) as count FROM sched_wakeup'])
+        found_disabled_msg = False
+        for std, line in prof.run(runtime, memleak_check):
+            result_check(std, line, runtime, memleak_check)
+            if '--verify disabled' in line:
+                found_disabled_msg = True
+        assert found_disabled_msg, "Should show --verify disabled message when --output2 is used"
+
+        # Verify database file was still created
+        assert os.path.exists(db_file), "Database file was not created"
+    finally:
+        if os.path.exists(db_file):
+            os.remove(db_file)
+
+def test_sql_verify_with_alias(runtime, memleak_check):
+    """Test --verify with alias attribute"""
+    # perf-prof sql -e 'sched:sched_wakeup//alias=wakeup/' -i 1000 --verify --query 'SELECT comm, COUNT(*) FROM wakeup GROUP BY comm'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup//alias=wakeup/', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT comm, COUNT(*) as count FROM wakeup GROUP BY comm LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_distinct(runtime, memleak_check):
+    """Test --verify with DISTINCT clause"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT COUNT(DISTINCT comm) FROM sched_wakeup'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT COUNT(DISTINCT comm) as unique_comms FROM sched_wakeup'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
+
+def test_sql_verify_having(runtime, memleak_check):
+    """Test --verify with HAVING clause"""
+    # perf-prof sql -e sched:sched_wakeup -i 1000 --verify --query 'SELECT comm, COUNT(*) FROM sched_wakeup GROUP BY comm HAVING COUNT(*) > 1'
+    prof = PerfProf(['sql', '-e', 'sched:sched_wakeup', '-i', '1000', '-m', '64', '--verify',
+                     '--query', 'SELECT comm, COUNT(*) as count FROM sched_wakeup GROUP BY comm HAVING count > 1 LIMIT 10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+        # Ensure no mismatch errors
+        assert 'mismatch' not in line.lower(), f"Verification mismatch found: {line}"
