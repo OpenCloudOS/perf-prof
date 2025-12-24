@@ -1696,6 +1696,7 @@ static int perf_tp_xBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pIdxInfo)
     /* Calculate estimated cost */
     cost = nr_cost ? cost / nr_cost : 1000;
     pIdxInfo->estimatedCost = cost;
+    priv->have_prepare = 1; /* Mark: this table is queried by current SQL statement */
 
     if (unlikely(table->verbose)) {
         printf("    idxNum: 0x%x\n", pIdxInfo->idxNum);
@@ -2437,6 +2438,7 @@ static inline void perf_tp_ftrace_filter(struct perf_tp_cursor *cursor)
                 if (tmp) {
                     if (filter) sqlite3_free(filter);
                     filter = tmp;
+                    priv->have_filter = 1; /* Mark: this table has WHERE constraints */
 
                     // Mark constraint as used by ftrace filter
                     for_each_constraint(priv, c, j, k) {
@@ -3075,17 +3077,36 @@ static void sql_tp_mem_reset(struct sql_tp_ctx *ctx)
  * because some tables (like event_metadata) don't exist yet during init,
  * but event Virtual Tables are already available for data collection.
  */
-static int sql_tp_mem_try_exec(sqlite3 *sql, const char *query)
+static int sql_tp_mem_try_exec(struct sql_tp_ctx *ctx, const char *query)
 {
     sqlite3_stmt *stmt;
     const char *next_query;
     int ret = -1;
+    struct tp *tp;
+    int i;
 
     while (1) {
-        if (sqlite3_prepare_v3(sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
+        if (sqlite3_prepare_v3(ctx->sql, query, -1, SQLITE_PREPARE_PERSISTENT, &stmt, &next_query) == SQLITE_OK) {
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
             ret = 0;
+
+            /*
+             * Count queries and filters per table for this SQL statement.
+             * Used to determine if ftrace filter can be safely applied:
+             * only when ALL queries on a table have WHERE constraints.
+             */
+            for_each_real_tp(ctx->tp_list, tp, i) {
+                struct tp_private *priv = tp->private;
+                if (priv->have_prepare) {
+                    priv->nr_query++;
+                    priv->have_prepare = 0;
+                }
+                if (priv->have_filter) {
+                    priv->nr_filter++;
+                    priv->have_filter = 0;
+                }
+            }
         }
         /* Continue to next statement even if current one failed */
         if (*next_query) query = next_query;
@@ -3149,7 +3170,7 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
 
         /* Step 3 */
         if (query && query[0])
-            sql_tp_mem_try_exec(ctx->sql, query);
+            sql_tp_mem_try_exec(ctx, query);
 
         /*
          * Step 4-5: Analyze constraints and select storage mode + index field.
@@ -3175,8 +3196,12 @@ struct sql_tp_ctx *sql_tp_mem(sqlite3 *sql, struct tp_list *tp_list, const char 
             else
                 priv->mode = MEM_VIRTUAL_TABLE_MODE;
 
-            /* Ftrace filter available: force Virtual Table for kernel-level filtering */
-            if (!tp->filter && priv->ftrace_filter) {
+            /*
+             * Apply ftrace filter only when ALL queries have WHERE constraints.
+             * If nr_query != nr_filter, some queries lack filters, so applying
+             * ftrace filter would incorrectly drop events needed by those queries.
+             */
+            if (!tp->filter && priv->ftrace_filter && priv->nr_query == priv->nr_filter) {
                 priv->mode = MEM_VIRTUAL_TABLE_MODE;
                 tp->filter = strdup(priv->ftrace_filter);
                 printf("%s:%s: SQL Query planner filter: %s\n", tp->sys, tp->name, tp->filter);
