@@ -13,8 +13,8 @@ struct symbol_table {
 };
 
 struct expr_global {
-    int __cpu;
-    int __pid;
+    int _cpu;
+    int _pid;
     void *data;
     int size;
 };

@@ -49,10 +49,10 @@ role=EXPR       # 事件角色表达式
 
 ## 事件字段作为变量
 
-在EXPR中，可以直接使用事件的字段名作为变量，此外还可以使用`__cpu`/`__pid`变量。
+在EXPR中，可以直接使用事件的字段名作为变量，此外还可以使用`_cpu`/`_pid`变量。
 
-- `__cpu` 事件发生的CPU
-- `__pid` 事件发生的进程ID（非线程ID）
+- `_cpu` 事件发生的CPU
+- `_pid` 事件发生的进程ID（非线程ID）
 
 ## 实际工作流程
 
@@ -110,7 +110,7 @@ int system(const char *format, ...)  // 格式化并执行命令
 - 在表达式中进行复杂的字符串模式匹配
 - 与其他操作符组合使用构建高级过滤条件
 - 可能的路径：
-  - `__pid`/事件字段 → `comm_get()` → `~` (如：`comm_get(__pid) ~ "pyth*"`)
+  - `_pid`/事件字段 → `comm_get()` → `~` (如：`comm_get(_pid) ~ "pyth*"`)
   - 事件字段 → `ksymbol()` → `~` (如：`ksymbol(function) ~ "sched*"`)
   - 事件字段 → `syscall_name()` → `~`
   - 事件字段 → `~`

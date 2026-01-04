@@ -163,7 +163,7 @@ perf-prof top -e sched:sched_wakeup//comm=comm/ --only-comm -m 64
 
 - 内核态trace event过滤器
 - 用户态ftrace过滤器，当内核态过滤器失败时，会自动降级到用户态执行过滤表达式。支持扩展的表达式语法，包括：
-  - 使用 `__cpu` 和 `__pid` 全局变量
+  - 使用 `_cpu` 和 `_pid` 全局变量
   - 调用 `comm_get()` 获取进程名
   - 使用 `~` 操作符进行通配符匹配
 
@@ -196,7 +196,7 @@ key值 value1累计值 value2累计值 ... name值
 **printkey示例**:
 ```bash
 # 显示复合键的多个维度
-perf-prof top -e 'irq:softirq_entry//key=(__cpu<<32)|vec/printkey=printf("   %03d        %d",key>>32,(int)key)/'
+perf-prof top -e 'irq:softirq_entry//key=(_cpu<<32)|vec/printkey=printf("   %03d        %d",key>>32,(int)key)/'
 ```
 
 #### 2. 键名列显示
@@ -215,7 +215,7 @@ perf-prof top -e 'irq:softirq_entry//key=(__cpu<<32)|vec/printkey=printf("   %03
 **选择printkey还是键名列？**
 
 1. **使用printkey的场景**:
-   - key是复合键（如：`__cpu*1000+vector`）
+   - key是复合键（如：`_cpu*1000+vector`）
    - 需要分解多个维度显示
    - 需要自定义格式化输出
 
@@ -337,8 +337,8 @@ perf-prof top -e 'skb:kfree_skb//key=protocol/comm=ksymbol(location)/' -m 32
 perf-prof top -e 'kvm:kvm_msi_set_irq//key=(target_cpu*1000+vector)/printkey=printf("cpu%d->vec%d",key/1000,key%1000)/'
 
 # 使用用户态过滤器过滤Python进程
-perf-prof top -e 'sched:sched_wakeup/comm_get(__pid) ~ "python*"/key=pid/' -i 1000
+perf-prof top -e 'sched:sched_wakeup/comm_get(_pid) ~ "python*"/key=pid/' -i 1000
 
 # 过滤特定CPU上的调度事件
-perf-prof top -e 'sched:sched_switch/__cpu<4/key=prev_pid/comm=prev_comm/' -i 1000
+perf-prof top -e 'sched:sched_switch/_cpu<4/key=prev_pid/comm=prev_comm/' -i 1000
 ```

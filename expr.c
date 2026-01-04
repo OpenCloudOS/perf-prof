@@ -547,8 +547,8 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("system", INT, SYSTEM);
 
     // add default global var to symbol table
-    ADD_GLO("__cpu", INT, &prog->glo.__cpu);
-    ADD_GLO("__pid", INT, &prog->glo.__pid);
+    ADD_GLO("_cpu", INT, &prog->glo._cpu);
+    ADD_GLO("_pid", INT, &prog->glo._pid);
 
 
     data = d; // reset data
@@ -817,8 +817,8 @@ int expr_load_global(struct expr_prog *prog, struct expr_global *global)
     }
 
     // Set default global variables
-    prog->glo.__cpu = global->__cpu;
-    prog->glo.__pid = global->__pid;
+    prog->glo._cpu = global->_cpu;
+    prog->glo._pid = global->_pid;
 
     return 0;
 }
@@ -1056,8 +1056,8 @@ static void expr_sample(struct prof_dev *dev, union perf_event *event, int insta
     tp_print_marker(&info->tp_list->tp[0]);
     tp_print_event(&info->tp_list->tp[0], raw->time, raw->cpu_entry.cpu, raw->raw.data, raw->raw.size);
 
-    info->prog->glo.__cpu = raw->cpu_entry.cpu;
-    info->prog->glo.__pid = raw->tid_entry.pid;
+    info->prog->glo._cpu = raw->cpu_entry.cpu;
+    info->prog->glo._pid = raw->tid_entry.pid;
     expr_load_data(info->prog, raw->raw.data, raw->raw.size);
     result = expr_run(info->prog);
     printf("result: 0x%lx\n", result);
@@ -1088,7 +1088,8 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "SYNTAX",
     "    Supported types: char, short, int, long, unsigned, and pointer types.",
     "    Most operators are supported. See Operators.",
-    "    Supports 4 built-in functions. See Built-in Functions.",
+    "    Supports multiple built-in functions. See Built-in Functions.",
+    "    Global variables _cpu and _pid are available. See Global Variables.",
     "",
     "  Operators",
     "    Precedence  Operator    Description",
@@ -1148,6 +1149,17 @@ static const char *expr_desc[] = PROFILER_DESC("expr",
     "        Format a command string using printf-style formatting and execute it via system().",
     "        Returns the command's exit status. Supports up to 6 additional parameters.",
     "        WARNING: Be cautious with untrusted input to avoid command injection.",
+    "",
+    "  Global Variables",
+    "    int _cpu",
+    "        The CPU number where the event occurred.",
+    "",
+    "    int _pid",
+    "        The process ID (not thread ID) of the event.",
+    "",
+    "    Other variables come from the tracepoint event fields. Use 'help' to see",
+    "    available fields for a specific event, e.g.:",
+    "        "PROGRAME" trace -e sched:sched_wakeup help",
     "",
     "  Extended Operator (C++-style operator overloading)",
     "    ~ (const char *str, const char *pattern)",

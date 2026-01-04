@@ -229,82 +229,82 @@ def test_expr_deep_nesting(runtime, memleak_check):
     nested_expr = 'pid > 0 ? (prio < 100 ? (success == 1 ? target_cpu : 0) : 1) : 2'
     expr(['-e', 'sched:sched_wakeup', nested_expr], runtime, memleak_check)
 
-# Tests for userspace ftrace filter with __cpu and __pid variables
+# Tests for userspace ftrace filter with _cpu and _pid variables
 def test_expr_userspace_filter_cpu_variable(runtime, memleak_check):
-    # Test __cpu variable in userspace ftrace filter
-    expr(['-e', 'sched:sched_wakeup/__cpu==0/', 'pid'], runtime, memleak_check)
+    # Test _cpu variable in userspace ftrace filter
+    expr(['-e', 'sched:sched_wakeup/_cpu==0/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_pid_variable(runtime, memleak_check):
-    # Test __pid variable in userspace ftrace filter
-    expr(['-e', 'sched:sched_wakeup/__pid>1/', 'pid'], runtime, memleak_check)
+    # Test _pid variable in userspace ftrace filter
+    expr(['-e', 'sched:sched_wakeup/_pid>1/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_cpu_pid_combined(runtime, memleak_check):
-    # Test __cpu and __pid variables combined in userspace ftrace filter
-    expr(['-e', 'sched:sched_wakeup/__cpu==0&&__pid>100/', 'pid'], runtime, memleak_check)
+    # Test _cpu and _pid variables combined in userspace ftrace filter
+    expr(['-e', 'sched:sched_wakeup/_cpu==0&&_pid>100/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_cpu_range(runtime, memleak_check):
-    # Test __cpu variable with range in userspace ftrace filter
-    expr(['-e', 'sched:sched_wakeup/__cpu>=0&&__cpu<=3/', 'target_cpu'], runtime, memleak_check)
+    # Test _cpu variable with range in userspace ftrace filter
+    expr(['-e', 'sched:sched_wakeup/_cpu>=0&&_cpu<=3/', 'target_cpu'], runtime, memleak_check)
 
 def test_expr_userspace_filter_pid_comparison(runtime, memleak_check):
-    # Test __pid variable with comparison in userspace ftrace filter
-    expr(['-e', 'sched:sched_wakeup/__pid!=common_pid/', 'pid'], runtime, memleak_check)
+    # Test _pid variable with comparison in userspace ftrace filter
+    expr(['-e', 'sched:sched_wakeup/_pid!=common_pid/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_complex_cpu_pid(runtime, memleak_check):
-    # Test complex expression with __cpu and __pid variables
-    expr(['-e', 'sched:sched_wakeup/(__cpu&1)==0&&(__pid%2)==0/', 'prio'], runtime, memleak_check)
+    # Test complex expression with _cpu and _pid variables
+    expr(['-e', 'sched:sched_wakeup/(_cpu&1)==0&&(_pid%2)==0/', 'prio'], runtime, memleak_check)
 
 def test_expr_userspace_filter_cpu_with_event_fields(runtime, memleak_check):
-    # Test __cpu variable combined with event fields
-    expr(['-e', 'sched:sched_wakeup/__cpu==target_cpu/', 'pid'], runtime, memleak_check)
+    # Test _cpu variable combined with event fields
+    expr(['-e', 'sched:sched_wakeup/_cpu==target_cpu/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_pid_with_event_fields(runtime, memleak_check):
-    # Test __pid variable combined with event fields
-    expr(['-e', 'sched:sched_wakeup/__pid==pid/', 'target_cpu'], runtime, memleak_check)
+    # Test _pid variable combined with event fields
+    expr(['-e', 'sched:sched_wakeup/_pid==pid/', 'target_cpu'], runtime, memleak_check)
 
 def test_expr_userspace_filter_cpu_ternary(runtime, memleak_check):
-    # Test __cpu variable in ternary expression within filter
-    expr(['-e', 'sched:sched_wakeup/__cpu>1?pid<1000:prio>50/', 'pid'], runtime, memleak_check)
+    # Test _cpu variable in ternary expression within filter
+    expr(['-e', 'sched:sched_wakeup/_cpu>1?pid<1000:prio>50/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_pid_bitwise(runtime, memleak_check):
-    # Test __pid variable with bitwise operations in filter
-    expr(['-e', 'sched:sched_wakeup/(__pid&0xFF)>10/', 'pid'], runtime, memleak_check)
+    # Test _pid variable with bitwise operations in filter
+    expr(['-e', 'sched:sched_wakeup/(_pid&0xFF)>10/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_cpu_math_operations(runtime, memleak_check):
-    # Test __cpu variable with math operations in filter
-    expr(['-e', 'sched:sched_wakeup/__cpu*2<target_cpu/', 'target_cpu'], runtime, memleak_check)
+    # Test _cpu variable with math operations in filter
+    expr(['-e', 'sched:sched_wakeup/_cpu*2<target_cpu/', 'target_cpu'], runtime, memleak_check)
 
 def test_expr_userspace_filter_multiple_events_cpu(runtime, memleak_check):
-    # Test __cpu variable with multiple events
-    expr(['-e', 'sched:sched_wakeup/__cpu==0/', 'pid'], runtime, memleak_check)
+    # Test _cpu variable with multiple events
+    expr(['-e', 'sched:sched_wakeup/_cpu==0/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_multiple_events_pid(runtime, memleak_check):
-    # Test __pid variable with multiple events
-    expr(['-e', 'sched:sched_wakeup/__pid>100/', 'prio'], runtime, memleak_check)
+    # Test _pid variable with multiple events
+    expr(['-e', 'sched:sched_wakeup/_pid>100/', 'prio'], runtime, memleak_check)
 
 def test_expr_userspace_filter_kmem_events_cpu(runtime, memleak_check):
-    # Test __cpu variable with kmem events
-    expr(['-e', 'kmem:kmalloc/__cpu==1/', 'bytes_alloc'], runtime, memleak_check)
+    # Test _cpu variable with kmem events
+    expr(['-e', 'kmem:kmalloc/_cpu==1/', 'bytes_alloc'], runtime, memleak_check)
 
 def test_expr_userspace_filter_kmem_events_pid(runtime, memleak_check):
-    # Test __pid variable with kmem events
-    expr(['-e', 'kmem:kmalloc/__pid>1/', 'bytes_alloc'], runtime, memleak_check)
+    # Test _pid variable with kmem events
+    expr(['-e', 'kmem:kmalloc/_pid>1/', 'bytes_alloc'], runtime, memleak_check)
 
 def test_expr_userspace_filter_timer_events_cpu(runtime, memleak_check):
-    # Test __cpu variable with timer events
-    expr(['-e', 'timer:hrtimer_expire_entry/__cpu<=3/', 'function'], runtime, memleak_check)
+    # Test _cpu variable with timer events
+    expr(['-e', 'timer:hrtimer_expire_entry/_cpu<=3/', 'function'], runtime, memleak_check)
 
 def test_expr_userspace_filter_irq_events_cpu(runtime, memleak_check):
-    # Test __cpu variable with irq events
-    expr(['-e', 'irq:softirq_entry/__cpu==0/', 'vec'], runtime, memleak_check)
+    # Test _cpu variable with irq events
+    expr(['-e', 'irq:softirq_entry/_cpu==0/', 'vec'], runtime, memleak_check)
 
 def test_expr_userspace_filter_with_attributes_cpu(runtime, memleak_check):
-    # Test __cpu variable with event attributes
-    expr(['-e', 'sched:sched_wakeup/__cpu==0/alias=wakeup/stack/', 'pid'], runtime, memleak_check)
+    # Test _cpu variable with event attributes
+    expr(['-e', 'sched:sched_wakeup/_cpu==0/alias=wakeup/stack/', 'pid'], runtime, memleak_check)
 
 def test_expr_userspace_filter_with_attributes_pid(runtime, memleak_check):
-    # Test __pid variable with event attributes
-    expr(['-e', 'sched:sched_wakeup/__pid>100/alias=wakeup/comm=comm/', 'prio'], runtime, memleak_check)
+    # Test _pid variable with event attributes
+    expr(['-e', 'sched:sched_wakeup/_pid>100/alias=wakeup/comm=comm/', 'prio'], runtime, memleak_check)
 
 
 # Tests for ~ operator (wildcard pattern matching)
@@ -410,12 +410,12 @@ def test_expr_match_userspace_filter_complex(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup/(comm~"[gs]*"&&pid>100)/', 'target_cpu'], runtime, memleak_check)
 
 def test_expr_match_with_cpu_variable(runtime, memleak_check):
-    # Test match combined with __cpu variable
-    expr(['-e', 'sched:sched_wakeup/__cpu==0&&comm~"*perf*"/', 'pid'], runtime, memleak_check)
+    # Test match combined with _cpu variable
+    expr(['-e', 'sched:sched_wakeup/_cpu==0&&comm~"*perf*"/', 'pid'], runtime, memleak_check)
 
 def test_expr_match_with_pid_variable(runtime, memleak_check):
-    # Test match combined with __pid variable
-    expr(['-e', 'sched:sched_wakeup/__pid>1&&comm~"sys*"/', 'prio'], runtime, memleak_check)
+    # Test match combined with _pid variable
+    expr(['-e', 'sched:sched_wakeup/_pid>1&&comm~"sys*"/', 'prio'], runtime, memleak_check)
 
 def test_expr_match_different_events(runtime, memleak_check):
     # Test match with different event types
@@ -630,12 +630,12 @@ def test_expr_string_inequality_negation(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', '!(comm != "systemd")'], runtime, memleak_check)
 
 def test_expr_string_equality_with_cpu_variable(runtime, memleak_check):
-    # Test == operator combined with __cpu variable
-    expr(['-e', 'sched:sched_wakeup/__cpu==0 && comm == "systemd"/', 'pid'], runtime, memleak_check)
+    # Test == operator combined with _cpu variable
+    expr(['-e', 'sched:sched_wakeup/_cpu==0 && comm == "systemd"/', 'pid'], runtime, memleak_check)
 
 def test_expr_string_inequality_with_pid_variable(runtime, memleak_check):
-    # Test != operator combined with __pid variable
-    expr(['-e', 'sched:sched_wakeup/__pid>1 && comm != "swapper"/', 'prio'], runtime, memleak_check)
+    # Test != operator combined with _pid variable
+    expr(['-e', 'sched:sched_wakeup/_pid>1 && comm != "swapper"/', 'prio'], runtime, memleak_check)
 
 def test_expr_string_equality_nested_ternary(runtime, memleak_check):
     # Test == operator in nested ternary expressions
@@ -722,7 +722,7 @@ def test_expr_syscall_name_invalid_number(runtime, memleak_check):
 
 def test_expr_syscall_name_complex_expression(runtime, memleak_check):
     # Test syscall_name in complex expression with filtering
-    expr(['-e', 'raw_syscalls:sys_enter', 'syscall_name(id) ~ "*write*" && comm_get(__pid) ~ "*perf*"'], runtime, memleak_check)
+    expr(['-e', 'raw_syscalls:sys_enter', 'syscall_name(id) ~ "*write*" && comm_get(_pid) ~ "*perf*"'], runtime, memleak_check)
 
 
 # Tests for system() built-in function
@@ -776,8 +776,8 @@ def test_expr_system_nested_ternary(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid > 100 ? (system("true") == 0 ? 1 : 0) : 0'], runtime, memleak_check)
 
 def test_expr_system_with_variables(runtime, memleak_check):
-    # Test system() with __cpu and __pid variables
-    expr(['-e', 'sched:sched_wakeup', 'system("test %d -ge 0 && test %d -ge 0", __cpu, __pid)'], runtime, memleak_check)
+    # Test system() with _cpu and _pid variables
+    expr(['-e', 'sched:sched_wakeup', 'system("test %d -ge 0 && test %d -ge 0", _cpu, _pid)'], runtime, memleak_check)
 
 def test_expr_system_arithmetic(runtime, memleak_check):
     # Test system() result in arithmetic operations
