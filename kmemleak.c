@@ -269,7 +269,7 @@ static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callc
         .pinned        = 1,
         .disabled      = 1,
         .exclude_callchain_user = prof_dev_ins_oncpu(dev),
-        .wakeup_events = 1,
+        .watermark     = 1,
     };
     struct perf_evsel *evsel;
     struct tp *tp;

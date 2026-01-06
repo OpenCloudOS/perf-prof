@@ -252,7 +252,7 @@ static struct perf_evsel *add_tp_event(struct prof_dev *dev, const char *sys, co
         .read_format   = 0,
         .pinned        = 1,
         .disabled      = 1,
-        .wakeup_events = 1,
+        .watermark     = 1,
     };
     struct perf_evsel *evsel;
     int id;

@@ -118,13 +118,13 @@ static int profile_init(struct prof_dev *dev)
         .read_format   = 0,
         .pinned        = 0,
         .disabled      = 1,
+        .watermark     = 1,
         .exclude_user  = env->exclude_user,
         .exclude_kernel = env->exclude_kernel,
         .exclude_guest = env->exclude_guest,
         .exclude_host = env->exclude_host,
         .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
         .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER),
-        .wakeup_events = 1,
     };
     struct perf_evsel *evsel;
 
