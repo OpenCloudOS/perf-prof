@@ -196,7 +196,7 @@ key值 value1累计值 value2累计值 ... name值
 **printkey示例**:
 ```bash
 # 显示复合键的多个维度
-perf-prof top -e 'irq:softirq_entry//key=(_cpu<<32)|vec/printkey=printf("   %03d        %d",key>>32,(int)key)/'
+perf-prof top -e 'irq:softirq_entry//key=(_cpu<<32)|vec/printkey=printf("  %03d      %d",key>>32,(int)key)/'
 ```
 
 #### 2. 键名列显示
@@ -322,10 +322,10 @@ perf-prof top -e 'block:block_rq_issue/rwbs=="W"&&nr_sector<4/top-by=nr_sector/c
 perf-prof top -e kvm:kvm_exit//key=exit_reason/ -i 1000
 
 # 统计进程的执行时间和进程切换次数
-perf-prof top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/
+perf-prof top -e sched:sched_stat_runtime//key=pid/top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/
 
 # 按进程名统计进程的执行时间和进程切换次数
-perf-prof top -e sched:sched_stat_runtime//top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ --only-comm
+perf-prof top -e sched:sched_stat_runtime//key=pid/comm=comm/top-by=runtime/,sched:sched_switch//key=prev_pid/comm=prev_comm/ --only-comm
 
 # 统计可执行程序的执行次数
 perf-prof top -e 'sched:sched_process_exec//key=pid/alias=num/comm=filename/' --only-comm

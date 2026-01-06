@@ -973,7 +973,7 @@ perf-prof trace -e timer:hrtimer_expire_entry help
 
 # 验证 symbolic 函数是否可用
 perf-prof sql -e irq:softirq_entry -i 1000 \
-  --query 'SELECT vec, symbolic("vec", vec) FROM softirq_entry LIMIT 5'
+  --query "SELECT vec, symbolic('vec', vec) FROM softirq_entry LIMIT 5"
 
 # 验证 ksymbol 函数是否可用
 perf-prof sql -e timer:hrtimer_expire_entry -i 1000 \
@@ -981,11 +981,11 @@ perf-prof sql -e timer:hrtimer_expire_entry -i 1000 \
 
 # 组合使用多个内置函数
 perf-prof sql -e irq:softirq_entry,timer:hrtimer_expire_entry -i 1000 \
-  --query '
-    SELECT "softirq" as type, symbolic("vec", vec) as name, COUNT(*) FROM softirq_entry GROUP BY vec
+  --query "
+    SELECT 'softirq' as type, symbolic('vec', vec) as name, COUNT(*) FROM softirq_entry GROUP BY vec
     UNION ALL
-    SELECT "timer" as type, ksymbol(function) as name, COUNT(*) FROM hrtimer_expire_entry GROUP BY function
-    ORDER BY COUNT(*) DESC LIMIT 10'
+    SELECT 'timer' as type, ksymbol(function) as name, COUNT(*) FROM hrtimer_expire_entry GROUP BY function
+    ORDER BY COUNT(*) DESC LIMIT 10"
 ```
 
 ### 性能优化

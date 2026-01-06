@@ -32,6 +32,7 @@ perf-prof profile -F <freq> [选项]
 - `--exclude-guest`/`-G`: Host/Guest 隔离分析
 - `--irqs_disabled`: 只采样中断关闭的代码段
 - `--tif_need_resched`: 只采样需要调度但未调度的代码段
+- `--exclude_pid <pid>`: 排除指定的进程
 - `--nr_running_min`/`--nr_running_max`: 按 runqueue 长度过滤
 - `--sched_policy`: 按调度策略过滤（0:NORMAL, 1:FIFO, 2:RR, 3:BATCH, 5:IDLE, 6:DEADLINE）
 - `--prio`: 按优先级过滤（0-139，0-99为实时优先级，100-139为普通优先级）
@@ -166,15 +167,13 @@ if (current_time - last_reset >= 1s) {
 
 **实时模式（无 `-i` 参数）**：
 ```
-YYYY-MM-DD HH:MM:SS.microsec
-            comm   tid [cpu] timestamp: profile: <counter> cpu-cycles
+YYYY-MM-DD HH:MM:SS.microsec      comm   tid [cpu] timestamp: profile: <counter> cpu-cycles
                 <调用栈（如果启用 -g）>
 ```
 
 **周期模式（有 `-i` 参数）**：
 ```
-YYYY-MM-DD HH:MM:SS.microsec
-            comm   tid [cpu] timestamp: profile: <counter> cpu-cycles
+YYYY-MM-DD HH:MM:SS.microsec      comm   tid [cpu] timestamp: profile: <counter> cpu-cycles
                 <调用栈（如果启用 -g）>
 [... 多个采样事件 ...]
 ```
@@ -194,12 +193,8 @@ flamegraph.pl cpu.folded > cpu.svg
 **火焰图周期模式（`--flame-graph file -i INT`）**：
 如果 `file` 为空字符串 `""`，则只输出火焰图，不打印事件：
 ```
-YYYY-MM-DD;HH:MM:SS
-comm;func1;func2;func3 count
-comm;func1;func4;func5 count
-
-YYYY-MM-DD;HH:MM:SS
-comm;func1;func2;func3 count
+YYYY-MM-DD;HH:MM:SS;comm;func1;func2;func3 count
+YYYY-MM-DD;HH:MM:SS;comm;func1;func4;func5 count
 ...
 ```
 

@@ -107,9 +107,6 @@ make LLVM=1
 ```bash
 # Monitor task states (R, S, D, T, I)
 ./perf-prof task-state -i 1000
-
-# Analyze scheduling delay
-./perf-prof rundelay --than 4ms -i 1000
 ```
 
 ### Event Tracing

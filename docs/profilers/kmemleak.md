@@ -23,20 +23,15 @@ OPTION:
 - `-C, --cpus`: Attach到指定CPU列表
 - `-p, --pids`: Attach到指定进程
 - `-t, --tids`: Attach到指定线程
-- `-i, --interval`: 输出间隔，单位：ms
 - `-m, --mmap-pages`: ringbuffer大小，页数，默认值: 4
 - `--order`: 启用事件时间戳排序（强烈推荐），提高分析准确性
-- `--than <n>`: 过滤内存分配超过指定时间的泄漏，单位: s/ms/us/*ns
-
-FILTER OPTION:
-- `-g, --call-graph`: 启用调用栈记录，用于定位泄漏位置
-- `--flame-graph <file>`: 生成火焰图文件
-- `--user-callchain`: 启用用户态调用栈（默认启用）
-- `--kernel-callchain`: 启用内核态调用栈（默认启用）
 
 PROFILER OPTION:
 - `--alloc <EVENT,...>`: 指定内存分配事件，必须包含 `ptr` 属性，可选 `size` 和 `stack` 属性
 - `--free <EVENT,...>`: 指定内存释放事件，必须包含 `ptr` 属性
+- `--than <n>`: 过滤内存分配超过指定时间的泄漏，单位: s/ms/us/*ns
+- `-g, --call-graph`: 启用调用栈记录，用于定位泄漏位置
+- `--flame-graph <file>`: 生成火焰图文件
 
 ### 示例
 ```bash
@@ -238,7 +233,7 @@ perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/ \
 - 使用过滤器缩小范围:
   ```bash
   # 只跟踪特定函数的分配
-  perf-prof kmemleak --alloc kmem:kmalloc/bytes_alloc>1024/ptr=ptr/size=bytes_alloc/ \
+  perf-prof kmemleak --alloc 'kmem:kmalloc/bytes_alloc>1024/ptr=ptr/size=bytes_alloc/' \
                      --free kmem:kfree//ptr=ptr/ --order -g
   ```
 
@@ -251,9 +246,9 @@ perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/ \
 perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ \
                    --free kmem:kfree//ptr=ptr/ --order -m 128 -g
 
-# 2. 页面分配泄漏检测
-perf-prof kmemleak --alloc 'kmem:mm_page_alloc//size=4096<<order/key=page/stack/' \
-                   --free kmem:mm_page_free//key=page/stack/ -m 256 --order
+# 2. 页面分配泄漏检测（低内核内核版本使用ptr=page）
+perf-prof kmemleak --alloc 'kmem:mm_page_alloc//ptr=pfn/size=4096<<order/stack/' \
+                   --free kmem:mm_page_free//ptr=pfn/stack/ -m 256 --order
 
 # 3. 特定进程的内存泄漏
 perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/ \
@@ -275,7 +270,7 @@ perf-prof kmemleak \
 
 # 2. 过滤大内存分配 (>1MB)
 perf-prof kmemleak \
-    --alloc kmem:kmalloc/bytes_alloc>1048576/ptr=ptr/size=bytes_alloc/ \
+    --alloc 'kmem:kmalloc/bytes_alloc>1048576/ptr=ptr/size=bytes_alloc/' \
     --free kmem:kfree//ptr=ptr/ --order -g
 
 # 3. 检测长时间未释放的内存 (>30秒)
@@ -343,9 +338,9 @@ done
 - **与其他分析器配合**:
   ```bash
   # 1. 先用 top 找热点
-  perf-prof top -e kmem:kmalloc//key=call_site.function/ -i 1000
+  perf-prof top -e 'kmem:kmalloc//key=call_site/printkey=printf("%lx",key)/' -i 1000
 
-  # 2. 再用 kmemleak 分析特定函数
+  # 2. 再用 kmemleak 分析特定函数（新内核支持call_site.function过滤器）
   perf-prof kmemleak --alloc kmem:kmalloc/call_site.function==hotspot_func/ptr=ptr/ \
                      --free kmem:kfree//ptr=ptr/ --order -g
 

@@ -1293,3 +1293,227 @@ perf-prof syscalls -e 'raw_syscalls:sys_enter/id>=0&&id<=3/' \
 - [系统调用延迟分析示例](#场景4系统调用延迟分析)
 - [事件过滤语法参考](../Event_filtering.md)
 - [延迟分析方法论](#分析方法论)
+
+
+## kmemprof - 内存分配分析
+
+kmemprof是multi-trace的特化版本，专用于分析内存分配的生命周期，统计内存分配/释放的字节数和堆栈信息。
+
+### 概述
+
+kmemprof分析内存分配事件到内存释放事件的完整生命周期，统计分配/释放的字节数，并输出分配/释放最多的前N个堆栈。
+
+**核心功能**：
+- **分配统计**：统计内存分配的总字节数和对象数
+- **释放统计**：统计内存释放的总字节数和对象数
+- **堆栈分析**：输出分配/释放最多字节的前N个堆栈
+- **生命周期追踪**：基于ptr（指针）关联分配和释放事件
+
+### 基础用法
+
+```bash
+perf-prof kmemprof [OPTION...] -e alloc -e free [-k str]
+```
+
+**与multi-trace的关系**：
+- kmemprof基于multi-trace实现，固定使用`--impl kmemprof`
+- 第一个`-e`指定内存分配事件（必须指定`size`属性，建议指定`stack`属性）
+- 第二个`-e`指定内存释放事件（建议指定`stack`属性）
+- 利用multi-trace的两事件关系处理能力，实现内存分配和释放事件的配对
+- 需要手动指定`-k`或为事件设置`key`属性（通常使用ptr作为key）
+
+### 核心特性
+
+#### 1. 事件配置
+
+**内存分配事件（第一个 `-e` 指定）**：
+- 支持任意产生内存分配的事件（如`kmem:kmalloc`、`kmem:kmalloc_node`、`kmem:mm_page_alloc`等）
+- **必须属性**：
+  - `size=EXPR`：指定内存分配大小的计算表达式
+- **建议属性**：
+  - `stack`：启用调用栈采样，用于输出分配最多的堆栈
+  - `key=EXPR`：指定关联键（通常是ptr字段）
+
+**内存释放事件（第二个 `-e` 指定）**：
+- 支持任意产生内存释放的事件（如`kmem:kfree`、`kmem:mm_page_free`等）
+- **建议属性**：
+  - `stack`：启用调用栈采样，用于输出释放最多的堆栈
+  - `key=EXPR`：指定关联键（通常是ptr字段，需与分配事件一致）
+
+**多事件支持**：
+- 同一个`-e`选项内可以用逗号分隔多个事件，用于处理多种分配/释放路径
+- 例如：`kmem:kmalloc,kmem:kmalloc_node`（同时监控两种分配方式）
+
+#### 2. Key关联
+
+kmemprof使用key来关联分配和释放事件：
+
+| 场景 | Key设置 | 示例 |
+|------|--------|------|
+| **内核slab分配** | `-k ptr` 或 `key=ptr` | 使用kmalloc返回的指针作为key |
+| **页面分配** | `key=pfn` | 使用pfn页框作为key（低版本内核不同） |
+| **自定义分配器** | `key=EXPR` | 根据分配器特性设置 |
+
+**注意**：分配事件和释放事件的key表达式可以不同，但计算结果必须相同。
+
+#### 3. 输出格式
+
+kmemprof的输出格式由`mem_profile_print()`函数实现：
+
+**周期性输出**：
+```
+时间戳
+
+alloc_event => free_event
+alloc_event total alloc N bytes on M objects
+Allocate X (Y%) bytes on Z (W%) objects:
+    [调用栈1]
+Allocate X (Y%) bytes on Z (W%) objects:
+    [调用栈2]
+...
+Skipping alloc numbered N..M (如果堆栈数超过first_n)
+
+free_event total free N bytes on M objects
+Free X (Y%) bytes on Z (W%) objects:
+    [调用栈1]
+Free X (Y%) bytes on Z (W%) objects:
+    [调用栈2]
+...
+Skipping free numbered N..M (如果堆栈数超过first_n)
+```
+
+**字段说明**：
+- **alloc_event => free_event**：分配事件和释放事件的名称
+- **total alloc N bytes on M objects**：总分配字节数和对象数
+- **Allocate X (Y%) bytes on Z (W%) objects**：该堆栈分配的字节数(占比)和对象数(占比)
+- **total free N bytes on M objects**：总释放字节数和对象数
+- **Free X (Y%) bytes on Z (W%) objects**：该堆栈释放的字节数(占比)和对象数(占比)
+- **调用栈**：内存分配/释放的调用栈（需要`stack`属性）
+- **Skipping ... numbered N..M**：跳过的堆栈序号范围（默认只输出前10个）
+
+**未配对事件输出**：
+当程序退出或周期结束时，如果有分配但未释放的事件，也会输出：
+```
+alloc_event total alloc N bytes on M objects but not freed
+```
+
+#### 4. 统计指标
+
+| 指标 | 含义 | 用途 |
+|------|------|------|
+| **alloc_bytes** | 总分配字节数 | 评估内存分配量 |
+| **nr_alloc** | 分配对象数 | 评估分配频率 |
+| **free_bytes** | 总释放字节数 | 评估内存释放量 |
+| **nr_free** | 释放对象数 | 评估释放频率 |
+| **堆栈占比** | 该堆栈的字节数/总字节数 | 识别热点分配路径 |
+
+### 选项参数
+
+**核心选项**：
+- `-e, --event`：事件选择器
+  - 第一个`-e`：内存分配事件（必须指定`size`属性）
+  - 第二个`-e`：内存释放事件
+- `-k, --key <str>`：系列事件的关联键（通常使用`ptr`）
+- `-i, --interval <ms>`：输出间隔（毫秒）
+- `--order`：启用事件排序（跨CPU关联时必需）
+- `-m, --mmap-pages <pages>`：环形缓冲区大小（高频事件需要增大）
+
+**Attach选项**：
+- `-C, --cpus <cpu,...>`：监控指定CPU
+- `-p, --pids <pid,...>`：附加到进程
+- `-t, --tids <tid,...>`：附加到线程
+
+**过滤选项**：
+- `--user-callchain`：包含用户态调用栈
+- `--kernel-callchain`：包含内核态调用栈
+- `--python-callchain`：包含Python调用栈
+
+### 使用示例
+
+#### 示例1：内核slab内存分析
+
+```bash
+# 分析kmalloc/kfree的内存分配
+perf-prof kmemprof -e 'kmem:kmalloc//size=bytes_alloc/stack/' -e kmem:kfree \
+    -m 128 --order -k ptr
+
+# 同时监控kmalloc和kmalloc_node
+perf-prof kmemprof \
+    -e 'kmem:kmalloc//size=bytes_alloc/stack/,kmem:kmalloc_node//size=bytes_alloc/stack/' \
+    -e kmem:kfree \
+    --order -k ptr
+```
+
+**参数说明**：
+- `size=bytes_alloc`：使用kmalloc事件的bytes_alloc字段作为分配大小
+- `stack`：启用调用栈采样
+- `-k ptr`：使用ptr字段作为关联键
+- `--order`：启用事件排序（kmalloc可能跨CPU）
+- `-m 128`：增大缓冲区（内存分配事件频率较高）
+
+#### 示例2：页面分配分析
+
+```bash
+# 分析页面分配/释放
+perf-prof kmemprof \
+    -e 'kmem:mm_page_alloc//size=4096<<order/key=pfn/stack/' \
+    -e 'kmem:mm_page_free//key=pfn/stack/' \
+    -m 256 --order
+```
+
+**参数说明**：
+- `size=4096<<order`：计算页面大小（4096 * 2^order）
+- `key=pfn`：使用pfn页框作为关联键
+- `-m 256`：页面分配频率较高，需要更大缓冲区
+
+#### 示例3：特定模块内存分析
+
+```bash
+# 只分析特定调用路径的内存分配（新内核支持call_site.function过滤器）
+perf-prof kmemprof \
+    -e 'kmem:kmalloc/call_site.function==__kmalloc_cache_noprof/size=bytes_alloc/stack/' \
+    -e kmem:kfree \
+    -m 128 --order -k ptr -i 5000
+
+# 只分析大于1KB的分配
+perf-prof kmemprof \
+    -e 'kmem:kmalloc/bytes_alloc>1024/size=bytes_alloc/stack/' \
+    -e kmem:kfree \
+    -m 128 --order -k ptr
+```
+
+### 与multi-trace的区别
+
+| 特性 | kmemprof | multi-trace |
+|------|----------|------------|
+| **事件配置** | 专用于alloc/free事件对 | 支持任意事件组合 |
+| **实现类型** | 固定使用`--impl kmemprof` | 支持delay/pair等多种实现 |
+| **输出格式** | 内存分配专用统计格式 | 通用的延迟统计格式 |
+| **堆栈分析** | 按堆栈聚合字节数，输出top N | 需要手动配置 |
+| **size属性** | 必须指定（用于计算分配大小） | 可选 |
+| **适用场景** | 内存分配热点分析 | 通用的多事件关系分析 |
+
+### 与kmemleak的区别
+
+| 特性 | kmemprof | kmemleak |
+|------|----------|----------|
+| **分析目标** | 内存分配热点分析 | 内存泄漏检测 |
+| **输出内容** | 周期性输出分配/释放统计 | 只输出未释放的内存 |
+| **堆栈输出** | top N分配最多的堆栈 | 未释放内存的分配堆栈 |
+| **适用场景** | 了解内存分配模式、热点路径 | 检测内存泄漏 |
+
+### 技术要点
+
+1. **size属性必需**：分配事件必须指定`size`属性，用于计算分配的字节数
+2. **stack属性建议**：启用`stack`属性才能输出分配/释放的调用栈
+3. **key一致性**：分配和释放事件的key计算结果必须相同才能正确配对
+4. **排序需求**：跨CPU的内存分配需要`--order`保证时序正确
+5. **缓冲区大小**：内存分配事件频率较高，建议使用`-m 128`或更大
+6. **堆栈聚合**：按调用栈聚合分配字节数，输出top N（默认10个）
+
+### 相关资源
+
+- [multi-trace核心文档](#multi-trace---多事件关系分析)
+- [kmemleak内存泄漏检测](kmemleak.md)
+- [内存分配生命周期跟踪示例](#场景3内存分配生命周期跟踪)
+- [事件过滤语法参考](../Event_filtering.md)

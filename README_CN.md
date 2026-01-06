@@ -115,9 +115,6 @@ make LLVM=1
 ```bash
 # 监控任务状态（R, S, D, T, I）
 ./perf-prof task-state -i 1000
-
-# 分析调度延迟
-./perf-prof rundelay --than 4ms -i 1000
 ```
 
 ### 事件跟踪

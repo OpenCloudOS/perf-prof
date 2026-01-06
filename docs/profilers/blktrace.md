@@ -85,7 +85,6 @@ getrq  →  红黑树索引 → insert  →  统计延迟  →  issue  →  统�
   - `sample_period = 1`: 每个事件都采样
   - `disabled = 1`: 初始化时禁用，待过滤器设置完成后启用
   - `pinned = 1`: 固定到CPU，保证精确采样
-  - `wakeup_events = 1`: 每个事件都唤醒用户态处理
 
 #### 过滤器
 
@@ -376,12 +375,9 @@ perf-prof blktrace -d /dev/vda -i 1000 --than 10ms --kvmclock <uuid>
   # 第一步：使用blktrace定位到有慢IO问题
   perf-prof blktrace -d /dev/sda -i 1000 --than 10ms
 
-  # 第二步：使用top分析哪些进程产生慢IO
-  perf-prof top -e block:block_rq_complete//key=pid/comm=comm/ -i 1000
-
-  # 第三步：分析具体的IO模式（读写、大小）
+  # 第二步：分析具体的IO模式（读写、大小）
   perf-prof top -e block:block_rq_complete//key=rwbs/ -i 1000
-  perf-prof top -e block:block_rq_complete//top-by=bytes/ -i 1000
+  perf-prof top -e block:block_rq_complete//top-by=nr_sector/ -i 1000
   ```
 
 - **多阶段分析**：
@@ -396,7 +392,7 @@ perf-prof blktrace -d /dev/vda -i 1000 --than 10ms --kvmclock <uuid>
   perf-prof blktrace -d /dev/sda -i 1000 --than 20ms -v
 
   # 阶段4：根因分析 - 结合其他工具定位根本原因
-  perf-prof top -e block:block_rq_complete//key=pid/comm=comm/ -i 1000
+  perf-prof top -e block:block_getrq//key=_pid/ -i 1000
   ```
 
 - **与trace分析器配合**：
