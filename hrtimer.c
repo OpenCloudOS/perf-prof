@@ -26,7 +26,7 @@ struct hrtimer_ctx {
 
 static int __analyzer(struct hrtimer_ctx *ctx, int instance, int nr_tp, u64 *counters)
 {
-    if (expr_load_data(ctx->prog, counters, nr_tp+1) != 0)
+    if (expr_load_data(ctx->prog, counters, (nr_tp+1)*sizeof(*counters)) != 0)
         return BREAK;
     return (int)expr_run(ctx->prog);
 }
@@ -407,17 +407,18 @@ static const char *hrtimer_desc[] = PROFILER_DESC("hrtimer",
     "High-resolution conditional sampling.",
     "",
     "SYNOPSIS",
-    "    High-resolution timer sampling. During the sampling interval, it is up to",
-    "    whether the events occurs or not to print samples. Whether the event occurs",
-    "    or not is determined by {expression}. The expression uses the event name as",
-    "    a variable, which represents the number of occurrences within the specified",
-    "    period. If the expression is true, the sample is printed, otherwise it is",
-    "    not printed.",
+    "    hrtimer includes a built-in software sampling timer. The --period option specifies",
+    "    the sampling interval. Events specified by -e are used only for counting and are not",
+    "    sampled. During each sampling interval, it evaluates {expression} based on the number",
+    "    of occurrences of the specified events (-e). If the expression evaluates to true, the",
+    "    sampled events are printed. The expression uses event names as variables (each",
+    "    representing the count of occurrences within the interval) and a 'period' variable",
+    "    representing the sampling timer interval.",
     "",
     "EXAMPLES",
     "    "PROGRAME" hrtimer -e sched:sched_switch -C 0 --period 50ms 'sched_switch==0'",
-    "    "PROGRAME" hrtimer -e sched:sched_switch,sched:sched_wakeup -C 0-5 -F 20 -g \\",
-    "        'sched_switch==0 && sched_wakeup==0'");
+    "    "PROGRAME" hrtimer -e sched:sched_switch,sched:sched_wakeup -C 0-5 --period 50ms -g \\",
+    "        'sched_switch==0 && sched_wakeup==0 && period > 50000000'");
 static const char *hrtimer_argv[] = PROFILER_ARGV("hrtimer",
     "OPTION:",
     "cpus", "watermark", "output", "mmap-pages", "exit-N", "usage-self",
@@ -440,10 +441,14 @@ PROFILER_REGISTER(hrtimer);
 
 
 static const char *irq_off_desc[] = PROFILER_DESC("irq-off",
-    "[OPTION...] [-F freq] [--period ns] [--than ns] [-g]",
+    "[OPTION...] --period ns [--than ns] [-g]",
     "Detect irq off.",
     "",
     "SYNOPSIS",
+    "    Detect interrupt-off conditions using a periodic hrtimer. The '--period' option",
+    "    specifies the timer interval. When the sampled timer interval exceeds the '--than'",
+    "    threshold, it indicates interrupts were disabled during that period. The '--than'",
+    "    value should be greater than '--period'.",
     "    Based on hrtimer. See '"PROGRAME" hrtimer -h' for more information.",
     "",
     "EXAMPLES",
@@ -454,7 +459,7 @@ static const char *irq_off_argv[] = PROFILER_ARGV("irq-off",
     "cpus", "watermark", "output", "mmap-pages", "exit-N", "usage-self",
     "version", "verbose", "quiet", "help",
     PROFILER_ARGV_FILTER,
-    PROFILER_ARGV_PROFILER, "freq", "period", "than", "call-graph");
+    PROFILER_ARGV_PROFILER, "period", "than", "call-graph");
 struct monitor irq_off = {
     .name = "irq-off",
     .desc = irq_off_desc,
