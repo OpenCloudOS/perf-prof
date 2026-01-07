@@ -356,7 +356,9 @@ static const char *trace_desc[] = PROFILER_DESC("trace",
     "",
     "EXAMPLES",
     "    "PROGRAME" trace -e sched:sched_wakeup -C 0 -g",
-    "    "PROGRAME" trace -e sched:sched_wakeup,sched:sched_switch --overwrite");
+    "    "PROGRAME" trace -e sched:sched_wakeup -g --flame-graph wakeup",
+    "    "PROGRAME" trace -e 'oom:mark_victim//exec=system(\"/proc/%d/stat\", pid)/'",
+    "    "PROGRAME" trace -e sched:sched_wakeup,sched:sched_switch --ptrace -- ls");
 static const char *trace_argv[] = PROFILER_ARGV("trace",
     PROFILER_ARGV_OPTION, "inherit",
     PROFILER_ARGV_CALLCHAIN_FILTER,

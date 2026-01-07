@@ -444,7 +444,8 @@ static const char *kvm_exit_desc[] = PROFILER_DESC("kvm-exit",
     "    kvm:kvm_exit, kvm:kvm_entry", "",
     "EXAMPLES",
     "    "PROGRAME" kvm-exit -p 2347 -i 1000",
-    "    "PROGRAME" kvm-exit -C 1-4 -i 1000 --perins");
+    "    "PROGRAME" kvm-exit -C 1-4 -i 1000 --perins",
+    "    "PROGRAME" kvm-exit -p 2347 --filter 'exit_reason==48' --than 1ms -i 1000");
 static const char *kvm_exit_argv[] = PROFILER_ARGV("kvm-exit",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "perins", "than", "heatmap", "filter");

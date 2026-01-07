@@ -298,7 +298,10 @@ static const char *profile_desc[] = PROFILER_DESC("profile",
     "Sampling at the specified frequency.", "",
     "EXAMPLES",
     "    "PROGRAME" profile -F 997 -p 2347 -g --flame-graph cpu",
-    "    "PROGRAME" profile -F 997 -C 0-3 --than 30 -g --flame-graph cpu");
+    "    "PROGRAME" profile -F 997 -C 0-3 --than 30 -g --flame-graph cpu",
+    "    "PROGRAME" profile -F 997 --prio 0-99 -g --flame-graph rt_cpu",
+    "    "PROGRAME" profile -F 997 --irqs_disabled -g --flame-graph irqoff",
+    "    "PROGRAME" profile -F 997 --tif_need_resched -g --flame-graph needresched");
 static const char *profile_argv[] = PROFILER_ARGV("profile",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_FILTER,

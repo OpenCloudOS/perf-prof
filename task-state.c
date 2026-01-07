@@ -965,6 +965,7 @@ static const char *task_state_desc[] = PROFILER_DESC("task-state",
     "    sched:sched_switch, sched:sched_wakeup, sched:sched_wakeup_new", "",
     "EXAMPLES",
     "    "PROGRAME" task-state -i 1000 --no-interruptible",
+    "    "PROGRAME" task-state -p 2347 --perins --ptrace",
     "    "PROGRAME" task-state -p 2347 -SD --than 20ms -g",
     "    "PROGRAME" task-state --filter 'java,python*' -S --than 100ms -g",
     "    "PROGRAME" task-state -- ip link show eth0");

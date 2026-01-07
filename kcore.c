@@ -181,13 +181,23 @@ static int kcore_argc_init(int argc, char *argv[])
 }
 
 static const char *kcore_desc[] = PROFILER_DESC("kcore",
-    "[OPTION...] [-1|2|4|8] [--string] kaddr|symbol [count]",
+    "[OPTION...] [-1|-2|-4|-8] [--string] <kaddr|symbol> [count]",
     "Read kernel memory.", "",
     "SYNOPSIS",
-    "    Read from /proc/kcore.", "",
+    "    Read from /proc/kcore. Supports reading kernel memory by virtual address",
+    "    or symbol name. The output includes hex dump with ASCII representation.",
+    "",
+    "    <kaddr|symbol>  Kernel virtual address (hex) or symbol name",
+    "    [count]         Number of elements to read (default: 1)",
+    "",
+    "    -1, -2, -4, -8  Element size in bytes (default: 8)",
+    "    --string        Read as null-terminated string",
+    "",
     "EXAMPLES",
     "    "PROGRAME" kcore --string linux_banner",
-    "    "PROGRAME" kcore -8 0xffffffff81ade0c0 1");
+    "    "PROGRAME" kcore -8 0xffffffff81ade0c0 1",
+    "    "PROGRAME" kcore jiffies",
+    "    "PROGRAME" kcore -4 loops_per_jiffy 1");
 static const char *kcore_argv[] = PROFILER_ARGV("kcore",
     "OPTION:",
     "version", "verbose", "quiet", "help",
