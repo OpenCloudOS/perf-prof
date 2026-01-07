@@ -579,16 +579,26 @@ static void hrcount_help(struct help_ctx *hctx)
 
 
 static const char *hrcount_desc[] = PROFILER_DESC("hrcount",
-    "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
-    "High-resolution periodic counter.",
+    "[OPTION...] -e EVENT[...] [--period ns] [-C cpus] [-i ms] [--perins]",
+    "High-resolution periodic counter with microsecond granularity.",
     "",
     "SYNOPSIS",
-    "    High-resolution counters are capable of displaying count changes at millisecond or",
-    "    microsecond granularity.",
+    "    Uses hrtimer (PERF_COUNT_SW_CPU_CLOCK) as the leader event to sample counters at",
+    "    high frequency. The timer period is set by --period, and events specified by -e",
+    "    are grouped under the timer. On timer expiration, PERF_SAMPLE_READ captures all",
+    "    event counters in the group atomically.",
+    "",
+    "    Each CPU's timer fires independently and samples simultaneously, preserving count",
+    "    accuracy across all CPUs. User-space accumulates counters into count_dist and",
+    "    outputs periodically based on -i interval.",
+    "",
+    "    Can only be attached to CPUs (-C), not to processes (-p).",
     "",
     "EXAMPLES",
     "    "PROGRAME" hrcount -e sched:sched_switch -C 0 --period 50ms -i 1000",
-    "    "PROGRAME" hrcount -e sched:sched_switch,sched:sched_wakeup -C 0-5 --period 50ms -i 1000");
+    "    "PROGRAME" hrcount -e sched:sched_switch,sched:sched_wakeup//alias=wakeup/ -C 0-5 --period 50ms -i 1000",
+    "    "PROGRAME" hrcount -e sched:sched_switch,sched:sched_wakeup//cpus=\"3-4\"/ -C 0-5 --period 200ms -i 1000 --perins",
+    "    "PROGRAME" hrcount -e sched:sched_switch -C 0-3 --period 10ms -i 500 --perins");
 static const char *hrcount_argv[] = PROFILER_ARGV("hrcount",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "period", "perins");
@@ -660,15 +670,25 @@ static int stat_read(struct prof_dev *dev, struct perf_evsel *leader, struct per
 
 
 static const char *stat_desc[] = PROFILER_DESC("stat",
-    "[OPTION...] -e EVENT[...] [--period ns] [--perins]",
-    "Low-resolution periodic counter.",
+    "[OPTION...] -e EVENT[...] [--period ns] [-C cpus] [-p pid] [-i ms] [--perins]",
+    "Low-resolution periodic counter, complementary to hrcount.",
     "",
     "SYNOPSIS",
-    "    Based on hrcount. See '"PROGRAME" hrcount -h' for more information.",
+    "    Based on hrcount but reads counters sequentially instead of sampling. The --period",
+    "    option specifies the read interval, and -i specifies the output interval.",
+    "",
+    "    Unlike hrcount which samples all CPU counters simultaneously via hrtimer, stat",
+    "    reads each CPU's or process's counters one by one. This sequential reading causes",
+    "    some precision loss, but allows attachment to both CPUs (-C) and processes (-p/-t).",
+    "",
+    "    Forms a complementary pair with hrcount: use hrcount for high-precision CPU-only",
+    "    monitoring, use stat for process-level monitoring with acceptable precision loss.",
     "",
     "EXAMPLES",
     "    "PROGRAME" stat -e sched:sched_switch -C 0 -i 1000 --period 100ms",
-    "    "PROGRAME" stat -e sched:sched_switch,sched:sched_wakeup -C 0-5 -i 1000");
+    "    "PROGRAME" stat -e sched:sched_switch,sched:sched_wakeup//alias=wakeup/ -C 0-5 -i 1000",
+    "    "PROGRAME" stat -e sched:sched_switch,sched:sched_wakeup//cpus=\"3-4\"/ -C 0-5 -i 1000 --period 200ms --perins",
+    "    "PROGRAME" stat -e sched:sched_switch -p 1234 -i 1000 --period 200ms --perins");
 static const char *stat_argv[] = PROFILER_ARGV("stat",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "perins", "period");
