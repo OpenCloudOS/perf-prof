@@ -607,9 +607,6 @@ static u64 decode_addr(struct insn *insn, struct sample_regs_intr *regs_intr)
         case 0xA3: // MOV Ov,rAX
             return decode_mem_abs(insn);
 
-        // XCHG
-        case 0x86: // XCHG Eb,Gb
-        case 0x87: // XCHG Ev,Gv
         // CMPXCHG
         case 0xB00F: // CMPXCHG Eb,Gb
         case 0xB10F: // CMPXCHG Ev,Gv
@@ -717,9 +714,6 @@ static u64 decode_data(struct insn *insn, struct sample_regs_intr *regs_intr, u6
         case 0xC6: /* Grp11 Eb,Ib (1A) */
         case 0xC7: /* Grp11 Ev,Iz (1A) */ return decode_opsrc_Imm(insn, byteop, 1);
 
-        //XCHG
-        case 0x86: // XCHG Eb,Gb
-        case 0x87: /* XCHG Ev,Gv */ return decode_opsrc_reg(insn, regs_intr, byteop);
         // CMPXCHG
         case 0xB00F: // CMPXCHG Eb,Gb
         case 0xB10F: { // CMPXCHG Ev,Gv
@@ -913,8 +907,6 @@ static bool safety(struct insn *insn)
         case 0xA3: // MOV Ov,rAX
         case 0xC6: // Grp11 Eb,Ib (1A)
         case 0xC7: // Grp11 Ev,Iz (1A)
-        case 0x86: // XCHG Eb,Gb
-        case 0x87: // XCHG Ev,Gv
         case 0xB00F: // CMPXCHG Eb,Gb
         case 0xB10F: // CMPXCHG Ev,Gv
             return true;
@@ -953,10 +945,6 @@ static bool supported(struct insn_decode_ctxt *ctxt, struct insn *insn)
                 return false;
             break;
 
-        // XCHG
-        case 0x86: // XCHG Eb,Gb        Exchange r8 with byte from r/m8
-        case 0x87: // XCHG Ev,Gv        Exchange r64 with quadword from r/m64
-            break;
         // CMPXCHG
         case 0xB00F: // CMPXCHG Eb,Gb
         case 0xB10F: // CMPXCHG Ev,Gv
