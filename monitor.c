@@ -1730,16 +1730,35 @@ void print_time(FILE *fp)
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
 }
 
+static inline void print_lost_events(struct prof_dev *dev)
+{
+    if (unlikely(dev->lost_events)) {
+        print_time(stderr);
+        fprintf(stderr, "%s: lost %lu events (total)\n", dev->prof->name, dev->lost_events);
+        dev->lost_events = 0;
+    }
+}
+
 void print_lost_fn(struct prof_dev *dev, union perf_event *event, int ins)
 {
-    int oncpu;
-
-    if (dev->env->exit_n) return;
-    oncpu = prof_dev_ins_oncpu(dev);
-    print_time(stderr);
-    fprintf(stderr, "%s: lost %llu events on %s #%d\n", dev->prof->name, event->lost.lost,
-                    oncpu ? "CPU" : "thread",
-                    oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins));
+    struct env *env = dev->env;
+    if (env->exit_n) return;
+    if (unlikely(env->verbose >= VERBOSE_NOTICE)) {
+        int oncpu = prof_dev_ins_oncpu(dev);
+        print_time(stderr);
+        fprintf(stderr, "%s: lost %llu events on %s #%d\n", dev->prof->name, event->lost.lost,
+                        oncpu ? "CPU" : "thread",
+                        oncpu ? prof_dev_ins_cpu(dev, ins) : prof_dev_ins_thread(dev, ins));
+    } else {
+        dev->lost_events += event->lost.lost;
+        if (!env->interval) {
+            u64 lost_time = get_ktime_ns();
+            if (dev->lost_print_time == 0 || lost_time - dev->lost_print_time > NSEC_PER_SEC) {
+                dev->lost_print_time = lost_time;
+                print_lost_events(dev);
+            }
+        }
+    }
 }
 
 static void print_fork_exit_fn(struct prof_dev *dev, union perf_event *event, int ins, int exit)
@@ -2065,6 +2084,7 @@ static void interval_handle(struct timer *timer)
     struct prof_dev *source, *tmp;
 
     prof_dev_get(dev);
+    print_lost_events(dev);
 
     // Do not use prof_dev_flush().
     if (dev->pages) {
@@ -2704,6 +2724,8 @@ static void prof_dev_free(struct prof_dev *dev)
     profiler *prof = dev->prof;
     struct perf_evlist *evlist = dev->evlist;
     struct prof_dev *child, *next, *parent;
+
+    print_lost_events(dev);
 
     if (dev->env->interval) {
         timer_destroy(&dev->timer);

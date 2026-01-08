@@ -384,6 +384,8 @@ struct prof_dev {
     int max_read_size;
     struct perf_counts_values *values;
     long sampled_events;
+    u64 lost_events;
+    u64 lost_print_time;
     struct perf_sample_pos {
         u64 sample_type;
         // Starting from event->sample.array, not include perf_event_header.
