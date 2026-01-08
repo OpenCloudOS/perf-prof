@@ -667,14 +667,23 @@ static void oncpu_sample(struct prof_dev *dev, union perf_event *event, int inst
 
 static const char *oncpu_desc[] = PROFILER_DESC("oncpu",
     "[OPTION...] [--detail] [--filter filter] [--only-comm] [--prio n]",
-    "Monitor the process running on the CPU.", "",
+    "Monitor the process running on the CPU.",
+    "",
+    "SYNOPSIS",
+    "    CPU process execution monitor for real-time tracking of running processes and their",
+    "    execution time statistics. Supports two monitoring modes:",
+    "      - Thread-based CPU distribution monitoring (-p option)",
+    "      - CPU-based process monitoring (-C option/default, with --prio priority filtering)",
+    "    Suitable for CPU resource contention analysis and process scheduling behavior observation.",
+    "",
     "TRACEPOINT",
-    "    sched:sched_switch, sched:sched_stat_runtime", "",
+    "    sched:sched_switch, sched:sched_stat_runtime",
+    "",
     "EXAMPLES",
-    "    "PROGRAME" oncpu -p 2347",
-    "    "PROGRAME" oncpu -C 0-3 --only-comm",
+    "    "PROGRAME" oncpu -p 2347            # Monitor thread CPU distribution",
+    "    "PROGRAME" oncpu -C 0-3 --only-comm # Monitor processes on CPUs 0-3",
     "    "PROGRAME" oncpu --only-comm --detail",
-    "    "PROGRAME" oncpu --prio 1-99 # real-time priority");
+    "    "PROGRAME" oncpu --prio 1-99        # Filter by real-time priority");
 static const char *oncpu_argv[] = PROFILER_ARGV("oncpu",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "detail\nMore detailed information output", "filter", "only-comm", "prio");
