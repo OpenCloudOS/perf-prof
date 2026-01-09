@@ -199,7 +199,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct top_ctx *ctx;
-    struct tep_handle *tep;
     int i, j, f = 0;
     int len, nr_key = 0;
     char *key_name = NULL;
@@ -214,7 +213,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
         return -1;
     dev->private = ctx;
 
-    tep = tep__ref();
+    tep__ref();
 
     ctx->EVENT = strdup(env->event);
     len = strlen(ctx->EVENT);
@@ -243,12 +242,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
             f ++;
         }
         if (env->key && !tp->key) {
-            struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
-            if (event && !tep_find_any_field(event, env->key)) {
-                fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
+            tp->key_prog = tp_new_prog(tp, env->key);
+            if (!tp->key_prog) {
+                fprintf(stderr, "%s:%s: Cannot set key '%s'\n", tp->sys, tp->name, env->key);
                 goto failed;
             }
-            tp->key_prog = tp_new_prog(tp, env->key);
             tp->key = env->key;
         }
         nr_key += !!tp->key_prog;
