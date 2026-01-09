@@ -67,6 +67,7 @@ struct lost_node {
     bool reclaim;
     u64 start_time;
     u64 end_time;
+    u64 lost_id; // struct perf_record_lost::id
     u64 lost;
 };
 
@@ -963,6 +964,7 @@ static void multi_trace_print_lost(struct prof_dev *dev, union perf_event *event
 {
     struct multi_trace_ctx *ctx = dev->private;
     struct lost_node *lost;
+    struct env *env;
 
     if (event)
         return print_lost_fn(dev, event, ins);
@@ -972,15 +974,25 @@ static void multi_trace_print_lost(struct prof_dev *dev, union perf_event *event
     else
         lost = list_first_entry(&ctx->timeline_lost_list, struct lost_node, lost_link);
 
-    print_time(stderr);
-    fprintf(stderr, "%s: lost %lu events on %s #%d", dev->prof->name, lost->lost,
-                    ctx->oncpu ? "CPU" : "thread",
-                    ctx->oncpu ? prof_dev_ins_cpu(dev, lost->ins) : prof_dev_ins_thread(dev, lost->ins));
-    if (dev->env->greater_than || dev->env->lower_than)
-        fprintf(stderr, " (%lu.%06lu, %lu.%06lu)\n", lost->start_time/NSEC_PER_SEC, (lost->start_time%NSEC_PER_SEC)/1000,
-                            lost->end_time/NSEC_PER_SEC, (lost->end_time%NSEC_PER_SEC)/1000);
-    else
-        fprintf(stderr, "\n");
+    env = dev->env;
+    if (unlikely(env->verbose >= VERBOSE_NOTICE)) {
+        print_time(stderr);
+        fprintf(stderr, "%s: lost %lu events on %s #%d", dev->prof->name, lost->lost,
+                        ctx->oncpu ? "CPU" : "thread",
+                        ctx->oncpu ? prof_dev_ins_cpu(dev, lost->ins) : prof_dev_ins_thread(dev, lost->ins));
+        if (env->greater_than || env->lower_than)
+            fprintf(stderr, " (%lu.%06lu, %lu.%06lu)\n", lost->start_time/NSEC_PER_SEC, (lost->start_time%NSEC_PER_SEC)/1000,
+                                lost->end_time/NSEC_PER_SEC, (lost->end_time%NSEC_PER_SEC)/1000);
+        else
+            fprintf(stderr, "\n");
+    } else {
+        struct perf_record_lost lost_event = {
+            .header = {PERF_RECORD_LOST, 0, sizeof(struct perf_record_lost)},
+            .id = lost->lost_id,
+            .lost = lost->lost,
+        };
+        print_lost_fn(dev, (union perf_event *)&lost_event, lost->ins);
+    }
 }
 
 static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int ins, u64 lost_start, u64 lost_end)
@@ -1008,6 +1020,7 @@ static void multi_trace_lost(struct prof_dev *dev, union perf_event *event, int 
         lost->reclaim = false;
         lost->start_time = lost_start;
         lost->end_time = lost_end;
+        lost->lost_id = event->lost.id;
         lost->lost = event->lost.lost;
 
         if (ctx->lost_affect == LOST_AFFECT_INS_EVENT) {
