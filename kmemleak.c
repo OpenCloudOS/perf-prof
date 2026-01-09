@@ -60,6 +60,7 @@ struct kmemleak_lost_node {
     bool reclaim;
     u64 start_time;
     u64 end_time;
+    u64 lost_id; // struct perf_record_lost::id
     u64 lost;
 };
 
@@ -375,12 +376,14 @@ static inline void lost_reclaim(struct prof_dev *dev)
 
     if (!list_empty(&ctx->lost_list)) {
         struct kmemleak_lost_node *lost = list_first_entry(&ctx->lost_list, struct kmemleak_lost_node, lost_link);
-        int oncpu = prof_dev_ins_oncpu(dev);
-
-        print_time(stderr);
-        fprintf(stderr, "%s: lost %lu events on %s #%d\n", dev->prof->name, lost->lost,
-                        oncpu ? "CPU" : "thread",
-                        oncpu ? prof_dev_ins_cpu(dev, lost->ins) : prof_dev_ins_thread(dev, lost->ins));
+        struct perf_record_lost lost_event = {
+            .header = {PERF_RECORD_LOST, 0, sizeof(struct perf_record_lost)},
+            .id = lost->lost_id,
+            .lost = lost->lost,
+        };
+        if (!rblist__empty(&ctx->alloc))
+            dev->lost_print_time = 0; // force print lost now
+        print_lost_fn(dev, (union perf_event *)&lost_event, lost->ins);
     }
 
     if (!rblist__empty(&ctx->alloc)) {
@@ -412,6 +415,7 @@ static void kmemleak_lost(struct prof_dev *dev, union perf_event *event, int ins
         lost->reclaim = false;
         lost->start_time = lost_start;
         lost->end_time = lost_end;
+        lost->lost_id = event->lost.id;
         lost->lost = event->lost.lost;
 
         list_for_each_entry(pos, &ctx->lost_list, lost_link) {
