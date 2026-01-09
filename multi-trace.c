@@ -378,7 +378,6 @@ static int monitor_ctx_init(struct prof_dev *dev)
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
     int i, j, stacks = 0;
-    struct tep_handle *tep;
     int oncpu = prof_dev_ins_oncpu(dev);
     struct two_event_options options = {
         .keyname = (oncpu && !ctx->comm) ? "CPU" : "THREAD",
@@ -405,7 +404,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     INIT_LIST_HEAD(&ctx->pending_list);
     INIT_LIST_HEAD(&ctx->timeline_lost_list);
 
-    tep = tep__ref();
+    tep__ref();
 
     if (ctx->nested)
         min_nr_events = 1;
@@ -444,12 +443,11 @@ static int monitor_ctx_init(struct prof_dev *dev)
             else
                 nr_real_nonpull_tp += env->detail ? 1 : !tp->untraced;
             if (env->key && !tp->key) {
-                struct tep_event *event = tep_find_event_by_name(tep, tp->sys, tp->name);
-                if (event && !tep_find_any_field(event, env->key)) {
-                    fprintf(stderr, "Cannot find %s field at %s:%s\n", env->key, tp->sys, tp->name);
+                tp->key_prog = tp_new_prog(tp, env->key);
+                if (!tp->key_prog) {
+                    fprintf(stderr, "%s:%s: Cannot set key '%s'\n", tp->sys, tp->name, env->key);
                     goto failed;
                 }
-                tp->key_prog = tp_new_prog(tp, env->key);
                 tp->key = env->key;
             }
             if (tp->key && !keyname)
