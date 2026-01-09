@@ -91,3 +91,17 @@ def test_printkey_conditional(runtime, memleak_check):
     top = PerfProf(['top', '-e', 'sched:sched_wakeup//key=prio/printkey=printf("%s",key<10?"HIGH":"LOW")/comm=comm/', '-m', '64'])
     for std, line in top.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_key_cpu(runtime, memleak_check):
+    # Test --key with builtin variable _cpu
+    #perf-prof top -e sched:sched_switch -k _cpu -m 64
+    top = PerfProf(['top', '-e', 'sched:sched_switch', '-k', '_cpu', '-m', '64'])
+    for std, line in top.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_key_complex_expr(runtime, memleak_check):
+    # Test --key with complex expression
+    #perf-prof top -e irq:softirq_entry -k '(_cpu<<16)|vec' -m 64
+    top = PerfProf(['top', '-e', 'irq:softirq_entry', '-k', '(_cpu<<16)|vec', '-m', '64'])
+    for std, line in top.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)

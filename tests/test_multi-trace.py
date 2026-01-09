@@ -207,3 +207,23 @@ def test_multi_trace_printkey_hex(runtime, memleak_check):
                             '-i', '1000', '--order', '--perins'])
     for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
         result_check(std, line, runtime, memleak_check)
+
+def test_multi_trace_key_cpu(runtime, memleak_check):
+    # Test --key with builtin variable _cpu
+    # perf-prof multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -k _cpu -i 1000 --order
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'irq:softirq_entry/vec==1/',
+                            '-e', 'irq:softirq_exit/vec==1/',
+                            '-k', '_cpu', '-i', '1000', '--order'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
+
+def test_multi_trace_key_complex_expr(runtime, memleak_check):
+    # Test --key with complex expression
+    # perf-prof multi-trace -e irq:softirq_entry/vec==1/ -e irq:softirq_exit/vec==1/ -k '(_cpu<<16)|vec' -i 1000 --order
+    multi_trace = PerfProf(["multi-trace",
+                            '-e', 'irq:softirq_entry/vec==1/',
+                            '-e', 'irq:softirq_exit/vec==1/',
+                            '-k', '(_cpu<<16)|vec', '-i', '1000', '--order'])
+    for std, line in multi_trace.run(runtime, memleak_check, util_interval=5):
+        result_check(std, line, runtime, memleak_check)
