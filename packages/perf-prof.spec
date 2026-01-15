@@ -2,6 +2,7 @@
 %define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
 %define has_btf %(test -f /sys/kernel/btf/vmlinux && echo 1 || echo 0)
+%define has_tcmalloc %(test -f /usr/include/gperftools/tcmalloc.h && echo 1 || echo 0)
 
 %undefine _disable_source_fetch
 %define debug_package %{nil}
@@ -22,6 +23,9 @@ ExclusiveArch:  x86_64 aarch64
 Requires:       elfutils-libelf
 Requires:       glibc
 Requires:       xz-libs
+%if %{has_tcmalloc}
+Requires:       gperftools-libs
+%endif
 
 BuildRequires:  elfutils-libelf-devel
 BuildRequires:  xz-devel
