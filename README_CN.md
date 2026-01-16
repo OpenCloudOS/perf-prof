@@ -308,7 +308,8 @@ perf-prof/
 ├── sqlite/               # SQLite源码和扩展模块
 ├── include/              # 包含头文件
 ├── tests/                # 测试套件
-└── docs/                 # 文档
+├── docs/                 # 文档
+└── skills/               # AI 辅助分析技能包
 ```
 
 ### 核心组件

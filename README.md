@@ -305,7 +305,8 @@ perf-prof/
 ├── sqlite/               # SQLite amalgamation source code and extension modules
 ├── include/              # Included header files
 ├── tests/                # Test suite
-└── docs/                 # Documentation
+├── docs/                 # Documentation
+└── skills/               # AI-assisted analysis skill packages
 ```
 
 ### Core Components
