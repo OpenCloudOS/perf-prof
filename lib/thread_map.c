@@ -217,8 +217,10 @@ static struct perf_thread_map *thread_map__new_by_pid_str(const char *pid_str)
 
 		sprintf(name, "/proc/%d/task", pid);
 		items = scandir(name, &namelist, filter, NULL);
-		if (items <= 0)
+		if (items <= 0) {
+			fprintf(stderr, "failed to open %s: process %d may have exited\n", name, pid);
 			goto out_free_threads;
+		}
 
 		total_tasks += items;
 		nt = perf_thread_map__realloc(threads, total_tasks);
@@ -262,6 +264,7 @@ struct perf_thread_map *thread_map__new_by_tid_str(const char *tid_str)
 	struct str_node *pos;
 	struct strlist_config slist_config = { .dont_dupstr = true, };
 	struct strlist *slist;
+	char path[256];
 
 	/* perf-stat expects threads to be generated even if tid not given */
 	if (!tid_str)
@@ -280,6 +283,13 @@ struct perf_thread_map *thread_map__new_by_tid_str(const char *tid_str)
 
 		if (tid == prev_tid)
 			continue;
+
+		/* Check if thread exists */
+		sprintf(path, "/proc/%d/task/%d", tid, tid);
+		if (access(path, F_OK) != 0) {
+			fprintf(stderr, "failed to open %s: thread %d may have exited\n", path, tid);
+			goto out_free_threads;
+		}
 
 		ntasks++;
 		nt = perf_thread_map__realloc(threads, ntasks);
