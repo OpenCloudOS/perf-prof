@@ -90,20 +90,25 @@ static PyObject *get_python_func(PyObject *module, const char *name)
 }
 
 /*
- * Build event handler function name: sys__event_name
+ * Build event handler function name: sys__event_name or sys__alias
  * e.g., "sched:sched_wakeup" -> "sched__sched_wakeup"
  * e.g., "sched:sched-wakeup" -> "sched__sched_wakeup"
+ * e.g., "sched:sched_wakeup" with alias="wakeup1" -> "sched__wakeup1"
  * Convert invalid characters (like '-') to '_' for valid Python function names.
+ *
+ * When alias is provided, use sys__alias to allow distinguishing multiple
+ * instances of the same event with different aliases.
  */
-static char *build_handler_name(const char *sys, const char *name)
+static char *build_handler_name(const char *sys, const char *name, const char *alias)
 {
     char *handler_name;
-    size_t len = strlen(sys) + 2 + strlen(name) + 1;
+    const char *event_part = alias ? alias : name;
+    size_t len = strlen(sys) + 2 + strlen(event_part) + 1;
     char *p;
 
     handler_name = malloc(len);
     if (handler_name) {
-        snprintf(handler_name, len, "%s__%s", sys, name);
+        snprintf(handler_name, len, "%s__%s", sys, event_part);
         /* Convert invalid characters to underscore */
         for (p = handler_name; *p; p++) {
             if (*p == '-' || *p == '.' || *p == ':')
@@ -248,7 +253,7 @@ static int cache_event_fields(struct python_ctx *ctx)
         }
 
         /* Look for event-specific handler */
-        handler_name = build_handler_name(tp->sys, tp->name);
+        handler_name = build_handler_name(tp->sys, tp->name, tp->alias);
         if (handler_name) {
             ctx->event_handlers[i] = get_python_func(ctx->module, handler_name);
             free(handler_name);
@@ -647,10 +652,11 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
         else
             Py_DECREF(result);
     } else if (ctx->func_sample) {
-        /* Add _event field for default handler */
+        /* Add _event field for default handler, use alias if available */
         char event_name[256];
         PyObject *event_str;
-        snprintf(event_name, sizeof(event_name), "%s:%s", tp->sys, tp->name);
+        snprintf(event_name, sizeof(event_name), "%s:%s", tp->sys,
+                 tp->alias ? tp->alias : tp->name);
         event_str = PyUnicode_FromString(event_name);
         PyDict_SetItemString(dict, "_event", event_str);
         Py_DECREF(event_str);
@@ -720,6 +726,8 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    sys__event_name(event)  - Event-specific handler",
     "                              e.g., sched__sched_wakeup for sched:sched_wakeup",
     "                              Characters '-', '.', ':' converted to '_'",
+    "    sys__alias(event)       - Alias-specific handler (when alias= is used)",
+    "                              e.g., sched__wakeup1 for alias=wakeup1",
     "    __sample__(event)       - Default handler (dict includes _event field)",
     "",
     "  EVENT DICT FIELDS",
@@ -727,7 +735,7 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    _time                   - Event timestamp (ns)",
     "    _cpu                    - CPU number",
     "    _period                 - Sample period",
-    "    _event                  - Event name (only in __sample__)",
+    "    _event                  - Event name, uses alias if set (only in __sample__)",
     "    common_flags            - Trace event flags",
     "    common_preempt_count    - Preemption count",
     "    common_pid              - Thread ID from trace event",
@@ -736,7 +744,8 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "EXAMPLES",
     "    "PROGRAME" python -e sched:sched_wakeup counter.py",
     "    "PROGRAME" python -e sched:sched_wakeup,sched:sched_switch -i 1000 analyzer.py",
-    "    "PROGRAME" python -e 'sched:sched_wakeup/pid>1000/' -C 0-3 filter.py");
+    "    "PROGRAME" python -e 'sched:sched_wakeup/pid>1000/' -C 0-3 filter.py",
+    "    "PROGRAME" python -e 'sched:sched_wakeup//alias=w1/,sched:sched_wakeup//alias=w2/' multi.py");
 
 static const char *python_argv[] = PROFILER_ARGV("python",
     PROFILER_ARGV_OPTION,
