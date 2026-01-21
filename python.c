@@ -19,6 +19,7 @@
 #include <dlfcn.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <event-parse-local.h>
 
 /* Global script path, set by argc_init before init */
 static char *script_path = NULL;
@@ -224,14 +225,53 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
 }
 
 /*
+ * Check if a field requires special pointer format output (e.g., %pI4, %pM).
+ * These fields have TEP_FIELD_IS_STRING flag but should be treated as binary data.
+ * Returns true if the field's IS_STRING flag should be cleared.
+ *
+ * Reference: arg_pointer_register() in sqlite/perf_tp.c
+ */
+static bool field_needs_binary_output(struct tep_event *event, const char *field_name)
+{
+    struct tep_print_parse *parse = event->print_fmt.print_cache;
+
+    while (parse) {
+        if (parse->type == PRINT_FMT_ARG_POINTER &&
+            parse->arg && parse->arg->type == TEP_PRINT_FIELD) {
+            if (strcmp(parse->arg->field.name, field_name) == 0) {
+                const char *format = parse->format;
+
+                /* Skip to 'p' in format string */
+                while (*format) if (*format++ == 'p') break;
+                switch (*format) {
+                    case 'I': /* %pI4, %pi4, %pI6, %pi6, %pIS, %piS */
+                    case 'i':
+                    case 'U': /* %pUb, %pUB, %pUl, %pUL */
+                    case 'M': /* %pM, %pMR, %pMF, %pm, %pmR */
+                    case 'm':
+                        return true;
+                    default:
+                        break;
+                }
+            }
+        }
+        parse = parse->next;
+    }
+    return false;
+}
+
+/*
  * Cache event fields for faster lookup during sampling.
  * After tep__ref(), tep_find_event() returns pointers that remain valid.
+ *
+ * Also clears TEP_FIELD_IS_STRING flag for fields that require special pointer
+ * format output (e.g., %pI4, %pM), as they should be treated as binary data.
  */
 static int cache_event_fields(struct python_ctx *ctx)
 {
     struct tep_handle *tep;
     struct tp *tp;
-    int i, ret = -1;
+    int i, j, ret = -1;
 
     ctx->nr_events = ctx->tp_list->nr_tp;
     ctx->event_fields = calloc(ctx->nr_events, sizeof(struct tep_format_field **));
@@ -250,6 +290,17 @@ static int cache_event_fields(struct python_ctx *ctx)
             ctx->event_fields[i] = tep_event_fields(event);
             if (!ctx->event_fields[i])
                 goto failed;
+
+            /* Clear IS_STRING flag for fields requiring special pointer format.
+             * These fields (e.g., IP addresses, MAC addresses, UUIDs) have IS_STRING
+             * flag but their data should be treated as binary (bytes in Python). */
+            for (j = 0; ctx->event_fields[i][j]; j++) {
+                struct tep_format_field *field = ctx->event_fields[i][j];
+                if ((field->flags & TEP_FIELD_IS_STRING) &&
+                    field_needs_binary_output(event, field->name)) {
+                    field->flags &= ~TEP_FIELD_IS_STRING;
+                }
+            }
         }
 
         /* Look for event-specific handler */
@@ -686,11 +737,14 @@ static void python_print_dev(struct prof_dev *dev, int indent)
 /*
  * Generate Python type hint based on field flags
  */
-static const char *python_type_hint(struct tep_format_field *field)
+static const char *python_type_hint(struct tep_event *event, struct tep_format_field *field)
 {
-    if (field->flags & TEP_FIELD_IS_STRING)
+    if (field->flags & TEP_FIELD_IS_STRING) {
+        /* Check if field needs binary output despite having IS_STRING flag */
+        if (field_needs_binary_output(event, field->name))
+            return "bytes";
         return "str";
-    else if (field->flags & TEP_FIELD_IS_ARRAY)
+    } else if (field->flags & TEP_FIELD_IS_ARRAY)
         return "bytes";
     else
         return "int";
@@ -828,7 +882,7 @@ static void python_help_script_template(struct help_ctx *hctx)
                         printf("    Event-specific fields:\n");
                         for (k = 0; fields[k]; k++) {
                             printf("        %s : %s\n", fields[k]->name,
-                                   python_type_hint(fields[k]));
+                                   python_type_hint(event, fields[k]));
                         }
                     }
                 }
@@ -847,7 +901,7 @@ static void python_help_script_template(struct help_ctx *hctx)
                     printf("    # Access event-specific fields\n");
                     for (k = 0; fields[k]; k++) {
                         printf("    # %s = event['%s']  # %s\n", fields[k]->name,
-                               fields[k]->name, python_type_hint(fields[k]));
+                               fields[k]->name, python_type_hint(event, fields[k]));
                     }
                     printf("    \n");
                     free(fields);
