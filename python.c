@@ -683,27 +683,228 @@ static void python_print_dev(struct prof_dev *dev, int indent)
     python_call_print_stat(ctx, indent);
 }
 
+/*
+ * Generate Python type hint based on field flags
+ */
+static const char *python_type_hint(struct tep_format_field *field)
+{
+    if (field->flags & TEP_FIELD_IS_STRING)
+        return "str";
+    else if (field->flags & TEP_FIELD_IS_ARRAY)
+        return "bytes";
+    else
+        return "int";
+}
+
+/*
+ * Output Python script template with event handler functions
+ */
+static void python_help_script_template(struct help_ctx *hctx)
+{
+    struct tep_handle *tep;
+    int i, j, k;
+    int has_events = 0;
+
+    /* Check if we have any events */
+    for (i = 0; i < hctx->nr_list; i++) {
+        if (hctx->tp_list[i]->nr_tp > 0) {
+            has_events = 1;
+            break;
+        }
+    }
+
+    printf("\n");
+    printf("# =============================================================================\n");
+    printf("# Python Script Template for perf-prof python\n");
+    printf("# =============================================================================\n");
+    printf("#\n");
+    printf("# Save this template to a .py file and customize as needed.\n");
+    printf("# Functions marked [OPTIONAL] can be safely deleted if not needed.\n");
+    printf("# Exceptions raised in functions will be printed but won't stop processing.\n");
+    printf("#\n");
+    printf("# Event dict common fields:\n");
+    printf("#   _pid, _tid    : Process/thread ID (int)\n");
+    printf("#   _time         : Event timestamp in nanoseconds (int)\n");
+    printf("#   _cpu          : CPU number (int)\n");
+    printf("#   _period       : Sample period (int)\n");
+    printf("#   _event        : Event name with alias if set (str, only in __sample__)\n");
+    printf("#   common_flags  : Trace event flags (int)\n");
+    printf("#   common_preempt_count : Preemption count (int)\n");
+    printf("#   common_pid    : Thread ID from trace event (int)\n");
+    printf("#\n");
+    printf("# =============================================================================\n");
+    printf("\n");
+
+    /* Import section */
+    printf("# Import modules as needed (examples)\n");
+    printf("# import json\n");
+    printf("# import time\n");
+    printf("# from collections import defaultdict, Counter\n");
+    printf("\n");
+
+    /* Global variables section */
+    printf("# Global variables for statistics\n");
+    printf("event_count = 0\n");
+    printf("interval_count = 0\n");
+    printf("\n");
+
+    /* __init__ function - optional */
+    printf("# [OPTIONAL] Delete if no initialization needed\n");
+    printf("def __init__():\n");
+    printf("    \"\"\"Called once before event processing starts.\"\"\"\n");
+    printf("    global event_count, interval_count\n");
+    printf("    event_count = 0\n");
+    printf("    interval_count = 0\n");
+    printf("    print(\"Python script initialized\")\n");
+    printf("\n");
+
+    /* __exit__ function - optional */
+    printf("# [OPTIONAL] Delete if no cleanup/summary needed\n");
+    printf("def __exit__():\n");
+    printf("    \"\"\"Called once before program exit.\"\"\"\n");
+    printf("    print(f\"Total events processed: {event_count}\")\n");
+    printf("    print(f\"Total intervals: {interval_count}\")\n");
+    printf("\n");
+
+    /* __interval__ function - optional */
+    printf("# [OPTIONAL] Delete if -i interval not used\n");
+    printf("def __interval__():\n");
+    printf("    \"\"\"Called at each -i interval.\"\"\"\n");
+    printf("    global interval_count\n");
+    printf("    interval_count += 1\n");
+    printf("    print(f\"Interval {interval_count}: {event_count} events so far\")\n");
+    printf("\n");
+
+    /* __print_stat__ function - optional */
+    printf("# [OPTIONAL] Delete if SIGUSR2 stats not needed\n");
+    printf("def __print_stat__(indent: int):\n");
+    printf("    \"\"\"Called on SIGUSR2 signal.\"\"\"\n");
+    printf("    prefix = ' ' * indent\n");
+    printf("    print(f\"{prefix}Events: {event_count}\")\n");
+    printf("\n");
+
+    /* __lost__ function - optional */
+    printf("# [OPTIONAL] Delete if event loss notification not needed\n");
+    printf("def __lost__():\n");
+    printf("    \"\"\"Called when events are lost.\"\"\"\n");
+    printf("    print(\"Warning: events lost!\")\n");
+    printf("\n");
+
+    /* Generate event-specific handlers if events are specified */
+    if (has_events) {
+        tep = tep__ref_light();
+
+        printf("# =============================================================================\n");
+        printf("# Event-specific handlers (higher priority than __sample__)\n");
+        printf("# [OPTIONAL] Delete these if using __sample__ for all events\n");
+        printf("# =============================================================================\n");
+        printf("\n");
+
+        for (i = 0; i < hctx->nr_list; i++) {
+            struct tp *tp;
+            for_each_real_tp(hctx->tp_list[i], tp, j) {
+                struct tep_event *event = tep_find_event(tep, tp->id);
+                struct tep_format_field **fields = NULL;
+                char *handler_name;
+
+                /* Build handler name using alias if available */
+                handler_name = build_handler_name(tp->sys, tp->name, tp->alias);
+                if (!handler_name)
+                    continue;
+
+                /* Function definition with docstring */
+                printf("def %s(event: dict):\n", handler_name);
+                printf("    \"\"\"\n");
+                printf("    Handler for %s:%s", tp->sys, tp->name);
+                if (tp->alias)
+                    printf(" (alias: %s)", tp->alias);
+                printf("\n");
+
+                /* Document event-specific fields */
+                if (event) {
+                    fields = tep_event_fields(event);
+                    if (fields) {
+                        printf("    \n");
+                        printf("    Event-specific fields:\n");
+                        for (k = 0; fields[k]; k++) {
+                            printf("        %s : %s\n", fields[k]->name,
+                                   python_type_hint(fields[k]));
+                        }
+                    }
+                }
+                printf("    \"\"\"\n");
+
+                /* Function body with field access examples */
+                printf("    global event_count\n");
+                printf("    event_count += 1\n");
+                printf("    \n");
+                printf("    # Access common fields\n");
+                printf("    pid = event['_pid']\n");
+                printf("    time_ns = event['_time']\n");
+                printf("    \n");
+
+                if (fields) {
+                    printf("    # Access event-specific fields\n");
+                    for (k = 0; fields[k]; k++) {
+                        printf("    # %s = event['%s']  # %s\n", fields[k]->name,
+                               fields[k]->name, python_type_hint(fields[k]));
+                    }
+                    printf("    \n");
+                    free(fields);
+                }
+
+                printf("    # Example: print event info\n");
+                printf("    # print(f\"[CPU{cpu}] {event}\")\n");
+                printf("\n");
+
+                free(handler_name);
+            }
+        }
+
+        tep__unref();
+    }
+
+    /* Default __sample__ handler */
+    printf("# =============================================================================\n");
+    printf("# Default event handler (used when no specific handler is defined)\n");
+    printf("# [OPTIONAL] Delete if using event-specific handlers for all events\n");
+    printf("# =============================================================================\n");
+    printf("\n");
+    printf("def __sample__(event: dict):\n");
+    printf("    \"\"\"\n");
+    printf("    Default handler for all events without specific handlers.\n");
+    printf("    The event dict includes '_event' field with format 'sys:name' or 'sys:alias'.\n");
+    printf("    \"\"\"\n");
+    printf("    global event_count\n");
+    printf("    event_count += 1\n");
+    printf("    \n");
+    printf("    event_name = event['_event']\n");
+    printf("    cpu = event['_cpu']\n");
+    printf("    \n");
+    printf("    # Example: print event\n");
+    printf("    # print(f\"[CPU{cpu}] {event_name}: pid={pid}\")\n");
+}
+
 static void python_help(struct help_ctx *hctx)
 {
     int i, j;
 
-    printf(PROGRAME " python ");
+    printf("# " PROGRAME " python ");
     printf("-e \"");
     for (i = 0; i < hctx->nr_list; i++) {
         struct tp *tp;
         for_each_real_tp(hctx->tp_list[i], tp, j) {
-            printf("%s:%s/%s/", tp->sys, tp->name,
-                   tp->filter && tp->filter[0] ? tp->filter : ".");
+            printf("%s:%s/%s/alias=%s/", tp->sys, tp->name,
+                   tp->filter && tp->filter[0] ? tp->filter : "", tp->alias ? tp->alias : "");
             if (i != hctx->nr_list - 1 ||
                 j != hctx->tp_list[i]->nr_tp - 1)
                 printf(",");
         }
     }
-    printf("\" ");
-    printf("script.py ");
+    printf("\" script.py\n");
 
-    common_help(hctx, true, true, true, true, true, true, false);
-    printf("\n");
+    /* Output Python script template */
+    python_help_script_template(hctx);
 }
 
 static const char *python_desc[] = PROFILER_DESC("python",
