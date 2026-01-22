@@ -52,6 +52,35 @@ struct python_sample_type {
     } raw;
 };
 
+/*
+ * Cached Python string objects for common dict keys.
+ * Using interned strings avoids repeated string hashing in PyDict_SetItem.
+ */
+struct python_key_cache {
+    /* Common sample fields */
+    PyObject *key_pid;          /* "_pid" */
+    PyObject *key_tid;          /* "_tid" */
+    PyObject *key_time;         /* "_time" */
+    PyObject *key_cpu;          /* "_cpu" */
+    PyObject *key_period;       /* "_period" */
+    PyObject *key_event;        /* "_event" */
+    /* Common trace_entry fields */
+    PyObject *key_common_flags;
+    PyObject *key_common_preempt_count;
+    PyObject *key_common_pid;
+};
+
+/*
+ * Per-event data: handler, fields, and cached Python strings.
+ */
+struct python_event_data {
+    PyObject *handler;              /* sys__event_name handler */
+    PyObject *event_name;           /* Cached "sys:name" or "sys:alias" string */
+    struct tep_format_field **fields;  /* Event fields from tep */
+    PyObject **field_keys;          /* Cached PyUnicode for each field name */
+    int nr_fields;
+};
+
 struct python_ctx {
     struct tp_list *tp_list;
     char *script_path;
@@ -62,10 +91,10 @@ struct python_ctx {
     PyObject *func_interval;
     PyObject *func_lost;
     PyObject *func_sample;  /* default __sample__ handler */
-    /* Per-event handlers: sys__event_name */
-    PyObject **event_handlers;
-    /* Event fields cache */
-    struct tep_format_field ***event_fields;
+    /* Cached common key strings */
+    struct python_key_cache key_cache;
+    /* Per-event data array */
+    struct python_event_data *events;
     int nr_events;
 };
 
@@ -121,13 +150,17 @@ static char *build_handler_name(const char *sys, const char *name, const char *a
 
 /*
  * Convert raw event data to Python dict
- * Fields are extracted based on tep_format_field
+ * Fields are extracted based on tep_format_field.
+ * Uses cached PyObject keys for faster dict operations.
  */
 static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
                                struct python_sample_type *data, int tp_index)
 {
     PyObject *dict, *val;
+    struct python_key_cache *kc = &ctx->key_cache;
+    struct python_event_data *ev;
     struct tep_format_field **fields;
+    PyObject **field_keys;
     void *base;
     int i;
 
@@ -135,36 +168,41 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
     if (!dict)
         return NULL;
 
-    /* Add common sample fields - must Py_DECREF after PyDict_SetItemString */
+    /* Add common sample fields using cached keys (PyDict_SetItem is faster) */
 #define SET_DICT_ITEM(dict, key, value) do { \
         val = (value); \
-        PyDict_SetItemString(dict, key, val); \
+        PyDict_SetItem(dict, key, val); \
         Py_DECREF(val); \
     } while (0)
 
-    SET_DICT_ITEM(dict, "_pid", PyLong_FromLong(data->tid_entry.pid));
-    SET_DICT_ITEM(dict, "_tid", PyLong_FromLong(data->tid_entry.tid));
-    SET_DICT_ITEM(dict, "_time", PyLong_FromUnsignedLongLong(data->time));
-    SET_DICT_ITEM(dict, "_cpu", PyLong_FromLong(data->cpu_entry.cpu));
-    SET_DICT_ITEM(dict, "_period", PyLong_FromUnsignedLongLong(data->period));
+    SET_DICT_ITEM(dict, kc->key_pid, PyLong_FromLong(data->tid_entry.pid));
+    SET_DICT_ITEM(dict, kc->key_tid, PyLong_FromLong(data->tid_entry.tid));
+    SET_DICT_ITEM(dict, kc->key_time, PyLong_FromUnsignedLongLong(data->time));
+    SET_DICT_ITEM(dict, kc->key_cpu, PyLong_FromLong(data->cpu_entry.cpu));
+    SET_DICT_ITEM(dict, kc->key_period, PyLong_FromUnsignedLongLong(data->period));
 
     /* Add common_* fields from trace_entry */
-    SET_DICT_ITEM(dict, "common_flags", PyLong_FromLong(data->raw.common.common_flags));
-    SET_DICT_ITEM(dict, "common_preempt_count", PyLong_FromLong(data->raw.common.common_preempt_count));
-    SET_DICT_ITEM(dict, "common_pid", PyLong_FromLong(data->raw.common.common_pid));
+    SET_DICT_ITEM(dict, kc->key_common_flags, PyLong_FromLong(data->raw.common.common_flags));
+    SET_DICT_ITEM(dict, kc->key_common_preempt_count, PyLong_FromLong(data->raw.common.common_preempt_count));
+    SET_DICT_ITEM(dict, kc->key_common_pid, PyLong_FromLong(data->raw.common.common_pid));
 
 #undef SET_DICT_ITEM
 
-    /* Get cached fields for this event */
-    if (tp_index < 0 || tp_index >= ctx->nr_events || !ctx->event_fields[tp_index]) {
+    /* Get cached event data */
+    if (tp_index < 0 || tp_index >= ctx->nr_events)
         return dict;
-    }
 
-    fields = ctx->event_fields[tp_index];
+    ev = &ctx->events[tp_index];
+    fields = ev->fields;
+    field_keys = ev->field_keys;
+
+    if (!fields || !field_keys)
+        return dict;
+
     base = data->raw.data;
 
-    /* Parse event-specific fields (similar to sql_tp_file_sample) */
-    for (i = 0; fields[i]; i++) {
+    /* Parse event-specific fields using cached keys */
+    for (i = 0; i < ev->nr_fields; i++) {
         struct tep_format_field *field = fields[i];
         PyObject *value = NULL;
         void *ptr;
@@ -216,7 +254,7 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
         }
 
         if (value) {
-            PyDict_SetItemString(dict, field->name, value);
+            PyDict_SetItem(dict, field_keys[i], value);
             Py_DECREF(value);
         }
     }
@@ -261,6 +299,45 @@ static bool field_needs_binary_output(struct tep_event *event, const char *field
 }
 
 /*
+ * Initialize common key cache with interned strings.
+ * Interned strings are guaranteed unique and allow pointer comparison.
+ */
+static int init_key_cache(struct python_key_cache *kc)
+{
+#define INTERN_KEY(field, str) do { \
+        kc->field = PyUnicode_InternFromString(str); \
+        if (!kc->field) return -1; \
+    } while (0)
+
+    INTERN_KEY(key_pid, "_pid");
+    INTERN_KEY(key_tid, "_tid");
+    INTERN_KEY(key_time, "_time");
+    INTERN_KEY(key_cpu, "_cpu");
+    INTERN_KEY(key_period, "_period");
+    INTERN_KEY(key_event, "_event");
+    INTERN_KEY(key_common_flags, "common_flags");
+    INTERN_KEY(key_common_preempt_count, "common_preempt_count");
+    INTERN_KEY(key_common_pid, "common_pid");
+
+#undef INTERN_KEY
+    return 0;
+}
+
+static void free_key_cache(struct python_key_cache *kc)
+{
+    Py_XDECREF(kc->key_pid);
+    Py_XDECREF(kc->key_tid);
+    Py_XDECREF(kc->key_time);
+    Py_XDECREF(kc->key_cpu);
+    Py_XDECREF(kc->key_period);
+    Py_XDECREF(kc->key_event);
+    Py_XDECREF(kc->key_common_flags);
+    Py_XDECREF(kc->key_common_preempt_count);
+    Py_XDECREF(kc->key_common_pid);
+    memset(kc, 0, sizeof(*kc));
+}
+
+/*
  * Cache event fields for faster lookup during sampling.
  * After tep__ref(), tep_find_event() returns pointers that remain valid.
  *
@@ -273,40 +350,67 @@ static int cache_event_fields(struct python_ctx *ctx)
     struct tp *tp;
     int i, j, ret = -1;
 
-    ctx->nr_events = ctx->tp_list->nr_tp;
-    ctx->event_fields = calloc(ctx->nr_events, sizeof(struct tep_format_field **));
-    ctx->event_handlers = calloc(ctx->nr_events, sizeof(PyObject *));
+    /* Initialize common key cache */
+    if (init_key_cache(&ctx->key_cache) < 0)
+        return -1;
 
-    if (!ctx->event_fields || !ctx->event_handlers)
+    ctx->nr_events = ctx->tp_list->nr_tp;
+    ctx->events = calloc(ctx->nr_events, sizeof(struct python_event_data));
+
+    if (!ctx->events)
         return -1;
 
     tep = tep__ref();
 
     for_each_real_tp(ctx->tp_list, tp, i) {
         struct tep_event *event = tep_find_event(tep, tp->id);
+        struct python_event_data *ev = &ctx->events[i];
         char *handler_name;
+        char event_name[256];
 
         if (event) {
-            ctx->event_fields[i] = tep_event_fields(event);
-            if (!ctx->event_fields[i])
+            ev->fields = tep_event_fields(event);
+            if (!ev->fields)
                 goto failed;
 
-            /* Clear IS_STRING flag for fields requiring special pointer format.
-             * These fields (e.g., IP addresses, MAC addresses, UUIDs) have IS_STRING
-             * flag but their data should be treated as binary (bytes in Python). */
-            for (j = 0; ctx->event_fields[i][j]; j++) {
-                struct tep_format_field *field = ctx->event_fields[i][j];
+            /* Count fields and allocate key cache */
+            for (j = 0; ev->fields[j]; j++) ;
+            ev->nr_fields = j;
+
+            ev->field_keys = calloc(ev->nr_fields, sizeof(PyObject *));
+            if (!ev->field_keys)
+                goto failed;
+
+            /* Cache field keys and fix IS_STRING flag */
+            for (j = 0; j < ev->nr_fields; j++) {
+                struct tep_format_field *field = ev->fields[j];
+
+                /* Clear IS_STRING flag for fields requiring special pointer format.
+                 * These fields (e.g., IP addresses, MAC addresses, UUIDs) have IS_STRING
+                 * flag but their data should be treated as binary (bytes in Python). */
                 if ((field->flags & TEP_FIELD_IS_STRING) &&
                     field_needs_binary_output(event, field->name)) {
                     field->flags &= ~TEP_FIELD_IS_STRING;
                 }
+
+                /* Cache interned string for field name */
+                ev->field_keys[j] = PyUnicode_InternFromString(field->name);
+                if (!ev->field_keys[j])
+                    goto failed;
             }
         }
+
+        /* Cache event name string for __sample__ handler */
+        snprintf(event_name, sizeof(event_name), "%s:%s", tp->sys,
+                    tp->alias ? tp->alias : tp->name);
+        ev->event_name = PyUnicode_InternFromString(event_name);
+        if (!ev->event_name)
+            goto failed;
 
         /* Look for event-specific handler */
         handler_name = build_handler_name(tp->sys, tp->name, tp->alias);
         if (handler_name) {
-            ctx->event_handlers[i] = get_python_func(ctx->module, handler_name);
+            ev->handler = get_python_func(ctx->module, handler_name);
             free(handler_name);
         }
     }
@@ -391,7 +495,7 @@ static int python_script_init(struct python_ctx *ctx)
 
 static void python_script_exit(struct python_ctx *ctx)
 {
-    int i;
+    int i, j;
 
     if (ctx->func_init) Py_DECREF(ctx->func_init);
     if (ctx->func_exit) Py_DECREF(ctx->func_exit);
@@ -400,21 +504,29 @@ static void python_script_exit(struct python_ctx *ctx)
     if (ctx->func_lost) Py_DECREF(ctx->func_lost);
     if (ctx->func_sample) Py_DECREF(ctx->func_sample);
 
-    if (ctx->event_handlers) {
+    /* Free per-event data */
+    if (ctx->events) {
         for (i = 0; i < ctx->nr_events; i++) {
-            if (ctx->event_handlers[i])
-                Py_DECREF(ctx->event_handlers[i]);
+            struct python_event_data *ev = &ctx->events[i];
+
+            Py_XDECREF(ev->handler);
+            Py_XDECREF(ev->event_name);
+
+            if (ev->field_keys) {
+                for (j = 0; j < ev->nr_fields; j++) {
+                    Py_XDECREF(ev->field_keys[j]);
+                }
+                free(ev->field_keys);
+            }
+
+            if (ev->fields)
+                free(ev->fields);
         }
-        free(ctx->event_handlers);
+        free(ctx->events);
     }
 
-    if (ctx->event_fields) {
-        for (i = 0; i < ctx->nr_events; i++) {
-            if (ctx->event_fields[i])
-                free(ctx->event_fields[i]);
-        }
-        free(ctx->event_fields);
-    }
+    /* Free common key cache */
+    free_key_cache(&ctx->key_cache);
 
     if (ctx->module) Py_DECREF(ctx->module);
 
@@ -677,6 +789,7 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
     struct python_sample_type *data = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct tp *tp;
+    struct python_event_data *ev;
     PyObject *dict, *result;
     int i;
 
@@ -690,29 +803,25 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
     if (i >= ctx->tp_list->nr_tp)
         return;
 
+    ev = &ctx->events[i];
+
     /* Convert event to Python dict */
     dict = event_to_dict(ctx, tp, data, i);
     if (!dict)
         return;
 
     /* Call event-specific handler or default __sample__ */
-    if (ctx->event_handlers[i]) {
-        result = PyObject_CallFunction(ctx->event_handlers[i], "O", dict);
+    if (ev->handler) {
+        result = PyObject_CallFunctionObjArgs(ev->handler, dict, NULL);
         if (!result)
             PyErr_Print();
         else
             Py_DECREF(result);
     } else if (ctx->func_sample) {
-        /* Add _event field for default handler, use alias if available */
-        char event_name[256];
-        PyObject *event_str;
-        snprintf(event_name, sizeof(event_name), "%s:%s", tp->sys,
-                 tp->alias ? tp->alias : tp->name);
-        event_str = PyUnicode_FromString(event_name);
-        PyDict_SetItemString(dict, "_event", event_str);
-        Py_DECREF(event_str);
+        /* Add cached _event field for default handler */
+        PyDict_SetItem(dict, ctx->key_cache.key_event, ev->event_name);
 
-        result = PyObject_CallFunction(ctx->func_sample, "O", dict);
+        result = PyObject_CallFunctionObjArgs(ctx->func_sample, dict, NULL);
         if (!result)
             PyErr_Print();
         else
