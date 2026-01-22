@@ -1368,6 +1368,8 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
     }
 
     tp->evsel = evsel;
+    if (!tp->stack)
+        tp->stack = attr->sample_type & PERF_SAMPLE_CALLCHAIN;
 
     if (!tp_kernel(tp))
         perf_evsel__keep_disable(evsel, true);

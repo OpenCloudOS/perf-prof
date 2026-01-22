@@ -19,6 +19,7 @@
 #include <dlfcn.h>
 #include <tep.h>
 #include <trace_helpers.h>
+#include <stack_helpers.h>
 #include <event-parse-local.h>
 
 /* Global script path, set by argc_init before init */
@@ -64,6 +65,7 @@ struct python_key_cache {
     PyObject *key_cpu;          /* "_cpu" */
     PyObject *key_period;       /* "_period" */
     PyObject *key_event;        /* "_event" */
+    PyObject *key_callchain;    /* "_callchain" */
     /* Common trace_entry fields */
     PyObject *key_common_flags;
     PyObject *key_common_preempt_count;
@@ -96,6 +98,8 @@ struct python_ctx {
     /* Per-event data array */
     struct python_event_data *events;
     int nr_events;
+    /* Callchain support */
+    int callchain_flags;    /* CALLCHAIN_KERNEL | CALLCHAIN_USER flags */
 };
 
 static void python_exit(struct prof_dev *dev);
@@ -152,9 +156,18 @@ static char *build_handler_name(const char *sys, const char *name, const char *a
  * Convert raw event data to Python dict
  * Fields are extracted based on tep_format_field.
  * Uses cached PyObject keys for faster dict operations.
+ *
+ * @ctx: Python context
+ * @tp: Tracepoint
+ * @data: Sample data (header portion)
+ * @tp_index: Index of the tracepoint
+ * @callchain: Callchain data (NULL if no callchain)
+ * @raw: Raw event data
+ * @raw_size: Size of raw data
  */
 static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
-                               struct python_sample_type *data, int tp_index)
+                               struct python_sample_type *data, int tp_index,
+                               struct callchain *callchain, void *raw, int raw_size)
 {
     PyObject *dict, *val;
     struct python_key_cache *kc = &ctx->key_cache;
@@ -162,6 +175,7 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
     struct tep_format_field **fields;
     PyObject **field_keys;
     void *base;
+    struct trace_entry *common;
     int i;
 
     dict = PyDict_New();
@@ -181,10 +195,22 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
     SET_DICT_ITEM(dict, kc->key_cpu, PyLong_FromLong(data->cpu_entry.cpu));
     SET_DICT_ITEM(dict, kc->key_period, PyLong_FromUnsignedLongLong(data->period));
 
+    /* Add callchain if present */
+    if (callchain && ctx->callchain_flags) {
+        PyObject *callchain_list = callchain_to_pylist(callchain, data->tid_entry.pid,
+                                                        ctx->callchain_flags);
+        if (callchain_list) {
+            PyDict_SetItem(dict, kc->key_callchain, callchain_list);
+            Py_DECREF(callchain_list);
+        }
+    }
+
     /* Add common_* fields from trace_entry */
-    SET_DICT_ITEM(dict, kc->key_common_flags, PyLong_FromLong(data->raw.common.common_flags));
-    SET_DICT_ITEM(dict, kc->key_common_preempt_count, PyLong_FromLong(data->raw.common.common_preempt_count));
-    SET_DICT_ITEM(dict, kc->key_common_pid, PyLong_FromLong(data->raw.common.common_pid));
+    base = raw;
+    common = (struct trace_entry *)base;
+    SET_DICT_ITEM(dict, kc->key_common_flags, PyLong_FromLong(common->common_flags));
+    SET_DICT_ITEM(dict, kc->key_common_preempt_count, PyLong_FromLong(common->common_preempt_count));
+    SET_DICT_ITEM(dict, kc->key_common_pid, PyLong_FromLong(common->common_pid));
 
 #undef SET_DICT_ITEM
 
@@ -198,8 +224,6 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
 
     if (!fields || !field_keys)
         return dict;
-
-    base = data->raw.data;
 
     /* Parse event-specific fields using cached keys */
     for (i = 0; i < ev->nr_fields; i++) {
@@ -315,6 +339,7 @@ static int init_key_cache(struct python_key_cache *kc)
     INTERN_KEY(key_cpu, "_cpu");
     INTERN_KEY(key_period, "_period");
     INTERN_KEY(key_event, "_event");
+    INTERN_KEY(key_callchain, "_callchain");
     INTERN_KEY(key_common_flags, "common_flags");
     INTERN_KEY(key_common_preempt_count, "common_preempt_count");
     INTERN_KEY(key_common_pid, "common_pid");
@@ -331,6 +356,7 @@ static void free_key_cache(struct python_key_cache *kc)
     Py_XDECREF(kc->key_cpu);
     Py_XDECREF(kc->key_period);
     Py_XDECREF(kc->key_event);
+    Py_XDECREF(kc->key_callchain);
     Py_XDECREF(kc->key_common_flags);
     Py_XDECREF(kc->key_common_preempt_count);
     Py_XDECREF(kc->key_common_pid);
@@ -683,6 +709,16 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx->tp_list)
         goto failed;
 
+    /* Initialize callchain support if enabled */
+    if (env->callchain || ctx->tp_list->nr_need_stack) {
+        ctx->callchain_flags = callchain_flags(dev, CALLCHAIN_KERNEL);
+        if (ctx->callchain_flags) {
+            if (callchain_pylist_init(ctx->callchain_flags) < 0)
+                goto failed;
+            dev->pages *= 2;  /* Increase buffer for callchain data */
+        }
+    }
+
     /* Initialize Python and load script */
     if (python_script_init(ctx) < 0)
         goto failed;
@@ -695,6 +731,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     return 0;
 
 failed:
+    if (ctx->callchain_flags)
+        callchain_pylist_exit(ctx->callchain_flags);
     python_script_exit(ctx);
     if (ctx->tp_list)
         tp_list_free(ctx->tp_list);
@@ -708,6 +746,9 @@ failed:
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct python_ctx *ctx = dev->private;
+
+    if (ctx->callchain_flags)
+        callchain_pylist_exit(ctx->callchain_flags);
 
     python_call_exit(ctx);
     python_script_exit(ctx);
@@ -729,12 +770,14 @@ static int python_init(struct prof_dev *dev)
         .size          = sizeof(struct perf_event_attr),
         .sample_period = 1,
         .sample_type   = PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID |
-                         PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW,
+                         PERF_SAMPLE_CPU | PERF_SAMPLE_PERIOD | PERF_SAMPLE_RAW |
+                         (env->callchain ? PERF_SAMPLE_CALLCHAIN : 0),
         .read_format   = PERF_FORMAT_ID,
         .pinned        = 1,
         .disabled      = 1,
-        .inherit       = env->inherit,
         .watermark     = 1,
+        .exclude_callchain_user = exclude_callchain_user(dev, CALLCHAIN_KERNEL),
+        .exclude_callchain_kernel = exclude_callchain_kernel(dev, CALLCHAIN_KERNEL),
     };
     struct perf_evsel *evsel;
     struct tp *tp;
@@ -747,6 +790,14 @@ static int python_init(struct prof_dev *dev)
     reduce_wakeup_times(dev, &attr);
 
     for_each_real_tp(ctx->tp_list, tp, i) {
+        /* Enable callchain for events with stack attribute if not globally enabled */
+        if (!env->callchain) {
+            if (tp->stack)
+                attr.sample_type |= PERF_SAMPLE_CALLCHAIN;
+            else
+                attr.sample_type &= (~PERF_SAMPLE_CALLCHAIN);
+        }
+
         evsel = tp_evsel_new(tp, &attr);
         if (!evsel)
             goto failed;
@@ -783,6 +834,33 @@ static void python_lost(struct prof_dev *dev, union perf_event *event,
     python_call_lost(ctx);
 }
 
+/*
+ * Extract raw data from sample, handling both callchain and non-callchain cases.
+ */
+static inline void get_raw_data(union perf_event *event, bool has_callchain,
+                         struct callchain **pcallchain, void **praw, int *psize)
+{
+    struct python_sample_type *data = (void *)event->sample.array;
+
+    if (has_callchain) {
+        /* With callchain: header -> callchain -> raw */
+        struct callchain *cc = (struct callchain *)&data->raw;
+        struct {
+            __u32 size;
+            __u8 data[0];
+        } *raw = (void *)cc->ips + cc->nr * sizeof(__u64);
+
+        *pcallchain = cc;
+        *praw = raw->data;
+        *psize = raw->size;
+    } else {
+        /* Without callchain: header -> raw */
+        *pcallchain = NULL;
+        *praw = data->raw.data;
+        *psize = data->raw.size;
+    }
+}
+
 static void python_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct python_ctx *ctx = dev->private;
@@ -790,6 +868,9 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
     struct perf_evsel *evsel;
     struct tp *tp;
     struct python_event_data *ev;
+    struct callchain *callchain;
+    void *raw;
+    int raw_size;
     PyObject *dict, *result;
     int i;
 
@@ -805,8 +886,11 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
 
     ev = &ctx->events[i];
 
+    /* Determine if this sample has callchain and extract raw data */
+    get_raw_data(event, tp->stack, &callchain, &raw, &raw_size);
+
     /* Convert event to Python dict */
-    dict = event_to_dict(ctx, tp, data, i);
+    dict = event_to_dict(ctx, tp, data, i, callchain, raw, raw_size);
     if (!dict)
         return;
 
@@ -891,6 +975,9 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("#   _cpu          : CPU number (int)\n");
     printf("#   _period       : Sample period (int)\n");
     printf("#   _event        : Event name with alias if set (str, only in __sample__)\n");
+    printf("#   _callchain    : Call stack list (when -g or stack attribute is set)\n");
+    printf("#                   Each frame dict: {'addr': int, 'symbol': str,\n");
+    printf("#                                     'offset': int, 'kernel': bool, 'dso': str}\n");
     printf("#   common_flags  : Trace event flags (int)\n");
     printf("#   common_preempt_count : Preemption count (int)\n");
     printf("#   common_pid    : Thread ID from trace event (int)\n");
@@ -1100,6 +1187,8 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    _cpu                    - CPU number",
     "    _period                 - Sample period",
     "    _event                  - Event name, uses alias if set (only in __sample__)",
+    "    _callchain              - Call stack list (when -g or stack attribute is set)",
+    "                              Each frame: {'addr', 'symbol', 'offset', 'kernel', 'dso'}",
     "    common_flags            - Trace event flags",
     "    common_preempt_count    - Preemption count",
     "    common_pid              - Thread ID from trace event",
@@ -1109,17 +1198,19 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    "PROGRAME" python -e sched:sched_wakeup counter.py",
     "    "PROGRAME" python -e sched:sched_wakeup,sched:sched_switch -i 1000 analyzer.py",
     "    "PROGRAME" python -e 'sched:sched_wakeup/pid>1000/' -C 0-3 filter.py",
-    "    "PROGRAME" python -e 'sched:sched_wakeup//alias=w1/,sched:sched_wakeup//alias=w2/' multi.py");
+    "    "PROGRAME" python -e 'sched:sched_wakeup//alias=w1/,sched:sched_wakeup//alias=w2/' multi.py",
+    "    "PROGRAME" python -e sched:sched_wakeup -g callstack.py  # with callchain");
 
 static const char *python_argv[] = PROFILER_ARGV("python",
     PROFILER_ARGV_OPTION,
-    PROFILER_ARGV_PROFILER, "event");
+    PROFILER_ARGV_CALLCHAIN_FILTER,
+    PROFILER_ARGV_PROFILER, "event", "call-graph");
 
 static profiler python = {
     .name = "python",
     .desc = python_desc,
     .argv = python_argv,
-    .pages = 2,
+    .pages = 8,
     .help = python_help,
     .argc_init = python_argc_init,
     .init = python_init,
