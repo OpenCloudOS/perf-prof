@@ -1133,3 +1133,230 @@ void heatmap_write(struct heatmap *heatmap, unsigned long time, unsigned long la
 }
 
 
+#ifdef HAVE_LIBPYTHON
+#include <Python.h>
+
+/*
+ * Cached Python string objects for callchain dict keys.
+ * These are created once and reused to avoid repeated string creation.
+ */
+static struct {
+    PyObject *key_addr;     /* "addr" */
+    PyObject *key_symbol;   /* "symbol" */
+    PyObject *key_offset;   /* "offset" */
+    PyObject *key_kernel;   /* "kernel" */
+    PyObject *key_dso;      /* "dso" */
+    int initialized;
+} callchain_key_cache;
+
+/*
+ * Initialize cached Python string keys for callchain dicts.
+ * Returns 0 on success, -1 on failure.
+ */
+static int init_callchain_key_cache(void)
+{
+    if (callchain_key_cache.initialized)
+        return 0;
+
+#define INTERN_CALLCHAIN_KEY(field, str) do { \
+        callchain_key_cache.field = PyUnicode_InternFromString(str); \
+        if (!callchain_key_cache.field) return -1; \
+    } while (0)
+
+    INTERN_CALLCHAIN_KEY(key_addr, "addr");
+    INTERN_CALLCHAIN_KEY(key_symbol, "symbol");
+    INTERN_CALLCHAIN_KEY(key_offset, "offset");
+    INTERN_CALLCHAIN_KEY(key_kernel, "kernel");
+    INTERN_CALLCHAIN_KEY(key_dso, "dso");
+
+#undef INTERN_CALLCHAIN_KEY
+
+    callchain_key_cache.initialized = 1;
+    return 0;
+}
+
+/*
+ * Convert a callchain to a Python list of frame dicts.
+ *
+ * Each frame dict contains:
+ *   - addr: int (instruction pointer address)
+ *   - symbol: str (function name or "Unknown")
+ *   - offset: int (offset from symbol start)
+ *   - kernel: bool (True if kernel frame, False if user frame)
+ *   - dso: str (DSO name or "[kernel.kallsyms]" or "Unknown")
+ *
+ * Frames are ordered from stack top to bottom (caller direction).
+ *
+ * @callchain: The callchain to convert
+ * @pid: Process ID for user space symbol resolution
+ * @flags: CALLCHAIN_KERNEL and/or CALLCHAIN_USER flags
+ *
+ * Returns a new reference to a Python list, or NULL on error.
+ */
+PyObject *callchain_to_pylist(struct callchain *callchain, u32 pid, int flags)
+{
+    PyObject *list, *frame_dict, *val;
+    u64 i;
+    bool kernel = false, user = false, py = false;
+    struct syms *syms = NULL;
+    bool need_kernel = flags & CALLCHAIN_KERNEL;
+    bool need_user = flags & CALLCHAIN_USER;
+
+    if (!callchain || callchain->nr == 0)
+        return PyList_New(0);
+
+    if (init_callchain_key_cache() < 0)
+        return NULL;
+
+    list = PyList_New(0);
+    if (!list)
+        return NULL;
+
+    for (i = 0; i < callchain->nr; i++) {
+        u64 ip = callchain->ips[i];
+
+        /* Handle context markers */
+        if (ip == PERF_CONTEXT_KERNEL) {
+            kernel = true;
+            user = py = false;
+            continue;
+        } else if (ip == PERF_CONTEXT_USER) {
+            user = true;
+            kernel = py = false;
+            if (need_user && ctx.syms_cache)
+                syms = syms_cache__get_syms(ctx.syms_cache, pid);
+            continue;
+        } else if (ip == PERF_CONTEXT_PYSTACK) {
+            py = true;
+            kernel = user = false;
+            continue;
+        }
+
+        /* Skip frames based on flags */
+        if (kernel && !need_kernel)
+            continue;
+        if ((user || py) && !need_user)
+            continue;
+
+        frame_dict = PyDict_New();
+        if (!frame_dict) {
+            Py_DECREF(list);
+            return NULL;
+        }
+
+#define SET_FRAME_ITEM(dict, key, value) do { \
+            val = (value); \
+            if (!val || PyDict_SetItem(dict, callchain_key_cache.key, val) < 0) { \
+                Py_XDECREF(val); \
+                Py_DECREF(dict); \
+                Py_DECREF(list); \
+                return NULL; \
+            } \
+            Py_DECREF(val); \
+        } while (0)
+
+        if (kernel) {
+            const struct ksym *ksym = ctx.ksyms ?
+                                      ksyms__map_addr(ctx.ksyms, ip) : NULL;
+
+            SET_FRAME_ITEM(frame_dict, key_addr, PyLong_FromUnsignedLongLong(ip));
+            SET_FRAME_ITEM(frame_dict, key_symbol,
+                           PyUnicode_FromString(ksym ? ksym->name : "Unknown"));
+            SET_FRAME_ITEM(frame_dict, key_offset,
+                           PyLong_FromUnsignedLongLong(ksym ? ip - ksym->addr : 0));
+            SET_FRAME_ITEM(frame_dict, key_kernel, Py_True); Py_INCREF(Py_True);
+            SET_FRAME_ITEM(frame_dict, key_dso,
+                           PyUnicode_FromString("[kernel.kallsyms]"));
+
+        } else if (user) {
+            struct dso *dso = NULL;
+            const struct sym *sym = NULL;
+            const char *symbol = "Unknown";
+            u64 offset = 0;
+            const char *dso_name = "Unknown";
+
+            if (syms) {
+                dso = syms__find_dso(syms, ip, &offset);
+                if (dso) {
+                    sym = dso__find_sym(dso, offset);
+                    if (sym) {
+                        symbol = sym__name(sym);
+                        offset = offset - sym->start;
+                        dso_name = dso__name(dso) ? : "Unknown";
+                    }
+                }
+            }
+
+            SET_FRAME_ITEM(frame_dict, key_addr, PyLong_FromUnsignedLongLong(ip));
+            SET_FRAME_ITEM(frame_dict, key_symbol, PyUnicode_FromString(symbol));
+            SET_FRAME_ITEM(frame_dict, key_offset, PyLong_FromUnsignedLongLong(offset));
+            SET_FRAME_ITEM(frame_dict, key_kernel, Py_False); Py_INCREF(Py_False);
+            SET_FRAME_ITEM(frame_dict, key_dso, PyUnicode_FromString(dso_name));
+
+        } else if (py) {
+            /* Python stack frame: ip is actually a string pointer: "func (file:lineno)" */
+            char *str = (char *)ip;
+            char *paren = strchr(str, '(');
+            int func_len = paren ? paren - str - 1 : strlen(str);
+            const char *dso_str = paren ? paren + 1 : "";
+
+            SET_FRAME_ITEM(frame_dict, key_addr, PyLong_FromLong(0));
+            SET_FRAME_ITEM(frame_dict, key_symbol, PyUnicode_FromStringAndSize(str, func_len));
+            SET_FRAME_ITEM(frame_dict, key_offset, PyLong_FromLong(0));
+            SET_FRAME_ITEM(frame_dict, key_kernel, Py_False); Py_INCREF(Py_False);
+            SET_FRAME_ITEM(frame_dict, key_dso, PyUnicode_FromStringAndSize(dso_str, strlen(dso_str) - 1 /* ) */));
+        }
+
+#undef SET_FRAME_ITEM
+
+        if (PyList_Append(list, frame_dict) < 0) {
+            Py_DECREF(frame_dict);
+            Py_DECREF(list);
+            return NULL;
+        }
+        Py_DECREF(frame_dict);
+    }
+
+    return list;
+}
+
+/*
+ * Free cached Python string keys for callchain dicts.
+ */
+static void free_callchain_key_cache(void)
+{
+    if (!callchain_key_cache.initialized || !Py_IsInitialized())
+        return;
+
+    Py_XDECREF(callchain_key_cache.key_addr);
+    Py_XDECREF(callchain_key_cache.key_symbol);
+    Py_XDECREF(callchain_key_cache.key_offset);
+    Py_XDECREF(callchain_key_cache.key_kernel);
+    Py_XDECREF(callchain_key_cache.key_dso);
+
+    memset(&callchain_key_cache, 0, sizeof(callchain_key_cache));
+}
+
+/*
+ * Initialize symbol resolution for callchain_to_pylist.
+ * Must be called before using callchain_to_pylist.
+ *
+ * @flags: CALLCHAIN_KERNEL and/or CALLCHAIN_USER flags
+ * Returns 0 on success, -1 on failure.
+ */
+int callchain_pylist_init(int flags)
+{
+    return global_syms_ref(flags & CALLCHAIN_KERNEL, flags & CALLCHAIN_USER);
+}
+
+/*
+ * Cleanup symbol resolution resources and cached Python objects.
+ * @flags: Same flags passed to callchain_pylist_init.
+ */
+void callchain_pylist_exit(int flags)
+{
+    free_callchain_key_cache();
+    global_syms_unref(flags & CALLCHAIN_KERNEL, flags & CALLCHAIN_USER);
+}
+
+#endif /* HAVE_LIBPYTHON */
