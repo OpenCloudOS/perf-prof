@@ -22,6 +22,8 @@
 #include <stack_helpers.h>
 #include <event-parse-local.h>
 
+static int register_perf_prof_module(void);
+
 /* Global script path, set by argc_init before init */
 static char *script_path = NULL;
 
@@ -464,6 +466,12 @@ static int python_script_init(struct python_ctx *ctx)
     PyObject *sys_path, *path;
     char *script_dir, *script_name, *base, *dot;
     char *script_path_copy;
+
+    /* Register perf_prof built-in module before Py_Initialize */
+    if (register_perf_prof_module() < 0) {
+        fprintf(stderr, "Failed to register perf_prof module\n");
+        return -1;
+    }
 
     /* Initialize Python */
     Py_Initialize();
@@ -992,11 +1000,20 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("#   _raw          : Raw tracepoint data (bytes)\n");
     printf("#   __tp          : [PRIVATE] tp pointer as int, for event printing (internal use)\n");
     printf("#\n");
+    printf("# Built-in module: perf_prof\n");
+    printf("#   perf_prof.print_event(event, timestamp=True, callchain=True)\n");
+    printf("#       Print event in standard perf-prof format:\n");
+    printf("#       YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields\n");
+    printf("#           addr symbol+offset (dso)\n");
+    printf("#\n");
     printf("# =============================================================================\n");
     printf("\n");
 
     /* Import section */
-    printf("# Import modules as needed (examples)\n");
+    printf("# Import perf_prof built-in module for event processing\n");
+    printf("import perf_prof\n");
+    printf("\n");
+    printf("# Import other modules as needed (examples)\n");
     printf("# import json\n");
     printf("# import time\n");
     printf("# from collections import defaultdict, Counter\n");
@@ -1205,6 +1222,13 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    __tp                    - [PRIVATE] tp pointer as int (internal use)",
     "    <field>                 - Event-specific fields (int/str/bytes)",
     "",
+    "  BUILT-IN MODULE: perf_prof",
+    "    import perf_prof",
+    "    perf_prof.print_event(event, timestamp=True, callchain=True)",
+    "        Print event in standard perf-prof format:",
+    "        YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields",
+    "            addr symbol+offset (dso)",
+    "",
     "EXAMPLES",
     "    "PROGRAME" python -e sched:sched_wakeup counter.py",
     "    "PROGRAME" python -e sched:sched_wakeup,sched:sched_switch -i 1000 analyzer.py",
@@ -1233,3 +1257,182 @@ static profiler python = {
     .sample = python_sample,
 };
 PROFILER_REGISTER(python);
+
+
+/*
+ * ============================================================================
+ * perf_prof built-in module
+ *
+ * Provides utility functions for Python scripts:
+ *   - print_event(event, timestamp=True, callchain=True): Print event in standard format
+ * ============================================================================
+ */
+
+/*
+ * Print timestamp in the format: YYYY-MM-DD HH:MM:SS.uuuuuu
+ * @realtime_ns: Wall clock time in nanoseconds since Unix epoch
+ */
+static void print_realtime(u64 realtime_ns)
+{
+    char timebuff[64];
+    time_t sec;
+    unsigned int usec;
+    struct tm *result;
+
+    sec = realtime_ns / NSEC_PER_SEC;
+    usec = (realtime_ns % NSEC_PER_SEC) / 1000;
+
+    result = localtime(&sec);
+    strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", result);
+    printf("%s.%06u ", timebuff, usec);
+}
+
+/*
+ * Print callchain frames
+ * Default format: addr symbol+offset (dso)
+ * Each frame is indented with 4 spaces
+ */
+static void print_callchain_frames(PyObject *callchain_list)
+{
+    Py_ssize_t i, n;
+    PyObject *frame, *addr_obj, *symbol_obj, *offset_obj, *dso_obj;
+    unsigned long long addr;
+    long offset;
+    const char *symbol, *dso;
+
+    if (!callchain_list || !PyList_Check(callchain_list))
+        return;
+
+    n = PyList_Size(callchain_list);
+    for (i = 0; i < n; i++) {
+        frame = PyList_GetItem(callchain_list, i);  /* Borrowed reference */
+        if (!frame || !PyDict_Check(frame))
+            continue;
+
+        addr_obj = PyDict_GetItemString(frame, "addr");
+        symbol_obj = PyDict_GetItemString(frame, "symbol");
+        offset_obj = PyDict_GetItemString(frame, "offset");
+        dso_obj = PyDict_GetItemString(frame, "dso");
+
+        addr = addr_obj ? PyLong_AsUnsignedLongLong(addr_obj) : 0;
+        symbol = (symbol_obj && PyUnicode_Check(symbol_obj)) ?
+                 PyUnicode_AsUTF8(symbol_obj) : "Unknown";
+        offset = offset_obj ? PyLong_AsLong(offset_obj) : 0;
+        dso = (dso_obj && PyUnicode_Check(dso_obj)) ?
+              PyUnicode_AsUTF8(dso_obj) : "Unknown";
+
+        printf("    %016llx %s+0x%lx (%s)\n", addr, symbol, offset, dso);
+    }
+}
+
+/*
+ * perf_prof.print_event(event, timestamp=True, callchain=True)
+ *
+ * Print event in standard perf-prof format.
+ *
+ * Args:
+ *   event: Event dict from callback
+ *   timestamp: Whether to print timestamp (default: True)
+ *   callchain: Whether to print callchain (default: True)
+ */
+static PyObject *perf_prof_print_event(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    PyObject *event;
+    int print_timestamp = 1;
+    int print_callchain = 1;
+    static const char *kwlist[] = {"event", "timestamp", "callchain", NULL};
+
+    PyObject *tp_obj, *realtime_obj, *cpu_obj, *raw_obj, *callchain_obj;
+    struct tp *tp;
+    u64 realtime_ns;
+    int cpu;
+    void *raw_data;
+    Py_ssize_t raw_size;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|pp", (void *)kwlist,
+                                     &event, &print_timestamp, &print_callchain))
+        return NULL;
+
+    if (!PyDict_Check(event)) {
+        PyErr_SetString(PyExc_TypeError, "event must be a dict");
+        return NULL;
+    }
+
+    /* Get required fields */
+    tp_obj = PyDict_GetItemString(event, "__tp");
+    realtime_obj = PyDict_GetItemString(event, "_realtime");
+    cpu_obj = PyDict_GetItemString(event, "_cpu");
+    raw_obj = PyDict_GetItemString(event, "_raw");
+
+    if (!tp_obj || !realtime_obj || !cpu_obj || !raw_obj) {
+        PyErr_SetString(PyExc_ValueError, "event missing required fields (__tp, _realtime, _cpu, _raw)");
+        return NULL;
+    }
+
+    tp = (struct tp *)PyLong_AsVoidPtr(tp_obj);
+    realtime_ns = PyLong_AsUnsignedLongLong(realtime_obj);
+    cpu = (int)PyLong_AsLong(cpu_obj);
+
+    if (!tp) {
+        PyErr_SetString(PyExc_ValueError, "invalid __tp pointer");
+        return NULL;
+    }
+
+    if (PyBytes_AsStringAndSize(raw_obj, (char **)&raw_data, &raw_size) < 0)
+        return NULL;
+
+    /* Print timestamp if requested */
+    if (print_timestamp)
+        print_realtime(realtime_ns);
+
+    /* Print event using tp_print_event */
+    tp_print_event(tp, realtime_ns / 1000, cpu, raw_data, (int)raw_size);
+
+    /* Print callchain if requested and available */
+    if (print_callchain) {
+        callchain_obj = PyDict_GetItemString(event, "_callchain");
+        if (callchain_obj && PyList_Check(callchain_obj) && PyList_Size(callchain_obj) > 0)
+            print_callchain_frames(callchain_obj);
+    }
+
+    Py_RETURN_NONE;
+}
+
+/* perf_prof module method table */
+static PyMethodDef perf_prof_methods[] = {
+    {"print_event", (PyCFunction)perf_prof_print_event, METH_VARARGS | METH_KEYWORDS,
+     "Print event in standard perf-prof format.\n\n"
+     "Args:\n"
+     "    event: Event dict\n"
+     "    timestamp: Whether to print timestamp (default: True)\n"
+     "    callchain: Whether to print callchain (default: True)\n\n"
+     "Output format:\n"
+     "    YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields\n"
+     "        addr symbol+offset (dso)\n"
+     "        ..."},
+    {NULL, NULL, 0, NULL}
+};
+
+/* perf_prof module definition */
+static struct PyModuleDef perf_prof_module = {
+    PyModuleDef_HEAD_INIT,
+    "perf_prof",                              /* module name */
+    "perf-prof built-in module for event processing utilities",  /* docstring */
+    -1,                                       /* size of per-interpreter state, -1 = global */
+    perf_prof_methods
+};
+
+/* Module initialization function */
+static PyObject *PyInit_perf_prof(void)
+{
+    return PyModule_Create(&perf_prof_module);
+}
+
+/*
+ * Register perf_prof module as a built-in module.
+ * Must be called before Py_Initialize().
+ */
+static int register_perf_prof_module(void)
+{
+    return PyImport_AppendInittab("perf_prof", PyInit_perf_prof);
+}
