@@ -69,6 +69,7 @@ struct python_key_cache {
     PyObject *key_callchain;    /* "_callchain" */
     /* Common trace_entry fields */
     PyObject *key_raw;
+    PyObject *key_tp;           /* "__tp" - tp pointer as int for event printing */
 };
 
 /*
@@ -214,6 +215,10 @@ static PyObject *event_to_dict(struct prof_dev *dev, struct tp *tp,
     /* Add _raw field containing complete raw event data */
     SET_DICT_ITEM(dict, kc->key_raw, PyBytes_FromStringAndSize((char *)raw, raw_size));
 
+    /* Add __tp field containing tp pointer as int for event printing.
+     * The tp pointer remains valid during event processing. */
+    SET_DICT_ITEM(dict, kc->key_tp, PyLong_FromVoidPtr(tp));
+
 #undef SET_DICT_ITEM
 
     /* Get cached event data */
@@ -346,6 +351,7 @@ static int init_key_cache(struct python_key_cache *kc)
     INTERN_KEY(key_event, "_event");
     INTERN_KEY(key_callchain, "_callchain");
     INTERN_KEY(key_raw, "_raw");
+    INTERN_KEY(key_tp, "__tp");
 
 #undef INTERN_KEY
     return 0;
@@ -362,6 +368,7 @@ static void free_key_cache(struct python_key_cache *kc)
     Py_XDECREF(kc->key_event);
     Py_XDECREF(kc->key_callchain);
     Py_XDECREF(kc->key_raw);
+    Py_XDECREF(kc->key_tp);
     memset(kc, 0, sizeof(*kc));
 }
 
@@ -983,6 +990,7 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("#                   Each frame dict: {'addr': int, 'symbol': str,\n");
     printf("#                                     'offset': int, 'kernel': bool, 'dso': str}\n");
     printf("#   _raw          : Raw tracepoint data (bytes)\n");
+    printf("#   __tp          : [PRIVATE] tp pointer as int, for event printing (internal use)\n");
     printf("#\n");
     printf("# =============================================================================\n");
     printf("\n");
@@ -1194,6 +1202,7 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    _callchain              - Call stack list (when -g or stack attribute is set)",
     "                              Each frame: {'addr', 'symbol', 'offset', 'kernel', 'dso'}",
     "    _raw                    - Raw tracepoint data (bytes)",
+    "    __tp                    - [PRIVATE] tp pointer as int (internal use)",
     "    <field>                 - Event-specific fields (int/str/bytes)",
     "",
     "EXAMPLES",
