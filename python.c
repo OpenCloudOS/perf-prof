@@ -62,6 +62,7 @@ struct python_key_cache {
     PyObject *key_pid;          /* "_pid" */
     PyObject *key_tid;          /* "_tid" */
     PyObject *key_time;         /* "_time" */
+    PyObject *key_realtime;     /* "_realtime" - wall clock time (ns) */
     PyObject *key_cpu;          /* "_cpu" */
     PyObject *key_period;       /* "_period" */
     PyObject *key_event;        /* "_event" */
@@ -155,7 +156,7 @@ static char *build_handler_name(const char *sys, const char *name, const char *a
  * Fields are extracted based on tep_format_field.
  * Uses cached PyObject keys for faster dict operations.
  *
- * @ctx: Python context
+ * @dev: Prof dev (for time conversion)
  * @tp: Tracepoint
  * @data: Sample data (header portion)
  * @tp_index: Index of the tracepoint
@@ -163,15 +164,17 @@ static char *build_handler_name(const char *sys, const char *name, const char *a
  * @raw: Raw event data
  * @raw_size: Size of raw data
  */
-static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
+static PyObject *event_to_dict(struct prof_dev *dev, struct tp *tp,
                                struct python_sample_type *data, int tp_index,
                                struct callchain *callchain, void *raw, int raw_size)
 {
     PyObject *dict, *val;
+    struct python_ctx *ctx = dev->private;
     struct python_key_cache *kc = &ctx->key_cache;
     struct python_event_data *ev;
     struct tep_format_field **fields;
     PyObject **field_keys;
+    u64 realtime_ns;
     void *base;
     int i;
 
@@ -191,6 +194,12 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
     SET_DICT_ITEM(dict, kc->key_time, PyLong_FromUnsignedLongLong(data->time));
     SET_DICT_ITEM(dict, kc->key_cpu, PyLong_FromLong(data->cpu_entry.cpu));
     SET_DICT_ITEM(dict, kc->key_period, PyLong_FromUnsignedLongLong(data->period));
+
+    /* Add _realtime: convert perf time to wall clock time (ns since Unix epoch).
+     * Note: This conversion has some drift and should only be used for display,
+     * not for latency calculations. Use _time for accurate latency measurements. */
+    realtime_ns = evclock_to_realtime_ns(dev, (evclock_t)(u64)data->time);
+    SET_DICT_ITEM(dict, kc->key_realtime, PyLong_FromUnsignedLongLong(realtime_ns));
 
     /* Add callchain if present */
     if (callchain && ctx->callchain_flags) {
@@ -331,6 +340,7 @@ static int init_key_cache(struct python_key_cache *kc)
     INTERN_KEY(key_pid, "_pid");
     INTERN_KEY(key_tid, "_tid");
     INTERN_KEY(key_time, "_time");
+    INTERN_KEY(key_realtime, "_realtime");
     INTERN_KEY(key_cpu, "_cpu");
     INTERN_KEY(key_period, "_period");
     INTERN_KEY(key_event, "_event");
@@ -346,6 +356,7 @@ static void free_key_cache(struct python_key_cache *kc)
     Py_XDECREF(kc->key_pid);
     Py_XDECREF(kc->key_tid);
     Py_XDECREF(kc->key_time);
+    Py_XDECREF(kc->key_realtime);
     Py_XDECREF(kc->key_cpu);
     Py_XDECREF(kc->key_period);
     Py_XDECREF(kc->key_event);
@@ -881,7 +892,7 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
     get_raw_data(event, tp->stack, &callchain, &raw, &raw_size);
 
     /* Convert event to Python dict */
-    dict = event_to_dict(ctx, tp, data, i, callchain, raw, raw_size);
+    dict = event_to_dict(dev, tp, data, i, callchain, raw, raw_size);
     if (!dict)
         return;
 
@@ -963,6 +974,8 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("# Event dict common fields:\n");
     printf("#   _pid, _tid    : Process/thread ID (int)\n");
     printf("#   _time         : Event timestamp in nanoseconds (int)\n");
+    printf("#   _realtime     : Wall clock time in ns since Unix epoch (int)\n");
+    printf("#                   Note: Has drift, only for display, not for latency calc\n");
     printf("#   _cpu          : CPU number (int)\n");
     printf("#   _period       : Sample period (int)\n");
     printf("#   _event        : Event name with alias if set (str, only in __sample__)\n");
@@ -1173,6 +1186,8 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "  EVENT DICT FIELDS",
     "    _pid, _tid              - Process/thread ID",
     "    _time                   - Event timestamp (ns)",
+    "    _realtime               - Wall clock time (ns since Unix epoch)",
+    "                              Note: Has drift, for display only, not latency calc",
     "    _cpu                    - CPU number",
     "    _period                 - Sample period",
     "    _event                  - Event name, uses alias if set (only in __sample__)",
