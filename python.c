@@ -67,9 +67,7 @@ struct python_key_cache {
     PyObject *key_event;        /* "_event" */
     PyObject *key_callchain;    /* "_callchain" */
     /* Common trace_entry fields */
-    PyObject *key_common_flags;
-    PyObject *key_common_preempt_count;
-    PyObject *key_common_pid;
+    PyObject *key_raw;
 };
 
 /*
@@ -175,7 +173,6 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
     struct tep_format_field **fields;
     PyObject **field_keys;
     void *base;
-    struct trace_entry *common;
     int i;
 
     dict = PyDict_New();
@@ -205,12 +202,8 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
         }
     }
 
-    /* Add common_* fields from trace_entry */
-    base = raw;
-    common = (struct trace_entry *)base;
-    SET_DICT_ITEM(dict, kc->key_common_flags, PyLong_FromLong(common->common_flags));
-    SET_DICT_ITEM(dict, kc->key_common_preempt_count, PyLong_FromLong(common->common_preempt_count));
-    SET_DICT_ITEM(dict, kc->key_common_pid, PyLong_FromLong(common->common_pid));
+    /* Add _raw field containing complete raw event data */
+    SET_DICT_ITEM(dict, kc->key_raw, PyBytes_FromStringAndSize((char *)raw, raw_size));
 
 #undef SET_DICT_ITEM
 
@@ -224,6 +217,8 @@ static PyObject *event_to_dict(struct python_ctx *ctx, struct tp *tp,
 
     if (!fields || !field_keys)
         return dict;
+
+    base = raw;
 
     /* Parse event-specific fields using cached keys */
     for (i = 0; i < ev->nr_fields; i++) {
@@ -340,9 +335,7 @@ static int init_key_cache(struct python_key_cache *kc)
     INTERN_KEY(key_period, "_period");
     INTERN_KEY(key_event, "_event");
     INTERN_KEY(key_callchain, "_callchain");
-    INTERN_KEY(key_common_flags, "common_flags");
-    INTERN_KEY(key_common_preempt_count, "common_preempt_count");
-    INTERN_KEY(key_common_pid, "common_pid");
+    INTERN_KEY(key_raw, "_raw");
 
 #undef INTERN_KEY
     return 0;
@@ -357,9 +350,7 @@ static void free_key_cache(struct python_key_cache *kc)
     Py_XDECREF(kc->key_period);
     Py_XDECREF(kc->key_event);
     Py_XDECREF(kc->key_callchain);
-    Py_XDECREF(kc->key_common_flags);
-    Py_XDECREF(kc->key_common_preempt_count);
-    Py_XDECREF(kc->key_common_pid);
+    Py_XDECREF(kc->key_raw);
     memset(kc, 0, sizeof(*kc));
 }
 
@@ -978,9 +969,7 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("#   _callchain    : Call stack list (when -g or stack attribute is set)\n");
     printf("#                   Each frame dict: {'addr': int, 'symbol': str,\n");
     printf("#                                     'offset': int, 'kernel': bool, 'dso': str}\n");
-    printf("#   common_flags  : Trace event flags (int)\n");
-    printf("#   common_preempt_count : Preemption count (int)\n");
-    printf("#   common_pid    : Thread ID from trace event (int)\n");
+    printf("#   _raw          : Raw tracepoint data (bytes)\n");
     printf("#\n");
     printf("# =============================================================================\n");
     printf("\n");
@@ -1189,9 +1178,7 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    _event                  - Event name, uses alias if set (only in __sample__)",
     "    _callchain              - Call stack list (when -g or stack attribute is set)",
     "                              Each frame: {'addr', 'symbol', 'offset', 'kernel', 'dso'}",
-    "    common_flags            - Trace event flags",
-    "    common_preempt_count    - Preemption count",
-    "    common_pid              - Thread ID from trace event",
+    "    _raw                    - Raw tracepoint data (bytes)",
     "    <field>                 - Event-specific fields (int/str/bytes)",
     "",
     "EXAMPLES",
