@@ -9,6 +9,7 @@
 
 /* Python.h must be included first */
 #include <Python.h>
+#include <structmember.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,28 +59,32 @@ struct python_sample_type {
 /*
  * Cached Python string objects for common dict keys.
  * Using interned strings avoids repeated string hashing in PyDict_SetItem.
+ * Access via dev->private->key_cache.
  */
 struct python_key_cache {
-    /* Common sample fields */
-    PyObject *key_pid;          /* "_pid" */
-    PyObject *key_tid;          /* "_tid" */
-    PyObject *key_time;         /* "_time" */
-    PyObject *key_realtime;     /* "_realtime" - wall clock time (ns) */
-    PyObject *key_cpu;          /* "_cpu" */
-    PyObject *key_period;       /* "_period" */
-    PyObject *key_event;        /* "_event" */
-    PyObject *key_callchain;    /* "_callchain" */
+    /* Common sample fields - for PerfEventObject */
+    PyObject *key_pid;              /* "_pid" */
+    PyObject *key_tid;              /* "_tid" */
+    PyObject *key_time;             /* "_time" */
+    PyObject *key_cpu;              /* "_cpu" */
+    PyObject *key_period;           /* "_period" */
     /* Common trace_entry fields */
-    PyObject *key_raw;
-    PyObject *key_tp;           /* "__tp" - tp pointer as int for event printing */
+    PyObject *key_common_flags;     /* "common_flags" */
+    PyObject *key_common_preempt_count; /* "common_preempt_count" */
+    PyObject *key_common_pid;       /* "common_pid" */
+    /* Lazy computed fields */
+    PyObject *key_realtime;         /* "_realtime" - wall clock time (ns) */
+    PyObject *key_callchain;        /* "_callchain" */
+    PyObject *key_event;            /* "_event" */
 };
 
 /*
  * Per-event data: handler, fields, and cached Python strings.
+ * Access via tp->private.
  */
 struct python_event_data {
     PyObject *handler;              /* sys__event_name handler */
-    PyObject *event_name;           /* Cached "sys:name" or "sys:alias" string */
+    PyObject *event_name;           /* Cached "sys:name" or "sys:alias" string for _event field */
     struct tep_format_field **fields;  /* Event fields from tep */
     PyObject **field_keys;          /* Cached PyUnicode for each field name */
     int nr_fields;
@@ -88,6 +93,7 @@ struct python_event_data {
 struct python_ctx {
     struct tp_list *tp_list;
     char *script_path;
+    PyObject *perf_prof_module;  /* perf_prof built-in module (keeps types alive) */
     PyObject *module;
     PyObject *func_init;
     PyObject *func_exit;
@@ -102,9 +108,1017 @@ struct python_ctx {
     int nr_events;
     /* Callchain support */
     int callchain_flags;    /* CALLCHAIN_KERNEL | CALLCHAIN_USER flags */
+    struct callchain_ctx *cc;  /* Callchain context for printing */
 };
 
-static void python_exit(struct prof_dev *dev);
+/*
+ * ============================================================================
+ * PerfEvent Type
+ *
+ * A Python type that represents a perf event with lazy field evaluation.
+ * Direct access to common fields, lazy computation for derived fields,
+ * and lazy parsing for event-specific fields with caching.
+ * ============================================================================
+ */
+
+/* Forward declarations */
+static PyTypeObject PerfEventType;
+static PyTypeObject PerfEventIterType;
+
+/*
+ * PerfEventObject - Python object representing a perf event
+ *
+ * Memory layout optimized for fast direct field access while supporting
+ * lazy evaluation for computed and event-specific fields.
+ *
+ * Key design:
+ * - event: Dynamically allocated copy of union perf_event (owns memory)
+ * - tp: Borrowed reference to tracepoint info (valid during sample processing)
+ * - dev: Borrowed reference to prof_dev (for accessing key_cache and time conversion)
+ */
+typedef struct {
+    PyObject_HEAD
+    /* Core pointers */
+    struct prof_dev *dev;           /* Prof dev - borrowed reference */
+    struct tp *tp;                  /* Tracepoint info - borrowed reference */
+    union perf_event *event;        /* Entire perf event - dynamically allocated copy */
+
+    /* Direct access fields (via PyMemberDef) - extracted from event */
+    int _pid;                       /* Process ID */
+    int _tid;                       /* Thread ID */
+    unsigned long long _time;       /* Event timestamp (ns) */
+    int _cpu;                       /* CPU number */
+    unsigned long long _period;     /* Sample period */
+    unsigned char common_flags;     /* Trace entry common flags */
+    unsigned char common_preempt_count; /* Trace entry preempt count */
+    int common_pid;                 /* Trace entry common_pid */
+
+    /* Lazy computed fields (via PyGetSetDef) - cached when first accessed */
+    PyObject *_realtime;            /* Wall clock time - lazy computed */
+    PyObject *_callchain_list;      /* Callchain as Python list - lazy computed */
+
+    /* Event-specific field cache (dict for lazy parsed fields) */
+    PyObject *field_cache;          /* Dict caching event-specific field values */
+} PerfEventObject;
+
+/*
+ * Iterator object for PerfEvent
+ */
+typedef struct {
+    PyObject_HEAD
+    PerfEventObject *event;
+    PyObject *keys;
+    Py_ssize_t index;
+} PerfEventIterObject;
+
+/* Helper to get raw data from PerfEventObject */
+static inline void perfevent_get_raw(PerfEventObject *self, void **raw, int *raw_size,
+                                      struct callchain **callchain)
+{
+    struct python_sample_type *data = (void *)self->event->sample.array;
+    bool has_callchain = self->tp->stack;
+
+    if (has_callchain) {
+        struct callchain *cc = (struct callchain *)&data->raw;
+        struct {
+            __u32 size;
+            __u8 data[0];
+        } *raw_data = (void *)cc->ips + cc->nr * sizeof(__u64);
+
+        if (callchain) *callchain = cc;
+        *raw = raw_data->data;
+        *raw_size = raw_data->size;
+    } else {
+        if (callchain) *callchain = NULL;
+        *raw = data->raw.data;
+        *raw_size = data->raw.size;
+    }
+}
+
+/* Common field names list */
+static const char *common_field_names[] = {
+    "_pid", "_tid", "_time", "_cpu", "_period",
+    "common_flags", "common_preempt_count", "common_pid",
+    "_realtime", "_callchain", "_event",
+    NULL
+};
+
+/* Check if a field name is a common field */
+static int is_common_field(const char *name)
+{
+    const char **p;
+    for (p = common_field_names; *p; p++) {
+        if (strcmp(name, *p) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Parse a single event-specific field */
+static PyObject *parse_event_field(void *raw_data, struct tep_format_field *field)
+{
+    PyObject *value = NULL;
+    void *base = raw_data;
+    void *ptr;
+    int len;
+
+    if (field->flags & TEP_FIELD_IS_STRING) {
+        /* String field */
+        if (field->flags & TEP_FIELD_IS_DYNAMIC) {
+            ptr = base + *(unsigned short *)(base + field->offset);
+            len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
+            if (len > 0)
+                value = PyUnicode_FromStringAndSize((char *)ptr, len - 1);
+            else
+                value = PyUnicode_FromString("");
+        } else {
+            ptr = base + field->offset;
+            value = PyUnicode_FromString((char *)ptr);
+        }
+    } else if (field->flags & TEP_FIELD_IS_ARRAY) {
+        /* Array field -> bytes */
+        if (field->flags & TEP_FIELD_IS_DYNAMIC) {
+            ptr = base + *(unsigned short *)(base + field->offset);
+            len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
+        } else {
+            ptr = base + field->offset;
+            len = field->size;
+        }
+        value = PyBytes_FromStringAndSize((char *)ptr, len);
+    } else {
+        /* Numeric field */
+        bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
+        long long val = 0;
+
+        if (field->size == 1)
+            val = is_signed ? *(char *)(base + field->offset)
+                            : *(unsigned char *)(base + field->offset);
+        else if (field->size == 2)
+            val = is_signed ? *(short *)(base + field->offset)
+                            : *(unsigned short *)(base + field->offset);
+        else if (field->size == 4)
+            val = is_signed ? *(int *)(base + field->offset)
+                            : *(unsigned int *)(base + field->offset);
+        else if (field->size == 8)
+            val = is_signed ? *(long long *)(base + field->offset)
+                            : *(unsigned long long *)(base + field->offset);
+
+        if (field->size <= 8)
+            value = PyLong_FromLongLong(val);
+    }
+
+    return value;
+}
+
+/* Get all field names (common + event-specific) */
+static PyObject *perfevent_get_all_field_names(PerfEventObject *self)
+{
+    struct python_ctx *ctx = self->dev->private;
+    struct python_key_cache *kc = &ctx->key_cache;
+    struct python_event_data *ev = self->tp->private;
+    PyObject *list;
+    int i;
+
+    list = PyList_New(0);
+    if (!list)
+        return NULL;
+
+    /* Add common field names from key_cache */
+#define APPEND_KEY(key) do { \
+        if (kc->key && PyList_Append(list, kc->key) < 0) { \
+            Py_DECREF(list); \
+            return NULL; \
+        } \
+    } while (0)
+
+    APPEND_KEY(key_pid);
+    APPEND_KEY(key_tid);
+    APPEND_KEY(key_time);
+    APPEND_KEY(key_cpu);
+    APPEND_KEY(key_period);
+    APPEND_KEY(key_common_flags);
+    APPEND_KEY(key_common_preempt_count);
+    APPEND_KEY(key_common_pid);
+    APPEND_KEY(key_realtime);
+    APPEND_KEY(key_callchain);
+    APPEND_KEY(key_event);
+
+#undef APPEND_KEY
+
+    /* Add event-specific field names from cached field_keys */
+    for (i = 0; i < ev->nr_fields; i++) {
+        if (ev->field_keys[i]) {
+            if (PyList_Append(list, ev->field_keys[i]) < 0) {
+                Py_DECREF(list);
+                return NULL;
+            }
+        }
+    }
+
+    return list;
+}
+
+/* Get event-specific field by name (with caching) */
+static PyObject *perfevent_get_field(PerfEventObject *self, PyObject *field_name)
+{
+    PyObject *value;
+    struct python_event_data *ev;
+    void *raw;
+    int raw_size;
+    int i;
+
+    /* Check cache first */
+    value = PyDict_GetItem(self->field_cache, field_name);
+    if (value) {
+        Py_INCREF(value);
+        return value;
+    }
+
+    /* Look up field in cached event data */
+    ev = (struct python_event_data *)self->tp->private;
+    for (i = 0; i < ev->nr_fields; i++) {
+        if (ev->field_keys[i] == field_name)
+            break;
+    }
+
+    if (i >= ev->nr_fields)
+        return NULL;
+
+    /* Parse field value */
+    perfevent_get_raw(self, &raw, &raw_size, NULL);
+    value = parse_event_field(raw, ev->fields[i]);
+    if (value) {
+        /* Cache the value using the cached key */
+        PyDict_SetItem(self->field_cache, ev->field_keys[i], value);
+    }
+
+    return value;
+}
+
+/*
+ * Create a new PerfEventObject (internal use)
+ * This is called from python_sample() to create event objects.
+ */
+static PerfEventObject *PerfEvent_create(struct prof_dev *dev, struct tp *tp,
+                                          union perf_event *event)
+{
+    PerfEventObject *self;
+    struct python_sample_type *data;
+    struct trace_entry *entry;
+    void *raw;
+    int raw_size;
+    size_t event_size;
+
+    self = PyObject_New(PerfEventObject, &PerfEventType);
+    if (!self)
+        return NULL;
+
+    /* Store borrowed references */
+    self->dev = dev;
+    self->tp = tp;
+
+    /* Copy entire perf_event (event owns this memory) */
+    event_size = event->header.size;
+    self->event = malloc(event_size);
+    if (!self->event) {
+        Py_DECREF(self);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    memcpy(self->event, event, event_size);
+
+    /* Extract header fields */
+    data = (void *)self->event->sample.array;
+    self->_pid = data->tid_entry.pid;
+    self->_tid = data->tid_entry.tid;
+    self->_time = data->time;
+    self->_cpu = data->cpu_entry.cpu;
+    self->_period = data->period;
+
+    /* Extract common fields from trace_entry */
+    perfevent_get_raw(self, &raw, &raw_size, NULL);
+    entry = (struct trace_entry *)raw;
+    self->common_flags = entry->common_flags;
+    self->common_preempt_count = entry->common_preempt_count;
+    self->common_pid = entry->common_pid;
+
+    /* Initialize lazy computed fields to NULL */
+    self->_realtime = NULL;
+    self->_callchain_list = NULL;
+
+    /* Initialize field cache */
+    self->field_cache = PyDict_New();
+    if (!self->field_cache) {
+        free(self->event);
+        Py_DECREF(self);
+        return NULL;
+    }
+
+    return self;
+}
+
+/*
+ * PerfEvent_new - Allocator (not used for internal creation)
+ */
+static PyObject *PerfEvent_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+    PyErr_SetString(PyExc_TypeError, "PerfEvent objects cannot be created directly");
+    return NULL;
+}
+
+/*
+ * PerfEvent_init - Initializer (not used for internal creation)
+ */
+static int PerfEvent_init(PerfEventObject *self, PyObject *args, PyObject *kwds)
+{
+    return 0;
+}
+
+/*
+ * PerfEvent_dealloc - Destructor
+ */
+static void PerfEvent_dealloc(PerfEventObject *self)
+{
+    /* Free dynamically allocated event */
+    free(self->event);
+
+    /* Release cached Python objects */
+    Py_XDECREF(self->_realtime);
+    Py_XDECREF(self->_callchain_list);
+    Py_XDECREF(self->field_cache);
+
+    /* Free the object */
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+/*
+ * Getter for _realtime field (lazy computed)
+ */
+static PyObject *PerfEvent_get_realtime(PerfEventObject *self, void *closure)
+{
+    if (!self->_realtime) {
+        u64 realtime_ns = evclock_to_realtime_ns(self->dev, (evclock_t)(u64)self->_time);
+        self->_realtime = PyLong_FromUnsignedLongLong(realtime_ns);
+    }
+    Py_XINCREF(self->_realtime);
+    return self->_realtime;
+}
+
+/*
+ * Getter for _callchain field (lazy computed)
+ */
+static PyObject *PerfEvent_get_callchain(PerfEventObject *self, void *closure)
+{
+    struct python_ctx *ctx;
+    struct callchain *callchain;
+    void *raw;
+    int raw_size;
+
+    if (!self->_callchain_list) {
+        ctx = (struct python_ctx *)self->dev->private;
+        perfevent_get_raw(self, &raw, &raw_size, &callchain);
+
+        if (callchain && ctx->callchain_flags) {
+            self->_callchain_list = callchain_to_pylist(callchain, self->_pid,
+                                                         ctx->callchain_flags);
+        }
+        if (!self->_callchain_list) {
+            self->_callchain_list = PyList_New(0);  /* Empty list if no callchain */
+        }
+    }
+    Py_XINCREF(self->_callchain_list);
+    return self->_callchain_list;
+}
+
+/*
+ * Getter for _event field (lazy computed, cached in python_event_data)
+ */
+static PyObject *PerfEvent_get_event(PerfEventObject *self, void *closure)
+{
+    struct python_event_data *ev = (struct python_event_data *)self->tp->private;
+    char event_name[256];
+
+    if (ev && ev->event_name) {
+        Py_INCREF(ev->event_name);
+        return ev->event_name;
+    }
+
+    /* Fallback: compute event name */
+    snprintf(event_name, sizeof(event_name), "%s:%s", self->tp->sys,
+             self->tp->alias ? self->tp->alias : self->tp->name);
+    return PyUnicode_InternFromString(event_name);
+}
+
+/*
+ * PerfEvent_getattro - Custom attribute access
+ * Handles lazy parsing of event-specific fields
+ */
+static PyObject *PerfEvent_getattro(PerfEventObject *self, PyObject *name)
+{
+    struct python_ctx *ctx = self->dev->private;
+    struct python_key_cache *kc = &ctx->key_cache;
+    PyObject *result;
+    const char *attr_name;
+
+    /*
+     * Fast path: builtin fields with pointer comparison
+     * Python interns attribute names, so pointer comparison works
+     */
+
+    /* Direct member access - fastest */
+    if (name == kc->key_time)
+        return PyLong_FromUnsignedLongLong(self->_time);
+    if (name == kc->key_cpu)
+        return PyLong_FromLong(self->_cpu);
+    if (name == kc->key_pid)
+        return PyLong_FromLong(self->_pid);
+    if (name == kc->key_tid)
+        return PyLong_FromLong(self->_tid);
+
+    /* Try event-specific field lookup */
+    result = perfevent_get_field(self, name);
+    if (result)
+        return result;
+
+    /* Lazy computed fields */
+    if (name == kc->key_realtime)
+        return PerfEvent_get_realtime(self, NULL);
+    if (name == kc->key_callchain)
+        return PerfEvent_get_callchain(self, NULL);
+    if (name == kc->key_event)
+        return PerfEvent_get_event(self, NULL);
+
+    /* Not commonly used fields */
+    if (name == kc->key_period)
+        return PyLong_FromUnsignedLongLong(self->_period);
+    if (name == kc->key_common_flags)
+        return PyLong_FromLong(self->common_flags);
+    if (name == kc->key_common_preempt_count)
+        return PyLong_FromLong(self->common_preempt_count);
+    if (name == kc->key_common_pid)
+        return PyLong_FromLong(self->common_pid);
+
+    /* Slow path: try the generic attribute lookup (handles members, methods, getset) */
+    result = PyObject_GenericGetAttr((PyObject *)self, name);
+    if (result || !PyErr_ExceptionMatches(PyExc_AttributeError))
+        return result;
+
+    PyErr_Clear();
+
+    attr_name = PyUnicode_AsUTF8(name);
+    PyErr_Format(PyExc_AttributeError,
+                 "'PerfEvent' object has no attribute '%s'", attr_name ? : "");
+    return NULL;
+}
+
+/*
+ * PerfEvent_length - Number of fields
+ */
+static Py_ssize_t PerfEvent_length(PerfEventObject *self)
+{
+    struct python_event_data *ev;
+    Py_ssize_t count = 11;  /* Common fields count: _pid, _tid, _time, _cpu, _period,
+                               common_flags, common_preempt_count, common_pid,
+                               _realtime, _callchain, _event */
+
+    ev = (struct python_event_data *)self->tp->private;
+    if (ev)
+        count += ev->nr_fields;
+
+    return count;
+}
+
+/*
+ * PerfEvent_subscript - event['field_name'] access
+ */
+static PyObject *PerfEvent_subscript(PerfEventObject *self, PyObject *key)
+{
+    if (!PyUnicode_Check(key)) {
+        PyErr_SetString(PyExc_TypeError, "field name must be a string");
+        return NULL;
+    }
+
+    /* Try attribute access (handles both common and event-specific fields) */
+    return PyObject_GetAttr((PyObject *)self, key);
+}
+
+/*
+ * PerfEvent_contains - 'field_name' in event
+ */
+static int PerfEvent_contains(PerfEventObject *self, PyObject *key)
+{
+    const char *field_name;
+    struct python_event_data *ev;
+    int i;
+
+    if (!PyUnicode_Check(key)) {
+        PyErr_SetString(PyExc_TypeError, "field name must be a string");
+        return -1;
+    }
+
+    field_name = PyUnicode_AsUTF8(key);
+    if (!field_name)
+        return -1;
+
+    /* Check common fields */
+    if (is_common_field(field_name))
+        return 1;
+
+    /* Check event-specific fields using cached fields */
+    ev = (struct python_event_data *)self->tp->private;
+    if (ev && ev->fields) {
+        for (i = 0; i < ev->nr_fields; i++) {
+            if (strcmp(ev->fields[i]->name, field_name) == 0)
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * PerfEvent_repr - repr(event)
+ */
+static PyObject *PerfEvent_repr(PerfEventObject *self)
+{
+    return PyUnicode_FromFormat("<PerfEvent %s:%s cpu=%d pid=%d time=%llu>",
+                                 self->tp->sys,
+                                 self->tp->alias ? self->tp->alias : self->tp->name,
+                                 self->_cpu, self->_pid, self->_time);
+}
+
+/*
+ * PerfEvent_hash - hash(event)
+ * Compute hash of entire union perf_event
+ */
+static Py_hash_t PerfEvent_hash(PerfEventObject *self)
+{
+    Py_hash_t hash;
+    size_t event_size = self->event->header.size;
+    unsigned char *data = (unsigned char *)self->event;
+    size_t i;
+
+    /* FNV-1a hash algorithm */
+    hash = 2166136261U;
+    for (i = 0; i < event_size; i++) {
+        hash ^= data[i];
+        hash *= 16777619U;
+    }
+
+    if (hash == -1)
+        hash = -2;  /* -1 is reserved for errors */
+
+    return hash;
+}
+
+/* Iterator dealloc */
+static void PerfEventIter_dealloc(PerfEventIterObject *self)
+{
+    Py_XDECREF(self->event);
+    Py_XDECREF(self->keys);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+/* Iterator next */
+static PyObject *PerfEventIter_next(PerfEventIterObject *self)
+{
+    PyObject *key, *value, *result;
+
+    if (self->index >= PyList_Size(self->keys))
+        return NULL;  /* StopIteration */
+
+    key = PyList_GetItem(self->keys, self->index++);  /* Borrowed reference */
+    if (!key)
+        return NULL;
+
+    value = PerfEvent_getattro(self->event, key);
+    if (!value)
+        return NULL;
+
+    result = PyTuple_Pack(2, key, value);
+    Py_DECREF(value);
+    return result;
+}
+
+/*
+ * PerfEvent_iter - iter(event)
+ */
+static PyObject *PerfEvent_iter(PerfEventObject *self)
+{
+    PerfEventIterObject *iter;
+
+    iter = PyObject_New(PerfEventIterObject, &PerfEventIterType);
+    if (!iter)
+        return NULL;
+
+    Py_INCREF(self);
+    iter->event = self;
+    iter->keys = perfevent_get_all_field_names(self);
+    if (!iter->keys) {
+        Py_DECREF(iter);
+        return NULL;
+    }
+    iter->index = 0;
+
+    return (PyObject *)iter;
+}
+
+/*
+ * PerfEvent_get - event.get(field, default=None)
+ * Get field value, return default if field not found
+ */
+static PyObject *PerfEvent_get(PerfEventObject *self, PyObject *args)
+{
+    PyObject *field_name;
+    PyObject *default_value = Py_None;
+    PyObject *result;
+
+    if (!PyArg_ParseTuple(args, "O|O", &field_name, &default_value))
+        return NULL;
+
+    if (!PyUnicode_Check(field_name)) {
+        PyErr_SetString(PyExc_TypeError, "field name must be a string");
+        return NULL;
+    }
+
+    /* Try to get the attribute */
+    result = PerfEvent_getattro(self, field_name);
+    if (result)
+        return result;
+
+    /* If AttributeError, return default value */
+    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+        PyErr_Clear();
+        Py_INCREF(default_value);
+        return default_value;
+    }
+
+    /* Other errors propagate */
+    return NULL;
+}
+
+/*
+ * PerfEvent_keys - event.keys()
+ */
+static PyObject *PerfEvent_keys(PerfEventObject *self, PyObject *args)
+{
+    return perfevent_get_all_field_names(self);
+}
+
+/*
+ * PerfEvent_values - event.values()
+ */
+static PyObject *PerfEvent_values(PerfEventObject *self, PyObject *args)
+{
+    PyObject *keys, *values, *key, *value;
+    Py_ssize_t i, n;
+
+    keys = perfevent_get_all_field_names(self);
+    if (!keys)
+        return NULL;
+
+    n = PyList_Size(keys);
+    values = PyList_New(n);
+    if (!values) {
+        Py_DECREF(keys);
+        return NULL;
+    }
+
+    for (i = 0; i < n; i++) {
+        key = PyList_GetItem(keys, i);  /* Borrowed reference */
+        value = PerfEvent_getattro(self, key);
+        if (!value) {
+            Py_DECREF(keys);
+            Py_DECREF(values);
+            return NULL;
+        }
+        PyList_SET_ITEM(values, i, value);  /* Steals reference */
+    }
+
+    Py_DECREF(keys);
+    return values;
+}
+
+/*
+ * PerfEvent_items - event.items()
+ */
+static PyObject *PerfEvent_items(PerfEventObject *self, PyObject *args)
+{
+    PyObject *keys, *items, *key, *value, *tuple;
+    Py_ssize_t i, n;
+
+    keys = perfevent_get_all_field_names(self);
+    if (!keys)
+        return NULL;
+
+    n = PyList_Size(keys);
+    items = PyList_New(n);
+    if (!items) {
+        Py_DECREF(keys);
+        return NULL;
+    }
+
+    for (i = 0; i < n; i++) {
+        key = PyList_GetItem(keys, i);  /* Borrowed reference */
+        value = PerfEvent_getattro(self, key);
+        if (!value) {
+            Py_DECREF(keys);
+            Py_DECREF(items);
+            return NULL;
+        }
+        tuple = PyTuple_Pack(2, key, value);
+        Py_DECREF(value);
+        if (!tuple) {
+            Py_DECREF(keys);
+            Py_DECREF(items);
+            return NULL;
+        }
+        PyList_SET_ITEM(items, i, tuple);  /* Steals reference */
+    }
+
+    Py_DECREF(keys);
+    return items;
+}
+
+/*
+ * PerfEvent_to_dict - event.to_dict()
+ */
+static PyObject *PerfEvent_to_dict(PerfEventObject *self, PyObject *args)
+{
+    PyObject *dict, *keys, *key, *value;
+    Py_ssize_t i, n;
+
+    dict = PyDict_New();
+    if (!dict)
+        return NULL;
+
+    keys = perfevent_get_all_field_names(self);
+    if (!keys) {
+        Py_DECREF(dict);
+        return NULL;
+    }
+
+    n = PyList_Size(keys);
+    for (i = 0; i < n; i++) {
+        key = PyList_GetItem(keys, i);  /* Borrowed reference */
+        value = PerfEvent_getattro(self, key);
+        if (!value) {
+            Py_DECREF(keys);
+            Py_DECREF(dict);
+            return NULL;
+        }
+        if (PyDict_SetItem(dict, key, value) < 0) {
+            Py_DECREF(value);
+            Py_DECREF(keys);
+            Py_DECREF(dict);
+            return NULL;
+        }
+        Py_DECREF(value);
+    }
+
+    Py_DECREF(keys);
+    return dict;
+}
+
+/*
+ * PerfEvent_print - event.print(timestamp=True, callchain=True)
+ */
+static PyObject *PerfEvent_print(PerfEventObject *self, PyObject *args, PyObject *kwargs)
+{
+    int print_timestamp = 1;
+    int print_callchain = 1;
+    static const char *kwlist[] = {"timestamp", "callchain", NULL};
+    struct python_ctx *ctx;
+    void *raw;
+    int raw_size;
+    struct callchain *callchain;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", (void *)kwlist,
+                                     &print_timestamp, &print_callchain))
+        return NULL;
+
+    /* Print timestamp if requested */
+    if (print_timestamp)
+        prof_dev_print_time(self->dev, self->_time, stdout);
+
+    /* Print event */
+    perfevent_get_raw(self, &raw, &raw_size, &callchain);
+    tp_print_event(self->tp, self->_time, self->_cpu, raw, raw_size);
+
+    /* Print callchain if requested */
+    if (print_callchain && callchain && callchain->nr > 0) {
+        ctx = (struct python_ctx *)self->dev->private;
+        print_callchain_common(ctx->cc, callchain, self->_pid);
+    }
+
+    Py_RETURN_NONE;
+}
+
+/*
+ * PerfEvent_str - str(event)
+ * Returns a user-friendly string representation
+ */
+static PyObject *PerfEvent_str(PerfEventObject *self)
+{
+    PyObject *dict, *str;
+
+    /* Convert to dict and use dict's str representation */
+    dict = PerfEvent_to_dict(self, NULL);
+    if (!dict)
+        return NULL;
+
+    str = PyObject_Str(dict);
+    Py_DECREF(dict);
+    return str;
+}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+
+/* Member definitions for direct access fields */
+static PyMemberDef PerfEvent_members[] = {
+    {"_pid", T_INT, offsetof(PerfEventObject, _pid), READONLY, "Process ID"},
+    {"_tid", T_INT, offsetof(PerfEventObject, _tid), READONLY, "Thread ID"},
+    {"_time", T_ULONGLONG, offsetof(PerfEventObject, _time), READONLY, "Event timestamp (ns)"},
+    {"_cpu", T_INT, offsetof(PerfEventObject, _cpu), READONLY, "CPU number"},
+    {"_period", T_ULONGLONG, offsetof(PerfEventObject, _period), READONLY, "Sample period"},
+    {"common_flags", T_UBYTE, offsetof(PerfEventObject, common_flags), READONLY, "Trace entry common flags"},
+    {"common_preempt_count", T_UBYTE, offsetof(PerfEventObject, common_preempt_count), READONLY, "Trace entry preempt count"},
+    {"common_pid", T_INT, offsetof(PerfEventObject, common_pid), READONLY, "Trace entry common_pid"},
+    {NULL}
+};
+
+/* Getter/setter definitions for lazy computed fields */
+static PyGetSetDef PerfEvent_getsetters[] = {
+    {"_realtime", (getter)PerfEvent_get_realtime, NULL, "Wall clock time (ns since Unix epoch)", NULL},
+    {"_callchain", (getter)PerfEvent_get_callchain, NULL, "Call stack list", NULL},
+    {"_event", (getter)PerfEvent_get_event, NULL, "Event name (sys:name or sys:alias)", NULL},
+    {NULL}
+};
+
+/* Method definitions */
+static PyMethodDef PerfEvent_methods[] = {
+    {"get", (PyCFunction)PerfEvent_get, METH_VARARGS, "Get field value with default"},
+    {"keys", (PyCFunction)PerfEvent_keys, METH_NOARGS, "Return list of all field names"},
+    {"values", (PyCFunction)PerfEvent_values, METH_NOARGS, "Return list of all field values"},
+    {"items", (PyCFunction)PerfEvent_items, METH_NOARGS, "Return list of (field_name, value) tuples"},
+    {"print", (PyCFunction)PerfEvent_print, METH_VARARGS | METH_KEYWORDS,
+     "Print event in standard perf-prof format"},
+    {"to_dict", (PyCFunction)PerfEvent_to_dict, METH_NOARGS, "Convert event to dict"},
+    {NULL}
+};
+
+#pragma GCC diagnostic pop
+
+/* Mapping protocol */
+static PyMappingMethods PerfEvent_as_mapping = {
+    .mp_length = (lenfunc)PerfEvent_length,
+    .mp_subscript = (binaryfunc)PerfEvent_subscript,
+};
+
+/* Sequence protocol (for 'in' operator) */
+static PySequenceMethods PerfEvent_as_sequence = {
+    .sq_contains = (objobjproc)PerfEvent_contains,
+};
+
+/* Iterator type definition */
+static PyTypeObject PerfEventIterType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "perf_prof.PerfEventIterator",
+    .tp_basicsize = sizeof(PerfEventIterObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_dealloc = (destructor)PerfEventIter_dealloc,
+    .tp_iter = PyObject_SelfIter,
+    .tp_iternext = (iternextfunc)PerfEventIter_next,
+};
+
+/* PerfEvent type definition */
+/* Detailed docstring for PerfEvent type */
+static const char PerfEvent_doc[] =
+    "PerfEvent - Perf event object with lazy field evaluation.\n"
+    "\n"
+    "Fields (direct access):\n"
+    "    _pid              Process ID (int)\n"
+    "    _tid              Thread ID (int)\n"
+    "    _time             Event timestamp in nanoseconds (int)\n"
+    "    _cpu              CPU number (int)\n"
+    "    _period           Sample period (int)\n"
+    "    common_flags      Trace entry common flags (int)\n"
+    "    common_preempt_count  Trace entry preempt count (int)\n"
+    "    common_pid        Trace entry common_pid (int)\n"
+    "\n"
+    "Fields (lazy computed):\n"
+    "    _realtime         Wall clock time in ns since Unix epoch (int)\n"
+    "                      Note: Has drift, for display only, not latency calc\n"
+    "    _callchain        Call stack list (when -g or stack attribute is set)\n"
+    "                      Each frame: {'addr', 'symbol', 'offset', 'kernel', 'dso'}\n"
+    "    _event            Event name (sys:name or sys:alias, only in __sample__)\n"
+    "    <field>           Event-specific fields (int/str/bytes)\n"
+    "\n"
+    "Access methods:\n"
+    "    event.field or event['field']  - Access field value\n"
+    "    event.get(field, default=None) - Get field with default fallback\n"
+    "    'field' in event               - Check if field exists\n"
+    "    len(event)                     - Number of fields\n"
+    "    event.keys()                   - List of all field names\n"
+    "    event.values()                 - List of all field values\n"
+    "    event.items()                  - List of (name, value) tuples\n"
+    "    for name, value in event       - Iterate over fields\n"
+    "    event.print(timestamp=True, callchain=True)\n"
+    "                                   - Print in perf-prof format\n"
+    "    event.to_dict()                - Convert to regular dict\n"
+    "    str(event), repr(event)        - String representations\n"
+    "    hash(event)                    - Hash of entire perf event\n";
+
+static PyTypeObject PerfEventType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "perf_prof.PerfEvent",
+    .tp_doc = PerfEvent_doc,
+    .tp_basicsize = sizeof(PerfEventObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = PerfEvent_new,
+    .tp_init = (initproc)PerfEvent_init,
+    .tp_dealloc = (destructor)PerfEvent_dealloc,
+    .tp_repr = (reprfunc)PerfEvent_repr,
+    .tp_str = (reprfunc)PerfEvent_str,
+    .tp_hash = (hashfunc)PerfEvent_hash,
+    .tp_getattro = (getattrofunc)PerfEvent_getattro,
+    .tp_members = PerfEvent_members,
+    .tp_getset = PerfEvent_getsetters,
+    .tp_methods = PerfEvent_methods,
+    .tp_as_mapping = &PerfEvent_as_mapping,
+    .tp_as_sequence = &PerfEvent_as_sequence,
+    .tp_iter = (getiterfunc)PerfEvent_iter,
+};
+
+/* ============================================================================
+ * End of PerfEvent Type
+ * ============================================================================ */
+
+/*
+ * ============================================================================
+ * perf_prof built-in module
+ *
+ * Provides:
+ *   - PerfEvent type: Lazy-evaluated event object with fields and methods
+ *
+ * The perf_prof module exposes the PerfEvent and PerfEventIter types,
+ * which are used to represent perf events passed to Python script handlers.
+ * ============================================================================
+ */
+
+/* perf_prof module definition */
+static struct PyModuleDef perf_prof_module = {
+    PyModuleDef_HEAD_INIT,
+    "perf_prof",                              /* module name */
+    "perf-prof built-in module for event processing utilities",  /* docstring */
+    -1,                                       /* size of per-interpreter state, -1 = global */
+    NULL
+};
+
+/* Module initialization function */
+static PyObject *PyInit_perf_prof(void)
+{
+    PyObject *m;
+
+    /* Prepare PerfEvent type */
+    if (PyType_Ready(&PerfEventType) < 0)
+        return NULL;
+
+    /* Prepare PerfEventIterator type */
+    if (PyType_Ready(&PerfEventIterType) < 0)
+        return NULL;
+
+    m = PyModule_Create(&perf_prof_module);
+    if (!m)
+        return NULL;
+
+    /* Add PerfEvent type to module */
+    Py_INCREF(&PerfEventType);
+    if (PyModule_AddObject(m, "PerfEvent", (PyObject *)&PerfEventType) < 0) {
+        Py_DECREF(&PerfEventType);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    return m;
+}
+
+/*
+ * Register perf_prof module as a built-in module.
+ * Must be called before Py_Initialize().
+ */
+static int register_perf_prof_module(void)
+{
+    return PyImport_AppendInittab("perf_prof", PyInit_perf_prof);
+}
+
+/* ============================================================================
+ * End of perf_prof built-in module
+ * ============================================================================ */
+
 
 /*
  * Get Python function from module, returns NULL if not found (not an error)
@@ -155,149 +1169,6 @@ static char *build_handler_name(const char *sys, const char *name, const char *a
 }
 
 /*
- * Convert raw event data to Python dict
- * Fields are extracted based on tep_format_field.
- * Uses cached PyObject keys for faster dict operations.
- *
- * @dev: Prof dev (for time conversion)
- * @tp: Tracepoint
- * @data: Sample data (header portion)
- * @tp_index: Index of the tracepoint
- * @callchain: Callchain data (NULL if no callchain)
- * @raw: Raw event data
- * @raw_size: Size of raw data
- */
-static PyObject *event_to_dict(struct prof_dev *dev, struct tp *tp,
-                               struct python_sample_type *data, int tp_index,
-                               struct callchain *callchain, void *raw, int raw_size)
-{
-    PyObject *dict, *val;
-    struct python_ctx *ctx = dev->private;
-    struct python_key_cache *kc = &ctx->key_cache;
-    struct python_event_data *ev;
-    struct tep_format_field **fields;
-    PyObject **field_keys;
-    u64 realtime_ns;
-    void *base;
-    int i;
-
-    dict = PyDict_New();
-    if (!dict)
-        return NULL;
-
-    /* Add common sample fields using cached keys (PyDict_SetItem is faster) */
-#define SET_DICT_ITEM(dict, key, value) do { \
-        val = (value); \
-        PyDict_SetItem(dict, key, val); \
-        Py_DECREF(val); \
-    } while (0)
-
-    SET_DICT_ITEM(dict, kc->key_pid, PyLong_FromLong(data->tid_entry.pid));
-    SET_DICT_ITEM(dict, kc->key_tid, PyLong_FromLong(data->tid_entry.tid));
-    SET_DICT_ITEM(dict, kc->key_time, PyLong_FromUnsignedLongLong(data->time));
-    SET_DICT_ITEM(dict, kc->key_cpu, PyLong_FromLong(data->cpu_entry.cpu));
-    SET_DICT_ITEM(dict, kc->key_period, PyLong_FromUnsignedLongLong(data->period));
-
-    /* Add _realtime: convert perf time to wall clock time (ns since Unix epoch).
-     * Note: This conversion has some drift and should only be used for display,
-     * not for latency calculations. Use _time for accurate latency measurements. */
-    realtime_ns = evclock_to_realtime_ns(dev, (evclock_t)(u64)data->time);
-    SET_DICT_ITEM(dict, kc->key_realtime, PyLong_FromUnsignedLongLong(realtime_ns));
-
-    /* Add callchain if present */
-    if (callchain && ctx->callchain_flags) {
-        PyObject *callchain_list = callchain_to_pylist(callchain, data->tid_entry.pid,
-                                                        ctx->callchain_flags);
-        if (callchain_list) {
-            PyDict_SetItem(dict, kc->key_callchain, callchain_list);
-            Py_DECREF(callchain_list);
-        }
-    }
-
-    /* Add _raw field containing complete raw event data */
-    SET_DICT_ITEM(dict, kc->key_raw, PyBytes_FromStringAndSize((char *)raw, raw_size));
-
-    /* Add __tp field containing tp pointer as int for event printing.
-     * The tp pointer remains valid during event processing. */
-    SET_DICT_ITEM(dict, kc->key_tp, PyLong_FromVoidPtr(tp));
-
-#undef SET_DICT_ITEM
-
-    /* Get cached event data */
-    if (tp_index < 0 || tp_index >= ctx->nr_events)
-        return dict;
-
-    ev = &ctx->events[tp_index];
-    fields = ev->fields;
-    field_keys = ev->field_keys;
-
-    if (!fields || !field_keys)
-        return dict;
-
-    base = raw;
-
-    /* Parse event-specific fields using cached keys */
-    for (i = 0; i < ev->nr_fields; i++) {
-        struct tep_format_field *field = fields[i];
-        PyObject *value = NULL;
-        void *ptr;
-        int len;
-
-        if (field->flags & TEP_FIELD_IS_STRING) {
-            /* String field */
-            if (field->flags & TEP_FIELD_IS_DYNAMIC) {
-                ptr = base + *(unsigned short *)(base + field->offset);
-                len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
-                if (len > 0)
-                    value = PyUnicode_FromStringAndSize((char *)ptr, len - 1); /* exclude null */
-                else
-                    value = PyUnicode_FromString("");
-            } else {
-                ptr = base + field->offset;
-                value = PyUnicode_FromString((char *)ptr);
-            }
-        } else if (field->flags & TEP_FIELD_IS_ARRAY) {
-            /* Array field -> bytes */
-            if (field->flags & TEP_FIELD_IS_DYNAMIC) {
-                ptr = base + *(unsigned short *)(base + field->offset);
-                len = *(unsigned short *)(base + field->offset + sizeof(unsigned short));
-            } else {
-                ptr = base + field->offset;
-                len = field->size;
-            }
-            value = PyBytes_FromStringAndSize((char *)ptr, len);
-        } else {
-            /* Numeric field */
-            bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
-            long long val = 0;
-
-            if (field->size == 1)
-                val = is_signed ? *(char *)(base + field->offset)
-                                : *(unsigned char *)(base + field->offset);
-            else if (field->size == 2)
-                val = is_signed ? *(short *)(base + field->offset)
-                                : *(unsigned short *)(base + field->offset);
-            else if (field->size == 4)
-                val = is_signed ? *(int *)(base + field->offset)
-                                : *(unsigned int *)(base + field->offset);
-            else if (field->size == 8)
-                val = is_signed ? *(long long *)(base + field->offset)
-                                : *(unsigned long long *)(base + field->offset);
-
-            if (field->size <= 8)
-                value = PyLong_FromLongLong(val);
-        }
-
-        if (value) {
-            PyDict_SetItem(dict, field_keys[i], value);
-            Py_DECREF(value);
-        }
-    }
-
-    return dict;
-}
-
-/*
  * Check if a field requires special pointer format output (e.g., %pI4, %pM).
  * These fields have TEP_FIELD_IS_STRING flag but should be treated as binary data.
  * Returns true if the field's IS_STRING flag should be cleared.
@@ -344,16 +1215,20 @@ static int init_key_cache(struct python_key_cache *kc)
         if (!kc->field) return -1; \
     } while (0)
 
+    /* Common sample fields */
     INTERN_KEY(key_pid, "_pid");
     INTERN_KEY(key_tid, "_tid");
     INTERN_KEY(key_time, "_time");
-    INTERN_KEY(key_realtime, "_realtime");
     INTERN_KEY(key_cpu, "_cpu");
     INTERN_KEY(key_period, "_period");
-    INTERN_KEY(key_event, "_event");
+    /* Common trace_entry fields */
+    INTERN_KEY(key_common_flags, "common_flags");
+    INTERN_KEY(key_common_preempt_count, "common_preempt_count");
+    INTERN_KEY(key_common_pid, "common_pid");
+    /* Lazy computed fields */
+    INTERN_KEY(key_realtime, "_realtime");
     INTERN_KEY(key_callchain, "_callchain");
-    INTERN_KEY(key_raw, "_raw");
-    INTERN_KEY(key_tp, "__tp");
+    INTERN_KEY(key_event, "_event");
 
 #undef INTERN_KEY
     return 0;
@@ -364,13 +1239,14 @@ static void free_key_cache(struct python_key_cache *kc)
     Py_XDECREF(kc->key_pid);
     Py_XDECREF(kc->key_tid);
     Py_XDECREF(kc->key_time);
-    Py_XDECREF(kc->key_realtime);
     Py_XDECREF(kc->key_cpu);
     Py_XDECREF(kc->key_period);
-    Py_XDECREF(kc->key_event);
+    Py_XDECREF(kc->key_common_flags);
+    Py_XDECREF(kc->key_common_preempt_count);
+    Py_XDECREF(kc->key_common_pid);
+    Py_XDECREF(kc->key_realtime);
     Py_XDECREF(kc->key_callchain);
-    Py_XDECREF(kc->key_raw);
-    Py_XDECREF(kc->key_tp);
+    Py_XDECREF(kc->key_event);
     memset(kc, 0, sizeof(*kc));
 }
 
@@ -404,6 +1280,8 @@ static int cache_event_fields(struct python_ctx *ctx)
         struct python_event_data *ev = &ctx->events[i];
         char *handler_name;
         char event_name[256];
+
+        tp->private = ev; /* Link tp to its python_event_data */
 
         if (event) {
             ev->fields = tep_event_fields(event);
@@ -477,6 +1355,14 @@ static int python_script_init(struct python_ctx *ctx)
     Py_Initialize();
     if (!Py_IsInitialized()) {
         fprintf(stderr, "Failed to initialize Python interpreter\n");
+        return -1;
+    }
+
+    /* Import perf_prof module to ensure PerfEvent types are initialized */
+    ctx->perf_prof_module = PyImport_ImportModule("perf_prof");
+    if (!ctx->perf_prof_module) {
+        PyErr_Print();
+        fprintf(stderr, "Failed to import perf_prof module\n");
         return -1;
     }
 
@@ -572,6 +1458,7 @@ static void python_script_exit(struct python_ctx *ctx)
     free_key_cache(&ctx->key_cache);
 
     if (ctx->module) Py_DECREF(ctx->module);
+    if (ctx->perf_prof_module) Py_DECREF(ctx->perf_prof_module);
 
     if (Py_IsInitialized())
         Py_Finalize();
@@ -732,6 +1619,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
         if (ctx->callchain_flags) {
             if (callchain_pylist_init(ctx->callchain_flags) < 0)
                 goto failed;
+            ctx->cc = callchain_ctx_new(ctx->callchain_flags, stdout);
+            if (!ctx->cc)
+                goto failed;
             dev->pages *= 2;  /* Increase buffer for callchain data */
         }
     }
@@ -748,6 +1638,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     return 0;
 
 failed:
+    if (ctx->cc)
+        callchain_ctx_free(ctx->cc);
     if (ctx->callchain_flags)
         callchain_pylist_exit(ctx->callchain_flags);
     python_script_exit(ctx);
@@ -764,6 +1656,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct python_ctx *ctx = dev->private;
 
+    if (ctx->cc)
+        callchain_ctx_free(ctx->cc);
     if (ctx->callchain_flags)
         callchain_pylist_exit(ctx->callchain_flags);
 
@@ -851,33 +1745,6 @@ static void python_lost(struct prof_dev *dev, union perf_event *event,
     python_call_lost(ctx);
 }
 
-/*
- * Extract raw data from sample, handling both callchain and non-callchain cases.
- */
-static inline void get_raw_data(union perf_event *event, bool has_callchain,
-                         struct callchain **pcallchain, void **praw, int *psize)
-{
-    struct python_sample_type *data = (void *)event->sample.array;
-
-    if (has_callchain) {
-        /* With callchain: header -> callchain -> raw */
-        struct callchain *cc = (struct callchain *)&data->raw;
-        struct {
-            __u32 size;
-            __u8 data[0];
-        } *raw = (void *)cc->ips + cc->nr * sizeof(__u64);
-
-        *pcallchain = cc;
-        *praw = raw->data;
-        *psize = raw->size;
-    } else {
-        /* Without callchain: header -> raw */
-        *pcallchain = NULL;
-        *praw = data->raw.data;
-        *psize = data->raw.size;
-    }
-}
-
 static void python_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct python_ctx *ctx = dev->private;
@@ -885,10 +1752,8 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
     struct perf_evsel *evsel;
     struct tp *tp;
     struct python_event_data *ev;
-    struct callchain *callchain;
-    void *raw;
-    int raw_size;
-    PyObject *dict, *result;
+    PerfEventObject *perf_event;
+    PyObject *result;
     int i;
 
     /* Find the matching tp */
@@ -903,33 +1768,28 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
 
     ev = &ctx->events[i];
 
-    /* Determine if this sample has callchain and extract raw data */
-    get_raw_data(event, tp->stack, &callchain, &raw, &raw_size);
-
-    /* Convert event to Python dict */
-    dict = event_to_dict(dev, tp, data, i, callchain, raw, raw_size);
-    if (!dict)
+    /* Create PerfEventObject */
+    perf_event = PerfEvent_create(dev, tp, event);
+    if (!perf_event)
         return;
 
     /* Call event-specific handler or default __sample__ */
     if (ev->handler) {
-        result = PyObject_CallFunctionObjArgs(ev->handler, dict, NULL);
+        result = PyObject_CallFunctionObjArgs(ev->handler, perf_event, NULL);
         if (!result)
             PyErr_Print();
         else
             Py_DECREF(result);
     } else if (ctx->func_sample) {
-        /* Add cached _event field for default handler */
-        PyDict_SetItem(dict, ctx->key_cache.key_event, ev->event_name);
-
-        result = PyObject_CallFunctionObjArgs(ctx->func_sample, dict, NULL);
+        /* _event field is available via PerfEvent_get_event getter */
+        result = PyObject_CallFunctionObjArgs(ctx->func_sample, perf_event, NULL);
         if (!result)
             PyErr_Print();
         else
             Py_DECREF(result);
     }
 
-    Py_DECREF(dict);
+    Py_DECREF(perf_event);
 }
 
 static void python_interval(struct prof_dev *dev)
@@ -986,32 +1846,35 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("# Functions marked [OPTIONAL] can be safely deleted if not needed.\n");
     printf("# Exceptions raised in functions will be printed but won't stop processing.\n");
     printf("#\n");
-    printf("# Event dict common fields:\n");
+    printf("# PerfEvent object fields:\n");
     printf("#   _pid, _tid    : Process/thread ID (int)\n");
     printf("#   _time         : Event timestamp in nanoseconds (int)\n");
-    printf("#   _realtime     : Wall clock time in ns since Unix epoch (int)\n");
-    printf("#                   Note: Has drift, only for display, not for latency calc\n");
     printf("#   _cpu          : CPU number (int)\n");
     printf("#   _period       : Sample period (int)\n");
-    printf("#   _event        : Event name with alias if set (str, only in __sample__)\n");
-    printf("#   _callchain    : Call stack list (when -g or stack attribute is set)\n");
+    printf("#   common_flags, common_preempt_count, common_pid : trace_entry fields\n");
+    printf("#   _realtime     : Wall clock time in ns since Unix epoch (int, lazy computed)\n");
+    printf("#                   Note: Has drift, only for display, not for latency calc\n");
+    printf("#   _callchain    : Call stack list (when -g or stack attribute is set, lazy computed)\n");
     printf("#                   Each frame dict: {'addr': int, 'symbol': str,\n");
     printf("#                                     'offset': int, 'kernel': bool, 'dso': str}\n");
-    printf("#   _raw          : Raw tracepoint data (bytes)\n");
-    printf("#   __tp          : [PRIVATE] tp pointer as int, for event printing (internal use)\n");
+    printf("#   _event        : Event name with alias if set (str, only in __sample__, lazy computed)\n");
+    printf("#   <field>       : Event-specific fields (int/str/bytes, lazy computed)\n");
     printf("#\n");
-    printf("# Built-in module: perf_prof\n");
-    printf("#   perf_prof.print_event(event, timestamp=True, callchain=True)\n");
-    printf("#       Print event in standard perf-prof format:\n");
+    printf("# PerfEvent access methods:\n");
+    printf("#   event.field or event['field']  - Access field value\n");
+    printf("#   event.get(field, default=None) - Get field with default fallback\n");
+    printf("#   'field' in event               - Check if field exists\n");
+    printf("#   len(event)                     - Number of fields\n");
+    printf("#   event.keys(), event.values(), event.items()  - Dict-like access\n");
+    printf("#   for field, value in event      - Iterate over fields\n");
+    printf("#   event.print(timestamp=True, callchain=True)  - Print in perf-prof format:\n");
     printf("#       YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields\n");
     printf("#           addr symbol+offset (dso)\n");
+    printf("#   event.to_dict()                - Convert to regular Python dict\n");
+    printf("#   str(event), repr(event)        - String representations\n");
+    printf("#   hash(event)                    - Hash of entire perf event\n");
     printf("#\n");
     printf("# =============================================================================\n");
-    printf("\n");
-
-    /* Import section */
-    printf("# Import perf_prof built-in module for event processing\n");
-    printf("import perf_prof\n");
     printf("\n");
     printf("# Import other modules as needed (examples)\n");
     printf("# import json\n");
@@ -1090,12 +1953,13 @@ static void python_help_script_template(struct help_ctx *hctx)
                     continue;
 
                 /* Function definition with docstring */
-                printf("def %s(event: dict):\n", handler_name);
+                printf("def %s(event):\n", handler_name);
                 printf("    \"\"\"\n");
                 printf("    Handler for %s:%s", tp->sys, tp->name);
                 if (tp->alias)
                     printf(" (alias: %s)", tp->alias);
                 printf("\n");
+                printf("    event is a PerfEvent object with lazy field evaluation.\n");
 
                 /* Document event-specific fields */
                 if (event) {
@@ -1130,8 +1994,8 @@ static void python_help_script_template(struct help_ctx *hctx)
                     free(fields);
                 }
 
-                printf("    # Example: print event info\n");
-                printf("    # print(f\"[CPU{cpu}] {event}\")\n");
+                printf("    # Example: print event\n");
+                printf("    # event.print()  # or event.print(timestamp=True, callchain=True)\n");
                 printf("\n");
 
                 free(handler_name);
@@ -1147,19 +2011,19 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("# [OPTIONAL] Delete if using event-specific handlers for all events\n");
     printf("# =============================================================================\n");
     printf("\n");
-    printf("def __sample__(event: dict):\n");
+    printf("def __sample__(event):\n");
     printf("    \"\"\"\n");
     printf("    Default handler for all events without specific handlers.\n");
-    printf("    The event dict includes '_event' field with format 'sys:name' or 'sys:alias'.\n");
+    printf("    event is a PerfEvent object. The _event field has format 'sys:name' or 'sys:alias'.\n");
     printf("    \"\"\"\n");
     printf("    global event_count\n");
     printf("    event_count += 1\n");
     printf("    \n");
-    printf("    event_name = event['_event']\n");
-    printf("    cpu = event['_cpu']\n");
+    printf("    event_name = event._event\n");
+    printf("    cpu = event._cpu\n");
     printf("    \n");
     printf("    # Example: print event\n");
-    printf("    # print(f\"[CPU{cpu}] {event_name}: pid={pid}\")\n");
+    printf("    # event.print()  # or print(event)\n");
 }
 
 static void python_help(struct help_ctx *hctx)
@@ -1189,8 +2053,8 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "Process perf events with Python scripts.",
     "",
     "SYNOPSIS",
-    "    Convert perf events to Python dict objects and process them with custom",
-    "    Python scripts. Provides a flexible way to analyze events using Python.",
+    "    Convert perf events to PerfEvent objects and process them with custom",
+    "    Python scripts. PerfEvent provides lazy field evaluation for efficiency.",
     "",
     "SCRIPT SYNTAX",
     "  CALLBACK FUNCTIONS",
@@ -1201,33 +2065,39 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    __lost__()              - Called when events are lost",
     "",
     "  EVENT HANDLERS (priority: specific > default)",
-    "    sys__event_name(event)  - Event-specific handler",
+    "    sys__event_name(event)  - Event-specific handler (event is PerfEvent)",
     "                              e.g., sched__sched_wakeup for sched:sched_wakeup",
     "                              Characters '-', '.', ':' converted to '_'",
     "    sys__alias(event)       - Alias-specific handler (when alias= is used)",
     "                              e.g., sched__wakeup1 for alias=wakeup1",
-    "    __sample__(event)       - Default handler (dict includes _event field)",
+    "    __sample__(event)       - Default handler (event includes _event field)",
     "",
-    "  EVENT DICT FIELDS",
+    "  PERFEVENT OBJECT FIELDS",
     "    _pid, _tid              - Process/thread ID",
     "    _time                   - Event timestamp (ns)",
-    "    _realtime               - Wall clock time (ns since Unix epoch)",
-    "                              Note: Has drift, for display only, not latency calc",
     "    _cpu                    - CPU number",
     "    _period                 - Sample period",
-    "    _event                  - Event name, uses alias if set (only in __sample__)",
-    "    _callchain              - Call stack list (when -g or stack attribute is set)",
+    "    common_flags, common_preempt_count, common_pid - trace_entry fields",
+    "    _realtime               - Wall clock time (ns since Unix epoch, lazy computed)",
+    "                              Note: Has drift, for display only, not latency calc",
+    "    _callchain              - Call stack list (when -g or stack attribute, lazy computed)",
     "                              Each frame: {'addr', 'symbol', 'offset', 'kernel', 'dso'}",
-    "    _raw                    - Raw tracepoint data (bytes)",
-    "    __tp                    - [PRIVATE] tp pointer as int (internal use)",
-    "    <field>                 - Event-specific fields (int/str/bytes)",
+    "    _event                  - Event name, uses alias if set (only in __sample__)",
+    "    <field>                 - Event-specific fields (int/str/bytes, lazy computed)",
     "",
-    "  BUILT-IN MODULE: perf_prof",
-    "    import perf_prof",
-    "    perf_prof.print_event(event, timestamp=True, callchain=True)",
-    "        Print event in standard perf-prof format:",
+    "  PERFEVENT ACCESS METHODS",
+    "    event.field or event['field']  - Access field value",
+    "    event.get(field, default=None) - Get field with default fallback",
+    "    'field' in event        - Check if field exists",
+    "    len(event)              - Number of fields",
+    "    event.keys(), values(), items()  - Dict-like access",
+    "    for field, value in event  - Iterate over fields",
+    "    event.print(timestamp=True, callchain=True)  - Print in perf-prof format:",
     "        YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields",
     "            addr symbol+offset (dso)",
+    "    event.to_dict()         - Convert to regular Python dict",
+    "    str(event), repr(event) - String representations",
+    "    hash(event)             - Hash of entire perf event",
     "",
     "EXAMPLES",
     "    "PROGRAME" python -e sched:sched_wakeup counter.py",
@@ -1257,182 +2127,3 @@ static profiler python = {
     .sample = python_sample,
 };
 PROFILER_REGISTER(python);
-
-
-/*
- * ============================================================================
- * perf_prof built-in module
- *
- * Provides utility functions for Python scripts:
- *   - print_event(event, timestamp=True, callchain=True): Print event in standard format
- * ============================================================================
- */
-
-/*
- * Print timestamp in the format: YYYY-MM-DD HH:MM:SS.uuuuuu
- * @realtime_ns: Wall clock time in nanoseconds since Unix epoch
- */
-static void print_realtime(u64 realtime_ns)
-{
-    char timebuff[64];
-    time_t sec;
-    unsigned int usec;
-    struct tm *result;
-
-    sec = realtime_ns / NSEC_PER_SEC;
-    usec = (realtime_ns % NSEC_PER_SEC) / 1000;
-
-    result = localtime(&sec);
-    strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", result);
-    printf("%s.%06u ", timebuff, usec);
-}
-
-/*
- * Print callchain frames
- * Default format: addr symbol+offset (dso)
- * Each frame is indented with 4 spaces
- */
-static void print_callchain_frames(PyObject *callchain_list)
-{
-    Py_ssize_t i, n;
-    PyObject *frame, *addr_obj, *symbol_obj, *offset_obj, *dso_obj;
-    unsigned long long addr;
-    long offset;
-    const char *symbol, *dso;
-
-    if (!callchain_list || !PyList_Check(callchain_list))
-        return;
-
-    n = PyList_Size(callchain_list);
-    for (i = 0; i < n; i++) {
-        frame = PyList_GetItem(callchain_list, i);  /* Borrowed reference */
-        if (!frame || !PyDict_Check(frame))
-            continue;
-
-        addr_obj = PyDict_GetItemString(frame, "addr");
-        symbol_obj = PyDict_GetItemString(frame, "symbol");
-        offset_obj = PyDict_GetItemString(frame, "offset");
-        dso_obj = PyDict_GetItemString(frame, "dso");
-
-        addr = addr_obj ? PyLong_AsUnsignedLongLong(addr_obj) : 0;
-        symbol = (symbol_obj && PyUnicode_Check(symbol_obj)) ?
-                 PyUnicode_AsUTF8(symbol_obj) : "Unknown";
-        offset = offset_obj ? PyLong_AsLong(offset_obj) : 0;
-        dso = (dso_obj && PyUnicode_Check(dso_obj)) ?
-              PyUnicode_AsUTF8(dso_obj) : "Unknown";
-
-        printf("    %016llx %s+0x%lx (%s)\n", addr, symbol, offset, dso);
-    }
-}
-
-/*
- * perf_prof.print_event(event, timestamp=True, callchain=True)
- *
- * Print event in standard perf-prof format.
- *
- * Args:
- *   event: Event dict from callback
- *   timestamp: Whether to print timestamp (default: True)
- *   callchain: Whether to print callchain (default: True)
- */
-static PyObject *perf_prof_print_event(PyObject *self, PyObject *args, PyObject *kwargs)
-{
-    PyObject *event;
-    int print_timestamp = 1;
-    int print_callchain = 1;
-    static const char *kwlist[] = {"event", "timestamp", "callchain", NULL};
-
-    PyObject *tp_obj, *realtime_obj, *cpu_obj, *raw_obj, *callchain_obj;
-    struct tp *tp;
-    u64 realtime_ns;
-    int cpu;
-    void *raw_data;
-    Py_ssize_t raw_size;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|pp", (void *)kwlist,
-                                     &event, &print_timestamp, &print_callchain))
-        return NULL;
-
-    if (!PyDict_Check(event)) {
-        PyErr_SetString(PyExc_TypeError, "event must be a dict");
-        return NULL;
-    }
-
-    /* Get required fields */
-    tp_obj = PyDict_GetItemString(event, "__tp");
-    realtime_obj = PyDict_GetItemString(event, "_realtime");
-    cpu_obj = PyDict_GetItemString(event, "_cpu");
-    raw_obj = PyDict_GetItemString(event, "_raw");
-
-    if (!tp_obj || !realtime_obj || !cpu_obj || !raw_obj) {
-        PyErr_SetString(PyExc_ValueError, "event missing required fields (__tp, _realtime, _cpu, _raw)");
-        return NULL;
-    }
-
-    tp = (struct tp *)PyLong_AsVoidPtr(tp_obj);
-    realtime_ns = PyLong_AsUnsignedLongLong(realtime_obj);
-    cpu = (int)PyLong_AsLong(cpu_obj);
-
-    if (!tp) {
-        PyErr_SetString(PyExc_ValueError, "invalid __tp pointer");
-        return NULL;
-    }
-
-    if (PyBytes_AsStringAndSize(raw_obj, (char **)&raw_data, &raw_size) < 0)
-        return NULL;
-
-    /* Print timestamp if requested */
-    if (print_timestamp)
-        print_realtime(realtime_ns);
-
-    /* Print event using tp_print_event */
-    tp_print_event(tp, realtime_ns / 1000, cpu, raw_data, (int)raw_size);
-
-    /* Print callchain if requested and available */
-    if (print_callchain) {
-        callchain_obj = PyDict_GetItemString(event, "_callchain");
-        if (callchain_obj && PyList_Check(callchain_obj) && PyList_Size(callchain_obj) > 0)
-            print_callchain_frames(callchain_obj);
-    }
-
-    Py_RETURN_NONE;
-}
-
-/* perf_prof module method table */
-static PyMethodDef perf_prof_methods[] = {
-    {"print_event", (PyCFunction)perf_prof_print_event, METH_VARARGS | METH_KEYWORDS,
-     "Print event in standard perf-prof format.\n\n"
-     "Args:\n"
-     "    event: Event dict\n"
-     "    timestamp: Whether to print timestamp (default: True)\n"
-     "    callchain: Whether to print callchain (default: True)\n\n"
-     "Output format:\n"
-     "    YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields\n"
-     "        addr symbol+offset (dso)\n"
-     "        ..."},
-    {NULL, NULL, 0, NULL}
-};
-
-/* perf_prof module definition */
-static struct PyModuleDef perf_prof_module = {
-    PyModuleDef_HEAD_INIT,
-    "perf_prof",                              /* module name */
-    "perf-prof built-in module for event processing utilities",  /* docstring */
-    -1,                                       /* size of per-interpreter state, -1 = global */
-    perf_prof_methods
-};
-
-/* Module initialization function */
-static PyObject *PyInit_perf_prof(void)
-{
-    return PyModule_Create(&perf_prof_module);
-}
-
-/*
- * Register perf_prof module as a built-in module.
- * Must be called before Py_Initialize().
- */
-static int register_perf_prof_module(void)
-{
-    return PyImport_AppendInittab("perf_prof", PyInit_perf_prof);
-}
