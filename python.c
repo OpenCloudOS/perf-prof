@@ -1538,16 +1538,20 @@ static void python_call_interval(struct python_ctx *ctx)
 }
 
 /*
- * Call Python __lost__() function
+ * Call Python __lost__(lost_start, lost_end) function
+ * lost_start: timestamp of the last sample before lost (0 if --order not enabled)
+ * lost_end: timestamp of the first sample after lost (0 if --order not enabled)
  */
-static void python_call_lost(struct python_ctx *ctx)
+static void python_call_lost(struct python_ctx *ctx, u64 lost_start, u64 lost_end)
 {
     PyObject *result;
 
     if (!ctx->func_lost)
         return;
 
-    result = PyObject_CallObject(ctx->func_lost, NULL);
+    result = PyObject_CallFunction(ctx->func_lost, "KK",
+                                   (unsigned long long)lost_start,
+                                   (unsigned long long)lost_end);
     if (!result) {
         PyErr_Print();
         return;
@@ -1742,7 +1746,7 @@ static void python_lost(struct prof_dev *dev, union perf_event *event,
 {
     struct python_ctx *ctx = dev->private;
     print_lost_fn(dev, event, instance);
-    python_call_lost(ctx);
+    python_call_lost(ctx, lost_start, lost_end);
 }
 
 static void python_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -1925,9 +1929,14 @@ static void python_help_script_template(struct help_ctx *hctx)
 
     /* __lost__ function - optional */
     printf("# [OPTIONAL] Delete if event loss notification not needed\n");
-    printf("def __lost__():\n");
-    printf("    \"\"\"Called when events are lost.\"\"\"\n");
-    printf("    print(\"Warning: events lost!\")\n");
+    printf("def __lost__(lost_start: int, lost_end: int):\n");
+    printf("    \"\"\"\n");
+    printf("    Called when events are lost.\n");
+    printf("    lost_start: timestamp of last sample before lost (0 if --order not enabled)\n");
+    printf("    lost_end: timestamp of first sample after lost (0 if --order not enabled)\n");
+    printf("    Events from other instances within [lost_start, lost_end] may be incomplete.\n");
+    printf("    \"\"\"\n");
+    printf("    print(f\"Warning: events lost! time range: {lost_start} - {lost_end}\")\n");
     printf("\n");
 
     /* Generate event-specific handlers if events are specified */
@@ -2062,7 +2071,8 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    __exit__()              - Called once before program exit",
     "    __print_stat__(indent)  - Called on SIGUSR2 signal",
     "    __interval__()          - Called at each -i interval",
-    "    __lost__()              - Called when events are lost",
+    "    __lost__(lost_start, lost_end)  - Called when events are lost",
+    "                              lost_start/lost_end: time range (0 if no --order)",
     "",
     "  EVENT HANDLERS (priority: specific > default)",
     "    sys__event_name(event)  - Event-specific handler (event is PerfEvent)",
