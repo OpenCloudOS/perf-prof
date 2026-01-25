@@ -877,16 +877,32 @@ static profiler *parse_main_options(int argc, char *argv[])
     if (prof == NULL)
         help();
 
-    if (!dashdash) {
-        if (prof && prof->argc_init)
-            argc = prof->argc_init(argc, argv);
-        else if (argc && env.verbose > 0) {
-            int i;
-            printf("Unparsed options:");
-            for (i = 0; i < argc; i ++)
-                printf(" %s", argv[i]);
-            printf("\n");
-        }
+    /*
+     * Allow profiler to parse its own arguments via argc_init callback.
+     * This must be called regardless of dashdash ('--') presence, because
+     * the first '--' is used to isolate profiler-specific options that are
+     * fully parsed by the profiler internally, maximizing profiler capability.
+     *
+     * Supports two '--' separators:
+     *   perf-prof <profiler> [main-opts] -- [profiler-opts] -- [workload]
+     *
+     * The profiler's argc_init stops parsing at the second '--', and the
+     * remaining arguments become the workload command line.
+     *
+     * Only show "Unparsed options" warning when:
+     *   1. No dashdash present (otherwise remaining args are for profiler/workload)
+     *   2. There are remaining arguments
+     *   3. Verbose mode is enabled
+     *   4. Profiler doesn't have argc_init (can't handle extra args)
+     */
+    if (prof && prof->argc_init)
+        argc = prof->argc_init(argc, argv);
+    else if (!dashdash && argc && env.verbose > 0) {
+        int i;
+        printf("Unparsed options:");
+        for (i = 0; i < argc; i ++)
+            printf(" %s", argv[i]);
+        printf("\n");
     }
 
     if (argc > 0) {
