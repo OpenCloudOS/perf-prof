@@ -4,7 +4,8 @@
  *
  * Convert perf events to Python objects and process them with Python scripts.
  *
- * Usage: perf-prof python -e EVENT script.py
+ * Usage: perf-prof python -e EVENT script.py [script-args...]
+ *        perf-prof python -e EVENT -- script.py --script-option
  */
 
 /* Python.h must be included first */
@@ -25,8 +26,10 @@
 
 static int register_perf_prof_module(void);
 
-/* Global script path, set by argc_init before init */
+/* Global script path and arguments, set by argc_init before init */
 static char *script_path = NULL;
+static int script_argc = 0;
+static char **script_argv = NULL;
 
 /*
  * Sample type for Python profiler (no callchain support in initial version)
@@ -1358,6 +1361,26 @@ static int python_script_init(struct python_ctx *ctx)
         return -1;
     }
 
+    /* Set sys.argv from script arguments */
+    if (script_argc > 0 && script_argv) {
+        wchar_t **wargv = calloc(script_argc, sizeof(wchar_t *));
+        if (wargv) {
+            int i;
+            for (i = 0; i < script_argc; i++) {
+                wargv[i] = Py_DecodeLocale(script_argv[i], NULL);
+                if (!wargv[i]) {
+                    script_argc = i;
+                    break;
+                }
+            }
+            if (script_argc)
+                PySys_SetArgvEx(script_argc, wargv, 0);
+            for (i = 0; i < script_argc; i++)
+                PyMem_RawFree(wargv[i]);
+            free(wargv);
+        }
+    }
+
     /* Import perf_prof module to ensure PerfEvent types are initialized */
     ctx->perf_prof_module = PyImport_ImportModule("perf_prof");
     if (!ctx->perf_prof_module) {
@@ -1560,20 +1583,20 @@ static void python_call_lost(struct python_ctx *ctx, u64 lost_start, u64 lost_en
 }
 
 /*
- * python_argc_init - Parse extra command line arguments (script.py)
- * Called before init() to capture the script path from remaining arguments.
+ * python_argc_init - Parse extra command line arguments (script.py [script args...])
+ * Called before init() to capture the script path and arguments.
+ * Usage: perf-prof python -e EVENT -- script.py --script-opts
  */
 static int python_argc_init(int argc, char *argv[])
 {
-    if (script_path) {
-        free(script_path);
-        script_path = NULL;
-    }
-
     if (argc >= 1) {
-        script_path = strdup(argv[0]);
-        if (!script_path)
-            return -1;
+        script_path = argv[0];
+        script_argc = argc;
+        script_argv = argv;
+    } else {
+        script_path = NULL;
+        script_argc = 0;
+        script_argv = NULL;
     }
     return 0;
 }
@@ -1593,7 +1616,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     if (!script_path) {
         fprintf(stderr, "Error: Python script path is required\n");
-        fprintf(stderr, "Usage: perf-prof python -e EVENT script.py\n");
+        fprintf(stderr, "Usage: perf-prof python -e EVENT [--] script.py [script-args...]\n");
         return -1;
     }
 
@@ -1881,9 +1904,14 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("# =============================================================================\n");
     printf("\n");
     printf("# Import other modules as needed (examples)\n");
+    printf("# import sys\n");
     printf("# import json\n");
-    printf("# import time\n");
+    printf("# import argparse\n");
     printf("# from collections import defaultdict, Counter\n");
+    printf("\n");
+    printf("# Script arguments available via sys.argv:\n");
+    printf("#   perf-prof python -e EVENT -- script.py --foo bar\n");
+    printf("#   sys.argv = ['script.py', '--foo', 'bar']\n");
     printf("\n");
 
     /* Global variables section */
@@ -2058,12 +2086,13 @@ static void python_help(struct help_ctx *hctx)
 }
 
 static const char *python_desc[] = PROFILER_DESC("python",
-    "[OPTION...] -e EVENT[,EVENT...] script.py",
+    "[OPTION...] -e EVENT[,EVENT...] [--] script.py [script-args...]",
     "Process perf events with Python scripts.",
     "",
     "SYNOPSIS",
     "    Convert perf events to PerfEvent objects and process them with custom",
     "    Python scripts. PerfEvent provides lazy field evaluation for efficiency.",
+    "    Script arguments after script.py are available via sys.argv.",
     "",
     "SCRIPT SYNTAX",
     "  CALLBACK FUNCTIONS",
