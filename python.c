@@ -1744,7 +1744,6 @@ static void monitor_ctx_exit(struct prof_dev *dev)
     if (ctx->callchain_flags)
         callchain_pylist_exit(ctx->callchain_flags);
 
-    python_call_exit(ctx);
     python_script_exit(ctx);
 
     tp_list_free(ctx->tp_list);
@@ -1817,6 +1816,8 @@ static int python_filter(struct prof_dev *dev)
 
 static void python_exit(struct prof_dev *dev)
 {
+    struct python_ctx *ctx = dev->private;
+    python_call_exit(ctx);
     monitor_ctx_exit(dev);
 }
 
@@ -2019,6 +2020,9 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("# [OPTIONAL] Delete if no cleanup/summary needed\n");
     printf("def __exit__():\n");
     printf("    \"\"\"Called once before program exit.\"\"\"\n");
+    printf("    # Redirect stderr to devnull to suppress BrokenPipeError when piped to head/tail\n");
+    printf("    # e.g., perf-prof python -e event script.py | head\n");
+    printf("    # import os; sys.stderr = open(os.devnull, 'w')\n");
     printf("    print(f\"Total events processed: {event_count}\")\n");
     printf("    print(f\"Total intervals: {interval_count}\")\n");
     printf("\n");
