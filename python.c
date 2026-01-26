@@ -112,6 +112,9 @@ struct python_ctx {
     /* Callchain support */
     int callchain_flags;    /* CALLCHAIN_KERNEL | CALLCHAIN_USER flags */
     struct callchain_ctx *cc;  /* Callchain context for printing */
+    /* minevtime tracking: rb tree of live PerfEventObjects sorted by _time */
+    struct rb_root live_events;
+    unsigned long nr_live_events;  /* Number of events in live_events tree */
 };
 
 /*
@@ -145,6 +148,8 @@ typedef struct {
     struct prof_dev *dev;           /* Prof dev - borrowed reference */
     struct tp *tp;                  /* Tracepoint info - borrowed reference */
     union perf_event *event;        /* Entire perf event - dynamically allocated copy */
+    /* minevtime tracking: node in python_ctx->live_events rb tree */
+    struct rb_node rb_node;
 
     /* Direct access fields (via PyMemberDef) - extracted from event */
     int _pid;                       /* Process ID */
@@ -359,6 +364,46 @@ static PyObject *perfevent_get_field(PerfEventObject *self, PyObject *field_name
 }
 
 /*
+ * Insert PerfEventObject into live_events rb tree (sorted by _time, then by pointer)
+ */
+static void live_events_insert(struct python_ctx *ctx, PerfEventObject *obj)
+{
+    struct rb_node **p = &ctx->live_events.rb_node;
+    struct rb_node *parent = NULL;
+    PerfEventObject *entry;
+
+    while (*p) {
+        parent = *p;
+        entry = rb_entry(parent, PerfEventObject, rb_node);
+
+        if (obj->_time < entry->_time)
+            p = &parent->rb_left;
+        else if (obj->_time > entry->_time)
+            p = &parent->rb_right;
+        else if (obj < entry)
+            p = &parent->rb_left;
+        else
+            p = &parent->rb_right;
+    }
+
+    rb_link_node(&obj->rb_node, parent, p);
+    rb_insert_color(&obj->rb_node, &ctx->live_events);
+    ctx->nr_live_events++;
+}
+
+/*
+ * Remove PerfEventObject from live_events rb tree
+ */
+static void live_events_remove(struct python_ctx *ctx, PerfEventObject *obj)
+{
+    if (!RB_EMPTY_NODE(&obj->rb_node)) {
+        rb_erase(&obj->rb_node, &ctx->live_events);
+        RB_CLEAR_NODE(&obj->rb_node);
+        ctx->nr_live_events--;
+    }
+}
+
+/*
  * Create a new PerfEventObject (internal use)
  * This is called from python_sample() to create event objects.
  */
@@ -417,6 +462,9 @@ static PerfEventObject *PerfEvent_create(struct prof_dev *dev, struct tp *tp,
         return NULL;
     }
 
+    /* Initialize rb_node for minevtime tracking (not inserted yet) */
+    RB_CLEAR_NODE(&self->rb_node);
+
     return self;
 }
 
@@ -442,6 +490,11 @@ static int PerfEvent_init(PerfEventObject *self, PyObject *args, PyObject *kwds)
  */
 static void PerfEvent_dealloc(PerfEventObject *self)
 {
+    struct python_ctx *ctx = self->dev->private;
+
+    /* Remove from live_events rb tree */
+    live_events_remove(ctx, self);
+
     /* Free dynamically allocated event */
     free(self->event);
 
@@ -1630,6 +1683,9 @@ static int monitor_ctx_init(struct prof_dev *dev)
     if (!ctx)
         return -1;
 
+    /* Initialize live_events rb tree for minevtime tracking */
+    ctx->live_events = RB_ROOT;
+
     tep__ref();
 
     ctx->script_path = strdup(script_path);
@@ -1816,7 +1872,35 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
             Py_DECREF(result);
     }
 
+    /*
+     * Check if Python script kept a reference to the event.
+     * If refcnt > 1, the script stored it somewhere (e.g., in a list),
+     * so we need to track it for minevtime calculation.
+     */
+    if (Py_REFCNT(perf_event) > 1)
+        live_events_insert(ctx, perf_event);
+
     Py_DECREF(perf_event);
+}
+
+/*
+ * python_minevtime - Return minimum event time of all live PerfEventObjects
+ *
+ * This is called by comm module to determine when it's safe to garbage collect
+ * pid->comm mappings. Returns ULLONG_MAX if no live events exist.
+ */
+static u64 python_minevtime(struct prof_dev *dev)
+{
+    struct python_ctx *ctx = dev->private;
+    struct rb_node *rbn;
+    PerfEventObject *obj;
+
+    rbn = rb_first(&ctx->live_events);
+    if (!rbn)
+        return ULLONG_MAX;
+
+    obj = rb_entry(rbn, PerfEventObject, rb_node);
+    return obj->_time;
 }
 
 static void python_interval(struct prof_dev *dev)
@@ -1828,6 +1912,7 @@ static void python_interval(struct prof_dev *dev)
 static void python_print_dev(struct prof_dev *dev, int indent)
 {
     struct python_ctx *ctx = dev->private;
+    dev_printf("live_events: %lu\n", ctx->nr_live_events);
     python_call_print_stat(ctx, indent);
 }
 
@@ -2162,6 +2247,7 @@ static profiler python = {
     .deinit = python_exit,
     .print_dev = python_print_dev,
     .interval = python_interval,
+    .minevtime = python_minevtime,
     .lost = python_lost,
     .sample = python_sample,
 };
