@@ -372,6 +372,10 @@ static int parse_short_opt(struct parse_opt_ctx_t *p, const struct option *optio
 	p->last_opt = NULL;
 retry:
 	for (; options->type != OPTION_END; options++) {
+		/* Skip disabled options in KEEP_UNKNOWN mode, let them pass to subcmd */
+		if ((options->flags & PARSE_OPT_DISABLED) &&
+		    (p->flags & PARSE_OPT_KEEP_UNKNOWN))
+			continue;
 		if (isshort(options->short_name) && options->short_name == *p->opt) {
 			p->opt = p->opt[1] ? p->opt + 1 : NULL;
 			p->opt = (p->opt && *p->opt == '=') ? p->opt + 1 : p->opt;
@@ -404,6 +408,10 @@ retry:
 		int flags = 0;
 
 		if (!options->long_name)
+			continue;
+		/* Skip disabled options in KEEP_UNKNOWN mode, let them pass to subcmd */
+		if ((options->flags & PARSE_OPT_DISABLED) &&
+		    (p->flags & PARSE_OPT_KEEP_UNKNOWN))
 			continue;
 
 		rest = skip_prefix(arg, options->long_name);
