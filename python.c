@@ -1434,6 +1434,19 @@ static int python_script_init(struct python_ctx *ctx)
         }
     }
 
+    /* Set stdout and stderr to line-buffered mode if not already */
+    if (PyRun_SimpleString(
+            "import sys, os\n"
+            "if sys.stdout.line_buffering != True:\n"
+            "    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)\n"
+            "if sys.stderr.line_buffering != True:\n"
+            "    sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)\n"
+        ) < 0) {
+        PyErr_Print();
+        fprintf(stderr, "Warning: Failed to set line buffering for Python stdio\n");
+        /* Continue anyway, this is not fatal */
+    }
+
     /* Import perf_prof module to ensure PerfEvent types are initialized */
     ctx->perf_prof_module = PyImport_ImportModule("perf_prof");
     if (!ctx->perf_prof_module) {
