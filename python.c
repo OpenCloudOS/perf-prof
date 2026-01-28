@@ -1177,15 +1177,19 @@ static int register_perf_prof_module(void)
 
 
 /*
- * Get Python function from module, returns NULL if not found (not an error)
- * Only returns user-defined functions, not built-in module attributes like __init__.
+ * Get Python callable from module, returns NULL if not found (not an error)
+ * Supports:
+ *   - PyFunction (pure Python functions)
+ *   - PyCFunction (C extension functions, including Cython)
+ *   - Other callables (lambdas, bound methods, etc.)
+ * Excludes module-level special attributes that happen to be callable.
  */
 static PyObject *get_python_func(PyObject *module, const char *name)
 {
     PyObject *func = PyObject_GetAttrString(module, name);
     if (func) {
-        /* Must be a user-defined function, not built-in or other callable */
-        if (!PyFunction_Check(func)) {
+        /* Must be callable */
+        if (!PyCallable_Check(func)) {
             Py_DECREF(func);
             func = NULL;
         }
@@ -1393,13 +1397,98 @@ failed:
 }
 
 /*
- * Initialize Python interpreter and load script
+ * Get the module's file path from __file__ attribute
+ * Returns a newly allocated string that must be freed by caller, or NULL on failure
+ */
+static char *get_module_file_path(PyObject *module)
+{
+    PyObject *file_attr;
+    const char *file_str;
+    char *result = NULL;
+
+    file_attr = PyObject_GetAttrString(module, "__file__");
+    if (file_attr && PyUnicode_Check(file_attr)) {
+        file_str = PyUnicode_AsUTF8(file_attr);
+        if (file_str)
+            result = strdup(file_str);
+        Py_DECREF(file_attr);
+    } else {
+        PyErr_Clear();
+    }
+    return result;
+}
+
+/*
+ * Extract module name from a file path
+ * Handles:
+ *   - myscript.py -> myscript
+ *   - mymodule.cpython-36m-x86_64-linux-gnu.so -> mymodule
+ *   - /path/to/myscript.py -> myscript
+ *   - modname (no extension) -> modname
+ *
+ * Returns a newly allocated string that must be freed by caller
+ */
+static char *extract_module_name(const char *path)
+{
+    char *name_copy, *base, *dot, *result;
+
+    name_copy = strdup(path);
+    if (!name_copy)
+        return NULL;
+
+    /* Remove directory path */
+    base = strrchr(name_copy, '/');
+    if (base)
+        base++;
+    else
+        base = name_copy;
+
+    /* Remove extension:
+     * - .py for Python scripts
+     * - .cpython-*.so for Cython modules (find first '.' after module name)
+     * - .so for other shared libraries
+     */
+    dot = strchr(base, '.');
+    if (dot)
+        *dot = '\0';
+
+    result = strdup(base);
+    free(name_copy);
+    return result;
+}
+
+/*
+ * Check if the path looks like a file (has extension or contains '/')
+ */
+static int looks_like_file_path(const char *path)
+{
+    /* Contains directory separator */
+    if (strchr(path, '/'))
+        return 1;
+
+    /* Has common extension */
+    if (strstr(path, ".py") || strstr(path, ".so"))
+        return 1;
+
+    return 0;
+}
+
+/*
+ * Initialize Python interpreter and load script/module
+ *
+ * Supports multiple module types:
+ *   - Python script: myscript.py or /path/to/myscript.py
+ *   - Cython module: mymodule.cpython-36m-x86_64-linux-gnu.so
+ *   - Module name only: mymodule (searched in sys.path and current dir)
+ *   - Shared library: mymodule.so
  */
 static int python_script_init(struct python_ctx *ctx)
 {
     PyObject *sys_path, *path;
-    char *script_dir, *script_name, *base, *dot;
-    char *script_path_copy;
+    char *script_dir = NULL, *module_name = NULL;
+    char *script_path_copy = NULL;
+    char *module_file_path = NULL;
+    int is_file_path;
 
     /* Register perf_prof built-in module before Py_Initialize */
     if (register_perf_prof_module() < 0) {
@@ -1455,50 +1544,72 @@ static int python_script_init(struct python_ctx *ctx)
         return -1;
     }
 
-    /* Add script directory to sys.path */
-    script_path_copy = strdup(ctx->script_path);
-    if (!script_path_copy)
-        return -1;
+    /* Determine if input looks like a file path or module name */
+    is_file_path = looks_like_file_path(ctx->script_path);
 
-    script_dir = dirname(script_path_copy);
-    sys_path = PySys_GetObject("path");
-    if (sys_path) {
-        path = PyUnicode_FromString(script_dir);
-        if (path) {
-            PyList_Insert(sys_path, 0, path);
-            Py_DECREF(path);
+    if (is_file_path) {
+        /* Add script/module directory to sys.path */
+        script_path_copy = strdup(ctx->script_path);
+        if (!script_path_copy)
+            return -1;
+
+        script_dir = dirname(script_path_copy);
+        sys_path = PySys_GetObject("path");
+        if (sys_path) {
+            path = PyUnicode_FromString(script_dir);
+            if (path) {
+                PyList_Insert(sys_path, 0, path);
+                Py_DECREF(path);
+            }
+        }
+    } else {
+        /* Module name only - add current directory to sys.path */
+        sys_path = PySys_GetObject("path");
+        if (sys_path) {
+            char cwd[PATH_MAX];
+            if (getcwd(cwd, sizeof(cwd))) {
+                path = PyUnicode_FromString(cwd);
+                if (path) {
+                    PyList_Insert(sys_path, 0, path);
+                    Py_DECREF(path);
+                }
+            }
         }
     }
 
-    /* Get module name (script filename without .py) */
-    script_name = strdup(ctx->script_path);
-    if (!script_name) {
+    /* Extract module name from path */
+    module_name = extract_module_name(ctx->script_path);
+    if (!module_name) {
         free(script_path_copy);
         return -1;
     }
 
-    /* Remove directory path */
-    base = strrchr(script_name, '/');
-    if (base)
-        base++;
-    else
-        base = script_name;
-
-    /* Remove .py extension */
-    dot = strrchr(base, '.');
-    if (dot && strcmp(dot, ".py") == 0)
-        *dot = '\0';
-
     /* Import the module */
-    ctx->module = PyImport_ImportModule(base);
-    free(script_name);
-    free(script_path_copy);
+    ctx->module = PyImport_ImportModule(module_name);
 
     if (!ctx->module) {
         PyErr_Print();
-        fprintf(stderr, "Failed to load Python script: %s\n", ctx->script_path);
+        fprintf(stderr, "Failed to load Python module: %s\n", ctx->script_path);
+        fprintf(stderr, "  Searched module name: %s\n", module_name);
+        if (is_file_path && script_dir)
+            fprintf(stderr, "  Added to sys.path: %s\n", script_dir);
+        free(module_name);
+        free(script_path_copy);
         return -1;
     }
+
+    /* Get and print module file path */
+    module_file_path = get_module_file_path(ctx->module);
+    if (module_file_path) {
+        printf("Loaded module: %s\n", module_file_path);
+        free(module_file_path);
+    } else {
+        /* Some built-in modules don't have __file__, but user modules should */
+        printf("Loaded module: %s (file path not available)\n", module_name);
+    }
+
+    free(module_name);
+    free(script_path_copy);
 
     /* Get callback functions */
     ctx->func_init = get_python_func(ctx->module, "__init__");
@@ -1681,14 +1792,12 @@ static int monitor_ctx_init(struct prof_dev *dev)
     }
 
     if (!script_path) {
-        fprintf(stderr, "Error: Python script path is required\n");
-        fprintf(stderr, "Usage: perf-prof python -e EVENT [--] script.py [script-args...]\n");
-        return -1;
-    }
-
-    /* Verify script exists */
-    if (access(script_path, R_OK) != 0) {
-        fprintf(stderr, "Error: Cannot read script: %s\n", script_path);
+        fprintf(stderr, "Error: Python module/script is required\n");
+        fprintf(stderr, "Usage: perf-prof python -e EVENT [--] module [args...]\n");
+        fprintf(stderr, "  module can be:\n");
+        fprintf(stderr, "    - Python script: myscript.py or /path/to/myscript.py\n");
+        fprintf(stderr, "    - Cython module: mymodule.cpython-36m-x86_64-linux-gnu.so\n");
+        fprintf(stderr, "    - Module name: mymodule (searched in sys.path and current dir)\n");
         return -1;
     }
 
@@ -2188,13 +2297,19 @@ static void python_help(struct help_ctx *hctx)
 }
 
 static const char *python_desc[] = PROFILER_DESC("python",
-    "[OPTION...] -e EVENT[,EVENT...] [--] script.py [script-args...]",
-    "Process perf events with Python scripts.",
+    "[OPTION...] -e EVENT[,EVENT...] [--] module [args...]",
+    "Process perf events with Python scripts or modules.",
     "",
     "SYNOPSIS",
     "    Convert perf events to PerfEvent objects and process them with custom",
-    "    Python scripts. PerfEvent provides lazy field evaluation for efficiency.",
-    "    Script arguments after script.py are available via sys.argv.",
+    "    Python scripts or modules. PerfEvent provides lazy field evaluation.",
+    "    Arguments after module name are available via sys.argv.",
+    "",
+    "MODULE TYPES",
+    "    Python script       myscript.py or /path/to/myscript.py",
+    "    Cython module       mymodule.cpython-36m-x86_64-linux-gnu.so",
+    "    Module name         mymodule (searched in sys.path and current dir)",
+    "    Shared library      mymodule.so",
     "",
     "SCRIPT SYNTAX",
     "  CALLBACK FUNCTIONS",
