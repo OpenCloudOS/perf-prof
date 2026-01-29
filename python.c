@@ -988,27 +988,36 @@ static PyObject *PerfEvent_str(PerfEventObject *self)
     return str;
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
 
 /* Member definitions for direct access fields */
+/*
+ * Python C API compatibility:
+ * - Python < 3.7: PyMemberDef/PyGetSetDef use char* (non-const)
+ * - Python >= 3.7: these structures use const char*
+ */
+#if PY_VERSION_HEX < 0x03070000
+#define S (char *)
+#else
+#define S
+#endif
+
 static PyMemberDef PerfEvent_members[] = {
-    {"_pid", T_INT, offsetof(PerfEventObject, _pid), READONLY, "Process ID"},
-    {"_tid", T_INT, offsetof(PerfEventObject, _tid), READONLY, "Thread ID"},
-    {"_time", T_ULONGLONG, offsetof(PerfEventObject, _time), READONLY, "Event timestamp (ns)"},
-    {"_cpu", T_INT, offsetof(PerfEventObject, _cpu), READONLY, "CPU number"},
-    {"_period", T_ULONGLONG, offsetof(PerfEventObject, _period), READONLY, "Sample period"},
-    {"common_flags", T_UBYTE, offsetof(PerfEventObject, common_flags), READONLY, "Trace entry common flags"},
-    {"common_preempt_count", T_UBYTE, offsetof(PerfEventObject, common_preempt_count), READONLY, "Trace entry preempt count"},
-    {"common_pid", T_INT, offsetof(PerfEventObject, common_pid), READONLY, "Trace entry common_pid"},
+    {S"_pid", T_INT, offsetof(PerfEventObject, _pid), READONLY, S"Process ID"},
+    {S"_tid", T_INT, offsetof(PerfEventObject, _tid), READONLY, S"Thread ID"},
+    {S"_time", T_ULONGLONG, offsetof(PerfEventObject, _time), READONLY, S"Event timestamp (ns)"},
+    {S"_cpu", T_INT, offsetof(PerfEventObject, _cpu), READONLY, S"CPU number"},
+    {S"_period", T_ULONGLONG, offsetof(PerfEventObject, _period), READONLY, S"Sample period"},
+    {S"common_flags", T_UBYTE, offsetof(PerfEventObject, common_flags), READONLY, S"Trace entry common flags"},
+    {S"common_preempt_count", T_UBYTE, offsetof(PerfEventObject, common_preempt_count), READONLY, S"Trace entry preempt count"},
+    {S"common_pid", T_INT, offsetof(PerfEventObject, common_pid), READONLY, S"Trace entry common_pid"},
     {NULL}
 };
 
 /* Getter/setter definitions for lazy computed fields */
 static PyGetSetDef PerfEvent_getsetters[] = {
-    {"_realtime", (getter)PerfEvent_get_realtime, NULL, "Wall clock time (ns since Unix epoch)", NULL},
-    {"_callchain", (getter)PerfEvent_get_callchain, NULL, "Call stack list", NULL},
-    {"_event", (getter)PerfEvent_get_event, NULL, "Event name (sys:name or sys:alias)", NULL},
+    {S"_realtime", (getter)PerfEvent_get_realtime, NULL, S"Wall clock time (ns since Unix epoch)", NULL},
+    {S"_callchain", (getter)PerfEvent_get_callchain, NULL, S"Call stack list", NULL},
+    {S"_event", (getter)PerfEvent_get_event, NULL, S"Event name (sys:name or sys:alias)", NULL},
     {NULL}
 };
 
@@ -1024,7 +1033,7 @@ static PyMethodDef PerfEvent_methods[] = {
     {NULL}
 };
 
-#pragma GCC diagnostic pop
+#undef S
 
 /* Mapping protocol */
 static PyMappingMethods PerfEvent_as_mapping = {
