@@ -1181,8 +1181,22 @@ static int register_perf_prof_module(void)
  * Supports:
  *   - PyFunction (pure Python functions)
  *   - PyCFunction (C extension functions, including Cython)
- *   - Other callables (lambdas, bound methods, etc.)
- * Excludes module-level special attributes that happen to be callable.
+ *   - Other user-defined callables
+ * Excludes:
+ *   - Module's built-in method wrappers (e.g., module.__init__, also callable)
+ *   - Non-callable attributes
+ *
+ * Why exclude "method-wrapper":
+ *   PyModule_Type defines tp_init slot (module___init__). PyType_Ready() creates
+ *   a wrapper descriptor via PyDescr_NewWrapper(). When accessing module.__init__,
+ *   if no user-defined __init__ exists in module's __dict__, PyObject_GenericGetAttr()
+ *   falls back to the descriptor's tp_descr_get, which calls PyWrapper_New() and
+ *   returns a "method-wrapper" object. Since PyDescr_IsData() returns false for
+ *   wrapper descriptors, user-defined functions in __dict__ take precedence.
+ *
+ *   Other callbacks (__exit__, __sample__, etc.) have no corresponding slots in
+ *   PyModule_Type (see CPython's slotdefs[]), so they either exist in __dict__
+ *   or are not found at all - no "method-wrapper" issue for them.
  */
 static PyObject *get_python_func(PyObject *module, const char *name)
 {
@@ -1192,6 +1206,17 @@ static PyObject *get_python_func(PyObject *module, const char *name)
         if (!PyCallable_Check(func)) {
             Py_DECREF(func);
             func = NULL;
+        } else {
+            /*
+             * Reject method-wrapper objects (e.g., module.__init__ when no
+             * user-defined __init__ exists). This is a wrapper around
+             * PyModule_Type.tp_init, not a user-defined function.
+             */
+            const char *type_name = Py_TYPE(func)->tp_name;
+            if (type_name && strcmp(type_name, "method-wrapper") == 0) {
+                Py_DECREF(func);
+                func = NULL;
+            }
         }
     }
     if (!func)
