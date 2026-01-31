@@ -138,16 +138,23 @@ static PyTypeObject PerfEventIterType;
  * lazy evaluation for computed and event-specific fields.
  *
  * Key design:
- * - event: Dynamically allocated copy of union perf_event (owns memory)
+ * - event: Pointer to union perf_event (borrowed or owned)
  * - tp: Borrowed reference to tracepoint info (valid during sample processing)
  * - dev: Borrowed reference to prof_dev (for accessing key_cache and time conversion)
+ *
+ * Event ownership (determined by rb_node state):
+ * - Initially, event points to the original perf_event (borrowed)
+ * - If Python script keeps a reference (refcnt > 1 after handler returns),
+ *   live_events_insert() copies the event and inserts into rb tree
+ * - RB_EMPTY_NODE(&rb_node) means borrowed; in tree means we own the copy
+ * - This optimization avoids copying for events that are processed and discarded
  */
 typedef struct {
     PyObject_HEAD
     /* Core pointers */
     struct prof_dev *dev;           /* Prof dev - borrowed reference */
     struct tp *tp;                  /* Tracepoint info - borrowed reference */
-    union perf_event *event;        /* Entire perf event - dynamically allocated copy */
+    union perf_event *event;        /* Entire perf event - borrowed or owned copy */
     /* minevtime tracking: node in python_ctx->live_events rb tree */
     struct rb_node rb_node;
 
@@ -365,12 +372,27 @@ static PyObject *perfevent_get_field(PerfEventObject *self, PyObject *field_name
 
 /*
  * Insert PerfEventObject into live_events rb tree (sorted by _time, then by pointer)
+ * This is called when Python script keeps a reference to the event (refcnt > 1).
+ * We copy the event here since the original event buffer will be reused.
  */
 static void live_events_insert(struct python_ctx *ctx, PerfEventObject *obj)
 {
     struct rb_node **p = &ctx->live_events.rb_node;
     struct rb_node *parent = NULL;
     PerfEventObject *entry;
+    size_t event_size;
+    union perf_event *event_copy;
+
+    /* Copy event since original buffer will be reused */
+    event_size = obj->event->header.size;
+    event_copy = malloc(event_size);
+    if (!event_copy) {
+        /* Memory allocation failed, cannot track this event */
+        PyErr_NoMemory();
+        return;
+    }
+    memcpy(event_copy, obj->event, event_size);
+    obj->event = event_copy;
 
     while (*p) {
         parent = *p;
@@ -392,7 +414,8 @@ static void live_events_insert(struct python_ctx *ctx, PerfEventObject *obj)
 }
 
 /*
- * Remove PerfEventObject from live_events rb tree
+ * Remove PerfEventObject from live_events rb tree and free the copied event.
+ * Objects in the tree own their event copy; objects not in tree have borrowed event.
  */
 static void live_events_remove(struct python_ctx *ctx, PerfEventObject *obj)
 {
@@ -400,12 +423,21 @@ static void live_events_remove(struct python_ctx *ctx, PerfEventObject *obj)
         rb_erase(&obj->rb_node, &ctx->live_events);
         RB_CLEAR_NODE(&obj->rb_node);
         ctx->nr_live_events--;
+
+        /* Free the copied event (objects in tree own their event) */
+        free(obj->event);
+        obj->event = NULL;
     }
 }
 
 /*
  * Create a new PerfEventObject (internal use)
  * This is called from python_sample() to create event objects.
+ *
+ * Initially, event points to the original perf_event buffer (borrowed reference).
+ * If the Python script keeps a reference (refcnt > 1 after handler returns),
+ * live_events_insert() will copy the event. This avoids copying for most events
+ * that are processed and immediately discarded.
  */
 static PerfEventObject *PerfEvent_create(struct prof_dev *dev, struct tp *tp,
                                           union perf_event *event)
@@ -415,7 +447,6 @@ static PerfEventObject *PerfEvent_create(struct prof_dev *dev, struct tp *tp,
     struct trace_entry *entry;
     void *raw;
     int raw_size;
-    size_t event_size;
 
     self = PyObject_New(PerfEventObject, &PerfEventType);
     if (!self)
@@ -425,15 +456,8 @@ static PerfEventObject *PerfEvent_create(struct prof_dev *dev, struct tp *tp,
     self->dev = dev;
     self->tp = tp;
 
-    /* Copy entire perf_event (event owns this memory) */
-    event_size = event->header.size;
-    self->event = malloc(event_size);
-    if (!self->event) {
-        Py_DECREF(self);
-        PyErr_NoMemory();
-        return NULL;
-    }
-    memcpy(self->event, event, event_size);
+    /* Initially use borrowed reference to event (no copy) */
+    self->event = event;
 
     /* Extract header fields */
     data = (void *)self->event->sample.array;
@@ -457,7 +481,6 @@ static PerfEventObject *PerfEvent_create(struct prof_dev *dev, struct tp *tp,
     /* Initialize field cache */
     self->field_cache = PyDict_New();
     if (!self->field_cache) {
-        free(self->event);
         Py_DECREF(self);
         return NULL;
     }
@@ -487,16 +510,17 @@ static int PerfEvent_init(PerfEventObject *self, PyObject *args, PyObject *kwds)
 
 /*
  * PerfEvent_dealloc - Destructor
+ *
+ * Event ownership: live_events_remove() handles freeing the copied event
+ * if the object was in the live_events tree. For objects that were never
+ * inserted (owns_event=0), the event pointer is borrowed and must not be freed.
  */
 static void PerfEvent_dealloc(PerfEventObject *self)
 {
     struct python_ctx *ctx = self->dev->private;
 
-    /* Remove from live_events rb tree */
+    /* Remove from live_events rb tree (also frees owned event if any) */
     live_events_remove(ctx, self);
-
-    /* Free dynamically allocated event */
-    free(self->event);
 
     /* Release cached Python objects */
     Py_XDECREF(self->_realtime);
