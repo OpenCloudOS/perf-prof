@@ -29,8 +29,9 @@
 
 struct page_faults_ctx {
     struct callchain_ctx *cc;
-    bool print_ip;
-    bool ip_sym;
+    struct callchain_ctx *print_ip;
+    bool timely_sym;
+    bool sample;
 };
 
 static int monitor_ctx_init(struct prof_dev *dev)
@@ -43,19 +44,17 @@ static int monitor_ctx_init(struct prof_dev *dev)
     tep__ref();
     if (dev->env->callchain) {
         ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-        ctx->print_ip = 0;
         dev->pages *= 2;
-    } else {
-        ctx->cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
-        callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
-        ctx->print_ip = 1;
     }
+    ctx->print_ip = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+    callchain_ctx_config(ctx->print_ip, 0, 1, 1, 0, 0, '\n', '\n');
     return 0;
 }
 
 static void monitor_ctx_exit(struct prof_dev *dev)
 {
     struct page_faults_ctx *ctx = dev->private;
+    callchain_ctx_free(ctx->print_ip);
     callchain_ctx_free(ctx->cc);
     tep__unref();
     free(ctx);
@@ -92,7 +91,7 @@ static int page_faults_init(struct prof_dev *dev)
     prof_dev_env2attr(dev, &attr);
 
     if (!attr.watermark)
-        ctx->ip_sym = 1;
+        ctx->timely_sym = 1;
 
     evsel = perf_evsel__new(&attr);
     if (!evsel) {
@@ -168,7 +167,7 @@ static void print_regs_user(struct sample_regs_user *regs_user, u64 unused)
 #endif
 }
 
-static void page_faults_sample(struct prof_dev *dev, union perf_event *event, int instance)
+static void page_faults_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
 {
     struct page_faults_ctx *ctx = dev->private;
     struct sample_type_header *data = (void *)event->sample.array;
@@ -178,25 +177,33 @@ static void page_faults_sample(struct prof_dev *dev, union perf_event *event, in
         __u64 ips[2];
     } callchain;
 
-    if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, data->time, stdout);
+
     tep__update_comm(NULL, data->tid_entry.tid);
-    printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016llx%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
-           data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr, ctx->print_ip?" ip ":"\n");
+    printf("%16s %6u [%03d] %llu.%06llu: page-fault: addr %016llx ip ", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+           data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, data->addr);
 
-    if (ctx->print_ip) {
-        if (ctx->ip_sym || data->ip >= START_OF_KERNEL) {
-            callchain.nr = 2;
-            callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
-            callchain.ips[1] = data->ip;
-            print_callchain(ctx->cc, (struct callchain *)&callchain, data->tid_entry.pid);
-        } else
-            printf("%016llx\n", data->ip);
-    }
+    if (data->ip >= START_OF_KERNEL || (ctx->sample && ctx->timely_sym)) {
+        callchain.nr = 2;
+        callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+        callchain.ips[1] = data->ip;
+        print_callchain(ctx->print_ip, (struct callchain *)&callchain, data->tid_entry.pid);
+    } else
+        printf("%016llx\n", data->ip);
 
-    if (dev->env->callchain) {
+    if (dev->env->callchain && !(flags & OMIT_CALLCHAIN)) {
         regs_user = (struct sample_regs_user *)&data->callchain.ips[data->callchain.nr];
         print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid, NULL, (callchain_cbs)print_regs_user, regs_user);
     }
+}
+
+static void page_faults_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct page_faults_ctx *ctx = dev->private;
+    ctx->sample = 1;
+    page_faults_print_event(dev, event, instance, 0);
+    ctx->sample = 0;
 }
 
 static const char *page_faults_desc[] = PROFILER_DESC("page-faults",
@@ -219,6 +226,7 @@ static profiler page_faults = {
     .pages = 2,
     .init = page_faults_init,
     .deinit = page_faults_exit,
+    .print_event = page_faults_print_event,
     .sample = page_faults_sample,
 };
 PROFILER_REGISTER(page_faults)
