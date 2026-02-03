@@ -403,9 +403,8 @@ static void ldlat_loads_interval(struct prof_dev *dev)
     return ;
 }
 
-static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, int instance)
+static void ldlat_loads_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
 {
-    struct env *env = dev->env;
     struct ldlat_ctx *ctx = dev->private;
     struct sample_type_header *data = (void *)event->sample.array;
     struct mem_info mem_info;
@@ -415,21 +414,32 @@ static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, in
         __u64 ips[2];
     } callchain;
 
+    callchain.nr = 2;
+    callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+    callchain.ips[1] = data->ip;
+
+    mem_info.data_src.val = data->data_src;
+    perf_mem__lvl_scnprintf(buf, sizeof(buf), &mem_info);
+
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, data->time, stdout);
+
+    printf("    pid %6u tid %6u [%03d] %llu.%06llu: %s: DATA ADDR %016llx PHYS %016llx latency %6llu cycles %s RIP ",
+            data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
+            data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, dev->prof->name,
+            data->addr, data->phys_addr, data->weight.full, buf);
+    print_callchain(ctx->ccx, (struct callchain *)&callchain, data->tid_entry.pid);
+}
+
+static void ldlat_loads_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct env *env = dev->env;
+    struct ldlat_ctx *ctx = dev->private;
+    struct sample_type_header *data = (void *)event->sample.array;
+
     if (env->verbose || (env->greater_than &&
-        data->weight.full > env->greater_than)) {
-        callchain.nr = 2;
-        callchain.ips[0] = data->ip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
-        callchain.ips[1] = data->ip;
-
-        mem_info.data_src.val = data->data_src;
-        perf_mem__lvl_scnprintf(buf, sizeof(buf), &mem_info);
-
-        printf("    pid %6u tid %6u [%03d] %llu.%06llu: %s: DATA ADDR %016llx PHYS %016llx latency %6llu cycles %s RIP ",
-                data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
-                data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, dev->prof->name,
-                data->addr, data->phys_addr, data->weight.full, buf);
-        print_callchain(ctx->ccx, (struct callchain *)&callchain, data->tid_entry.pid);
-    }
+        data->weight.full > env->greater_than))
+        ldlat_loads_print_event(dev, event, instance, 0);
 
     latency_dist_input(ctx->lat_dist, instance, data->data_src, data->weight.full, env->greater_than);
 }
@@ -458,6 +468,7 @@ static profiler ldlat_loads = {
     .init = ldlat_loads_init,
     .deinit = ldlat_loads_exit,
     .interval = ldlat_loads_interval,
+    .print_event = ldlat_loads_print_event,
     .sample = ldlat_loads_sample,
 };
 PROFILER_REGISTER(ldlat_loads);
@@ -525,6 +536,7 @@ static profiler ldlat_stores = {
     .init = ldlat_stores_init,
     .deinit = ldlat_loads_exit,
     .interval = ldlat_loads_interval,
+    .print_event = ldlat_loads_print_event,
     .sample = ldlat_loads_sample,
 };
 PROFILER_REGISTER(ldlat_stores);
