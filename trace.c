@@ -41,9 +41,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->time = 0;
     ctx->time_str[0] = '\0';
     if (env->callchain || ctx->tp_list->nr_need_stack) {
-        if (!env->flame_graph)
-            ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-        else {
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        if (env->flame_graph) {
             ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
             if (env->interval) {
                 trace_interval(dev);
@@ -66,9 +65,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
     struct trace_ctx *ctx = dev->private;
 
     if (dev->env->callchain || ctx->tp_list->nr_need_stack) {
-        if (!dev->env->flame_graph)
-            callchain_ctx_free(ctx->cc);
-        else {
+        callchain_ctx_free(ctx->cc);
+        if (ctx->flame) {
             flame_graph_output(ctx->flame);
             flame_graph_close(ctx->flame);
         }
@@ -217,31 +215,6 @@ static inline void __print_callchain(struct prof_dev *dev, union perf_event *eve
     }
 }
 
-static inline bool have_callchain(struct prof_dev *dev, union perf_event *event, struct perf_evsel *evsel)
-{
-    struct trace_ctx *ctx = dev->private;
-
-    if (dev->env->callchain)
-        return true;
-
-    if (ctx->tp_list->nr_need_stack == ctx->tp_list->nr_real_tp)
-        return true;
-
-    if (ctx->tp_list->need_stream_id) {
-        struct sample_type_header *data = (void *)event->sample.array;
-        if (!evsel) {
-            evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-            if (!evsel) {
-                fprintf(stderr, "Can't find evsel, please set read_format = PERF_FORMAT_ID\n");
-                exit(1);
-            }
-        }
-        return !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
-    }
-
-    return false;
-}
-
 static long trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct trace_ctx *ctx = dev->private;
@@ -259,11 +232,41 @@ static long trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, i
         if (tp->evsel == evsel) {
             if (!tp->ftrace_filter)
                 return 1;
-            __raw_size(event, &raw, &size, have_callchain(dev, event, evsel));
+            __raw_size(event, &raw, &size, tp->stack);
             return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
         }
     }
     return 0;
+}
+
+static void trace_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    struct trace_ctx *ctx = dev->private;
+    struct sample_type_header *data = (void *)event->sample.array;
+    struct perf_evsel *evsel = NULL;
+    struct tp *tp = NULL;
+    void *raw;
+    int size, i;
+
+    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    for_each_real_tp(ctx->tp_list, tp, i) {
+        if (tp->evsel == evsel) break;
+    }
+    if (i == ctx->tp_list->nr_tp)
+        return;
+
+    if (!(flags & OMIT_TIMESTAMP)) {
+        prof_dev_print_time(dev, data->time, stdout);
+        tp_print_marker(tp);
+    }
+
+    __raw_size(event, &raw, &size, tp->stack);
+    tp_print_event(tp, data->time, data->cpu_entry.cpu, raw, size);
+
+    if (tp->stack && !(flags & OMIT_CALLCHAIN)) {
+        struct sample_type_callchain *c = (void *)event->sample.array;
+        print_callchain_common(ctx->cc, &c->callchain, data->tid_entry.pid);
+    }
 }
 
 static void trace_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -274,7 +277,6 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     struct tp *tp = NULL;
     void *raw;
     int size;
-    bool callchain;
     int i;
 
     if (event->header.type == PERF_RECORD_DEV) {
@@ -290,19 +292,15 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
         }
     }
     if (i == ctx->tp_list->nr_tp)
-        tp = NULL;
+        return;
 
-    callchain = have_callchain(dev, event, evsel);
-    __raw_size(event, &raw, &size, callchain);
-
-    if (dev->print_title) {
-        prof_dev_print_time(dev, data->time, stdout);
-        tp_print_marker(tp);
-    }
+    prof_dev_print_time(dev, data->time, stdout);
+    tp_print_marker(tp);
+    __raw_size(event, &raw, &size, tp->stack);
     tp_print_event(tp, data->time, data->cpu_entry.cpu, raw, size);
     if (tp && tp->exec_prog)
         tp_prog_run(tp, tp->exec_prog, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
-    __print_callchain(dev, event, callchain);
+    __print_callchain(dev, event, tp->stack);
 }
 
 static void trace_interval(struct prof_dev *dev)
@@ -380,6 +378,7 @@ static profiler trace = {
     .deinit = trace_exit,
     .interval = trace_interval,
     .ftrace_filter = trace_ftrace_filter,
+    .print_event = trace_print_event,
     .sample = trace_sample,
 };
 PROFILER_REGISTER(trace);
