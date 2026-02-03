@@ -1839,17 +1839,40 @@ static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *
     }
 }
 
+/*
+ * perf_event_forward - Forward a PERF_RECORD_SAMPLE event to the target device.
+ *
+ * This function handles the complete preprocessing of events before forwarding:
+ *   1. ftrace filter check - filter events in userspace if kernel filter failed
+ *   2. Python stack attachment - attach Python callchain if enabled
+ *   3. Event encapsulation - wrap event into PERF_RECORD_DEV format
+ *   4. Timestamp conversion - convert to target clock domain
+ *   5. enabled_after check - skip events before the enabled time
+ *   6. exit_n accounting - count sampled events and close source device if limit reached
+ *
+ * The target device will use prof_dev_print_event() to print the forwarded event,
+ * and its own exit_n setting controls the target device's lifecycle independently.
+ *
+ * Returns the wrapped PERF_RECORD_DEV event, or NULL if the event should be skipped.
+ */
 static inline union perf_event *
-perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance, bool writable, bool converted)
+perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance, bool *writable, bool *converted)
 {
     union perf_event *py_event = event;
     struct perf_record_dev *event_dev = (void *)dev->forward.event_dev;
     void *data;
     int header_size = offsetof(struct perf_record_dev, event);
 
-    if (unlikely(dev->links.pystack))
-        py_event = pystack_perf_event(dev, event, &writable, header_size);
+    // 1. Userspace ftrace filter: skip events that don't match the filter expression.
+    if (unlikely(dev->ftrace_filter &&
+                 dev->prof->ftrace_filter(dev, event, *instance) <= 0))
+        return NULL;
 
+    // 2. Python stack: attach Python callchain to the event if enabled.
+    if (unlikely(dev->links.pystack))
+        py_event = pystack_perf_event(dev, event, writable, header_size);
+
+    // 3. Event encapsulation: wrap the event into PERF_RECORD_DEV format.
     if (py_event != event) {
         event_dev = (void *)py_event - header_size;
         event = py_event;
@@ -1860,10 +1883,11 @@ perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance,
     event_dev->header.misc = 0;
     event_dev->header.type = PERF_RECORD_DEV;
 
-    if (!converted)
+    // 4. Timestamp conversion: convert to target clock domain.
+    if (!*converted)
         perf_event_convert(dev, &event_dev->event, true);
 
-    // Build perf_event with sample_type, PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_ID | PERF_SAMPLE_CPU.
+    // Extract fields from the sample for quick access by target device.
     data = (void *)event_dev->event.sample.array;
     event_dev->pid = *(u32 *)(data + dev->pos.tid_pos);
     event_dev->tid = *(u32 *)(data + dev->pos.tid_pos + sizeof(u32));
@@ -1874,9 +1898,24 @@ perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance,
     event_dev->instance = *instance;
     event_dev->dev = dev;
 
+    // 5. enabled_after check: skip events before the source device's enabled time.
+    if (unlikely(event_dev->time < dev->time_ctx.enabled_after.clock))
+        return NULL;
+
+    // 6. exit_n accounting: count and close source device if limit reached.
+    //    The target device has its own exit_n for independent lifecycle control.
+    if (unlikely(dev->env->exit_n &&
+                 ++dev->sampled_events > dev->env->exit_n)) {
+        prof_dev_close(dev);
+        return NULL;
+    }
+
     if (dev->forward.ins_reset)
         *instance = 0;
 
+    // Mark event as writable (copied to event_dev buffer) and converted.
+    *writable = 1;
+    *converted = 1;
     return (union perf_event *)event_dev;
 }
 
@@ -1888,16 +1927,9 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     if (dev->forward.target) {
         // Forward upward.
         if (event->header.type == PERF_RECORD_SAMPLE) {
-            struct perf_record_dev *event_dev;
-
-            event = perf_event_forward(dev, event, &instance, writable, converted);
-            converted = true;
-
-            // The source device forwards events after its `enabled_after' to the target device.
-            event_dev = (void *)event;
-            if (unlikely(event_dev->time < dev->time_ctx.enabled_after.clock)) {
+            event = perf_event_forward(dev, event, &instance, &writable, &converted);
+            if (event == NULL)
                 return 0;
-            }
         }
         // Only PERF_RECORD_SAMPLE events are forwarded.
         if (event->header.type == PERF_RECORD_DEV)
