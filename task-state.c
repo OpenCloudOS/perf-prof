@@ -199,9 +199,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
 
     tep__ref();
     if (env->callchain) {
-        if (!env->flame_graph)
-            ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-        else
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        if (env->flame_graph)
             ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
         dev->pages *= 2;
     }
@@ -240,9 +239,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
     perf_thread_map__put(ctx->thread_map);
     rblist__exit(&ctx->task_states);
     if (dev->env->callchain) {
-        if (!dev->env->flame_graph)
-            callchain_ctx_free(ctx->cc);
-        else {
+        callchain_ctx_free(ctx->cc);
+        if (ctx->flame) {
             flame_graph_output(ctx->flame);
             flame_graph_close(ctx->flame);
         }
@@ -684,14 +682,14 @@ static inline void __print_callchain(struct prof_dev *dev, union perf_event *eve
         }
     }
 }
-static void task_state_print_event(struct prof_dev *dev, union perf_event *event)
+static void print_event(struct prof_dev *dev, union perf_event *event)
 {
     struct sample_type_header *data = (void *)event->sample.array;
     void *raw;
     int size;
 
     __raw_size(dev, event, &raw, &size);
-    if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
+    prof_dev_print_time(dev, data->time, stdout);
     tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
     __print_callchain(dev, event);
 }
@@ -731,6 +729,25 @@ static inline int task_state_event_lost(struct prof_dev *dev, union perf_event *
     return 0;
 }
 
+static void task_state_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    struct task_state_ctx *ctx = dev->private;
+    struct sample_type_header *data = (void *)event->sample.array;
+    void *raw;
+    int size;
+
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, data->time, stdout);
+
+    __raw_size(dev, event, &raw, &size);
+    tep__print_event(data->time, data->cpu_entry.cpu, raw, size);
+
+    if (dev->env->callchain && !(flags & OMIT_CALLCHAIN)) {
+        struct sample_type_callchain *c = (void *)event->sample.array;
+        print_callchain_common(ctx->cc, &c->callchain, data->tid_entry.pid);
+    }
+}
+
 static void task_state_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct env *env = dev->env;
@@ -749,14 +766,8 @@ static void task_state_sample(struct prof_dev *dev, union perf_event *event, int
     if (data->time > ctx->recent_time)
         ctx->recent_time = data->time;
 
-    if (unlikely(!prof_dev_is_final(dev))) {
-        // When task-state is used as a forwarding device, it only prints out the event.
-        task_state_print_event(dev, event);
-        goto free_event;
-    }
-
     if (unlikely(env->verbose >= VERBOSE_EVENT))
-        task_state_print_event(dev, event);
+        task_state_print_event(dev, event, instance, 0);
 
     if (unlikely(task_state_event_lost(dev, event) < 0))
         goto free_event;
@@ -846,8 +857,8 @@ parse_next:
                             task->event) {
                             if (dev->print_title) print_time(stdout);
                             printf(" task-state: %d %s RUNDELAY %lu ms\n", task->pid, tep__pid_to_comm(task->pid), delta/NSEC_PER_MSEC);
-                            task_state_print_event(dev, task->event);
-                            task_state_print_event(dev, event);
+                            print_event(dev, task->event);
+                            print_event(dev, event);
                         }
                     }
                 }
@@ -885,8 +896,8 @@ parse_next:
                         task->event) {
                         if (dev->print_title) print_time(stdout);
                         printf(" task-state: %d %s WAIT %lu ms\n", task->pid, tep__pid_to_comm(task->pid), delta/NSEC_PER_MSEC);
-                        task_state_print_event(dev, task->event);
-                        task_state_print_event(dev, event);
+                        print_event(dev, task->event);
+                        print_event(dev, event);
                     }
                 }
             }
@@ -1002,6 +1013,7 @@ struct monitor task_state = {
     .interval = task_state_interval,
     .minevtime = task_state_minevtime,
     .lost = task_state_lost,
+    .print_event = task_state_print_event,
     .sample = task_state_sample,
 };
 MONITOR_REGISTER(task_state);
