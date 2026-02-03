@@ -223,27 +223,52 @@ static void split_lock_interval(struct prof_dev *dev)
     ctx->print = 0;
 }
 
+// in linux/perf_event.h
+// PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ
+struct sample_type_data {
+    __u64   ip;
+    struct {
+        __u32    pid;
+        __u32    tid;
+    }    tid_entry;
+    __u64   time;
+    struct {
+        __u32    cpu;
+        __u32    reserved;
+    }    cpu_entry;
+    __u64 counter; //split-lock次数
+    __u64 enabled;
+    __u64 running;
+    struct callchain callchain;
+};
+
+static void print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags, uint64_t counter)
+{
+    struct split_lock_ctx *ctx = dev->private;
+    struct sample_type_data *data = (void *)event->sample.array;
+
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, data->time, stdout);
+
+    printf("    pid %6d tid %6d [%03d] %llu.%06llu: split-lock: %lu %s ip %08llx\n",
+            data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
+            data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000,
+            counter, miscstr(event->header.misc), data->ip);
+
+    if (dev->env->callchain && !(flags & OMIT_CALLCHAIN))
+        print_callchain_common(ctx->cc, &data->callchain, data->tid_entry.pid);
+}
+
+static void split_lock_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    struct sample_type_data *data = (void *)event->sample.array;
+    print_event(dev, event, instance, flags, data->counter);
+}
+
 static void split_lock_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct split_lock_ctx *ctx = dev->private;
-    // in linux/perf_event.h
-    // PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ,
-    struct sample_type_data {
-        __u64   ip;
-        struct {
-            __u32    pid;
-            __u32    tid;
-        }    tid_entry;
-        __u64   time;
-        struct {
-            __u32    cpu;
-            __u32    reserved;
-        }    cpu_entry;
-        __u64 counter; //split-lock次数
-        __u64 enabled;
-        __u64 running;
-        struct callchain callchain;
-    } *data = (void *)event->sample.array;
+    struct sample_type_data *data = (void *)event->sample.array;
     uint64_t counter = 0;
     struct misc_ip_key key = {2, event->header.misc, data->ip};
 
@@ -254,13 +279,7 @@ static void split_lock_sample(struct prof_dev *dev, union perf_event *event, int
         ctx->p[instance].counter = data->counter;
     }
     if ((dev->env->verbose || dev->env->callchain) && counter) {
-        if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
-        printf("    pid %6d tid %6d [%03d] %llu.%06llu: split-lock: %lu %s ip %08llx\n",
-                data->tid_entry.pid, data->tid_entry.tid, data->cpu_entry.cpu,
-                data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000,
-                counter, miscstr(event->header.misc), data->ip);
-        if (dev->env->callchain)
-            print_callchain_common(ctx->cc, &data->callchain, data->tid_entry.pid);
+        print_event(dev, event, instance, 0, counter);
     }
 }
 
@@ -286,6 +305,7 @@ struct monitor split_lock = {
     .deinit = split_lock_exit,
     .read = split_lock_read,
     .interval = split_lock_interval,
+    .print_event = split_lock_print_event,
     .sample = split_lock_sample,
 };
 MONITOR_REGISTER(split_lock)
