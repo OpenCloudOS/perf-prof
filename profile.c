@@ -29,6 +29,22 @@ struct profile_ctx {
 static void monitor_ctx_exit(struct prof_dev *dev);
 static void profile_interval(struct prof_dev *dev);
 
+// in linux/perf_event.h
+// PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
+struct sample_type_data {
+    struct {
+        __u32    pid;
+        __u32    tid;
+    }    tid_entry;
+    __u64   time;
+    struct {
+        __u32    cpu;
+        __u32    reserved;
+    }    cpu_entry;
+    __u64 counter;
+    struct callchain callchain;
+};
+
 static int monitor_ctx_init(struct prof_dev *dev)
 {
     struct env *env = dev->env;
@@ -54,9 +70,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->time = 0;
     ctx->time_str[0] = '\0';
     if (env->callchain) {
-        if (!env->flame_graph)
-            ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-        else {
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        if (env->flame_graph) {
             ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
             if (env->interval) {
                 ctx->only_flame_graph = (env->flame_graph[0] == '\0');
@@ -91,9 +106,8 @@ static void monitor_ctx_exit(struct prof_dev *dev)
     if (ctx->stat) free(ctx->stat);
     bpf_filter_close(&ctx->filter);
     if (dev->env->callchain) {
-        if (!dev->env->flame_graph)
-            callchain_ctx_free(ctx->cc);
-        else {
+        callchain_ctx_free(ctx->cc);
+        if (ctx->flame) {
             flame_graph_output(ctx->flame);
             flame_graph_close(ctx->flame);
         }
@@ -220,24 +234,31 @@ static int profile_read(struct prof_dev *dev, struct perf_evsel *evsel, struct p
     return 0;
 }
 
+static void profile_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    struct profile_ctx *ctx = dev->private;
+    struct sample_type_data *data = (void *)event->sample.array;
+    uint64_t counter = 0;
+
+    if (data->counter > ctx->counter[instance])
+        counter = data->counter - ctx->counter[instance];
+    ctx->counter[instance] = data->counter;
+
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, data->time, stdout);
+
+    tep__update_comm(NULL, data->tid_entry.tid);
+    printf("%16s %6u [%03d] %llu.%06llu: profile: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+                    data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
+
+    if (dev->env->callchain && !(flags & OMIT_CALLCHAIN))
+        print_callchain_common(ctx->cc, &data->callchain, data->tid_entry.pid);
+}
+
 static void profile_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct profile_ctx *ctx = dev->private;
-    // in linux/perf_event.h
-    // PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU | PERF_SAMPLE_READ | PERF_SAMPLE_CALLCHAIN
-    struct sample_type_data {
-        struct {
-            __u32    pid;
-            __u32    tid;
-        }    tid_entry;
-        __u64   time;
-        struct {
-            __u32    cpu;
-            __u32    reserved;
-        }    cpu_entry;
-        __u64 counter;
-        struct callchain callchain;
-    } *data = (void *)event->sample.array;
+    struct sample_type_data *data = (void *)event->sample.array;
     uint64_t counter = 0;
     int print = 1;
 
@@ -261,7 +282,7 @@ static void profile_sample(struct prof_dev *dev, union perf_event *event, int in
 
     if (print) {
         if (!ctx->only_flame_graph) {
-            if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
+            prof_dev_print_time(dev, data->time, stdout);
             tep__update_comm(NULL, data->tid_entry.tid);
             printf("%16s %6u [%03d] %llu.%06llu: profile: %lu cpu-cycles\n", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
                             data->cpu_entry.cpu, data->time / NSEC_PER_SEC, (data->time % NSEC_PER_SEC)/1000, counter);
@@ -331,6 +352,7 @@ struct monitor profile = {
     .filter = profile_filter,
     .deinit = profile_exit,
     .interval = profile_interval,
+    .print_event = profile_print_event,
     .sample = profile_sample,
 };
 PROFILER_REGISTER(profile);
