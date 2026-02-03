@@ -73,10 +73,12 @@ struct breakpoint_ctx {
     struct insn_decode_ctxt ctxt[HBP_NUM];
     DECLARE_HASHTABLE(insn_hashmap, INSN_HASHTABLE_BITS);
     struct expr_prog *data_filter;
+    struct callchain_ctx *print_ip;
     struct callchain_ctx *cc;
     struct flame_graph *flame;
-    bool print_ip;
-    bool ip_sym;
+    bool timely_sym;
+    bool print_event;
+    bool sample;
     bool kcore;
 };
 
@@ -124,20 +126,15 @@ static int monitor_ctx_init(struct prof_dev *dev)
         hash_init(ctx->insn_hashmap);
     }
 
-    ctx->print_ip = 1;
     if (env->callchain) {
-        if (!env->flame_graph) {
-            ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
-            ctx->print_ip = 0;
-        } else
+        ctx->cc = callchain_ctx_new(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), stdout);
+        if (env->flame_graph)
             ctx->flame = flame_graph_open(callchain_flags(dev, CALLCHAIN_KERNEL | CALLCHAIN_USER), env->flame_graph);
         dev->pages *= 2;
     }
 
-    if (ctx->print_ip) {
-        ctx->cc = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
-        callchain_ctx_config(ctx->cc, 0, 1, 1, 0, 0, '\n', '\n');
-    }
+    ctx->print_ip = callchain_ctx_new(CALLCHAIN_KERNEL | CALLCHAIN_USER, stdout);
+    callchain_ctx_config(ctx->print_ip, 0, 1, 1, 0, 0, '\n', '\n');
 
     tep__ref();
     return 0;
@@ -164,6 +161,7 @@ static void monitor_ctx_exit(struct prof_dev *dev)
         kcore_unref();
         expr_destroy(ctx->data_filter);
     }
+    callchain_ctx_free(ctx->print_ip);
     callchain_ctx_free(ctx->cc);
     flame_graph_output(ctx->flame);
     flame_graph_close(ctx->flame);
@@ -277,7 +275,7 @@ static int breakpoint_init(struct prof_dev *dev)
     prof_dev_env2attr(dev, &attr);
 
     if (!attr.watermark)
-        ctx->ip_sym = 1;
+        ctx->timely_sym = 1;
 
     for (i = 0; i < HBP_NUM; i++) {
         if (ctx->hwbp[i].address) {
@@ -1191,6 +1189,15 @@ static void x86_decode_insn(struct breakpoint_ctx *bpctx, struct insn_decode_ctx
     node->insn_pos = insn_pos;
     insn_node_add(bpctx->insn_hashmap, node, ip);
 
+    /*
+     * print_event path: set safety to 0 to break continuity.
+     * Non-continuous events cannot maintain accurate ctxt->bytes[] state.
+     * When sample path resumes, non-safe instructions (ADD/SUB/etc) will be
+     * skipped until a safe instruction (MOV/CMPXCHG) re-establishes safety.
+     */
+    if (bpctx->print_event)
+        ctxt->safety = 0;
+
 decode:
     for (i = insn_pos; i < in_len; i++) {
         if (insn_decode(&insn, in + i, in_len - i, mode) < 0)
@@ -1262,12 +1269,14 @@ decode:
         break;
     }
 
-    ctxt->safety = safety;
+    // Only sample path updates safety for continuous event tracking.
+    if (bpctx->sample)
+        ctxt->safety = safety;
 }
 
 #endif
 
-static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int instance)
+static void print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
 {
     struct breakpoint_ctx *ctx = dev->private;
     struct env *env = dev->env;
@@ -1319,21 +1328,21 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
     rip = data->ip;
 #endif
 
-    if (dev->print_title) prof_dev_print_time(dev, data->time, stdout);
-    tep__update_comm(NULL, data->tid_entry.tid);
-    printf("%16s %6u [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s%s", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
-            data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
-            data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr, ctx->print_ip?" ip ":"\n");
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, data->time, stdout);
 
-    if (ctx->print_ip) {
-        if (ctx->ip_sym || rip >= START_OF_KERNEL) {
-            callchain.nr = 2;
-            callchain.ips[0] = rip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
-            callchain.ips[1] = rip;
-            print_callchain(ctx->cc, (struct callchain *)&callchain, data->tid_entry.pid);
-        } else
-            printf("%016lx\n", rip);
-    }
+    tep__update_comm(NULL, data->tid_entry.tid);
+    printf("%16s %6u [%03d] %llu.%06llu: breakpoint: 0x%llx/%d:%s ip ", tep__pid_to_comm(data->tid_entry.tid), data->tid_entry.tid,
+            data->cpu_entry.cpu, data->time/NSEC_PER_SEC, (data->time%NSEC_PER_SEC)/1000,
+            data->addr, ctx->hwbp[i].len, ctx->hwbp[i].typestr);
+
+    if (rip >= START_OF_KERNEL || (ctx->sample && ctx->timely_sym)) {
+        callchain.nr = 2;
+        callchain.ips[0] = rip >= START_OF_KERNEL ? PERF_CONTEXT_KERNEL : PERF_CONTEXT_USER;
+        callchain.ips[1] = rip;
+        print_callchain(ctx->print_ip, (struct callchain *)&callchain, data->tid_entry.pid);
+    } else
+        printf("%016lx\n", rip);
 
     if (ctx->kcore && ctx->hwbp[i].type == HW_BREAKPOINT_W) {
         #if defined(__i386__) || defined(__x86_64__)
@@ -1348,7 +1357,7 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
         // Data write breakpoint,  Exception Class: Trap.
         x86_decode_insn(ctx, &ctx->ctxt[i], rip, regs_intr);
 
-        if (ctx->data_filter) {
+        if (ctx->data_filter && ctx->sample) {
             struct insn_decode_ctxt *ctxt = &ctx->ctxt[i];
             u64 mem_data;
 
@@ -1370,14 +1379,49 @@ static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int
         #endif
     }
 
+    if ((flags & OMIT_CALLCHAIN) && ctx->print_event)
+        return;
+
     if (env->callchain) {
-        if (!env->flame_graph)
+        if (!env->flame_graph || ctx->print_event)
             print_callchain_common_cbs(ctx->cc, &data->callchain, data->tid_entry.pid,
                 env->verbose >= 0 ? (callchain_cbs)print_regs_intr : NULL, NULL, regs_intr);
         else
             flame_graph_add_callchain(ctx->flame, &data->callchain, data->tid_entry.pid, NULL);
     } else if (env->verbose >= 0)
         print_regs_intr(regs_intr, 0);
+}
+
+/*
+ * breakpoint_print_event - Print forwarded breakpoint event.
+ *
+ * For non-continuous forwarded events, set print_event=1 to:
+ * - Break instruction decode safety (ctxt->safety = 0)
+ * - Skip data filtering (requires continuous events)
+ * - Print callchain instead of writing to flame graph
+ */
+static void breakpoint_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    struct breakpoint_ctx *ctx = dev->private;
+    ctx->print_event = 1;
+    ctx->sample = 0;
+    print_event(dev, event, instance, flags);
+}
+
+/*
+ * breakpoint_sample - Process continuous breakpoint sample.
+ *
+ * For continuous local samples, set sample=1 to:
+ * - Maintain instruction decode safety state
+ * - Execute data filtering with --filter option
+ * - Write callchain to flame graph if configured
+ */
+static void breakpoint_sample(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct breakpoint_ctx *ctx = dev->private;
+    ctx->print_event = 0;
+    ctx->sample = 1;
+    print_event(dev, event, instance, 0);
 }
 
 static const char *breakpoint_desc[] = PROFILER_DESC("breakpoint",
@@ -1440,6 +1484,7 @@ static profiler breakpoint = {
     .argc_init = breakpoint_argc_init,
     .init = breakpoint_init,
     .deinit = breakpoint_deinit,
+    .print_event = breakpoint_print_event,
     .sample = breakpoint_sample,
 };
 PROFILER_REGISTER(breakpoint)
