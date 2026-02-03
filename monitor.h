@@ -221,6 +221,11 @@ struct help_ctx {
 
 enum profdev_flush;
 
+enum {
+    OMIT_TIMESTAMP = 1,
+    OMIT_CALLCHAIN = 2,
+};
+
 typedef struct monitor {
     struct monitor *next;
     const char *name;
@@ -283,6 +288,7 @@ typedef struct monitor {
     //PERF_RECORD_SAMPLE           = 9,
     // userspace ftrace filter: return >0: sample; <=0: drop.
     long (*ftrace_filter)(struct prof_dev *dev, union perf_event *event, int instance);
+    void (*print_event)(struct prof_dev *dev, union perf_event *event, int instance, int flags);
     void (*sample)(struct prof_dev *dev, union perf_event *event, int instance);
 
     //PERF_RECORD_SWITCH           = 14,
@@ -304,7 +310,7 @@ typedef struct monitor {
 
     //PERF_RECORD_TEXT_POKE        = 20,
     void (*text_poke)(struct prof_dev *dev, union perf_event *event, int instance);
-}profiler;
+} profiler;
 
 enum prof_dev_state {
     PROF_DEV_STATE_EXIT      = -2,
@@ -455,7 +461,6 @@ struct prof_dev {
         struct list_head source_list;
         struct list_head link_to_target;
         struct perf_record_dev *event_dev; // PERF_SAMPLE_MAX_SIZE
-        short forwarded_time_pos; // perf_record_dev.time
         bool ins_reset;
     } forward;
     struct performance_evaluation { // env->sampling_limit
@@ -529,6 +534,7 @@ int prof_dev_disable(struct prof_dev *dev);
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target);
 void prof_dev_flush(struct prof_dev *dev, enum profdev_flush how);
 void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp);
+void prof_dev_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags);
 int prof_dev_reopen_output(struct prof_dev *dev);
 
 /*

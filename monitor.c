@@ -2666,14 +2666,25 @@ int prof_dev_disable(struct prof_dev *dev)
     return 0;
 }
 
+/**
+ * prof_dev_forward - Forward events from source device to target device.
+ * @dev: source device
+ * @target: target device
+ *
+ * Events from @dev will be wrapped in PERF_RECORD_DEV and forwarded to @target.
+ *
+ * When order is enabled, events from both @dev and @target are sorted together
+ * in the same heap. Each device extracts timestamps from its own time_pos
+ * independently, so time_pos doesn't need to match between devices. After
+ * sorting, order.c calls perf_event_process_record() which wraps @dev's events
+ * into PERF_RECORD_DEV and delivers them to @target (trace, multi-trace).
+ */
 int prof_dev_forward(struct prof_dev *dev, struct prof_dev *target)
 {
     if (perf_sample_forward_init(dev) == 0) {
-        if (using_order(target) && perf_sample_time_init(target) == 0 &&
-            target->pos.time_pos != dev->forward.forwarded_time_pos) {
-            fprintf(stderr, "%s cannot forward to %s: time_pos is different.\n", dev->prof->name, target->prof->name);
+        if (using_order(target) && perf_sample_time_init(target) < 0)
             return -1;
-        }
+
         dev->forward.event_dev = malloc(PERF_SAMPLE_MAX_SIZE);
         if (dev->forward.event_dev) {
             dev->forward.target = target;
@@ -2945,6 +2956,22 @@ void prof_dev_print_time(struct prof_dev *dev, u64 evtime, FILE *fp)
     result = localtime(&tv.tv_sec);
     strftime(timebuff, sizeof(timebuff), "%Y-%m-%d %H:%M:%S", result);
     fprintf(fp, "%s.%06u ", timebuff, (unsigned int)tv.tv_usec);
+}
+
+void prof_dev_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    if (unlikely(event->header.type == PERF_RECORD_DEV)) {
+        struct perf_record_dev *event_dev = (void *)event;
+        event = &event_dev->event;
+        dev = event_dev->dev;
+        instance = event_dev->instance;
+    }
+
+    if (dev->prof->print_event) {
+        dev->prof->print_event(dev, event, instance, flags);
+    } else {
+        fprintf(stderr, "No print_event() for %s\n", dev->prof->name);
+    }
 }
 
 int prof_dev_reopen_output(struct prof_dev *dev)

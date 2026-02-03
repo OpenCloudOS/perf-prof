@@ -571,8 +571,6 @@ int perf_sample_forward_init(struct prof_dev *dev)
         return -1;
     }
 
-    dev->forward.forwarded_time_pos = sizeof(u32) + sizeof(u32); // PERF_SAMPLE_TID
-
     return 0;
 }
 

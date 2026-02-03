@@ -278,7 +278,7 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     int i;
 
     if (event->header.type == PERF_RECORD_DEV) {
-        perf_event_process_record(dev, event, instance, true, true);
+        prof_dev_print_event(dev, event, instance, 0);
         return;
     }
 

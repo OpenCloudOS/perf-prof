@@ -1067,12 +1067,10 @@ void multi_trace_print_title(union perf_event *event, struct tp *tp, const char 
     }
 
     if (event->header.type == PERF_RECORD_DEV) {
-        struct perf_record_dev *event_dev = (void *)event;
-        perf_event_process_record(dev, event, event_dev->instance, true, true);
+        prof_dev_print_event(dev, event, 0, OMIT_TIMESTAMP);
         return;
     }
 
-    tep__update_comm(NULL, data->h.tid_entry.tid);
     multi_trace_raw_size(event, &raw, &size, tp);
     tp_print_event(tp, data->h.time, data->h.cpu_entry.cpu, raw, size);
 
