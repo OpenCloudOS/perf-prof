@@ -499,13 +499,12 @@ static void hrcount_sample(struct prof_dev *dev, union perf_event *event, int in
             }
             continue;
         }
-        for_each_real_tp(ctx->tp_list, tp, j) {
-            if (tp->evsel == evsel) {
-                counter = data->groups.ctnr[i].value - ins_counter[j];
-                ins_counter[j] = data->groups.ctnr[i].value;
-                count_dist_insert(ctx->count_dist, instance, j, 0, ctx->perins_pos[instance], counter);
-                break;
-            }
+        tp = tp_from_evsel(evsel, ctx->tp_list);
+        if (tp) {
+            j = tp->idx;
+            counter = data->groups.ctnr[i].value - ins_counter[j];
+            ins_counter[j] = data->groups.ctnr[i].value;
+            count_dist_insert(ctx->count_dist, instance, j, 0, ctx->perins_pos[instance], counter);
         }
     }
 
@@ -656,13 +655,12 @@ static int stat_read(struct prof_dev *dev, struct perf_evsel *leader, struct per
             }
             continue;
         }
-        for_each_real_tp(ctx->tp_list, tp, j) {
-            if (tp->evsel == evsel) {
-                counter = groups->ctnr[i].value - ins_counter[j];
-                ins_counter[j] = groups->ctnr[i].value;
-                count_dist_insert(ctx->count_dist, instance, j, 0, ctx->perins_pos[instance], counter);
-                break;
-            }
+        tp = tp_from_evsel(evsel, ctx->tp_list);
+        if (tp) {
+            j = tp->idx;
+            counter = groups->ctnr[i].value - ins_counter[j];
+            ins_counter[j] = groups->ctnr[i].value;
+            count_dist_insert(ctx->count_dist, instance, j, 0, ctx->perins_pos[instance], counter);
         }
     }
 
