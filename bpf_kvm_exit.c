@@ -341,6 +341,23 @@ static void bpf_kvm_exit_deinit(struct prof_dev *dev)
     monitor_ctx_exit(dev);
 }
 
+static void bpf_kvm_exit_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
+{
+    struct kvmexit_ctx *ctx = dev->private;
+    struct kvm_vcpu_event *raw = (void *)event->sample.array + sizeof(u64) + sizeof(u32)/* u32 size; */;
+    u64 *time = (void *)event->sample.array;
+
+    if (!(flags & OMIT_TIMESTAMP))
+        prof_dev_print_time(dev, *time, stdout);
+    printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm_exit: %s lat %lu%s", comm_get(dev, raw->pid),
+        raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
+        find_exit_reason(raw->isa, raw->exit_reason), raw->latency, ctx->oncpu ? " " : "\n");
+    if (ctx->oncpu) {
+        int64_t wait = raw->sched_latency - raw->run_delay;
+        printf("wait %ld rundelay %lu sw %u\n", wait < 0 ? 0 : wait, raw->run_delay, raw->switches);
+    }
+}
+
 static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct kvmexit_ctx *ctx = dev->private;
@@ -354,11 +371,6 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
     s64 delta = raw->latency;
     u64 ins = 0;
     u32 hlt;
-
-    if (unlikely(!prof_dev_is_final(dev))) {
-        // When bpf:kvm_exit is used as a forwarding device, it only output the event.
-        goto print_event;
-    }
 
     if (*time > ctx->recent_time)
         ctx->recent_time = *time;
@@ -395,14 +407,7 @@ static void bpf_kvm_exit_sample(struct prof_dev *dev, union perf_event *event, i
     if (env->greater_than &&
         (raw->exit_reason != hlt ? delta : raw->run_delay) > env->greater_than) {
     print_event:
-        if (dev->print_title) prof_dev_print_time(dev, *time, stdout);
-        printf("%18s %8u    [%03d] %lu.%06lu: bpf:kvm_exit: %s lat %lu%s", comm_get(dev, raw->pid),
-            raw->pid, prof_dev_ins_cpu(dev, instance), *time / NSEC_PER_SEC, (*time % NSEC_PER_SEC)/1000,
-            find_exit_reason(raw->isa, raw->exit_reason), delta, ctx->oncpu ? " " : "\n");
-        if (ctx->oncpu) {
-            int64_t wait = raw->sched_latency - raw->run_delay;
-            printf("wait %ld rundelay %lu sw %u\n", wait < 0 ? 0 : wait, raw->run_delay, raw->switches);
-        }
+        bpf_kvm_exit_print_event(dev, event, instance, 0);
     }
 }
 
@@ -491,6 +496,7 @@ struct monitor bpf_kvm_exit = {
     .filter = bpf_kvm_exit_filter,
     .deinit = bpf_kvm_exit_deinit,
     .interval = bpf_kvm_exit_interval,
+    .print_event = bpf_kvm_exit_print_event,
     .sample = bpf_kvm_exit_sample,
     .print_dev = bpf_kvm_exit_print_dev,
     .sigusr = bpf_kvm_exit_sigusr,
