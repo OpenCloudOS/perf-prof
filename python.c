@@ -2009,6 +2009,34 @@ static void python_lost(struct prof_dev *dev, union perf_event *event,
     python_call_lost(ctx, lost_start, lost_end);
 }
 
+static long python_ftrace_filter(struct prof_dev *dev, union perf_event *event, int instance)
+{
+    struct python_ctx *ctx = dev->private;
+    struct python_sample_type *data = (void *)event->sample.array;
+    struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    struct tp *tp = tp_from_evsel(evsel, ctx->tp_list);
+    void *raw;
+    int size;
+
+    if (!tp) return 0;
+    if (!tp->ftrace_filter)
+        return 1;
+
+    if (tp->stack) {
+        struct callchain *cc = (struct callchain *)&data->raw;
+        struct {
+            __u32 size;
+            __u8 data[0];
+        } *raw_data = (void *)cc->ips + cc->nr * sizeof(__u64);
+        raw = raw_data->data;
+        size = raw_data->size;
+    } else {
+        raw = data->raw.data;
+        size = data->raw.size;
+    }
+    return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
+}
+
 static void python_sample(struct prof_dev *dev, union perf_event *event, int instance)
 {
     struct python_ctx *ctx = dev->private;
@@ -2018,19 +2046,14 @@ static void python_sample(struct prof_dev *dev, union perf_event *event, int ins
     struct python_event_data *ev;
     PerfEventObject *perf_event;
     PyObject *result;
-    int i;
 
     /* Find the matching tp */
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel)
-            break;
-    }
-
-    if (i >= ctx->tp_list->nr_tp)
+    tp = tp_from_evsel(evsel, ctx->tp_list);
+    if (!tp)
         return;
 
-    ev = &ctx->events[i];
+    ev = tp->private;
 
     /* Create PerfEventObject */
     perf_event = PerfEvent_create(dev, tp, event);
@@ -2439,6 +2462,7 @@ static profiler python = {
     .interval = python_interval,
     .minevtime = python_minevtime,
     .lost = python_lost,
+    .ftrace_filter = python_ftrace_filter,
     .sample = python_sample,
 };
 PROFILER_REGISTER(python);
