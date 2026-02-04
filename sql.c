@@ -442,19 +442,14 @@ static long sql_ftrace_filter(struct prof_dev *dev, union perf_event *event, int
 {
     struct sql_ctx *ctx = dev->private;
     struct sql_sample_type *data = (void *)event->sample.array;
-    struct perf_evsel *evsel;
-    struct tp *tp;
-    int i;
+    struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    struct tp *tp = tp_from_evsel(evsel, ctx->tp_list);
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel) {
-            if (!tp->ftrace_filter)
-                return 1;
-            return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, data->raw.data, data->raw.size));
-        }
-    }
-    return 0;
+    if (!tp) return 0;
+    if (!tp->ftrace_filter)
+        return 1;
+    return tp_prog_run(tp, tp->ftrace_filter,
+           GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, data->raw.data, data->raw.size));
 }
 
 static void commit_transaction(struct sql_ctx *ctx, bool new_transaction)
@@ -493,21 +488,18 @@ static void sql_sample(struct prof_dev *dev, union perf_event *event, int instan
     struct sql_sample_type *data = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct tp *tp;
-    int i;
 
     ensure_transaction(ctx);
 
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel) {
-            if (ctx->tp_ctx->sample(ctx->tp_ctx, tp, event) == 0) {
-                ctx->total_inserts++;
-                ctx->pending_inserts++;
-            }
-            if (unlikely(ctx->verify_tp_ctx))
-                ctx->verify_tp_ctx->sample(ctx->verify_tp_ctx, tp, event);
-            break;
+    tp = tp_from_evsel(evsel, ctx->tp_list);
+    if (tp) {
+        if (ctx->tp_ctx->sample(ctx->tp_ctx, tp, event) == 0) {
+            ctx->total_inserts++;
+            ctx->pending_inserts++;
         }
+        if (unlikely(ctx->verify_tp_ctx))
+            ctx->verify_tp_ctx->sample(ctx->verify_tp_ctx, tp, event);
     }
 
     /* Optimized commit strategy: batch size only (no time check for single-threaded) */
