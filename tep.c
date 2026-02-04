@@ -983,6 +983,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         }
 
         tp->id = id;
+        tp->idx = i;
         tp->sys = sys;
         tp->name = name;
         tp->filter = (filter && filter[0]) ? strdup(filter) : NULL;
@@ -1376,7 +1377,26 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr)
     if (tp->cpus)
         perf_evsel__set_own_cpus(evsel, tp->cpus);
 
+    perf_evsel_link_tp(evsel, tp);
+
     return evsel;
+}
+
+struct tp *tp_from_evsel(struct perf_evsel *evsel, struct tp_list *tp_list)
+{
+    /* Fast path: direct access via evsel->external->tp */
+    struct tp *tp = evsel ? perf_evsel_tp(evsel) : NULL;
+    int i;
+
+    if (tp)
+        return tp;
+
+    /* Fallback: iterate tp_list if perf_evsel_link_tp() failed */
+    for_each_real_tp(tp_list, tp, i) {
+        if (tp->evsel == evsel)
+            return tp;
+    }
+    return NULL;
 }
 
 int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list)

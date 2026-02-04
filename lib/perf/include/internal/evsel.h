@@ -46,6 +46,7 @@ struct perf_evsel {
 	u64			*id;
 	u32			 ids;
 	struct perf_evsel	*leader;
+	void			*external;
 	bool			 keep_disable;
 	bool			 init_enabled;
 

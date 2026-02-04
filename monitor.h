@@ -9,6 +9,7 @@
 #include <perf/evsel.h>
 #include <perf/mmap.h>
 #include <perf/event.h>
+#include <internal/evsel.h>
 #include <parse-options.h>
 #include <tep.h>
 #include <timer.h>
@@ -21,6 +22,7 @@
 #include <linux/time64.h>
 #include <linux/refcount.h>
 #include <linux/min_heap.h>
+#include "include/linux/types.h"
 
 /* perf sample has 16 bits size limit */
 #define PERF_SAMPLE_MAX_SIZE (1 << 16)
@@ -677,6 +679,24 @@ void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mm
 union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable);
 int perf_timespec_init(struct prof_dev *dev);
 
+struct perf_evsel_external {
+    struct prof_dev *dev;  // evsel -> dev
+    struct tp *tp;   // evsel -> tp
+};
+
+int perf_evsel_link_tp(struct perf_evsel *evsel, struct tp *tp);
+static inline struct tp *perf_evsel_tp(struct perf_evsel *evsel)
+{
+    struct perf_evsel_external *ext = evsel->external;
+    return ext ? ext->tp : NULL;
+}
+static inline struct prof_dev *perf_evsel_dev(struct perf_evsel *evsel)
+{
+    struct perf_evsel_external *ext = evsel->external;
+    return ext ? ext->dev : NULL;
+}
+int prof_dev_evsel_external_init(struct prof_dev *dev);
+void prof_dev_evsel_external_deinit(struct prof_dev *dev);
 
 //comm.c
 int global_comm_ref(void);

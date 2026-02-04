@@ -35,6 +35,7 @@ struct tp {
         struct prof_dev *source_dev;
     };
     int id; // id > 0: tp:sys; id < 0: profiler;
+    int idx; // index in tp_list
     char *sys;
     char *name;
     char *filter;
@@ -223,6 +224,7 @@ unsigned long tp_get_num(struct tp *tp, struct expr_global *global);
 void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, int size);
 
 struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *attr);
+struct tp *tp_from_evsel(struct perf_evsel *evsel, struct tp_list *tp_list);
 int tp_list_apply_filter(struct prof_dev *dev, struct tp_list *tp_list);
 long tp_list_ftrace_filter(struct prof_dev *dev, struct tp_list *tp_list, struct expr_global *global);
 

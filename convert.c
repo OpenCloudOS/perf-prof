@@ -969,3 +969,55 @@ NULL_e:
 NULL_tidmap:
     return dev->time_ctx.base_evtime > 0 ? 0 : -1;
 }
+
+/*
+ * evsel->external: Fast path for evsel -> tp and evsel -> dev access.
+ *
+ * perf_evsel_link_tp(): Called in tp_evsel_new(), links evsel to tp.
+ * prof_dev_evsel_external_init(): Called after prof->init(), links all evsels to dev.
+ *
+ * Access via: perf_evsel_tp(evsel), perf_evsel_dev(evsel)
+ */
+
+int perf_evsel_link_tp(struct perf_evsel *evsel, struct tp *tp)
+{
+    evsel->external = calloc(1, sizeof(struct perf_evsel_external));
+    if (!evsel->external)
+        return -1;
+    ((struct perf_evsel_external *)evsel->external)->tp = tp;
+    return 0;
+}
+
+int prof_dev_evsel_external_init(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_evsel *evsel;
+    struct perf_evsel_external *ext;
+
+    perf_evlist__for_each_evsel(evlist, evsel) {
+        /* evsel->external may already be allocated by perf_evsel_link_tp() */
+        if (!evsel->external) {
+            evsel->external = calloc(1, sizeof(struct perf_evsel_external));
+            if (!evsel->external) {
+                prof_dev_evsel_external_deinit(dev);
+                return -1;
+            }
+        }
+        ext = evsel->external;
+        ext->dev = dev;
+    }
+    return 0;
+}
+
+void prof_dev_evsel_external_deinit(struct prof_dev *dev)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    struct perf_evsel *evsel;
+
+    perf_evlist__for_each_evsel(evlist, evsel) {
+        if (evsel->external) {
+            free(evsel->external);
+            evsel->external = NULL;
+        }
+    }
+}
