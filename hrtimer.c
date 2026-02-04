@@ -296,7 +296,7 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
     int n = env->event ? ctx->tp_list->nr_real_tp : 0;
     u64 *jcounter = ctx->counters + instance * (n + 1);
     u64 counter, cpu_clock = 0;
-    u64 i, j = 0, k, print = BREAK;
+    u64 i, j = 0, print = BREAK;
     int verbose = env->verbose;
     int header_end = 0;
     struct tp *tp;
@@ -326,9 +326,9 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
             continue;
         }
 
-        if (ctx->tp_list)
-        for_each_real_tp(ctx->tp_list, tp, k) {
-            if (tp->evsel == evsel) {
+        if (ctx->tp_list) {
+            tp = tp_from_evsel(evsel, ctx->tp_list);
+            if (tp) {
                 counter = data->groups.ctnr[i].value - jcounter[j];
                 jcounter[j] = data->groups.ctnr[i].value;
                 ctx->ins_counters[j] = counter;
@@ -340,7 +340,6 @@ static void hrtimer_sample(struct prof_dev *dev, union perf_event *event, int in
                     }
                     printf("  %s:%s %lu\n", tp->sys, tp->name, counter);
                 }
-                break;
             }
         }
     }
