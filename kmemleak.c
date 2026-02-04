@@ -654,31 +654,13 @@ static void report_kmemleak(struct prof_dev *dev)
     ctx->alloc.node_delete = perf_event_backup_node_delete;
 }
 
-static bool config_is_alloc(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
+static inline bool config_is_alloc(struct kmemleak_ctx *ctx, struct tp *p)
 {
     struct tp *tp;
     int i;
-
-    for_each_real_tp(ctx->tp_alloc, tp, i) {
-        if (tp->id == config) {
-            *p = tp;
+    for_each_real_tp(ctx->tp_alloc, tp, i)
+        if (tp == p)
             return true;
-        }
-    }
-    return false;
-}
-
-static bool config_is_free(struct kmemleak_ctx *ctx, __u64 config, struct tp **p)
-{
-    struct tp *tp;
-    int i;
-
-    for_each_real_tp(ctx->tp_free, tp, i) {
-        if (tp->id == config) {
-            *p = tp;
-            return true;
-        }
-    }
     return false;
 }
 
@@ -718,7 +700,8 @@ static long kmemleak_ftrace_filter(struct prof_dev *dev, union perf_event *event
     struct kmemleak_ctx *ctx = dev->private;
     struct sample_type_header *data = (void *)event->sample.array;
     struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    bool callchain = !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
+    struct tp *tp = evsel ? perf_evsel_tp(evsel) : NULL;
+    bool callchain = tp ? tp->stack : !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
     void *raw;
     int size;
     long err;
@@ -726,6 +709,11 @@ static long kmemleak_ftrace_filter(struct prof_dev *dev, union perf_event *event
 
     __raw_size(event, callchain, &raw, &size);
     glo = GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size);
+    if (tp) {
+        if (!tp->ftrace_filter)
+            return 1;
+        return tp_prog_run(tp, tp->ftrace_filter, glo);
+    }
     err = tp_list_ftrace_filter(dev, ctx->tp_alloc, glo);
     if (err < 0)
         err = tp_list_ftrace_filter(dev, ctx->tp_free, glo);
@@ -744,7 +732,6 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
     struct tp *tp = NULL;
     void *ptr = NULL;
     unsigned long long bytes_alloc = 0;
-    __u64 config;
     int rc;
     void *raw;
     int size;
@@ -760,13 +747,14 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
      * To get the raw location, you must know whether there is a callchain in perf_event.
      */
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    if (!evsel)
-        return;
+    tp = tp_from_evsel(evsel, ctx->tp_alloc);
+    if (!tp) {
+        tp = tp_from_evsel(evsel, ctx->tp_free);
+        if (!tp)
+            return;
+    }
 
-    config = perf_evsel__attr(evsel)->config;
-    is_alloc = config_is_alloc(ctx, config, &tp);
-    if (!is_alloc)
-        config_is_free(ctx, config, &tp);
+    is_alloc = config_is_alloc(ctx, tp);
 
     callchain = (is_alloc && dev->env->callchain) || tp->stack;
     __raw_size(event, callchain, &raw, &size);
