@@ -1606,23 +1606,24 @@ static long multi_trace_ftrace_filter(struct prof_dev *dev, union perf_event *ev
 {
     struct multi_trace_ctx *ctx = dev->private;
     struct multi_trace_type_header *hdr = (void *)event->sample.array;
-    struct perf_evsel *evsel;
-    struct tp *tp;
+    struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
+    struct tp *tp = evsel ? perf_evsel_tp(evsel) : NULL;
     int i, j;
     void *raw;
     int size;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
-    for (i = 0; i < ctx->nr_list; i++) {
-        for_each_real_tp(ctx->tp_list[i], tp, j) {
-            if (tp->evsel == evsel) {
-                if (!tp->ftrace_filter)
-                    return 1;
-                multi_trace_raw_size(event, &raw, &size, tp);
-                return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
-            }
-        }
+    if (tp) {
+    found:
+        if (!tp->ftrace_filter)
+            return 1;
+        multi_trace_raw_size(event, &raw, &size, tp);
+        return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
     }
+
+    for (i = 0; i < ctx->nr_list; i++)
+        for_each_real_tp(ctx->tp_list[i], tp, j)
+            if (tp->evsel == evsel)
+                goto found;
     return 0;
 }
 
