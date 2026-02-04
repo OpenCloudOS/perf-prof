@@ -284,14 +284,15 @@ static long num_dist_ftrace_filter(struct prof_dev *dev, union perf_event *event
     struct num_dist_ctx *ctx = dev->private;
     struct sample_type_header *hdr = (void *)event->sample.array;
     struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
-    bool callchain = !!(perf_evsel__attr(evsel)->sample_type & PERF_SAMPLE_CALLCHAIN);
+    struct tp *tp = tp_from_evsel(evsel, ctx->tp_list);
     void *raw;
     int size;
-    struct expr_global *glo;
 
-    __raw_size(event, &raw, &size, callchain);
-    glo = GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size);
-    return tp_list_ftrace_filter(dev, ctx->tp_list, glo);
+    if (!tp) return 0;
+    if (!tp->ftrace_filter)
+        return 1;
+    __raw_size(event, &raw, &size, tp->stack);
+    return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
 }
 
 static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int instance)
@@ -301,32 +302,21 @@ static void num_dist_sample(struct prof_dev *dev, union perf_event *event, int i
     struct sample_type_header *hdr = (void *)event->sample.array;
     struct perf_evsel *evsel;
     struct tp *tp;
-    bool callchain;
-    int i;
     void *raw;
     int size;
     __u64 delta;
 
     evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
-    if (!evsel)
+    tp = tp_from_evsel(evsel, ctx->tp_list);
+    if (!tp)
         return;
 
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel)
-            break;
-    }
-    if (i == ctx->nr_points)
-        return ;
-
-    tp = &ctx->tp_list->tp[i];
-    callchain = tp->stack || env->callchain;
-    __raw_size(event, &raw, &size, callchain);
-
+    __raw_size(event, &raw, &size, tp->stack || env->callchain);
     delta = tp_get_num(tp, GLOBAL(hdr->cpu_entry.cpu, hdr->tid_entry.pid, raw, size));
-    latency_dist_input(ctx->dist, env->perins?instance:0, i, delta, env->greater_than);
+    latency_dist_input(ctx->dist, env->perins?instance:0, tp->idx, delta, env->greater_than);
 
     if (env->heatmap)
-        heatmap_write(ctx->heatmaps[i], hdr->time, delta);
+        heatmap_write(ctx->heatmaps[tp->idx], hdr->time, delta);
 
     if ((env->greater_than && delta > env->greater_than) ||
         env->verbose >= VERBOSE_EVENT) {
