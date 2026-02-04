@@ -219,21 +219,16 @@ static long trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, i
 {
     struct trace_ctx *ctx = dev->private;
     struct sample_type_header *data = (void *)event->sample.array;
-    struct perf_evsel *evsel;
-    struct tp *tp;
+    struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
+    struct tp *tp = tp_from_evsel(evsel, ctx->tp_list);
     void *raw;
-    int size, i;
+    int size;
 
-    evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel) {
-            if (!tp->ftrace_filter)
-                return 1;
-            __raw_size(event, &raw, &size, tp->stack);
-            return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
-        }
-    }
-    return 0;
+    if (!tp) return 0;
+    if (!tp->ftrace_filter)
+        return 1;
+    __raw_size(event, &raw, &size, tp->stack);
+    return tp_prog_run(tp, tp->ftrace_filter, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
 }
 
 static void trace_print_event(struct prof_dev *dev, union perf_event *event, int instance, int flags)
@@ -243,13 +238,11 @@ static void trace_print_event(struct prof_dev *dev, union perf_event *event, int
     struct perf_evsel *evsel = NULL;
     struct tp *tp = NULL;
     void *raw;
-    int size, i;
+    int size;
 
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel) break;
-    }
-    if (i == ctx->tp_list->nr_tp)
+    tp = tp_from_evsel(evsel, ctx->tp_list);
+    if (!tp)
         return;
 
     if (!(flags & OMIT_TIMESTAMP)) {
@@ -274,7 +267,6 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     struct tp *tp = NULL;
     void *raw;
     int size;
-    int i;
 
     if (event->header.type == PERF_RECORD_DEV) {
         prof_dev_print_event(dev, event, instance, 0);
@@ -282,20 +274,15 @@ static void trace_sample(struct prof_dev *dev, union perf_event *event, int inst
     }
 
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
-    for_each_real_tp(ctx->tp_list, tp, i) {
-        if (tp->evsel == evsel) {
-            if (tp_broadcast_event(tp, event)) return;
-            else break;
-        }
-    }
-    if (i == ctx->tp_list->nr_tp)
+    tp = tp_from_evsel(evsel, ctx->tp_list);
+    if (!tp || tp_broadcast_event(tp, event))
         return;
 
     prof_dev_print_time(dev, data->time, stdout);
     tp_print_marker(tp);
     __raw_size(event, &raw, &size, tp->stack);
     tp_print_event(tp, data->time, data->cpu_entry.cpu, raw, size);
-    if (tp && tp->exec_prog)
+    if (tp->exec_prog)
         tp_prog_run(tp, tp->exec_prog, GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size));
     __print_callchain(dev, event, tp->stack);
 }
@@ -358,7 +345,7 @@ static const char *trace_desc[] = PROFILER_DESC("trace",
     "EXAMPLES",
     "    "PROGRAME" trace -e sched:sched_wakeup -C 0 -g",
     "    "PROGRAME" trace -e sched:sched_wakeup -g --flame-graph wakeup",
-    "    "PROGRAME" trace -e 'oom:mark_victim//exec=system(\"/proc/%d/stat\", pid)/'",
+    "    "PROGRAME" trace -e 'oom:mark_victim//exec=system(\"cat /proc/%d/stat\", pid)/'",
     "    "PROGRAME" trace -e sched:sched_wakeup,sched:sched_switch --ptrace -- ls");
 static const char *trace_argv[] = PROFILER_ARGV("trace",
     PROFILER_ARGV_OPTION, "inherit",
