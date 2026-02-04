@@ -1612,9 +1612,6 @@ static long multi_trace_ftrace_filter(struct prof_dev *dev, union perf_event *ev
     void *raw;
     int size;
 
-    if (event->header.type == PERF_RECORD_DEV)
-        return 1;
-
     evsel = perf_evlist__id_to_evsel(dev->evlist, hdr->id, NULL);
     for (i = 0; i < ctx->nr_list; i++) {
         for_each_real_tp(ctx->tp_list[i], tp, j) {

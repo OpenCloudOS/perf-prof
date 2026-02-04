@@ -224,9 +224,6 @@ static long trace_ftrace_filter(struct prof_dev *dev, union perf_event *event, i
     void *raw;
     int size, i;
 
-    if (event->header.type == PERF_RECORD_DEV)
-        return 1;
-
     evsel = perf_evlist__id_to_evsel(dev->evlist, data->id, NULL);
     for_each_real_tp(ctx->tp_list, tp, i) {
         if (tp->evsel == evsel) {
