@@ -1042,7 +1042,7 @@ static void task_state_matcher(struct tp *tp, void *raw, int size, struct matche
 
     if (event->header.type == PERF_RECORD_DEV) {
         struct perf_record_dev *event_dev = (void *)event;
-        event = &event_dev->event;
+        event = event_dev->event;
         dev = event_dev->dev;
     } else
         dev = tp->source_dev;

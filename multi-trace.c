@@ -152,7 +152,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
     } else {
         const struct timeline_node *e = new_entry;
         union perf_event *event = e->event;
-        union perf_event *new_event = memdup(event, event->header.size);
+        union perf_event *new_event = perf_event_dup(event);
         struct timeline_node *b = malloc(sizeof(*b));
         if (b && new_event) {
             b->time = e->time;
@@ -166,7 +166,7 @@ static struct rb_node *perf_event_backup_node_new(struct rblist *rlist, const vo
             b->maybe_unpaired = 0;
             b->ins = e->ins;
             b->seq = e->seq;
-            b->event = perf_event_get(new_event);
+            b->event = new_event;
             RB_CLEAR_NODE(&b->timeline_node);
             RB_CLEAR_NODE(&b->key_node);
             INIT_LIST_HEAD(&b->needed);
@@ -200,7 +200,6 @@ static void perf_event_backup_node_delete(struct rblist *rblist, struct rb_node 
         list_del(&b->needed);
         ctx->backup_stat.delete ++;
         ctx->backup_stat.mem_bytes -= b->event->header.size;
-        perf_event_put(b->event);
         free(b->event);
         free(b);
     }
@@ -235,7 +234,7 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
     struct multi_trace_ctx *ctx = container_of(rlist, struct multi_trace_ctx, timeline);
     const struct timeline_node *e = new_entry;
     union perf_event *event = e->event;
-    union perf_event *new_event = memdup(event, event->header.size);
+    union perf_event *new_event = perf_event_dup(event);
     struct timeline_node *b = malloc(sizeof(*b));
     if (b && new_event) {
         b->time = e->time;
@@ -249,7 +248,7 @@ static struct rb_node *timeline_node_new(struct rblist *rlist, const void *new_e
         b->maybe_unpaired = 0;
         b->ins = e->ins;
         b->seq = e->seq;
-        b->event = perf_event_get(new_event);
+        b->event = new_event;
         RB_CLEAR_NODE(&b->timeline_node);
         RB_CLEAR_NODE(&b->key_node);
         INIT_LIST_HEAD(&b->pending);
@@ -293,7 +292,6 @@ static void timeline_node_delete(struct rblist *rblist, struct rb_node *rb_node)
         ctx->tl_stat.unneeded --;
         ctx->tl_stat.unneeded_bytes -= b->event->header.size;
     }
-    perf_event_put(b->event);
     free(b->event);
     free(b);
 }

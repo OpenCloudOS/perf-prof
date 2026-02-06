@@ -143,6 +143,23 @@ struct perf_record_tp {
     char str[];
 };
 
+/*
+ * perf_record_dev - Encapsulates events from source device for forwarding
+ *
+ * Used by perf_event_forward() to wrap PERF_RECORD_SAMPLE events from a source
+ * device (profiler as event source) before forwarding to the target device
+ * (e.g., multi-trace).
+ *
+ * The @event pointer references the original event without copying by default.
+ * Deep copy occurs only when:
+ *   1. Timestamp conversion is needed (dev->convert.need_conv)
+ *   2. Python callchain is attached (pystack)
+ *   3. Event is stored for later processing (via perf_event_dup)
+ *
+ * The @dev pointer is safe to access during event processing because tep's
+ * refcount mechanism (prof_dev_use/prof_dev_unuse) guarantees source_dev
+ * is released only after target device's deinit completes.
+ */
 struct perf_record_dev {
     struct perf_event_header header;
 
@@ -152,8 +169,8 @@ struct perf_record_dev {
     u64 time;
     u64 id;
     u32 cpu, instance;
-    struct prof_dev *dev;
-    union perf_event event;
+    struct prof_dev *dev;   /* source device, valid during target's lifetime */
+    union perf_event *event; /* points to original or deep-copied event */
 };
 
 struct perf_record_order_time {

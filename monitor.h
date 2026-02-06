@@ -566,21 +566,44 @@ static inline bool prof_dev_enabled(struct prof_dev *dev)
 {
     return dev->state == PROF_DEV_STATE_ACTIVE;
 }
-static inline union perf_event *perf_event_get(union perf_event *event)
-{
-    if (event->header.type == PERF_RECORD_DEV) {
-        struct perf_record_dev *event_dev = (void *)event;
-        prof_dev_get(event_dev->dev);
-    }
-    return event;
-}
 
-static inline void perf_event_put(union perf_event *event)
+/**
+ * perf_event_dup - deep copy a perf event
+ * @event: the event to duplicate
+ *
+ * For PERF_RECORD_DEV events, this creates a self-contained copy where
+ * event_dev->event points to the embedded data (event_dev + 1), rather than
+ * external memory.
+ *
+ * The duplicated event is independent of the source device and can be safely
+ * stored and freed later without holding source device reference.
+ *
+ * Note: The duplicated event retains event_dev->dev pointer to the source
+ * device. Callers must ensure all duplicated events are freed before the
+ * source device is released. The source device's release is controlled by
+ * prof_dev_unuse() in tp_list_free(), which is called in profiler's deinit().
+ * Profilers must free all duplicated events before tp_list_free() is called.
+ *
+ * Returns: newly allocated event, or NULL on failure.
+ */
+static inline union perf_event *perf_event_dup(union perf_event *event)
 {
-    if (event->header.type == PERF_RECORD_DEV) {
+    if (unlikely(event->header.type == PERF_RECORD_DEV)) {
         struct perf_record_dev *event_dev = (void *)event;
-        prof_dev_put(event_dev->dev);
+        /* event not yet copied to event_dev+1, need deep copy */
+        if (likely((void *)event_dev->event != (void *)(event_dev + 1))) {
+            union perf_event *new_event = malloc(sizeof(*event_dev) + event_dev->event->header.size);
+            if (new_event) {
+                memcpy(new_event, event_dev, sizeof(*event_dev));
+                event_dev = (void *)new_event;
+                memcpy((void *)(event_dev + 1), event_dev->event, event_dev->event->header.size);
+                event_dev->event = (void *)(event_dev + 1);
+            }
+            return new_event;
+        }
+        /* event already copied, just memdup the whole thing */
     }
+    return memdup(event, event->header.size);
 }
 
 static inline const char *prof_dev_state(struct prof_dev *dev)

@@ -1858,10 +1858,10 @@ static void print_context_switch_cpu_fn(struct prof_dev *dev, union perf_event *
 static inline union perf_event *
 perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance, bool *writable, bool *converted)
 {
-    union perf_event *py_event = event;
     struct perf_record_dev *event_dev = (void *)dev->forward.event_dev;
     void *data;
-    int header_size = offsetof(struct perf_record_dev, event);
+    int header_size = sizeof(struct perf_record_dev);
+    bool add_pystack = false;
 
     // 1. Userspace ftrace filter: skip events that don't match the filter expression.
     if (unlikely(dev->ftrace_filter &&
@@ -1869,34 +1869,42 @@ perf_event_forward(struct prof_dev *dev, union perf_event *event, int *instance,
         return NULL;
 
     // 2. Python stack: attach Python callchain to the event if enabled.
-    if (unlikely(dev->links.pystack))
-        py_event = pystack_perf_event(dev, event, writable, header_size);
+    if (unlikely(dev->links.pystack)) {
+        union perf_event *py_event = pystack_perf_event(dev, event, writable, header_size);
+        if (py_event != event) {
+            event_dev = (void *)py_event - header_size;
+            event = py_event;
+            add_pystack = true;
+        }
+    }
 
     // 3. Event encapsulation: wrap the event into PERF_RECORD_DEV format.
-    if (py_event != event) {
-        event_dev = (void *)py_event - header_size;
-        event = py_event;
-    } else
-        memcpy(&event_dev->event, event, event->header.size);
-
     event_dev->header.size = header_size + event->header.size;
     event_dev->header.misc = 0;
     event_dev->header.type = PERF_RECORD_DEV;
 
-    // 4. Timestamp conversion: convert to target clock domain.
-    if (!*converted)
-        perf_event_convert(dev, &event_dev->event, true);
-
     // Extract fields from the sample for quick access by target device.
-    data = (void *)event_dev->event.sample.array;
+    data = (void *)event->sample.array;
     event_dev->pid = *(u32 *)(data + dev->pos.tid_pos);
     event_dev->tid = *(u32 *)(data + dev->pos.tid_pos + sizeof(u32));
-    event_dev->time = *(u64 *)(data + dev->pos.time_pos);
     if (dev->pos.id_pos >= 0)
         event_dev->id = *(u64 *)(data + dev->pos.id_pos);
     event_dev->cpu = dev->pos.cpu_pos >= 0 ? *(u32 *)(data + dev->pos.cpu_pos) : perf_cpu_map__cpu(dev->cpus, *instance);
     event_dev->instance = *instance;
     event_dev->dev = dev;
+    event_dev->event = event;
+
+    // 4. Timestamp conversion: convert to target clock domain.
+    if (unlikely(dev->convert.need_conv) && !*converted) {
+        if (!add_pystack) {
+            event_dev->event = (void *)(event_dev + 1);
+            memcpy(event_dev->event, event, event->header.size);
+        }
+        perf_event_convert(dev, event_dev->event, true);
+        // Read time from converted event
+        data = (void *)event_dev->event->sample.array;
+    }
+    event_dev->time = *(u64 *)(data + dev->pos.time_pos);
 
     // 5. enabled_after check: skip events before the source device's enabled time.
     if (unlikely(event_dev->time < dev->time_ctx.enabled_after.clock))
@@ -1937,7 +1945,7 @@ int perf_event_process_record(struct prof_dev *dev, union perf_event *event, int
     } else if (event->header.type == PERF_RECORD_DEV) {
         // Return down.
         struct perf_record_dev *event_dev = (void *)event;
-        event = &event_dev->event;
+        event = event_dev->event;
         dev = event_dev->dev;
         instance = event_dev->instance;
         converted = true;
@@ -3000,7 +3008,7 @@ void prof_dev_print_event(struct prof_dev *dev, union perf_event *event, int ins
 {
     if (unlikely(event->header.type == PERF_RECORD_DEV)) {
         struct perf_record_dev *event_dev = (void *)event;
-        event = &event_dev->event;
+        event = event_dev->event;
         dev = event_dev->dev;
         instance = event_dev->instance;
     }
