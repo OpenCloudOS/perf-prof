@@ -819,6 +819,7 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             tp->source_dev = prof_dev_open_cpu_thread_map(prof, env, dev->cpus, dev->threads, dev);
             if (!tp->source_dev)
                 goto err_out;
+            prof_dev_use(tp->source_dev);
             name = sys;
             sys = NULL;
         } else { // sys:name/filter/
@@ -1051,9 +1052,8 @@ void tp_list_free(struct tp_list *tp_list)
         return ;
     for (i = 0; i < tp_list->nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
-        // Closed within prof_dev_close().
-        //if (tp_is_dev(tp) && tp->source_dev)
-        //    prof_dev_close(tp->source_dev);
+        if (tp_is_dev(tp) && tp->source_dev)
+            prof_dev_unuse(tp->source_dev);
         if (tp->filter)
             free(tp->filter);
         if (tp->ftrace_filter)
