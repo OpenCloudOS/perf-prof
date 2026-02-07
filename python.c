@@ -72,6 +72,7 @@ struct python_key_cache {
     PyObject *key_cpu;              /* "_cpu" */
     PyObject *key_period;           /* "_period" */
     /* Common trace_entry fields */
+    PyObject *key_common_type;      /* "common_type" */
     PyObject *key_common_flags;     /* "common_flags" */
     PyObject *key_common_preempt_count; /* "common_preempt_count" */
     PyObject *key_common_pid;       /* "common_pid" */
@@ -212,12 +213,12 @@ static inline void perfevent_get_raw(PerfEventObject *self, void **raw, int *raw
 
 /*
  * Common field names for tracepoint events.
- * Tracepoint events have: _pid,_tid,_time,_cpu,_period,common_flags,common_preempt_count,
- *                         common_pid,_realtime,_callchain,_event + tep fields
+ * Tracepoint events have: _pid,_tid,_time,_cpu,_period,common_type,common_flags,
+ *                         common_preempt_count,common_pid,_realtime,_callchain,_event + tep fields
  */
 static const char *tp_common_field_names[] = {
     "_pid", "_tid", "_time", "_cpu", "_period",
-    "common_flags", "common_preempt_count", "common_pid",
+    "common_type", "common_flags", "common_preempt_count", "common_pid",
     "_realtime", "_callchain", "_event",
     NULL
 };
@@ -322,8 +323,8 @@ static PyObject *perfevent_get_all_field_names(PerfEventObject *self)
 
     /*
      * Field layout:
-     * - Tracepoint events: _pid,_tid,_time,_cpu,_period,common_flags,common_preempt_count,
-     *                      common_pid,_realtime,_callchain,_event + tep fields
+     * - Tracepoint events: _pid,_tid,_time,_cpu,_period,common_type,common_flags,
+     *                      common_preempt_count,common_pid,_realtime,_callchain,_event + tep fields
      * - Profiler events:   _pid,_tid,_time,_cpu,_realtime,_event + member_cache fields
      */
     APPEND_KEY(key_pid);
@@ -357,6 +358,7 @@ static PyObject *perfevent_get_all_field_names(PerfEventObject *self)
     } else {
         /* Tracepoint event: full field set */
         APPEND_KEY(key_period);
+        APPEND_KEY(key_common_type);
         APPEND_KEY(key_common_flags);
         APPEND_KEY(key_common_preempt_count);
         APPEND_KEY(key_common_pid);
@@ -824,8 +826,8 @@ static PyObject *PerfEvent_getattro(PerfEventObject *self, PyObject *name)
      * Python interns attribute names, so pointer comparison works
      *
      * Field layout:
-     * - Tracepoint: _pid,_tid,_time,_cpu,_period,common_flags,common_preempt_count,
-     *               common_pid,_realtime,_callchain,_event + tep fields
+     * - Tracepoint: _pid,_tid,_time,_cpu,_period,common_type,common_flags,
+     *               common_preempt_count,common_pid,_realtime,_callchain,_event + tep fields
      * - Profiler:   _pid,_tid,_time,_cpu,_realtime,_event + member_cache fields
      */
 
@@ -860,6 +862,10 @@ static PyObject *PerfEvent_getattro(PerfEventObject *self, PyObject *name)
         if (name == kc->key_period)
             return PyLong_FromUnsignedLongLong(self->_period);
 
+        if (name == kc->key_common_type) {
+            perfevent_get_raw(self, (void *)&entry, &raw_size, NULL);
+            return PyLong_FromLong(entry->common_type);
+        }
         if (name == kc->key_common_flags) {
             perfevent_get_raw(self, (void *)&entry, &raw_size, NULL);
             return PyLong_FromLong(entry->common_flags);
@@ -912,8 +918,9 @@ static Py_ssize_t PerfEvent_length(PerfEventObject *self)
         }
     } else {
         /* Tracepoint event: common fields count: _pid, _tid, _time, _cpu, _period,
-           common_flags, common_preempt_count, common_pid, _realtime, _callchain, _event = 11 */
-        count = 11;
+           common_type, common_flags, common_preempt_count, common_pid,
+           _realtime, _callchain, _event = 12 */
+        count = 12;
 
         ev = (struct python_event_data *)self->tp->private;
         if (ev)
@@ -1637,6 +1644,7 @@ static int init_key_cache(struct python_key_cache *kc)
     INTERN_KEY(key_cpu, "_cpu");
     INTERN_KEY(key_period, "_period");
     /* Common trace_entry fields */
+    INTERN_KEY(key_common_type, "common_type");
     INTERN_KEY(key_common_flags, "common_flags");
     INTERN_KEY(key_common_preempt_count, "common_preempt_count");
     INTERN_KEY(key_common_pid, "common_pid");
@@ -1656,6 +1664,7 @@ static void free_key_cache(struct python_key_cache *kc)
     Py_XDECREF(kc->key_time);
     Py_XDECREF(kc->key_cpu);
     Py_XDECREF(kc->key_period);
+    Py_XDECREF(kc->key_common_type);
     Py_XDECREF(kc->key_common_flags);
     Py_XDECREF(kc->key_common_preempt_count);
     Py_XDECREF(kc->key_common_pid);
@@ -2586,7 +2595,7 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("#   _time         : Event timestamp in nanoseconds (int)\n");
     printf("#   _cpu          : CPU number (int)\n");
     printf("#   _period       : Sample period (int)\n");
-    printf("#   common_flags, common_preempt_count, common_pid : trace_entry fields\n");
+    printf("#   common_type, common_flags, common_preempt_count, common_pid : trace_entry fields\n");
     printf("#   _realtime     : Wall clock time in ns since Unix epoch (int, lazy computed)\n");
     printf("#                   Note: Has drift, only for display, not for latency calc\n");
     printf("#   _callchain    : Call stack list (when -g or stack attribute is set, lazy computed)\n");
@@ -2874,7 +2883,7 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    _time                   - Event timestamp (ns)",
     "    _cpu                    - CPU number",
     "    _period                 - Sample period",
-    "    common_flags, common_preempt_count, common_pid - trace_entry fields",
+    "    common_type, common_flags, common_preempt_count, common_pid - trace_entry fields",
     "    _realtime               - Wall clock time (ns since Unix epoch, lazy computed)",
     "                              Note: Has drift, for display only, not latency calc",
     "    _callchain              - Call stack list (when -g or stack attribute, lazy computed)",
