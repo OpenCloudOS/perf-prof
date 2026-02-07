@@ -702,9 +702,34 @@ void perf_event_convert_read_tsc_conversion(struct prof_dev *dev, struct perf_mm
 union perf_event *perf_event_convert(struct prof_dev *dev, union perf_event *event, bool writable);
 int perf_timespec_init(struct prof_dev *dev);
 
+struct perf_event_member {
+    const char *name;
+    int offset;
+    int size;
+    unsigned long deps;
+    const char *doc;
+    enum perf_event_sample_format format;
+    void *private;
+};
+
+struct perf_event_member_cache {
+    struct perf_event_member *id;
+    struct perf_event_member *time;
+    struct perf_event_member *cpu;
+    struct perf_event_member *pid, *tid;
+    struct perf_event_member *callchain;
+    struct perf_event_member *raw;
+    struct perf_event_member *branch_stack;
+    struct perf_event_member *stack_user;
+    struct perf_event_member *members;
+    int nr_members;
+    u64 sample_type;
+};
+
 struct perf_evsel_external {
     struct prof_dev *dev;  // evsel -> dev
     struct tp *tp;   // evsel -> tp
+    struct perf_event_member_cache *member_cache;  // evsel -> member_cache (for profiler event source)
 };
 
 int perf_evsel_link_tp(struct perf_evsel *evsel, struct tp *tp);
@@ -718,8 +743,19 @@ static inline struct prof_dev *perf_evsel_dev(struct perf_evsel *evsel)
     struct perf_evsel_external *ext = evsel->external;
     return ext ? ext->dev : NULL;
 }
+static inline struct perf_event_member_cache *perf_evsel_member_cache(struct perf_evsel *evsel)
+{
+    struct perf_evsel_external *ext = evsel->external;
+    return ext ? ext->member_cache : NULL;
+}
 int prof_dev_evsel_external_init(struct prof_dev *dev);
 void prof_dev_evsel_external_deinit(struct prof_dev *dev);
+struct perf_evsel *perf_event_evsel(struct prof_dev *dev, union perf_event *event);
+struct perf_event_member_cache *perf_event_members(struct perf_evsel *evsel);
+int perf_event_member_offset(struct perf_event_member_cache *cache,
+                             struct perf_event_member *member,
+                             union perf_event *event);
+
 
 //comm.c
 int global_comm_ref(void);

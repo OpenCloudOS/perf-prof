@@ -14,6 +14,8 @@
 #include <tp_struct.h>
 #include <linux/math64.h>
 #include <api/fs/fs.h>
+#include <linux/bitops.h>
+#include <internal/evlist.h>
 
 bool current_clocksource_is_tsc = false;
 
@@ -971,12 +973,20 @@ NULL_tidmap:
 }
 
 /*
- * evsel->external: Fast path for evsel -> tp and evsel -> dev access.
+ * evsel->external (struct perf_evsel_external)
  *
- * perf_evsel_link_tp(): Called in tp_evsel_new(), links evsel to tp.
- * prof_dev_evsel_external_init(): Called after prof->init(), links all evsels to dev.
+ * Extends perf_evsel with perf-prof specific data, providing fast reverse
+ * lookups from evsel to its owning context:
  *
- * Access via: perf_evsel_tp(evsel), perf_evsel_dev(evsel)
+ *   - tp:           The tp (tracepoint descriptor) associated with this evsel.
+ *                   Set by perf_evsel_link_tp() during tp_evsel_new().
+ *   - dev:          The prof_dev instance that owns this evsel.
+ *                   Set by prof_dev_evsel_external_init() after prof->init().
+ *   - member_cache: Describes the sample record layout based on sample_type,
+ *                   used by profiler event sources (dev_tp) to access fields
+ *                   in forwarded events. Built by perf_event_members().
+ *
+ * Access helpers: perf_evsel_tp(), perf_evsel_dev(), perf_evsel_member_cache().
  */
 
 int perf_evsel_link_tp(struct perf_evsel *evsel, struct tp *tp)
@@ -994,6 +1004,9 @@ int prof_dev_evsel_external_init(struct prof_dev *dev)
     struct perf_evsel *evsel;
     struct perf_evsel_external *ext;
 
+    if (dev->silent || dev->type == PROF_DEV_TYPE_SERVICE)
+        return 0;
+
     perf_evlist__for_each_evsel(evlist, evsel) {
         /* evsel->external may already be allocated by perf_evsel_link_tp() */
         if (!evsel->external) {
@@ -1005,6 +1018,11 @@ int prof_dev_evsel_external_init(struct prof_dev *dev)
         }
         ext = evsel->external;
         ext->dev = dev;
+
+        /* Initialize member_cache for events with sample_type */
+        if (!ext->member_cache) {
+            ext->member_cache = perf_event_members(evsel);
+        }
     }
     return 0;
 }
@@ -1016,8 +1034,224 @@ void prof_dev_evsel_external_deinit(struct prof_dev *dev)
 
     perf_evlist__for_each_evsel(evlist, evsel) {
         if (evsel->external) {
+            struct perf_evsel_external *ext = evsel->external;
+            if (ext->member_cache)
+                free(ext->member_cache);
             free(evsel->external);
             evsel->external = NULL;
         }
     }
+}
+
+struct perf_evsel *perf_event_evsel(struct prof_dev *dev, union perf_event *event)
+{
+    struct perf_evlist *evlist = dev->evlist;
+    u64 id;
+
+    if (evlist->nr_entries == 1)
+        return perf_evlist__first(evlist);
+
+    if (dev->pos.id_pos < 0)
+        return NULL;
+
+    id = *(u64 *)((void *)event->sample.array + dev->pos.id_pos);
+    return perf_evlist__id_to_evsel(dev->evlist, id, NULL);
+}
+
+/*
+ * perf_event_members - Parse sample_type and build member_cache for a perf_evsel.
+ *
+ * Build an array of perf_event_member describing each field in the sample record,
+ * based on attr->sample_type. Fields are listed in kernel-defined order. Fixed-size
+ * fields have a known offset; variable-size fields (callchain, raw, branch_stack,
+ * stack_user) have size=0 and record their dependencies (deps) on preceding
+ * variable-size fields. Use perf_event_member_offset() to resolve the actual offset
+ * at runtime.
+ *
+ * The cache also stores quick-access pointers (id, pid, tid, time, cpu, callchain,
+ * raw, branch_stack, stack_user) for commonly used fields.
+ *
+ * Returns NULL if sample_type is empty or on allocation failure.
+ */
+struct perf_event_member_cache *perf_event_members(struct perf_evsel *evsel)
+{
+    struct perf_event_attr *attr = perf_evsel__attr(evsel);
+    u64 sample_type = attr->sample_type & (PERF_SAMPLE_MAX - 1);
+    struct perf_event_member_cache *cache;
+    struct perf_event_member *members;
+    int nr_members = 0;
+    int i = 0;
+    int size;
+    int offset = 0;
+    unsigned long deps = 0;
+
+    if (!sample_type)
+        return NULL;
+
+    /* Count number of members */
+    if (sample_type & PERF_SAMPLE_IDENTIFIER) nr_members++;
+    if (sample_type & PERF_SAMPLE_IP) nr_members++;
+    if (sample_type & PERF_SAMPLE_TID) nr_members += 2;  /* pid and tid are exposed as two members */
+    if (sample_type & PERF_SAMPLE_TIME) nr_members++;
+    if (sample_type & PERF_SAMPLE_ADDR) nr_members++;
+    if (sample_type & PERF_SAMPLE_ID) nr_members++;
+    if (sample_type & PERF_SAMPLE_STREAM_ID) nr_members++;
+    if (sample_type & PERF_SAMPLE_CPU) nr_members++;
+    if (sample_type & PERF_SAMPLE_PERIOD) nr_members++;
+    if (sample_type & PERF_SAMPLE_READ) nr_members++;
+    if (sample_type & PERF_SAMPLE_CALLCHAIN) nr_members++;
+    if (sample_type & PERF_SAMPLE_RAW) nr_members++;
+    if (sample_type & PERF_SAMPLE_BRANCH_STACK) nr_members++;
+    if (sample_type & PERF_SAMPLE_REGS_USER) nr_members++;
+    if (sample_type & PERF_SAMPLE_STACK_USER) nr_members++;
+    if (sample_type & PERF_SAMPLE_WEIGHT) nr_members++;
+    if (sample_type & PERF_SAMPLE_DATA_SRC) nr_members++;
+    if (sample_type & PERF_SAMPLE_TRANSACTION) nr_members++;
+    if (sample_type & PERF_SAMPLE_REGS_INTR) nr_members++;
+    if (sample_type & PERF_SAMPLE_PHYS_ADDR) nr_members++;
+
+    cache = malloc(sizeof(*cache) + nr_members * sizeof(struct perf_event_member));
+    if (!cache)
+        return NULL;
+
+    memset(cache, 0, sizeof(*cache));
+    cache->sample_type = sample_type;
+    cache->nr_members = nr_members;
+    cache->members = (struct perf_event_member *)(cache + 1);
+    members = cache->members;
+
+    /*
+     * Sample record layout (after perf_event_header):
+     *  { u64           id;       } && PERF_SAMPLE_IDENTIFIER
+     *  { u64           ip;       } && PERF_SAMPLE_IP
+     *  { u32           pid, tid; } && PERF_SAMPLE_TID
+     *  { u64           time;     } && PERF_SAMPLE_TIME
+     *  { u64           addr;     } && PERF_SAMPLE_ADDR
+     *  { u64           id;       } && PERF_SAMPLE_ID
+     *  { u64           stream_id;} && PERF_SAMPLE_STREAM_ID
+     *  { u32           cpu, res; } && PERF_SAMPLE_CPU
+     *  { u64           period;   } && PERF_SAMPLE_PERIOD
+     *  { struct read_format values; } && PERF_SAMPLE_READ
+     *  { u64 nr, u64 ips[nr];    } && PERF_SAMPLE_CALLCHAIN
+     *  { u32 size; char data[size]; } && PERF_SAMPLE_RAW
+     *  { u64 nr; { u64 hw_idx; } && PERF_SAMPLE_BRANCH_HW_INDEX
+     *            { u64 from, to, flags } lbr[nr];
+     *            { u64 counters; } cntr[nr] && PERF_SAMPLE_BRANCH_COUNTERS
+     *  } && PERF_SAMPLE_BRANCH_STACK
+     *  { u64 abi; u64 regs[weight(mask)]; } && PERF_SAMPLE_REGS_USER
+     *  { u64 size; char data[size]; u64 dyn_size; } && PERF_SAMPLE_STACK_USER
+     *  { u64 weight; } && PERF_SAMPLE_WEIGHT / PERF_SAMPLE_WEIGHT_STRUCT
+     *  { u64 data_src; } && PERF_SAMPLE_DATA_SRC
+     *  { u64 transaction; } && PERF_SAMPLE_TRANSACTION
+     *  { u64 abi; u64 regs[weight(mask)]; } && PERF_SAMPLE_REGS_INTR
+     *  { u64 phys_addr; } && PERF_SAMPLE_PHYS_ADDR
+     *  { u64 size; char data[size]; } && PERF_SAMPLE_AUX
+     *  { u64 cgroup; } && PERF_SAMPLE_CGROUP
+     *  { u64 data_page_size; } && PERF_SAMPLE_DATA_PAGE_SIZE
+     *  { u64 code_page_size; } && PERF_SAMPLE_CODE_PAGE_SIZE
+     */
+
+#define ADD_MEMBER(name_str, sz, fmt, doc_str, ...) \
+do { \
+    if (sample_type & (fmt)) { \
+        members[i].name = name_str; \
+        members[i].offset = offset; \
+        members[i].size = sz; \
+        members[i].deps = deps; \
+        members[i].doc = doc_str; \
+        members[i].format = fmt; \
+        members[i].private = NULL; \
+        __VA_ARGS__; \
+        i++; \
+        deps |= (sz == 0 ? (fmt) : 0); \
+        offset += sz; \
+    } \
+} while (0)
+
+    /* Fixed size members in order */
+    ADD_MEMBER("identifier", sizeof(u64), PERF_SAMPLE_IDENTIFIER, "Sample identifier", cache->id = &members[i]);
+    ADD_MEMBER("ip", sizeof(u64), PERF_SAMPLE_IP, "Instruction pointer");
+    ADD_MEMBER("pid", sizeof(u32), PERF_SAMPLE_TID, "Process ID", cache->pid = &members[i]);
+    ADD_MEMBER("tid", sizeof(u32), PERF_SAMPLE_TID, "Thread ID", cache->tid = &members[i]);
+    ADD_MEMBER("time", sizeof(u64), PERF_SAMPLE_TIME, "Event timestamp", cache->time = &members[i]);
+    ADD_MEMBER("addr", sizeof(u64), PERF_SAMPLE_ADDR, "Memory address");
+    ADD_MEMBER("id", sizeof(u64), PERF_SAMPLE_ID, "Sample ID", cache->id = &members[i]);
+    ADD_MEMBER("stream_id", sizeof(u64), PERF_SAMPLE_STREAM_ID, "Stream ID", cache->id = &members[i]);
+    ADD_MEMBER("cpu", sizeof(u32), PERF_SAMPLE_CPU, "CPU number", cache->cpu = &members[i]; offset += 4; /* skip reserved */);
+    ADD_MEMBER("period", sizeof(u64), PERF_SAMPLE_PERIOD, "Sample period");
+
+    /* PERF_SAMPLE_READ - Fixed size based on read_format */
+    ADD_MEMBER("read", perf_evsel__read_size(evsel), PERF_SAMPLE_READ, "Read format values");
+
+    /* PERF_SAMPLE_CALLCHAIN - variable size */
+    ADD_MEMBER("callchain", 0, PERF_SAMPLE_CALLCHAIN, "Call chain", cache->callchain = &members[i]);
+
+    /* PERF_SAMPLE_RAW - variable size */
+    ADD_MEMBER("raw", 0, PERF_SAMPLE_RAW, "Raw data", cache->raw = &members[i]);
+
+    /* PERF_SAMPLE_BRANCH_STACK - variable size */
+    ADD_MEMBER("branch_stack", 0, PERF_SAMPLE_BRANCH_STACK, "Branch stack", cache->branch_stack = &members[i]);
+
+    /* PERF_SAMPLE_REGS_USER - Fixed size */
+    size = sizeof(u64) + hweight64(attr->sample_regs_user) * sizeof(u64);
+    ADD_MEMBER("regs_user", size, PERF_SAMPLE_REGS_USER, "User registers");
+
+    /* PERF_SAMPLE_STACK_USER - variable size */
+    ADD_MEMBER("stack_user", 0, PERF_SAMPLE_STACK_USER, "User stack", cache->stack_user = &members[i]);
+
+    ADD_MEMBER("weight", sizeof(u64), PERF_SAMPLE_WEIGHT, "Sample weight");
+    ADD_MEMBER("data_src", sizeof(u64), PERF_SAMPLE_DATA_SRC, "Data source");
+    ADD_MEMBER("transaction", sizeof(u64), PERF_SAMPLE_TRANSACTION, "Transaction");
+
+    /* PERF_SAMPLE_REGS_INTR - Fixed size */
+    size = sizeof(u64) + hweight64(attr->sample_regs_intr) * sizeof(u64);
+    ADD_MEMBER("regs_intr", size, PERF_SAMPLE_REGS_INTR, "Interrupt registers");
+
+    ADD_MEMBER("phys_addr", sizeof(u64), PERF_SAMPLE_PHYS_ADDR, "Physical address");
+
+#undef ADD_MEMBER
+
+    return cache;
+}
+
+/*
+ * Calculate the offset of a member in a perf_event sample.
+ * For variable-size members (callchain, raw, etc.), we need to
+ * compute the actual offset based on deps.
+ */
+int perf_event_member_offset(struct perf_event_member_cache *cache,
+                             struct perf_event_member *member,
+                             union perf_event *event)
+{
+    void *data = event->sample.array;
+    int deps_size = 0;
+
+    if (!member->deps)
+        return member->offset;
+
+    /* PERF_SAMPLE_CALLCHAIN: { u64 nr; u64 ips[nr]; } */
+    if (member->deps & PERF_SAMPLE_CALLCHAIN) {
+        u64 nr = *(u64 *)(data + cache->callchain->offset);
+        deps_size += sizeof(u64) + nr * sizeof(u64);
+    }
+
+    /* PERF_SAMPLE_RAW: { u32 size; char data[size]; } */
+    if (member->deps & PERF_SAMPLE_RAW) {
+        u32 size = *(u32 *)(data + cache->raw->offset);
+        deps_size += sizeof(u32) + size;
+    }
+
+    /* PERF_SAMPLE_BRANCH_STACK - { u64 nr; { u64 from, to, flags } lbr[nr]; } */
+    if (member->deps & PERF_SAMPLE_BRANCH_STACK) {
+        u64 nr = *(u64 *)(data + cache->branch_stack->offset);
+        deps_size += sizeof(u64) + nr * sizeof(struct perf_branch_entry);
+    }
+
+    /* PERF_SAMPLE_STACK_USER: { u64 size; char data[size]; u64 dyn_size; } */
+    if (member->deps & PERF_SAMPLE_STACK_USER) {
+        u64 size = *(u64 *)(data + cache->stack_user->offset);
+        deps_size += sizeof(u64) + size + sizeof(u64);
+    }
+
+    return member->offset + deps_size;
 }
