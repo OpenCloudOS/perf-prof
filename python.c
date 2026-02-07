@@ -23,6 +23,108 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 #include <event-parse-local.h>
+#include <linux/bitmap.h>
+#include <asm/perf_regs.h>
+
+/*
+ * Register name tables for PERF_SAMPLE_REGS_USER / PERF_SAMPLE_REGS_INTR.
+ * Indexed by bit position in sample_regs_user / sample_regs_intr mask.
+ */
+#if defined(__x86_64__)
+static const char *perf_reg_names[] = {
+    [PERF_REG_X86_AX]    = "ax",
+    [PERF_REG_X86_BX]    = "bx",
+    [PERF_REG_X86_CX]    = "cx",
+    [PERF_REG_X86_DX]    = "dx",
+    [PERF_REG_X86_SI]    = "si",
+    [PERF_REG_X86_DI]    = "di",
+    [PERF_REG_X86_BP]    = "bp",
+    [PERF_REG_X86_SP]    = "sp",
+    [PERF_REG_X86_IP]    = "ip",
+    [PERF_REG_X86_FLAGS] = "flags",
+    [PERF_REG_X86_CS]    = "cs",
+    [PERF_REG_X86_SS]    = "ss",
+    [PERF_REG_X86_DS]    = "ds",
+    [PERF_REG_X86_ES]    = "es",
+    [PERF_REG_X86_FS]    = "fs",
+    [PERF_REG_X86_GS]    = "gs",
+    [PERF_REG_X86_R8]    = "r8",
+    [PERF_REG_X86_R9]    = "r9",
+    [PERF_REG_X86_R10]   = "r10",
+    [PERF_REG_X86_R11]   = "r11",
+    [PERF_REG_X86_R12]   = "r12",
+    [PERF_REG_X86_R13]   = "r13",
+    [PERF_REG_X86_R14]   = "r14",
+    [PERF_REG_X86_R15]   = "r15",
+};
+#define PERF_REG_MAX  PERF_REG_X86_64_MAX
+#elif defined(__i386__)
+static const char *perf_reg_names[] = {
+    [PERF_REG_X86_AX]    = "ax",
+    [PERF_REG_X86_BX]    = "bx",
+    [PERF_REG_X86_CX]    = "cx",
+    [PERF_REG_X86_DX]    = "dx",
+    [PERF_REG_X86_SI]    = "si",
+    [PERF_REG_X86_DI]    = "di",
+    [PERF_REG_X86_BP]    = "bp",
+    [PERF_REG_X86_SP]    = "sp",
+    [PERF_REG_X86_IP]    = "ip",
+    [PERF_REG_X86_FLAGS] = "flags",
+    [PERF_REG_X86_CS]    = "cs",
+    [PERF_REG_X86_SS]    = "ss",
+    [PERF_REG_X86_DS]    = "ds",
+    [PERF_REG_X86_ES]    = "es",
+    [PERF_REG_X86_FS]    = "fs",
+    [PERF_REG_X86_GS]    = "gs",
+};
+#define PERF_REG_MAX  PERF_REG_X86_32_MAX
+#elif defined(__aarch64__)
+static const char *perf_reg_names[] = {
+    [PERF_REG_ARM64_X0]  = "x0",
+    [PERF_REG_ARM64_X1]  = "x1",
+    [PERF_REG_ARM64_X2]  = "x2",
+    [PERF_REG_ARM64_X3]  = "x3",
+    [PERF_REG_ARM64_X4]  = "x4",
+    [PERF_REG_ARM64_X5]  = "x5",
+    [PERF_REG_ARM64_X6]  = "x6",
+    [PERF_REG_ARM64_X7]  = "x7",
+    [PERF_REG_ARM64_X8]  = "x8",
+    [PERF_REG_ARM64_X9]  = "x9",
+    [PERF_REG_ARM64_X10] = "x10",
+    [PERF_REG_ARM64_X11] = "x11",
+    [PERF_REG_ARM64_X12] = "x12",
+    [PERF_REG_ARM64_X13] = "x13",
+    [PERF_REG_ARM64_X14] = "x14",
+    [PERF_REG_ARM64_X15] = "x15",
+    [PERF_REG_ARM64_X16] = "x16",
+    [PERF_REG_ARM64_X17] = "x17",
+    [PERF_REG_ARM64_X18] = "x18",
+    [PERF_REG_ARM64_X19] = "x19",
+    [PERF_REG_ARM64_X20] = "x20",
+    [PERF_REG_ARM64_X21] = "x21",
+    [PERF_REG_ARM64_X22] = "x22",
+    [PERF_REG_ARM64_X23] = "x23",
+    [PERF_REG_ARM64_X24] = "x24",
+    [PERF_REG_ARM64_X25] = "x25",
+    [PERF_REG_ARM64_X26] = "x26",
+    [PERF_REG_ARM64_X27] = "x27",
+    [PERF_REG_ARM64_X28] = "x28",
+    [PERF_REG_ARM64_X29] = "x29",
+    [PERF_REG_ARM64_LR]  = "lr",
+    [PERF_REG_ARM64_SP]  = "sp",
+    [PERF_REG_ARM64_PC]  = "pc",
+};
+#define PERF_REG_MAX  PERF_REG_ARM64_MAX
+#else
+static const char *perf_reg_names[] = {};
+#define PERF_REG_MAX  0
+#endif
+
+#define PERF_REG_NAMES_SIZE (sizeof(perf_reg_names) / sizeof(perf_reg_names[0]))
+
+/* Interned Python string keys for register names, initialized by init_perf_reg_keys() */
+static PyObject *perf_reg_keys[PERF_REG_MAX > 0 ? PERF_REG_MAX : 1];
+static PyObject *perf_reg_key_abi;  /* interned "abi" key */
 
 static int register_perf_prof_module(void);
 
@@ -383,6 +485,90 @@ static PyObject *perfevent_get_all_field_names(PerfEventObject *self)
 }
 
 /*
+ * Initialize interned Python string keys for register names.
+ * Called once after Py_Initialize().
+ */
+static int init_perf_reg_keys(void)
+{
+    int i;
+
+    perf_reg_key_abi = PyUnicode_InternFromString("abi");
+    if (!perf_reg_key_abi)
+        return -1;
+
+    for (i = 0; i < PERF_REG_MAX; i++) {
+        if (i < (int)PERF_REG_NAMES_SIZE && perf_reg_names[i]) {
+            perf_reg_keys[i] = PyUnicode_InternFromString(perf_reg_names[i]);
+            if (!perf_reg_keys[i])
+                return -1;
+        }
+    }
+    return 0;
+}
+
+static void free_perf_reg_keys(void)
+{
+    int i;
+
+    Py_XDECREF(perf_reg_key_abi);
+    perf_reg_key_abi = NULL;
+
+    for (i = 0; i < PERF_REG_MAX; i++) {
+        Py_XDECREF(perf_reg_keys[i]);
+        perf_reg_keys[i] = NULL;
+    }
+}
+
+/*
+ * Convert { u64 abi; u64 regs[hweight64(mask)]; } to Python dict {'reg': value}.
+ * The mask indicates which registers were sampled. Each set bit corresponds to
+ * a register, and the regs array contains values in set-bit order.
+ * Uses interned string keys from perf_reg_keys[] for fast dict construction.
+ */
+static PyObject *perf_regs_to_pydict(void *data, u64 mask)
+{
+    PyObject *dict;
+    PyObject *abi_val;
+    u64 abi = *(u64 *)data;
+    u64 *regs = (u64 *)(data + sizeof(u64));
+    unsigned long m = (unsigned long)mask;
+    int bit, idx = 0;
+
+    dict = PyDict_New();
+    if (!dict)
+        return NULL;
+
+    /* Add abi field using interned key */
+    abi_val = PyLong_FromUnsignedLongLong(abi);
+    if (abi_val) {
+        PyDict_SetItem(dict, perf_reg_key_abi, abi_val);
+        Py_DECREF(abi_val);
+    }
+
+    for_each_set_bit(bit, &m, PERF_REG_MAX) {
+        PyObject *key;
+        PyObject *val;
+
+        key = perf_reg_keys[bit];
+        val = PyLong_FromUnsignedLongLong(regs[idx]);
+        if (val) {
+            if (key)
+                PyDict_SetItem(dict, key, val);
+            else {
+                /* Unknown register bit, use "regN" as key */
+                char buf[16];
+                snprintf(buf, sizeof(buf), "reg%d", bit);
+                PyDict_SetItemString(dict, buf, val);
+            }
+            Py_DECREF(val);
+        }
+        idx++;
+    }
+
+    return dict;
+}
+
+/*
  * Get profiler event field by name (with caching).
  * For profiler events (tp_is_dev), fields are defined in perf_event_member_cache.
  */
@@ -441,6 +627,20 @@ static PyObject *perfevent_get_dev_field(PerfEventObject *self, PyObject *field_
                 u32 size = *(u32 *)data;
                 void *raw = data + sizeof(u32);
                 value = PyBytes_FromStringAndSize((char *)raw, size);
+            }
+            break;
+        case PERF_SAMPLE_REGS_USER:
+            /* { u64 abi; u64 regs[hweight64(mask)]; } -> dict {'reg': value} */
+            {
+                struct perf_event_attr *attr = perf_evsel__attr(evsel);
+                value = perf_regs_to_pydict(data, attr->sample_regs_user);
+            }
+            break;
+        case PERF_SAMPLE_REGS_INTR:
+            /* { u64 abi; u64 regs[hweight64(mask)]; } -> dict {'reg': value} */
+            {
+                struct perf_event_attr *attr = perf_evsel__attr(evsel);
+                value = perf_regs_to_pydict(data, attr->sample_regs_intr);
             }
             break;
         default:
@@ -1925,6 +2125,12 @@ static int python_script_init(struct python_ctx *ctx)
         return -1;
     }
 
+    /* Initialize interned register name keys */
+    if (init_perf_reg_keys() < 0) {
+        fprintf(stderr, "Failed to initialize register name keys\n");
+        return -1;
+    }
+
     /* Set sys.argv from script arguments */
     if (script_argc > 0 && script_argv) {
         wchar_t **wargv = calloc(script_argc, sizeof(wchar_t *));
@@ -2107,6 +2313,9 @@ static void python_script_exit(struct python_ctx *ctx)
 
     /* Free common key cache */
     free_key_cache(&ctx->key_cache);
+
+    /* Free interned register name keys */
+    free_perf_reg_keys();
 
     if (ctx->module) Py_DECREF(ctx->module);
     if (ctx->perf_prof_module) Py_DECREF(ctx->perf_prof_module);
