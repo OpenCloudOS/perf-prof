@@ -721,6 +721,7 @@ struct perf_event_member_cache {
     struct perf_event_member *raw;
     struct perf_event_member *branch_stack;
     struct perf_event_member *stack_user;
+    struct perf_event_member *aux;
     struct perf_event_member *members;
     int nr_members;
     u64 sample_type;

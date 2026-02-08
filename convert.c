@@ -1105,10 +1105,15 @@ struct perf_event_member_cache *perf_event_members(struct perf_evsel *evsel)
     if (sample_type & PERF_SAMPLE_REGS_USER) nr_members++;
     if (sample_type & PERF_SAMPLE_STACK_USER) nr_members++;
     if (sample_type & PERF_SAMPLE_WEIGHT) nr_members++;
+    else if (sample_type & PERF_SAMPLE_WEIGHT_STRUCT) nr_members++;
     if (sample_type & PERF_SAMPLE_DATA_SRC) nr_members++;
     if (sample_type & PERF_SAMPLE_TRANSACTION) nr_members++;
     if (sample_type & PERF_SAMPLE_REGS_INTR) nr_members++;
     if (sample_type & PERF_SAMPLE_PHYS_ADDR) nr_members++;
+    if (sample_type & PERF_SAMPLE_AUX) nr_members++;
+    if (sample_type & PERF_SAMPLE_CGROUP) nr_members++;
+    if (sample_type & PERF_SAMPLE_DATA_PAGE_SIZE) nr_members++;
+    if (sample_type & PERF_SAMPLE_CODE_PAGE_SIZE) nr_members++;
 
     cache = malloc(sizeof(*cache) + nr_members * sizeof(struct perf_event_member));
     if (!cache)
@@ -1200,6 +1205,8 @@ do { \
     ADD_MEMBER("stack_user", 0, PERF_SAMPLE_STACK_USER, "User stack", cache->stack_user = &members[i]);
 
     ADD_MEMBER("weight", sizeof(u64), PERF_SAMPLE_WEIGHT, "Sample weight");
+    if (!(sample_type & PERF_SAMPLE_WEIGHT))
+        ADD_MEMBER("weight", sizeof(u64), PERF_SAMPLE_WEIGHT_STRUCT, "Sample weight struct");
     ADD_MEMBER("data_src", sizeof(u64), PERF_SAMPLE_DATA_SRC, "Data source");
     ADD_MEMBER("transaction", sizeof(u64), PERF_SAMPLE_TRANSACTION, "Transaction");
 
@@ -1208,6 +1215,13 @@ do { \
     ADD_MEMBER("regs_intr", size, PERF_SAMPLE_REGS_INTR, "Interrupt registers");
 
     ADD_MEMBER("phys_addr", sizeof(u64), PERF_SAMPLE_PHYS_ADDR, "Physical address");
+
+    /* PERF_SAMPLE_AUX - variable size */
+    ADD_MEMBER("aux", 0, PERF_SAMPLE_AUX, "AUX data", cache->aux = &members[i]);
+
+    ADD_MEMBER("cgroup", sizeof(u64), PERF_SAMPLE_CGROUP, "Cgroup ID");
+    ADD_MEMBER("data_page_size", sizeof(u64), PERF_SAMPLE_DATA_PAGE_SIZE, "Data page size");
+    ADD_MEMBER("code_page_size", sizeof(u64), PERF_SAMPLE_CODE_PAGE_SIZE, "Code page size");
 
 #undef ADD_MEMBER
 
@@ -1251,6 +1265,12 @@ int perf_event_member_offset(struct perf_event_member_cache *cache,
     if (member->deps & PERF_SAMPLE_STACK_USER) {
         u64 size = *(u64 *)(data + cache->stack_user->offset);
         deps_size += sizeof(u64) + size + sizeof(u64);
+    }
+
+    /* PERF_SAMPLE_AUX: { u64 size; char data[size]; } */
+    if (member->deps & PERF_SAMPLE_AUX) {
+        u64 size = *(u64 *)(data + cache->aux->offset);
+        deps_size += sizeof(u64) + size;
     }
 
     return member->offset + deps_size;
