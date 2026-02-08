@@ -643,6 +643,30 @@ static PyObject *perfevent_get_dev_field(PerfEventObject *self, PyObject *field_
                 value = perf_regs_to_pydict(data, attr->sample_regs_intr);
             }
             break;
+        case PERF_SAMPLE_BRANCH_STACK:
+            /* { u64 nr; struct perf_branch_entry lbr[nr]; } -> bytes */
+            {
+                u64 nr = *(u64 *)data;
+                u64 total = sizeof(u64) + nr * sizeof(struct perf_branch_entry);
+                value = PyBytes_FromStringAndSize((char *)data, total);
+            }
+            break;
+        case PERF_SAMPLE_STACK_USER:
+            /* { u64 size; char data[size]; u64 dyn_size; } -> bytes (data part) */
+            {
+                u64 sz = *(u64 *)data;
+                void *stack_data = data + sizeof(u64);
+                value = PyBytes_FromStringAndSize((char *)stack_data, sz);
+            }
+            break;
+        case PERF_SAMPLE_AUX:
+            /* { u64 size; char data[size]; } -> bytes (data part) */
+            {
+                u64 sz = *(u64 *)data;
+                void *aux_data = data + sizeof(u64);
+                value = PyBytes_FromStringAndSize((char *)aux_data, sz);
+            }
+            break;
         default:
             /* Numeric fields */
             if (member->size == 8) {
