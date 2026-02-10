@@ -13,6 +13,7 @@
 #include <internal/lib.h>
 #include <linux/kernel.h>
 #include <linux/math64.h>
+#include <linux/zalloc.h>
 #include "internal.h"
 
 void perf_mmap__init(struct perf_mmap *map, struct perf_mmap *prev,
@@ -34,47 +35,34 @@ size_t perf_mmap__mmap_len(struct perf_mmap *map)
 int perf_mmap__mmap(struct perf_mmap *map, struct perf_mmap_param *mp,
 		    int fd, int cpu)
 {
-	size_t ev_len = mp->mask + 1;
-
 	map->prev = 0;
 	map->mask = mp->mask;
 	map->base = mmap(NULL, perf_mmap__mmap_len(map), mp->prot,
 			 MAP_SHARED, fd, 0);
-	if (map->base == MAP_FAILED)
-		goto failed;
-
-	if (ev_len > PERF_SAMPLE_MAX_SIZE)
-		ev_len = PERF_SAMPLE_MAX_SIZE;
-	map->event_copy = mmap(NULL, ev_len, PROT_READ | PROT_WRITE,
-			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (map->event_copy == MAP_FAILED)
-		goto failed1;
+	if (map->base == MAP_FAILED) {
+		map->base = NULL;
+		return -1;
+	}
 
 	map->fd  = fd;
 	map->cpu = cpu;
 	return 0;
-
-failed1:
-	munmap(map->base, perf_mmap__mmap_len(map));
-failed:
-	map->base = NULL;
-	map->event_copy = NULL;
-	return -1;
 }
 
 void perf_mmap__munmap(struct perf_mmap *map)
 {
-	if (map && map->base != NULL) {
-		size_t ev_len = map->mask + 1;
-		if (ev_len > PERF_SAMPLE_MAX_SIZE)
-			ev_len = PERF_SAMPLE_MAX_SIZE;
-		munmap(map->event_copy, ev_len);
+	if (!map)
+		return;
+
+	zfree(&map->event_copy);
+	map->event_copy_sz = 0;
+	if (map->base) {
 		munmap(map->base, perf_mmap__mmap_len(map));
 		map->base = NULL;
 		map->fd = -1;
 		refcount_set(&map->refcnt, 0);
 	}
-	if (map && map->unmap_cb)
+	if (map->unmap_cb)
 		map->unmap_cb(map);
 }
 
@@ -249,8 +237,19 @@ static union perf_event *perf_mmap__read(struct perf_mmap *map,
 		 */
 		if ((*startp & map->mask) + size != ((*startp + size) & map->mask)) {
 			unsigned int offset = *startp;
-			unsigned int len = min(sizeof(*event), size), cpy;
+			unsigned int len = size, cpy;
 			void *dst = map->event_copy;
+
+			if (size > map->event_copy_sz) {
+				dst = realloc(map->event_copy, size);
+				if (!dst) {
+					event = NULL;
+					pr_err("%s: failed to realloc event_copy, size=%lu, skip\n", __func__, size);
+					goto skip_this_event;
+				}
+				map->event_copy = dst;
+				map->event_copy_sz = size;
+			}
 
 			do {
 				cpy = min(map->mask + 1 - (offset & map->mask), len);
@@ -263,6 +262,7 @@ static union perf_event *perf_mmap__read(struct perf_mmap *map,
 			event = (union perf_event *)map->event_copy;
 		}
 
+skip_this_event:
 		*startp += size;
 
 		if (map->overwrite) {
@@ -305,7 +305,7 @@ union perf_event *perf_mmap__read_event(struct perf_mmap *map, bool *writable)
 	if (!refcount_read(&map->refcnt))
 		return NULL;
 
-	/* non-overwirte doesn't pause the ringbuffer */
+	/* non-overwrite doesn't pause the ringbuffer */
 	if (!map->overwrite)
 		map->end = perf_mmap__read_head(map);
 
@@ -384,7 +384,7 @@ int perf_mmap__read_self(struct perf_mmap *map, struct perf_counts_values *count
 		idx = READ_ONCE(pc->index);
 		cnt = READ_ONCE(pc->offset);
 		if (pc->cap_user_rdpmc && idx) {
-			s64 evcnt = read_perf_counter(idx - 1);
+			u64 evcnt = read_perf_counter(idx - 1);
 			u16 width = READ_ONCE(pc->pmc_width);
 
 			evcnt <<= 64 - width;

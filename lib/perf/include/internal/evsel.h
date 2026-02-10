@@ -52,7 +52,18 @@ struct perf_evsel {
 
 	/* parse modifier helper */
 	int			 nr_members;
+	/*
+	 * system_wide is for events that need to be on every CPU, irrespective
+	 * of user requested CPUs or threads. Tha main example of this is the
+	 * dummy event. Map propagation will set cpus for this event to all CPUs
+	 * as software PMU events like dummy, have a CPU map that is empty.
+	 */
 	bool			 system_wide;
+	/*
+	 * Some events, for example uncore events, require a CPU.
+	 * i.e. it cannot be the 'any CPU' value of -1.
+	 */
+	bool			 requires_cpu;
 	int			 idx;
 };
 

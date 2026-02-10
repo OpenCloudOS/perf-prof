@@ -34,7 +34,8 @@ struct perf_mmap {
 	u64			 flush;
 	libperf_unmap_cb_t	 unmap_cb;
 	struct perf_evlist	*evlist;
-	char			*event_copy;
+	void			*event_copy;
+	size_t			 event_copy_sz;
 	struct perf_mmap	*next;
 };
 

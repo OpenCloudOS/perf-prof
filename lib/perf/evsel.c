@@ -323,6 +323,9 @@ int perf_evsel__read_size(struct perf_evsel *evsel)
 	if (read_format & PERF_FORMAT_ID)
 		entry += sizeof(u64);
 
+	if (read_format & PERF_FORMAT_LOST)
+		entry += sizeof(u64);
+
 	if (read_format & PERF_FORMAT_GROUP) {
 		nr = evsel->nr_members;
 		size += sizeof(u64);
@@ -336,6 +339,7 @@ int perf_evsel__read(struct perf_evsel *evsel, int cpu, int thread,
 		     struct perf_counts_values *count)
 {
 	size_t size = perf_evsel__read_size(evsel);
+	u64 read_format = evsel->attr.read_format;
 	int *fd = FD(evsel, cpu, thread);
 
 	memset(count, 0, sizeof(*count));
@@ -344,6 +348,7 @@ int perf_evsel__read(struct perf_evsel *evsel, int cpu, int thread,
 		return -EINVAL;
 
 	if (MMAP(evsel, cpu, thread) &&
+	    !(read_format & (PERF_FORMAT_ID | PERF_FORMAT_LOST)) &&
 	    !perf_mmap__read_self(MMAP(evsel, cpu, thread), count))
 		return 0;
 

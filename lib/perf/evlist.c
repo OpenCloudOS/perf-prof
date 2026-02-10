@@ -39,27 +39,39 @@ static void __perf_evlist__propagate_maps(struct perf_evlist *evlist,
 	 * We already have cpus for evsel (via PMU sysfs) so
 	 * keep it, if there's no target cpu list defined.
 	 */
-	if (!evsel->own_cpus || evlist->has_user_cpus) {
+	if (evsel->system_wide) {
 		perf_cpu_map__put(evsel->cpus);
-		evsel->cpus = perf_cpu_map__get(evlist->cpus);
-	} else if (!evsel->system_wide && perf_cpu_map__empty(evlist->cpus)) {
+		evsel->cpus = perf_cpu_map__new(NULL);
+	} else if (!evsel->own_cpus || evlist->has_user_cpus ||
+		   (!evsel->requires_cpu && perf_cpu_map__empty(evlist->user_requested_cpus))) {
 		perf_cpu_map__put(evsel->cpus);
-		evsel->cpus = perf_cpu_map__get(evlist->cpus);
+		evsel->cpus = perf_cpu_map__get(evlist->user_requested_cpus);
 	} else if (evsel->cpus != evsel->own_cpus) {
 		perf_cpu_map__put(evsel->cpus);
 		evsel->cpus = perf_cpu_map__get(evsel->own_cpus);
 	}
 
-	perf_thread_map__put(evsel->threads);
-	evsel->threads = perf_thread_map__get(evlist->threads);
+	if (evsel->system_wide) {
+		perf_thread_map__put(evsel->threads);
+		evsel->threads = perf_thread_map__new_dummy();
+	} else {
+		perf_thread_map__put(evsel->threads);
+		evsel->threads = perf_thread_map__get(evlist->threads);
+	}
 	evlist->all_cpus = perf_cpu_map__merge(evlist->all_cpus, evsel->cpus);
 }
 
 static void perf_evlist__propagate_maps(struct perf_evlist *evlist)
 {
-	struct perf_evsel *evsel;
+	struct perf_evsel *evsel, *n;
 
-	perf_evlist__for_each_evsel(evlist, evsel)
+	evlist->needs_map_propagation = true;
+
+	/* Clear the all_cpus set which will be merged into during propagation. */
+	perf_cpu_map__put(evlist->all_cpus);
+	evlist->all_cpus = NULL;
+
+	list_for_each_entry_safe(evsel, n, &evlist->entries, node)
 		__perf_evlist__propagate_maps(evlist, evsel);
 }
 
@@ -69,7 +81,9 @@ void perf_evlist__add(struct perf_evlist *evlist,
 	evsel->idx = evlist->nr_entries;
 	list_add_tail(&evsel->node, &evlist->entries);
 	evlist->nr_entries += 1;
-	__perf_evlist__propagate_maps(evlist, evsel);
+
+	if (evlist->needs_map_propagation)
+		__perf_evlist__propagate_maps(evlist, evsel);
 }
 
 void perf_evlist__remove(struct perf_evlist *evlist,
@@ -123,10 +137,10 @@ static void perf_evlist__purge(struct perf_evlist *evlist)
 
 void perf_evlist__exit(struct perf_evlist *evlist)
 {
-	perf_cpu_map__put(evlist->cpus);
+	perf_cpu_map__put(evlist->user_requested_cpus);
 	perf_cpu_map__put(evlist->all_cpus);
 	perf_thread_map__put(evlist->threads);
-	evlist->cpus = NULL;
+	evlist->user_requested_cpus = NULL;
 	evlist->all_cpus = NULL;
 	evlist->threads = NULL;
 }
@@ -154,18 +168,15 @@ void perf_evlist__set_maps(struct perf_evlist *evlist,
 	 * original reference count of 1.  If that is not the case it is up to
 	 * the caller to increase the reference count.
 	 */
-	if (cpus != evlist->cpus) {
-		perf_cpu_map__put(evlist->cpus);
-		evlist->cpus = perf_cpu_map__get(cpus);
+	if (cpus != evlist->user_requested_cpus) {
+		perf_cpu_map__put(evlist->user_requested_cpus);
+		evlist->user_requested_cpus = perf_cpu_map__get(cpus);
 	}
 
 	if (threads != evlist->threads) {
 		perf_thread_map__put(evlist->threads);
 		evlist->threads = perf_thread_map__get(threads);
 	}
-
-	if (!evlist->all_cpus && cpus)
-		evlist->all_cpus = perf_cpu_map__get(cpus);
 
 	perf_evlist__propagate_maps(evlist);
 }
@@ -177,7 +188,7 @@ int perf_evlist__open(struct perf_evlist *evlist)
 	struct rlimit rl;
 
 	if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
-		evlist->rl_file = evlist->nr_entries * perf_cpu_map__nr(evlist->cpus) *
+		evlist->rl_file = evlist->nr_entries * perf_cpu_map__nr(evlist->user_requested_cpus) *
 					perf_thread_map__nr(evlist->threads);
 		rl.rlim_cur += evlist->rl_file;
 		if (rl.rlim_cur > rl.rlim_max) {
@@ -359,7 +370,7 @@ void *perf_evlist_poll__get_external(struct perf_evlist *evlist, struct perf_mma
 int perf_evlist_poll__alloc(struct perf_evlist *evlist)
 {
 	struct perf_evlist_poll *epoll = &evlist->epoll;
-	struct perf_cpu_map *cpus = evlist->cpus;
+	struct perf_cpu_map *cpus = evlist->all_cpus;
 	struct perf_thread_map *threads = evlist->threads;
 
 	if (!epoll->external) {
@@ -564,7 +575,7 @@ mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 	       int idx, struct perf_mmap_param *mp, int cpu_idx,
 	       int thread, int *_output, int *_output_overwrite)
 {
-	int evlist_cpu = perf_cpu_map__cpu(evlist->cpus, cpu_idx);
+	int evlist_cpu = perf_cpu_map__cpu(evlist->all_cpus, cpu_idx);
 	struct perf_evsel *evsel;
 	unsigned revent;
 
@@ -669,7 +680,7 @@ mmap_per_cpu(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 	     struct perf_mmap_param *mp)
 {
 	int nr_threads = perf_thread_map__nr(evlist->threads);
-	int nr_cpus    = perf_cpu_map__nr(evlist->cpus);
+	int nr_cpus    = perf_cpu_map__nr(evlist->all_cpus);
 	int cpu, thread;
 
 	for (cpu = 0; cpu < nr_cpus; cpu++) {
@@ -697,8 +708,8 @@ static int perf_evlist__nr_mmaps(struct perf_evlist *evlist)
 {
 	int nr_mmaps;
 
-	nr_mmaps = perf_cpu_map__nr(evlist->cpus);
-	if (perf_cpu_map__empty(evlist->cpus))
+	nr_mmaps = perf_cpu_map__nr(evlist->all_cpus);
+	if (perf_cpu_map__empty(evlist->all_cpus))
 		nr_mmaps = perf_thread_map__nr(evlist->threads);
 
 	return nr_mmaps;
@@ -709,8 +720,7 @@ int perf_evlist__mmap_ops(struct perf_evlist *evlist,
 			  struct perf_mmap_param *mp)
 {
 	struct perf_evsel *evsel;
-	struct perf_cpu_map *cpus = evlist->cpus;
-	struct perf_thread_map *threads = evlist->threads;
+	struct perf_cpu_map *cpus = evlist->all_cpus;
 
 	if (!ops || !ops->get || !ops->mmap)
 		return -EINVAL;
@@ -722,7 +732,7 @@ int perf_evlist__mmap_ops(struct perf_evlist *evlist,
 	perf_evlist__for_each_entry(evlist, evsel) {
 		if ((evsel->attr.read_format & PERF_FORMAT_ID) &&
 		    evsel->sample_id == NULL &&
-		    perf_evsel__alloc_id(evsel, perf_cpu_map__nr(cpus), perf_thread_map__nr(threads)) < 0)
+		    perf_evsel__alloc_id(evsel, evsel->fd->max_x, evsel->fd->max_y) < 0)
 			return -ENOMEM;
 	}
 
@@ -791,24 +801,51 @@ perf_evlist__next_mmap(struct perf_evlist *evlist, struct perf_mmap *map,
 	return overwrite ? evlist->mmap_ovw_first : evlist->mmap_first;
 }
 
-void __perf_evlist__set_leader(struct list_head *list)
+void __perf_evlist__set_leader(struct list_head *list, struct perf_evsel *leader)
 {
-	struct perf_evsel *evsel, *leader;
+	struct perf_evsel *evsel;
+	int n = 0;
 
-	leader = list_entry(list->next, struct perf_evsel, node);
-	evsel = list_entry(list->prev, struct perf_evsel, node);
-
-	leader->nr_members = evsel->idx - leader->idx + 1;
-
-	__perf_evlist__for_each_entry(list, evsel)
+	__perf_evlist__for_each_entry(list, evsel) {
 		evsel->leader = leader;
+		n++;
+	}
+	leader->nr_members = n;
 }
 
 void perf_evlist__set_leader(struct perf_evlist *evlist)
 {
 	if (evlist->nr_entries) {
-		evlist->nr_groups = evlist->nr_entries > 1 ? 1 : 0;
-		__perf_evlist__set_leader(&evlist->entries);
+		struct perf_evsel *first = list_entry(evlist->entries.next,
+						struct perf_evsel, node);
+
+		__perf_evlist__set_leader(&evlist->entries, first);
+	}
+}
+
+int perf_evlist__nr_groups(struct perf_evlist *evlist)
+{
+	struct perf_evsel *evsel;
+	int nr_groups = 0;
+
+	perf_evlist__for_each_evsel(evlist, evsel) {
+		/*
+		 * evsels by default have a nr_members of 1, and they are their
+		 * own leader. If the nr_members is >1 then this is an
+		 * indication of a group.
+		 */
+		if (evsel->leader == evsel && evsel->nr_members > 1)
+			nr_groups++;
+	}
+	return nr_groups;
+}
+
+void perf_evlist__go_system_wide(struct perf_evlist *evlist, struct perf_evsel *evsel)
+{
+	if (!evsel->system_wide) {
+		evsel->system_wide = true;
+		if (evlist->needs_map_propagation)
+			__perf_evlist__propagate_maps(evlist, evsel);
 	}
 }
 

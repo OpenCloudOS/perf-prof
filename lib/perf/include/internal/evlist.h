@@ -30,9 +30,14 @@ struct perf_evlist_poll {
 struct perf_evlist {
 	struct list_head	 entries;
 	int			 nr_entries;
-	int			 nr_groups;
 	bool			 has_user_cpus;
-	struct perf_cpu_map	*cpus;
+	bool			 needs_map_propagation;
+	/**
+	 * The cpus passed from the command line or all online CPUs by
+	 * default.
+	 */
+	struct perf_cpu_map	*user_requested_cpus;
+	/** The union of all evsel cpu maps. */
 	struct perf_cpu_map	*all_cpus;
 	struct perf_thread_map	*threads;
 	int			 rl_file;
@@ -146,5 +151,7 @@ int perf_evlist__id_add_fd(struct perf_evlist *evlist,
 
 void perf_evlist__reset_id_hash(struct perf_evlist *evlist);
 
-void __perf_evlist__set_leader(struct list_head *list);
+void __perf_evlist__set_leader(struct list_head *list, struct perf_evsel *leader);
+
+void perf_evlist__go_system_wide(struct perf_evlist *evlist, struct perf_evsel *evsel);
 #endif /* __LIBPERF_INTERNAL_EVLIST_H */
