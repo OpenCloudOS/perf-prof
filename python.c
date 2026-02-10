@@ -122,9 +122,18 @@ static const char *perf_reg_names[] = {};
 
 #define PERF_REG_NAMES_SIZE (sizeof(perf_reg_names) / sizeof(perf_reg_names[0]))
 
-/* Interned Python string keys for register names, initialized by init_perf_reg_keys() */
+/* Interned Python string keys for register names, initialized by init_perf_interned_keys() */
 static PyObject *perf_reg_keys[PERF_REG_MAX > 0 ? PERF_REG_MAX : 1];
 static PyObject *perf_reg_key_abi;  /* interned "abi" key */
+
+/* Interned Python string keys for PERF_SAMPLE_READ fields */
+static PyObject *perf_read_key_value;
+static PyObject *perf_read_key_time_enabled;
+static PyObject *perf_read_key_time_running;
+static PyObject *perf_read_key_id;
+static PyObject *perf_read_key_lost;
+static PyObject *perf_read_key_nr;
+static PyObject *perf_read_key_cntr;
 
 static int register_perf_prof_module(void);
 
@@ -488,7 +497,7 @@ static PyObject *perfevent_get_all_field_names(PerfEventObject *self)
  * Initialize interned Python string keys for register names.
  * Called once after Py_Initialize().
  */
-static int init_perf_reg_keys(void)
+static int init_perf_interned_keys(void)
 {
     int i;
 
@@ -503,10 +512,24 @@ static int init_perf_reg_keys(void)
                 return -1;
         }
     }
+
+    /* Intern PERF_SAMPLE_READ field keys */
+    perf_read_key_value = PyUnicode_InternFromString("value");
+    perf_read_key_time_enabled = PyUnicode_InternFromString("time_enabled");
+    perf_read_key_time_running = PyUnicode_InternFromString("time_running");
+    perf_read_key_id = PyUnicode_InternFromString("id");
+    perf_read_key_lost = PyUnicode_InternFromString("lost");
+    perf_read_key_nr = PyUnicode_InternFromString("nr");
+    perf_read_key_cntr = PyUnicode_InternFromString("cntr");
+    if (!perf_read_key_value || !perf_read_key_time_enabled ||
+        !perf_read_key_time_running || !perf_read_key_id ||
+        !perf_read_key_lost || !perf_read_key_nr || !perf_read_key_cntr)
+        return -1;
+
     return 0;
 }
 
-static void free_perf_reg_keys(void)
+static void free_perf_interned_keys(void)
 {
     int i;
 
@@ -517,6 +540,14 @@ static void free_perf_reg_keys(void)
         Py_XDECREF(perf_reg_keys[i]);
         perf_reg_keys[i] = NULL;
     }
+
+    Py_XDECREF(perf_read_key_value);  perf_read_key_value = NULL;
+    Py_XDECREF(perf_read_key_time_enabled);  perf_read_key_time_enabled = NULL;
+    Py_XDECREF(perf_read_key_time_running);  perf_read_key_time_running = NULL;
+    Py_XDECREF(perf_read_key_id);  perf_read_key_id = NULL;
+    Py_XDECREF(perf_read_key_lost);  perf_read_key_lost = NULL;
+    Py_XDECREF(perf_read_key_nr);  perf_read_key_nr = NULL;
+    Py_XDECREF(perf_read_key_cntr);  perf_read_key_cntr = NULL;
 }
 
 /*
@@ -563,6 +594,90 @@ static PyObject *perf_regs_to_pydict(void *data, u64 mask)
             Py_DECREF(val);
         }
         idx++;
+    }
+
+    return dict;
+}
+
+/*
+ * Decode PERF_SAMPLE_READ data based on attr->read_format into a Python dict.
+ *
+ * !PERF_FORMAT_GROUP:
+ *   { u64 value; u64 time_enabled; u64 time_running; u64 id; u64 lost; }
+ *   -> {'value': int, 'time_enabled': int, 'time_running': int, 'id': int, 'lost': int}
+ *
+ * PERF_FORMAT_GROUP:
+ *   { u64 nr; u64 time_enabled; u64 time_running; { u64 value; u64 id; u64 lost; } cntr[nr]; }
+ *   -> {'nr': int, 'time_enabled': int, 'time_running': int,
+ *       'cntr': [{'value': int, 'id': int, 'lost': int}, ...]}
+ */
+static inline void dict_set_u64(PyObject *dict, PyObject *key, u64 val)
+{
+    PyObject *v = PyLong_FromUnsignedLongLong(val);
+    PyDict_SetItem(dict, key, v);
+    Py_DECREF(v);
+}
+
+static PyObject *perf_read_to_pydict(void *data, struct perf_evsel *evsel)
+{
+    u64 read_format = perf_evsel__attr(evsel)->read_format;
+    u64 *ptr = data;
+    PyObject *dict;
+
+    dict = PyDict_New();
+    if (!dict)
+        return NULL;
+
+    if (!(read_format & PERF_FORMAT_GROUP)) {
+        /* Non-group: value, [time_enabled], [time_running], [id], [lost] */
+        dict_set_u64(dict, perf_read_key_value, *ptr++);
+
+        if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED)
+            dict_set_u64(dict, perf_read_key_time_enabled, *ptr++);
+        if (read_format & PERF_FORMAT_TOTAL_TIME_RUNNING)
+            dict_set_u64(dict, perf_read_key_time_running, *ptr++);
+        if (read_format & PERF_FORMAT_ID)
+            dict_set_u64(dict, perf_read_key_id, *ptr++);
+        if (read_format & PERF_FORMAT_LOST)
+            dict_set_u64(dict, perf_read_key_lost, *ptr++);
+    } else {
+        /* Group: nr, [time_enabled], [time_running], cntr[nr] */
+        u64 nr = *ptr++;
+        u64 i;
+        PyObject *cntr_list;
+
+        dict_set_u64(dict, perf_read_key_nr, nr);
+
+        if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED)
+            dict_set_u64(dict, perf_read_key_time_enabled, *ptr++);
+        if (read_format & PERF_FORMAT_TOTAL_TIME_RUNNING)
+            dict_set_u64(dict, perf_read_key_time_running, *ptr++);
+
+        cntr_list = PyList_New(nr);
+        if (!cntr_list) {
+            Py_DECREF(dict);
+            return NULL;
+        }
+
+        for (i = 0; i < nr; i++) {
+            PyObject *entry = PyDict_New();
+            if (!entry) {
+                Py_DECREF(cntr_list);
+                Py_DECREF(dict);
+                return NULL;
+            }
+
+            dict_set_u64(entry, perf_read_key_value, *ptr++);
+            if (read_format & PERF_FORMAT_ID)
+                dict_set_u64(entry, perf_read_key_id, *ptr++);
+            if (read_format & PERF_FORMAT_LOST)
+                dict_set_u64(entry, perf_read_key_lost, *ptr++);
+
+            PyList_SET_ITEM(cntr_list, i, entry); /* steals ref */
+        }
+
+        PyDict_SetItem(dict, perf_read_key_cntr, cntr_list);
+        Py_DECREF(cntr_list);
     }
 
     return dict;
@@ -628,6 +743,10 @@ static PyObject *perfevent_get_dev_field(PerfEventObject *self, PyObject *field_
                 void *raw = data + sizeof(u32);
                 value = PyBytes_FromStringAndSize((char *)raw, size);
             }
+            break;
+        case PERF_SAMPLE_READ:
+            /* Read format values -> dict */
+            value = perf_read_to_pydict(data, evsel);
             break;
         case PERF_SAMPLE_REGS_USER:
             /* { u64 abi; u64 regs[hweight64(mask)]; } -> dict {'reg': value} */
@@ -2150,7 +2269,7 @@ static int python_script_init(struct python_ctx *ctx)
     }
 
     /* Initialize interned register name keys */
-    if (init_perf_reg_keys() < 0) {
+    if (init_perf_interned_keys() < 0) {
         fprintf(stderr, "Failed to initialize register name keys\n");
         return -1;
     }
@@ -2339,7 +2458,7 @@ static void python_script_exit(struct python_ctx *ctx)
     free_key_cache(&ctx->key_cache);
 
     /* Free interned register name keys */
-    free_perf_reg_keys();
+    free_perf_interned_keys();
 
     if (ctx->module) Py_DECREF(ctx->module);
     if (ctx->perf_prof_module) Py_DECREF(ctx->perf_prof_module);
