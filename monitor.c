@@ -982,9 +982,12 @@ static char *perf_type_str(int type)
     return type < nr_types ? perf_types[type] : NULL;
 }
 
-static void print_event(struct perf_event_attr *attr)
+static void print_event(struct perf_evsel *evsel, int indent)
 {
+    struct perf_event_attr *attr = perf_evsel__attr(evsel);
+    struct perf_event_member_cache *member_cache = perf_evsel_member_cache(evsel);
     const char *str = "unknown";
+
     if (attr->type == PERF_TYPE_HARDWARE) {
         switch (attr->config) {
             case PERF_COUNT_HW_CPU_CYCLES: str = "cpu-cycles"; break;
@@ -999,7 +1002,7 @@ static void print_event(struct perf_event_attr *attr)
             case PERF_COUNT_HW_REF_CPU_CYCLES: str = "ref-cpu-cycles"; break;
             default: break;
         }
-        printf("%s", str);
+        dev_printf("- %s\n", str);
     } else if (attr->type == PERF_TYPE_SOFTWARE) {
         switch (attr->config) {
             case PERF_COUNT_SW_CPU_CLOCK: str = "cpu-clock"; break;
@@ -1016,17 +1019,26 @@ static void print_event(struct perf_event_attr *attr)
             case PERF_COUNT_SW_CGROUP_SWITCHES: str = "cgroup-switches"; break;
             default: break;
         }
-        printf("%s", str);
+        dev_printf("- %s\n", str);
     } else if (attr->type == PERF_TYPE_TRACEPOINT) {
         struct tep_event *e = tep_find_event(tep__ref_light(), (int)attr->config);
-        if (e) printf("%s:%s", e->system, e->name);
+        if (e) dev_printf("- %s:%s\n", e->system, e->name);
         tep__unref();
     } else if (attr->type == PERF_TYPE_RAW) {
-        printf("raw:0x%lx", (long)attr->config);
+        dev_printf("- raw:0x%lx\n", (long)attr->config);
     } else if (attr->type == PERF_TYPE_BREAKPOINT) {
-        printf("breakpoint");
+        dev_printf("- breakpoint\n");
     } else {
-        printf("%s", perf_type_str(attr->type) ?: "unknown");
+        dev_printf("- %s\n", perf_type_str(attr->type) ?: "unknown");
+    }
+
+    if (member_cache) {
+        dev_printf("    sample_type:");
+        for (int i = 0; i < member_cache->nr_members; i++) {
+            struct perf_event_member *m = &member_cache->members[i];
+            printf(" %s", m->name);
+        }
+        printf("\n");
     }
 }
 
@@ -1057,7 +1069,7 @@ static void print_thread(struct perf_thread_map *threads)
 static void print_dev(struct prof_dev *dev, int indent)
 {
     struct prof_dev *source, *child, *tmp;
-    struct perf_evsel *evsel, *last = NULL;
+    struct perf_evsel *evsel;
     char *cpu_str = perf_cpu_map__string(dev->cpus);
 
     printf("%*s- %s:\n", indent-4, "", dev->prof->name);
@@ -1065,14 +1077,10 @@ static void print_dev(struct prof_dev *dev, int indent)
     dev_printf("cpu: %s\n", cpu_str);
     dev_printf("thread: "); print_thread(dev->threads); printf("\n");
     if (dev->env->workload.pid) dev_printf("workload: %d\n", dev->env->workload.pid);
-    dev_printf("event: ");
-    perf_evlist__for_each_evsel(dev->evlist, evsel) last = evsel;
+    dev_printf("event:\n");
     perf_evlist__for_each_evsel(dev->evlist, evsel) {
-        struct perf_event_attr *attr = perf_evsel__attr(evsel);
-        print_event(attr);
-        if (evsel != last) printf(",");
+        print_event(evsel, indent);
     }
-    printf("\n");
     dev_printf("ringbuffer_size: %lu\n", (u64)dev->pages * page_size * prof_dev_nr_ins(dev));
     dev_printf("users: %d\n", dev->dev_users);
     dev_printf("refcount: %d\n", dev->refcount - (indent>4) /* for_each_child_dev_get */);
