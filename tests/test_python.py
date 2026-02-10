@@ -898,3 +898,248 @@ def __exit__():
                 error_found = True
             print(line, end='', flush=True)
         assert error_found, "Expected error message for non-existent module"
+
+
+# =============================================================================
+# Profiler event source test scripts
+# =============================================================================
+
+# Profile event source - basic counting
+PROFILE_COUNTER_SCRIPT = '''
+count = 0
+
+def profile(event):
+    global count
+    count += 1
+
+def __interval__():
+    global count
+    print(f"ProfileEvents: {count}")
+    count = 0
+'''
+
+# Profile event source - field access
+PROFILE_FIELD_SCRIPT = '''
+def profile(event):
+    # Common fields
+    pid = event._pid
+    tid = event._tid
+    time = event._time
+    cpu = event._cpu
+
+    # Profiler-specific fields from sample_type
+    pid2 = event.pid
+    tid2 = event.tid
+    t = event.time
+    c = event.cpu
+    read = event.read
+
+    # read should be a dict with 'value' key
+    assert isinstance(read, dict), f"read should be dict, got {type(read)}"
+    assert 'value' in read, f"read dict should have 'value' key, got {read.keys()}"
+
+    # Test dict-style access
+    pid3 = event['_pid']
+
+    # Test get with default
+    nonexistent = event.get('nonexistent', -1)
+    assert nonexistent == -1
+
+    # Test 'in' operator
+    assert '_pid' in event
+    assert 'pid' in event
+    assert 'read' in event
+
+    # Test keys(), len()
+    keys = event.keys()
+    assert 'pid' in keys
+    assert 'read' in keys
+    num_fields = len(event)
+
+    # Test to_dict()
+    d = event.to_dict()
+    assert isinstance(d, dict)
+
+def __interval__():
+    print("profile field access ok")
+'''
+
+# Page-faults event source - field access
+PAGE_FAULTS_FIELD_SCRIPT = '''
+def page_faults(event):
+    # Common fields
+    pid = event._pid
+    tid = event._tid
+    cpu = event._cpu
+
+    # page-faults specific fields
+    ip = event.ip
+    addr = event.addr
+
+    assert isinstance(ip, int), f"ip should be int, got {type(ip)}"
+    assert isinstance(addr, int), f"addr should be int, got {type(addr)}"
+
+def __interval__():
+    print("page-faults field access ok")
+'''
+
+# Page-faults with callchain and regs_user
+PAGE_FAULTS_CALLCHAIN_SCRIPT = '''
+has_callchain = False
+has_regs = False
+
+def page_faults(event):
+    global has_callchain, has_regs
+    callchain = event.get('callchain', None)
+    if callchain is not None:
+        has_callchain = True
+        assert isinstance(callchain, list), f"callchain should be list, got {type(callchain)}"
+        if callchain:
+            frame = callchain[0]
+            assert 'symbol' in frame
+            assert 'addr' in frame
+
+    regs = event.get('regs_user', None)
+    if regs is not None:
+        has_regs = True
+        assert isinstance(regs, dict), f"regs_user should be dict, got {type(regs)}"
+        assert 'abi' in regs, f"regs_user should have 'abi', got {regs.keys()}"
+
+def __interval__():
+    print(f"callchain={has_callchain} regs={has_regs}")
+'''
+
+# Profile event source - event.print()
+PROFILE_PRINT_SCRIPT = '''
+count = 0
+
+def profile(event):
+    global count
+    count += 1
+    if count <= 3:
+        event.print()
+
+def __interval__():
+    print("profile print ok")
+'''
+
+# Combined tracepoint + profiler event source
+COMBINED_SCRIPT = '''
+tp_count = 0
+prof_count = 0
+
+def sched__sched_wakeup(event):
+    global tp_count
+    tp_count += 1
+    # Verify tracepoint fields
+    pid = event.pid
+    comm = event.comm
+
+def profile(event):
+    global prof_count
+    prof_count += 1
+    # Verify profiler fields
+    pid = event.pid
+    read = event.read
+
+def __interval__():
+    print(f"tp={tp_count} prof={prof_count}")
+'''
+
+
+class TestPythonProfilerEventSource:
+    """Test profiler event source (dev_tp) support"""
+
+    def test_profile_basic_counting(self, runtime, memleak_check):
+        """Test profile as profiler event source with basic counting"""
+        script_path = write_script(PROFILE_COUNTER_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'profile', '-C', '0', '-i', '1000', '-m', '64', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_profile_field_access(self, runtime, memleak_check):
+        """Test profile event field access: pid, tid, time, cpu, read"""
+        script_path = write_script(PROFILE_FIELD_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'profile/-F 99/', '-C', '0', '-i', '1000', '-m', '64', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_profile_with_callchain(self, runtime, memleak_check):
+        """Test profile event source with callchain (-g)"""
+        script_path = write_script(COUNTER_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'profile/-F 99 -g/', '-C', '0', '-i', '1000', '-m', '128', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_profile_event_print(self, runtime, memleak_check):
+        """Test event.print() for profiler events"""
+        script_path = write_script(PROFILE_PRINT_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'profile/-F 99/', '-C', '0', '-i', '1000', '-m', '64', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_page_faults_field_access(self, runtime, memleak_check):
+        """Test page-faults as profiler event source with field access"""
+        script_path = write_script(PAGE_FAULTS_FIELD_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'page-faults/-N 10/', '-C', '0', '-i', '1000', '-m', '64', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_page_faults_callchain_and_regs(self, runtime, memleak_check):
+        """Test page-faults with callchain and regs_user dict"""
+        script_path = write_script(PAGE_FAULTS_CALLCHAIN_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'page-faults/-g -N 10/', '-C', '0', '-i', '1000', '-m', '128', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_combined_tracepoint_and_profiler(self, runtime, memleak_check):
+        """Test combined tracepoint + profiler event source"""
+        script_path = write_script(COMBINED_SCRIPT)
+        try:
+            prof = PerfProf(['python', '-e', 'sched:sched_wakeup,profile/-F 99/', '--order', '-C', '0', '-i', '1000', '-m', '128', script_path])
+            for std, line in prof.run(runtime, memleak_check):
+                result_check(std, line, runtime, memleak_check)
+        finally:
+            os.unlink(script_path)
+
+    def test_profile_help_template(self, runtime, memleak_check):
+        """Test help template generation for profiler event source"""
+        prof = PerfProf(['python', '-e', 'profile', 'help'])
+        output = []
+        for std, line in prof.run(None, memleak_check):
+            output.append(line)
+            print(line, end='', flush=True)
+        template = ''.join(output)
+        # Should have profiler-specific handler
+        assert 'def profile(event)' in template
+        # Should have Profiler events section in comments
+        assert 'Profiler events' in template
+
+    def test_combined_help_template(self, runtime, memleak_check):
+        """Test help template with mixed tracepoint + profiler events"""
+        prof = PerfProf(['python', '-e', 'sched:sched_wakeup,profile', 'help'])
+        output = []
+        for std, line in prof.run(None, memleak_check):
+            output.append(line)
+            print(line, end='', flush=True)
+        template = ''.join(output)
+        assert 'def sched__sched_wakeup(event)' in template
+        assert 'def profile(event)' in template
