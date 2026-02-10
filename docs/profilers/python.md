@@ -3,8 +3,8 @@
 
 ## 概述
 - **主要用途**: 将perf事件转换为PerfEvent对象，通过自定义Python脚本或模块进行灵活的事件分析和处理。适合快速原型开发、自定义分析逻辑、复杂数据处理场景。
-- **适用场景**: 需要自定义事件处理逻辑、快速验证分析思路、复杂数据聚合、与Python生态集成、使用Cython加速处理
-- **功能分类**: 自定义事件类，数据分析与工具，脚本处理
+- **适用场景**: 需要自定义事件处理逻辑、快速验证分析思路、复杂数据聚合、与Python生态集成、使用Cython加速处理、联合分析多个profiler的事件
+- **功能分类**: 自定义事件类，数据分析与工具，脚本处理，联合分析
 - **最低内核版本**: 支持perf_event的Linux内核
 - **依赖库**: libpython3 (python3-devel/python3-dev)
 - **平台支持**: 所有支持perf_event的CPU架构
@@ -25,7 +25,7 @@ OPTION:
 - `--no-kernel-callchain`: 禁用内核态堆栈采样
 
 PROFILER OPTION:
-- `-e, --event`: 指定tracepoint事件（必需）
+- `-e, --event`: 指定tracepoint事件或profiler事件源（必需）
 - `module`: Python脚本或模块（必需，位置参数）
 - `args...`: 传递给脚本的参数，通过`sys.argv`访问
 
@@ -71,6 +71,12 @@ perf-prof python -e 'sched:sched_wakeup//stack/' analyzer.py
 
 # 传递参数给脚本（使用--分隔perf-prof选项和脚本参数）
 perf-prof python -e sched:sched_wakeup -i 1000 -- analyzer.py --threshold 100 --output result.txt
+
+# 使用profiler事件源：处理profile采样事件
+perf-prof python -e profile -i 1000 profile_analyzer.py
+
+# 联合分析：同时处理tracepoint和profiler事件
+perf-prof python -e sched:sched_wakeup,profile -i 1000 combined.py
 ```
 
 ### 脚本参数
@@ -187,6 +193,10 @@ perf事件 → PerfEvent对象 → 惰性字段解析 → 回调函数 → 用�
 
 ### 事件源
 
+python profiler 支持两类事件源：
+
+#### Tracepoint事件源
+
 - **sample_type**:
   - `PERF_SAMPLE_TID`: 进程/线程ID
   - `PERF_SAMPLE_TIME`: 事件时间戳
@@ -201,6 +211,68 @@ perf事件 → PerfEvent对象 → 惰性字段解析 → 回调函数 → 用�
   - 支持事件过滤器: `-e 'sched:sched_wakeup/pid>1000/'`
   - 支持多个事件: `-e event1,event2,event3`
   - 支持stack属性启用堆栈: `-e 'event//stack/'`
+
+#### Profiler事件源（dev_tp）
+
+通过`-e profiler`指定一个已有的profiler作为事件源，profiler产生的事件通过PERF_RECORD_DEV转发到python进行处理。
+
+- **指定方式**: `-e profiler[/option/ATTR/...]`
+  - `profiler` 为已注册的profiler名称（如 `profile`, `kvm-exit`, `task-state` 等）
+  - `/option/` 指定profiler支持的选项参数
+  - `ATTR` 指定属性（如 `alias=`, `key=` 等）
+
+- **事件字段**: profiler事件的字段由源profiler的`sample_type`决定，sample_type各bit映射为以下成员：
+
+  | sample_type bit | 成员名 | 类型 | 说明 |
+  |-----------------|--------|------|------|
+  | `PERF_SAMPLE_IDENTIFIER` | identifier | u64 | 样本标识符 |
+  | `PERF_SAMPLE_IP` | ip | u64 | 指令指针 |
+  | `PERF_SAMPLE_TID` | pid, tid | u32, u32 | 进程ID和线程ID |
+  | `PERF_SAMPLE_TIME` | time | u64 | 事件时间戳 |
+  | `PERF_SAMPLE_ADDR` | addr | u64 | 内存地址 |
+  | `PERF_SAMPLE_ID` | id | u64 | 样本ID |
+  | `PERF_SAMPLE_STREAM_ID` | stream_id | u64 | 流ID |
+  | `PERF_SAMPLE_CPU` | cpu | u32 | CPU编号 |
+  | `PERF_SAMPLE_PERIOD` | period | u64 | 采样周期 |
+  | `PERF_SAMPLE_CALLCHAIN` | callchain | list | 调用栈（与tracepoint的`_callchain`格式相同） |
+  | `PERF_SAMPLE_RAW` | raw | bytes | 原始数据 |
+  | `PERF_SAMPLE_READ` | read | dict | 计数器读取值（见下方说明） |
+  | `PERF_SAMPLE_BRANCH_STACK` | branch_stack | bytes | 分支栈 `{ u64 nr; lbr[nr]; }` |
+  | `PERF_SAMPLE_REGS_USER` | regs_user | dict | 用户态寄存器 `{'abi': int, 'reg': int, ...}` |
+  | `PERF_SAMPLE_STACK_USER` | stack_user | bytes | 用户态栈数据 `{ u64 size; data[size]; }` |
+  | `PERF_SAMPLE_WEIGHT` | weight | u64 | 采样权重 |
+  | `PERF_SAMPLE_WEIGHT_STRUCT` | weight | u64 | 采样权重结构（与WEIGHT互斥） |
+  | `PERF_SAMPLE_DATA_SRC` | data_src | u64 | 数据来源 |
+  | `PERF_SAMPLE_TRANSACTION` | transaction | u64 | 事务 |
+  | `PERF_SAMPLE_REGS_INTR` | regs_intr | dict | 中断时寄存器 `{'abi': int, 'reg': int, ...}` |
+  | `PERF_SAMPLE_PHYS_ADDR` | phys_addr | u64 | 物理地址 |
+  | `PERF_SAMPLE_AUX` | aux | bytes | AUX数据 `{ u64 size; data[size]; }` |
+  | `PERF_SAMPLE_CGROUP` | cgroup | u64 | Cgroup ID |
+  | `PERF_SAMPLE_DATA_PAGE_SIZE` | data_page_size | u64 | 数据页大小 |
+  | `PERF_SAMPLE_CODE_PAGE_SIZE` | code_page_size | u64 | 代码页大小 |
+
+  寄存器字段以字典形式返回，`abi`表示ABI版本，其余key为架构相关的寄存器名：
+  - x86_64: `ax,bx,cx,dx,si,di,bp,sp,ip,flags,cs,ss,ds,es,fs,gs,r8-r15`
+  - i386: `ax,bx,cx,dx,si,di,bp,sp,ip,flags,cs,ss,ds,es,fs,gs`
+  - arm64: `x0-x28,x29,lr,sp,pc`
+
+  `read`字段按`attr->read_format`解码为字典，格式取决于是否使用`PERF_FORMAT_GROUP`：
+  - 非GROUP: `{'value': int, 'time_enabled': int, 'time_running': int, 'id': int, 'lost': int}`
+  - GROUP: `{'nr': int, 'time_enabled': int, 'time_running': int, 'cntr': [{'value': int, 'id': int, 'lost': int}, ...]}`
+
+  其中`time_enabled`/`time_running`/`id`/`lost`仅在对应`PERF_FORMAT_*`标志启用时出现。
+
+- **示例**:
+  ```bash
+  # 使用profile作为事件源，处理CPU采样事件
+  perf-prof python -e profile -i 1000 analyzer.py
+
+  # profile事件源指定选项参数
+  perf-prof python -e 'profile/-F 997 -g/' -i 1000 analyzer.py
+
+  # 联合分析tracepoint和profiler事件
+  perf-prof python -e sched:sched_wakeup,profile -i 1000 combined.py
+  ```
 
 ### 事件处理
 
@@ -217,10 +289,15 @@ perf事件 → PerfEvent对象 → 惰性字段解析 → 回调函数 → 用�
 | `sys__event_name(event)` | 事件特定处理器 | event: PerfEvent对象 |
 
 **事件特定处理器命名规则**
-- 格式: `{sys}__{name}`，其中`sys`是事件类别，`name`是事件名称
-- 特殊字符`-`、`.`、`:`转换为`_`
-- 示例: `sched:sched_wakeup` → `sched__sched_wakeup(event)`
-- 示例: `sched:sched-migrate` → `sched__sched_migrate(event)`
+- **Tracepoint事件**: 格式 `{sys}__{name}`，其中`sys`是事件类别，`name`是事件名称
+  - 特殊字符`-`、`.`、`:`转换为`_`
+  - 示例: `sched:sched_wakeup` → `sched__sched_wakeup(event)`
+  - 示例: `sched:sched-migrate` → `sched__sched_migrate(event)`
+- **Profiler事件**: 格式 `{profiler_name}`，直接使用profiler名称
+  - 特殊字符`-`、`.`、`:`转换为`_`
+  - 示例: `profile` → `profile(event)`
+  - 示例: `kvm-exit` → `kvm_exit(event)`
+  - 示例: `task-state` → `task_state(event)`
 
 **使用alias区分相同事件**
 - 当通过`-e`指定多个相同事件时，使用`alias=`属性区分
@@ -253,7 +330,9 @@ perf事件 → PerfEvent对象 → 惰性字段解析 → 回调函数 → 用�
 
 **PerfEvent对象字段**
 
-PerfEvent是一个惰性求值的事件对象，直接访问字段比字典更高效。
+PerfEvent是一个惰性求值的事件对象，直接访问字段比字典更高效。两种事件类型的字段集不同：
+
+**Tracepoint事件字段** (`-e sys:name`)
 
 | 字段名 | 类型 | 描述 | 求值方式 |
 |--------|------|------|----------|
@@ -262,13 +341,28 @@ PerfEvent是一个惰性求值的事件对象，直接访问字段比字典更�
 | `_time` | int | 事件时间戳(ns)，用于延迟计算 | 直接访问 |
 | `_cpu` | int | CPU编号 | 直接访问 |
 | `_period` | int | 采样周期 | 直接访问 |
-| `common_flags` | int | trace_entry的common_flags | 直接访问 |
-| `common_preempt_count` | int | trace_entry的preempt_count | 直接访问 |
-| `common_pid` | int | trace_entry的common_pid | 直接访问 |
+| `common_type` | int | trace_entry的common_type（事件类型ID） | 从raw数据读取 |
+| `common_flags` | int | trace_entry的common_flags | 从raw数据读取 |
+| `common_preempt_count` | int | trace_entry的preempt_count | 从raw数据读取 |
+| `common_pid` | int | trace_entry的common_pid | 从raw数据读取 |
 | `_realtime` | int | 真实时间(ns，Unix纪元)，仅用于显示，有偏差不可用于延迟计算 | 惰性计算 |
 | `_callchain` | list | 调用栈列表（使用`-g`或`stack`属性时） | 惰性计算 |
 | `_event` | str | 事件名称（仅`__sample__`） | 惰性计算 |
-| `<field>` | 各类型 | 事件特定字段 | 惰性解析 |
+| `<field>` | 各类型 | 事件特定tep字段 | 惰性解析 |
+
+**Profiler事件字段** (`-e profiler`)
+
+| 字段名 | 类型 | 描述 | 求值方式 |
+|--------|------|------|----------|
+| `_pid` | int | 进程ID | 直接访问 |
+| `_tid` | int | 线程ID | 直接访问 |
+| `_time` | int | 事件时间戳(ns) | 直接访问 |
+| `_cpu` | int | CPU编号 | 直接访问 |
+| `_realtime` | int | 真实时间(ns，Unix纪元) | 惰性计算 |
+| `_event` | str | profiler名称或alias | 惰性计算 |
+| `<field>` | 各类型 | 由源profiler的sample_type决定的字段 | 惰性解析 |
+
+Profiler事件的 `<field>` 字段取决于源profiler的sample_type配置，常见字段包括：`ip`（指令指针）、`period`（采样周期）、`callchain`（调用栈）等。
 
 **PerfEvent访问方式**
 
@@ -319,6 +413,7 @@ event.print(callchain=False)            # 不显示调用栈
 # 字符串表示
 print(str(event))    # 字典风格输出
 print(repr(event))   # <PerfEvent sched:sched_wakeup cpu=0 pid=1234 time=...>
+                     # 或 <PerfEvent profile cpu=0 pid=1234 time=...>（profiler事件）
 
 # 计算哈希（可用于去重）
 h = hash(event)
@@ -352,10 +447,22 @@ _callchain = [
 | `dso` | str | DSO名称，内核为"[kernel.kallsyms]"，用户态为库/可执行文件路径 |
 
 **字段类型映射**
+
+Tracepoint事件：
 - 数值字段 → Python int
 - 字符串字段 → Python str
 - 数组字段 → Python bytes
 - 动态字符串 → Python str
+
+Profiler事件（基于member size）：
+- u64/u32/u16/u8 字段 → Python int
+- callchain字段 → Python list（与tracepoint的`_callchain`格式相同）
+- raw字段 → Python bytes（原始trace数据）
+- branch_stack字段 → Python bytes（`{ u64 nr; lbr[nr]; }`）
+- stack_user字段 → Python bytes（`{ u64 size; data[size]; }`）
+- aux字段 → Python bytes（`{ u64 size; data[size]; }`）
+- regs_user/regs_intr字段 → Python dict（`{'abi': int, 'reg_name': int, ...}`）
+- read字段 → Python dict（按read_format解码，见上方说明）
 
 ### 内建模块: perf_prof
 
@@ -397,12 +504,14 @@ event.print(timestamp=True, callchain=True)
 - `timestamp`: 是否打印时间戳（默认 True）
 - `callchain`: 是否打印调用栈（默认 True，需要事件包含 `_callchain` 字段）
 
-输出格式：
+对于tracepoint事件，输出格式：
 ```
 YYYY-MM-DD HH:MM:SS.uuuuuu            comm   pid .... [cpu] time.us: sys:name: fields
     addr symbol+offset (dso)
     ...
 ```
+
+对于profiler事件，调用源profiler的打印方法（`prof_dev_print_event`），输出格式由源profiler决定。
 
 **使用示例**
 ```python
@@ -481,16 +590,26 @@ perf-prof python -e sched:sched_wakeup help > my_script.py
 # Exceptions raised in functions will be printed but won't stop processing.
 #
 # PerfEvent object fields:
+#
+#   Tracepoint events (-e sys:name):
 #   _pid, _tid    : Process/thread ID (int)
 #   _time         : Event timestamp in nanoseconds (int)
 #   _cpu          : CPU number (int)
 #   _period       : Sample period (int)
-#   common_flags, common_preempt_count, common_pid : trace_entry fields
+#   common_type, common_flags, common_preempt_count, common_pid : trace_entry fields
 #   _realtime     : Wall clock time in ns since Unix epoch (int, lazy computed)
 #                   Note: Has drift, only for display, not for latency calc
 #   _callchain    : Call stack list (when -g or stack attribute is set, lazy computed)
 #   _event        : Event name with alias if set (str, only in __sample__, lazy computed)
 #   <field>       : Event-specific fields (int/str/bytes, lazy computed)
+#
+#   Profiler events (-e profiler):
+#   _pid, _tid    : Process/thread ID (int)
+#   _time         : Event timestamp in nanoseconds (int)
+#   _cpu          : CPU number (int)
+#   _realtime     : Wall clock time in ns since Unix epoch (int, lazy computed)
+#   _event        : Event name with alias if set (str, only in __sample__, lazy computed)
+#   <field>       : Profiler-specific fields based on sample_type (lazy computed)
 #
 # PerfEvent access methods:
 #   event.field or event['field']  - Access field value
@@ -572,7 +691,7 @@ def __sample__(event):
 ```
 
 ### 基础分析方法
-1. 确定要分析的tracepoint事件
+1. 确定要分析的tracepoint事件或profiler事件源
 2. 使用`perf-prof python -e EVENT help`生成脚本模板
 3. 根据模板编写Python脚本实现分析逻辑
 4. 运行分析器收集数据
@@ -706,6 +825,68 @@ perf-prof python -e 'sched:sched_wakeup//stack/' -i 1000 callstack_analyzer.py
 
 # 同时采样用户态堆栈
 perf-prof python -e sched:sched_wakeup -g --user-callchain -i 1000 callstack_analyzer.py
+```
+
+### Profiler事件源示例
+
+**处理profile采样事件**
+```python
+# profile_analyzer.py - 分析CPU采样的热点函数
+from collections import Counter
+
+hot_functions = Counter()
+
+def profile(event):
+    """处理profile profiler的采样事件"""
+    ip = event.get('ip', 0)
+    callchain = event.get('callchain', [])
+
+    # 统计热点函数（取调用栈顶部）
+    if callchain:
+        top_frame = callchain[0]
+        hot_functions[top_frame['symbol']] += 1
+
+def __interval__():
+    print(f"\n{'FUNCTION':<40} {'COUNT':>8}")
+    print('-' * 50)
+    for func, count in hot_functions.most_common(10):
+        print(f"{func:<40} {count:>8}")
+    hot_functions.clear()
+```
+
+```bash
+perf-prof python -e 'profile/-F 997 -g/' -i 1000 profile_analyzer.py
+```
+
+**联合分析tracepoint和profiler事件**
+```python
+# combined.py - 同时分析调度事件和CPU采样
+wakeup_count = 0
+sample_count = 0
+
+def sched__sched_wakeup(event):
+    """处理tracepoint事件"""
+    global wakeup_count
+    wakeup_count += 1
+
+def profile(event):
+    """处理profiler事件"""
+    global sample_count
+    sample_count += 1
+    # 打印事件（使用源profiler的格式）
+    # event.print()
+
+def __interval__():
+    print(f"Wakeups: {wakeup_count}, CPU samples: {sample_count}")
+
+def __sample__(event):
+    """未定义特定处理器的事件走这里"""
+    # event._event 可用于区分事件类型
+    pass
+```
+
+```bash
+perf-prof python -e sched:sched_wakeup,profile -i 1000 combined.py
 ```
 
 ### 高级技巧
