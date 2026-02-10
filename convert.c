@@ -1051,8 +1051,20 @@ struct perf_evsel *perf_event_evsel(struct prof_dev *dev, union perf_event *even
     if (evlist->nr_entries == 1)
         return perf_evlist__first(evlist);
 
-    if (dev->pos.id_pos < 0)
-        return NULL;
+    if (dev->pos.id_pos < 0) {
+        struct perf_evsel *evsel, *first = NULL;
+
+        perf_evlist__for_each_evsel(evlist, evsel) {
+            struct perf_event_attr *attr = perf_evsel__attr(evsel);
+            if (is_sampling_event(attr)) {
+                if (!first)
+                    first = evsel;
+                else
+                    return NULL;
+            }
+        }
+        return first;
+    }
 
     id = *(u64 *)((void *)event->sample.array + dev->pos.id_pos);
     return perf_evlist__id_to_evsel(dev->evlist, id, NULL);
