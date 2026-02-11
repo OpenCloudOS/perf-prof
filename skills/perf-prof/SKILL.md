@@ -1,6 +1,6 @@
 ---
 name: perf-prof
-description: 使用perf-prof进行Linux系统问题分析。perf-prof是基于perf_event的系统级分析工具，事件在内存中实时处理，可长期运行。触发场景：(1) CPU使用率高、热点分析 (2) 进程状态异常(D/S状态多) (3) 延迟抖动、响应慢 (4) 内存泄露或增长异常 (5) 块设备IO慢 (6) 虚拟机性能问题 (7) 事件聚合统计。核心分析器：profile(CPU采样)、task-state(进程状态)、multi-trace(延迟分析)、kmemleak(内存泄露)、blktrace(IO延迟)、top/sql(聚合统计)、kvm-exit(虚拟化退出)、rundelay(调度延迟)、syscalls(系统调用耗时)。适用于：性能问题定位、内核/应用开发调试、学习理解Linux内核机制（调度、内存、IO、中断等）。
+description: 使用perf-prof进行Linux系统问题分析。perf-prof是基于perf_event的系统级分析工具，事件在内存中实时处理，可长期运行。触发场景：(1) CPU使用率高、热点分析 (2) 进程状态异常(D/S状态多) (3) 延迟抖动、响应慢 (4) 内存泄露或增长异常 (5) 块设备IO慢 (6) 虚拟机性能问题 (7) 事件聚合统计 (8) 自定义脚本分析。核心分析器：profile(CPU采样)、task-state(进程状态)、multi-trace(延迟分析)、kmemleak(内存泄露)、blktrace(IO延迟)、top/sql(聚合统计)、kvm-exit(虚拟化退出)、rundelay(调度延迟)、syscalls(系统调用耗时)、python(自定义脚本分析)。适用于：性能问题定位、内核/应用开发调试、学习理解Linux内核机制（调度、内存、IO、中断等）。
 ---
 
 # perf-prof 系统性能分析
@@ -56,7 +56,8 @@ perf-prof 是一个Linux系统级性能分析工具，基于perf_event在内存�
    ├── 事件计数
    |   ├── 高频计数、微突发检测 → hrcount
    |   └── 低频计数 → stat
-   └── 通用事件追踪 → trace
+   ├── 通用事件追踪 → trace
+   └── 自定义脚本分析 → python
    ```
 
 ### 第一步(续)：问题定界 - 用户态 vs 内核态 - Guest vs Host
@@ -118,6 +119,7 @@ perf-prof 是一个Linux系统级性能分析工具，基于perf_event在内存�
 - [blktrace](references/profilers/blktrace.md) - 块设备IO分析：分析从IO请求创建到完成的整个生命周期，跟踪块设备上的IO延迟
 - [kvm-exit](references/profilers/kvm-exit.md) - KVM虚拟化退出延迟分析：分析KVM虚拟机退出(VM-Exit)到重新进入(VM-Entry)之间的延迟，统计不同退出原因的延迟分布
 - [trace](references/profilers/trace.md) - 事件追踪与打印：实时跟踪和显示内核/用户空间事件，是最基础和灵活的事件分析工具
+- [python](references/profilers/python.md) - Python脚本事件处理：将perf事件转换为PerfEvent对象，通过自定义Python脚本进行灵活分析，支持tracepoint和profiler事件源的联合分析
 - [breakpoint](references/profilers/breakpoint.md) - 硬件断点分析：利用CPU调试寄存器跟踪指定地址的读写执行，支持x86内核地址写入值解码
 
 以下分析器无文档，必须通过第三步获取概要信息及示例：
@@ -154,7 +156,8 @@ perf-prof 是一个Linux系统级性能分析工具，基于perf_event在内存�
 - 虚拟化分析：`kvm-exit`,`kvmmmu`,`bpf:kvm_exit`
 - 硬件性能监控：`hwstat`,`llcstat`,`tlbstat`,`split-lock`,`ldlat-stores`,`ldlat-loads`,`breakpoint`
 - 中断与死锁：`irq-off`,`watchdog`
-- 数据分析与工具：`sql`,`trace`,`breakpoint`,`expr`,`misc`,`kcore`,`list`,`usdt`,`help`
+- 数据分析：`sql`,`python`,`trace`
+- 辅助工具：`expr`,`misc`,`kcore`,`list`,`usdt`,`help`
 
 **按分析技术分类**
 - 采样分析：`profile`
@@ -170,13 +173,14 @@ perf-prof 是一个Linux系统级性能分析工具，基于perf_event在内存�
 - 状态监控：`task-state`,`oncpu`
   - 进程状态：`task-state`
 - 追踪分析：`trace`
+- 脚本分析：`python`
 - 断点分析：`breakpoint`
-- 联合分析：`multi-trace`,`trace`
+- 联合分析：`multi-trace`,`trace`,`python`
 
 **按事件依赖程度分类**
 - 无事件依赖类：`misc`,`kcore`,`list`,`usdt`,`help`
 - 内建事件类：`tlbstat`,`llcstat`,`hwstat`,`breakpoint`,`kvmmmu`,`irq-off`,`page-faults`,`ldlat-stores`,`ldlat-loads`,`oncpu`,`blktrace`,`sched-migrate`,`kvm-exit`,`percpu-stat`,`watchdog`,`task-state`,`cpu-util`,`profile`,`split-lock`
-- 自定义事件类：`expr`,`stat`,`hrcount`,`event-care`,`hrtimer`,`rundelay`,`nested-trace`,`syscalls`,`kmemprof`,`multi-trace`,`top`,`num-dist`,`kmemleak`,`trace`,`sql`
+- 自定义事件类：`expr`,`stat`,`hrcount`,`event-care`,`hrtimer`,`rundelay`,`nested-trace`,`syscalls`,`kmemprof`,`multi-trace`,`top`,`num-dist`,`kmemleak`,`trace`,`sql`,`python`
 
 **ebpf类**
 `bpf:kvm_exit`
@@ -518,6 +522,6 @@ filter: trace events filter
 ## 参考文档
 
 详细的分析器文档在 `references/` 目录：
-- 分析器使用指南：profile.md, top.md, task-state.md, multi-trace.md, hrcount.md, breakpoint.md等
+- 分析器使用指南：profile.md, top.md, task-state.md, multi-trace.md, hrcount.md, breakpoint.md, python.md等
 - 过滤器语法：Event_filtering.md
 - 表达式系统：expr.md
