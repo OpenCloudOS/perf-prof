@@ -987,6 +987,7 @@ static void print_event(struct perf_evsel *evsel, int indent)
     struct perf_event_attr *attr = perf_evsel__attr(evsel);
     struct perf_event_member_cache *member_cache = perf_evsel_member_cache(evsel);
     const char *str = "unknown";
+    int i;
 
     if (attr->type == PERF_TYPE_HARDWARE) {
         switch (attr->config) {
@@ -1034,7 +1035,7 @@ static void print_event(struct perf_evsel *evsel, int indent)
 
     if (member_cache) {
         dev_printf("    sample_type:");
-        for (int i = 0; i < member_cache->nr_members; i++) {
+        for (i = 0; i < member_cache->nr_members; i++) {
             struct perf_event_member *m = &member_cache->members[i];
             printf(" %s", m->name);
         }
