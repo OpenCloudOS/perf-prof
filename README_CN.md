@@ -172,6 +172,7 @@ perf-prof 提供 30+ 专用分析器，按类别组织：
 - **top** - 键值统计分析
 - **multi-trace** - 多事件关系分析
 - **syscalls** - 系统调用延迟分析
+- **python** - Python 脚本事件处理
 
 ### 工具类
 - **trace** - 事件跟踪
@@ -274,6 +275,7 @@ num=EXPR                 # 数值分布字段
 - [kvm-exit](docs/profilers/kvm-exit.md) - KVM 退出分析
 - [blktrace](docs/profilers/blktrace.md) - 块设备 I/O 跟踪
 - [trace](docs/profilers/trace.md) - 事件跟踪
+- [python](docs/profilers/python.md) - Python 脚本事件处理
 
 ### 高级主题
 

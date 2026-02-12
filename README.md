@@ -164,7 +164,7 @@ perf-prof provides 30+ specialized profilers organized by category:
 - **top** - Key-value statistical analysis
 - **multi-trace** - Multi-event relationship analysis
 - **syscalls** - System call latency analysis
-- **expr** - Expression-based event processing
+- **python** - Custom Python script event processing
 
 ### Utilities
 - **trace** - Event tracking
@@ -267,6 +267,7 @@ num=EXPR                 # Number distribution field
 - [kvm-exit](docs/profilers/kvm-exit.md) - KVM exit analysis
 - [blktrace](docs/profilers/blktrace.md) - Block device I/O tracking
 - [trace](docs/profilers/trace.md) - Event tracing
+- [python](docs/profilers/python.md) - Python script event processing
 
 ### Advanced Topics
 
