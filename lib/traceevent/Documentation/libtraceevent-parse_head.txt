@@ -16,19 +16,19 @@ int *tep_parse_header_page*(struct tep_handle pass:[*]_tep_, char pass:[*]_buf_,
 
 DESCRIPTION
 -----------
-The _tep_parse_header_page()_ function parses the header page data from _buf_,
+The *tep_parse_header_page()* function parses the header page data from _buf_,
 and initializes the _tep_, trace event parser context, with it. The buffer
 _buf_ is with _size_, and is supposed to be copied from
 tracefs/events/header_page.
 
 Some old kernels do not have header page info, in this case the
-_tep_parse_header_page()_ function  can be called with _size_ equal to 0. The
+*tep_parse_header_page()* function  can be called with _size_ equal to 0. The
 _tep_ context is initialized with default values. The _long_size_ can be used in
 this use case, to set the size of a long integer to be used.
 
 RETURN VALUE
 ------------
-The _tep_parse_header_page()_ function returns 0 in case of success, or -1
+The *tep_parse_header_page()* function returns 0 in case of success, or -1
 in case of an error.
 
 EXAMPLE
@@ -60,7 +60,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -79,4 +79,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

@@ -3,22 +3,35 @@
  * Copyright (C) 2010 Red Hat Inc, Steven Rostedt <srostedt@redhat.com>
  *
  */
-#ifndef __UTIL_H
-#define __UTIL_H
+#ifndef __TEP_EVENT_UTIL_H
+#define __TEP_EVENT_UTIL_H
 
 #include <ctype.h>
+#include <stdarg.h>
+#include <stdbool.h>
+
+#include "event-parse.h"
+
+void tep_warning(const char *fmt, ...);
+void tep_info(const char *fmt, ...);
 
 /* Can be overridden */
-void warning(const char *fmt, ...);
-void pr_stat(const char *fmt, ...);
-void vpr_stat(const char *fmt, va_list ap);
+int tep_vprint(const char *name, enum tep_loglevel level,
+	       bool print_err, const char *fmt, va_list ap);
 
-/* Always available */
-void __warning(const char *fmt, ...);
-void __pr_stat(const char *fmt, ...);
+/* The actual call of tep_vprint() for overrides to use */
+int __tep_vprint(const char *name, enum tep_loglevel level,
+		 bool print_err, const char *fmt, va_list ap);
 
-void __vwarning(const char *fmt, ...);
-void __vpr_stat(const char *fmt, ...);
+
+#define __deprecated(msg) __attribute__((deprecated("msg")))
+
+/* For backward compatibilty, do not use */
+int tep_vwarning(const char *name, const char *fmt, va_list ap) __deprecated(Use tep_vprint instead);
+void pr_stat(const char *fmt, ...) __deprecated(Use tep_info instead);
+void vpr_stat(const char *fmt, va_list ap) __deprecated(Use tep_vprint instead);
+void __pr_stat(const char *fmt, ...) __deprecated(Use tep_info instead);;
+void __vpr_stat(const char *fmt, va_list ap) __deprecated(Use tep_vprint instead);;
 
 #define min(x, y) ({				\
 	typeof(x) _min1 = (x);			\

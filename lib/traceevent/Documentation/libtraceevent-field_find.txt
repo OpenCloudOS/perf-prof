@@ -22,18 +22,18 @@ DESCRIPTION
 These functions search for a field with given name in an event. The field
 returned can be used to find the field content from within a data record.
 
-The _tep_find_common_field()_ function searches for a common field with _name_
+The *tep_find_common_field()* function searches for a common field with _name_
 in the _event_.
 
-The _tep_find_field()_ function searches for an event specific field with
+The *tep_find_field()* function searches for an event specific field with
 _name_ in the _event_.
 
-The _tep_find_any_field()_ function searches for any field with _name_ in the
+The *tep_find_any_field()* function searches for any field with _name_ in the
 _event_.
 
 RETURN VALUE
 ------------
-The _tep_find_common_field(), _tep_find_field()_ and _tep_find_any_field()_
+The _tep_find_common_field(), *tep_find_field()* and _tep_find_any_field()_
 functions return a pointer to the found field, or NULL in case there is no field
 with the requested name.
 
@@ -96,7 +96,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -115,4 +115,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

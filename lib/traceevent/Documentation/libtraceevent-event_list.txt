@@ -24,7 +24,7 @@ struct tep_event pass:[*]pass:[*]*tep_list_events_copy*(struct tep_handle pass:[
 
 DESCRIPTION
 -----------
-The _tep_list_events()_ function returns an array of pointers to the events,
+The *tep_list_events()* function returns an array of pointers to the events,
 sorted by the _sort_type_ criteria. The last element of the array is NULL.
 The returned memory must not be freed, it is managed by the library.
 The function is not thread safe. The _tep_ argument is trace event parser
@@ -36,18 +36,18 @@ context. The _sort_type_ argument is the required sort criteria:
 	_TEP_EVENT_SORT_SYSTEM_	- sort by the event (system, name, id) triplet.
 --
 
-The _tep_list_events_copy()_ is a thread safe version of _tep_list_events()_.
+The *tep_list_events_copy()* is a thread safe version of _tep_list_events()_.
 It has the same behavior, but the returned array is allocated internally and
 must be freed by the caller. Note that the content of the array must not be
 freed (see the EXAMPLE below).
 
 RETURN VALUE
 ------------
-The _tep_list_events()_ function returns an array of pointers to events.
+The *tep_list_events()* function returns an array of pointers to events.
 In case of an error, NULL is returned. The returned array must not be freed,
 it is managed by the library.
 
-The _tep_list_events_copy()_ function returns an array of pointers to events.
+The *tep_list_events_copy()* function returns an array of pointers to events.
 In case of an error, NULL is returned. The returned array must be freed by
 the caller.
 
@@ -100,7 +100,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -119,4 +119,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

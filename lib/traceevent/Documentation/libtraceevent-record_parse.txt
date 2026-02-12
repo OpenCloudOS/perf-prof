@@ -30,19 +30,19 @@ DESCRIPTION
 -----------
 This set of functions can be used to extract common fields from a record.
 
-The _tep_data_type()_ function gets the event id from the record _rec_.
+The *tep_data_type()* function gets the event id from the record _rec_.
 It reads the "common_type" field. The _tep_ argument is the trace event parser
 context.
 
-The _tep_data_pid()_ function gets the process id from the record _rec_.
+The *tep_data_pid()* function gets the process id from the record _rec_.
 It reads the "common_pid" field. The _tep_ argument is the trace event parser
 context.
 
-The _tep_data_preempt_count()_ function gets the preemption count from the
+The *tep_data_preempt_count()* function gets the preemption count from the
 record _rec_. It reads the "common_preempt_count" field. The _tep_ argument is
 the trace event parser context.
 
-The _tep_data_flags()_ function gets the latency flags from the record _rec_.
+The *tep_data_flags()* function gets the latency flags from the record _rec_.
 It reads the "common_flags" field. The _tep_ argument is the trace event parser
 context. Supported latency flags are:
 [verse]
@@ -56,14 +56,14 @@ context. Supported latency flags are:
 
 RETURN VALUE
 ------------
-The _tep_data_type()_ function returns an integer, representing the event id.
+The *tep_data_type()* function returns an integer, representing the event id.
 
-The _tep_data_pid()_ function returns an integer, representing the process id
+The *tep_data_pid()* function returns an integer, representing the process id
 
-The _tep_data_preempt_count()_ function returns an integer, representing the
+The *tep_data_preempt_count()* function returns an integer, representing the
 preemption count.
 
-The _tep_data_flags()_ function returns an integer, representing the latency
+The *tep_data_flags()* function returns an integer, representing the latency
 flags. Look at the _trace_flag_type_ enum for supported flags.
 
 All these functions in case of an error return a negative integer.
@@ -115,7 +115,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -134,4 +134,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

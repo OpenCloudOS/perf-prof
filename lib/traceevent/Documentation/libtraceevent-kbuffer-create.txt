@@ -1,0 +1,233 @@
+libtraceevent(3)
+================
+
+NAME
+----
+kbuffer_alloc, kbuffer_dup, kbuffer_free, kbuffer_load_subbuffer, kbuffer_subbuffer,
+kbuffer_refresh, kbuffer_subbuffer_size, kbuffer_start_of_data - Creating of kbuffer element to parse
+the Linux kernel tracing ring buffer
+
+SYNOPSIS
+--------
+[verse]
+--
+*#include <kbuffer.h>*
+
+enum kbuffer_endian {
+	KBUFFER_ENDIAN_BIG,
+	KBUFFER_ENDIAN_LITTLE,
+	KBUFFER_ENDIAN_SAME_AS_HOST,
+};
+
+enum kbuffer_long_size {
+	KBUFFER_LSIZE_4,
+	KBUFFER_LSIZE_8,
+	KBUFFER_LSIZE_SAME_AS_HOST,
+};
+
+struct kbuffer;
+struct tep_handle;
+
+struct kbuffer pass:[*]*kbuffer_alloc*(enum kbuffer_long_size _size_, enum kbuffer_endian _endian_);
+struct kbuffer pass:[*]*kbuffer_dup*(struct kbuffer pass:[*]_kbuf_);
+void *kbuffer_free*(struct kbuffer pass:[*]_kbuf_);
+int *kbuffer_load_subbuffer*(struct kbuffer pass:[*]_kbuf_, void pass:[*]_subbuffer_);
+int *kbuffer_subbuffer_size*(struct kbuffer pass:[*]_kbuf_);
+int *kbuffer_refresh*(struct kbuffer pass:[*]_kbuf_);
+int *kbuffer_start_of_data*(struct kbuffer pass:[*]_kbuf_);
+void pass:[*]*kbuffer_subbuffer*(struct kbuffer pass:[*]_kbuf);
+--
+
+DESCRIPTION
+-----------
+These functions create a _kbuffer_ handle that can be used to parse the raw sub buffers
+of the Linux kernel tracing ring buffer. The ring buffer is found in the tracefs
+directory, and can be retrieved by *tracefs_instance_get_file(3)* at
+*per_cpu/cpuX/trace_pipe_raw* where *X* is replaced by the per CPU number of
+the specified ring buffer. The ring buffer inside the kernel is split up per
+CPU, such that the raw ring buffer must be retrieved per CPU as well.
+
+The *kbuffer_alloc()* will create a descriptor that can be used to manage a sub buffer
+read by the ring buffer. The _size_ parameter denotes what the word size is
+for the given buffer (note, this works from reading raw data from machines other
+than the machine that is calling this function). The _endian_ denotes the endian
+for the machine.
+
+If _endian_ is set to _KBUFFER_ENDIAN_SAME_AS_HOST_ the endian will be set to the same
+as the host endianess, which is useful when the application is reading the
+ring buffer data directly from the same machine it is running on.
+
+If _size_ is set to _KBUFFER_LSIZE_SAME_AS_HOST_, if the word size is 8, it will
+set the kbuffer descriptor to long size of 8. But if the size is 4, then it
+will then perform a *uname(2)* call, and if the _machine_ field has the string "64"
+in it, it will be set to 8 byte long size and not 4 byte. This is because the
+ring buffer long size is dependent on the kernel and not user space.
+
+The *kbuffer_dup()* function will duplicate an existing kbuffer structure with
+an allocated new one. It will have all the properties of the passed in _kbuf_,
+including pointing to the same subbuffer that was loaded in the _kbuf_.
+It must be freed with *kbuffer_free()*.
+
+The *kbuffer_free()* function will free the resources created by *kbuffer_alloc()*.
+
+The *kbuffer_load_subbuffer()* will take a _subbuffer_ which is a raw data blob
+from the tracefs *trace_pipe_raw* file. The Linux tracing ring buffer is broken up
+into sub buffers. Each sub buffer is as stand alone data segment that has all the
+information to split out the individual events and time stamps. This sub buffer
+is what kbuffer uses to walk the events.
+
+The *kbuffer_subbuffer_size()* returns the location of the end of the last event
+on the sub-buffer. It does not return the size of the sub-buffer itself.
+
+The *kbuffer_refresh()* is to be used if more writes were done on the loaded kbuffer
+where the size of the kbuffer needs to be refreshed to be able to read the new
+events that were written since the last *kbuffer_load_subbuffer()* was called on it.
+
+Note, no memory barriers are implemented with this function and any synchronization
+with the writer is the responsibility of the application.
+
+The *kbuffer_start_of_data()* function returns the offset of where the actual
+data load of the sub-buffer begins.
+
+The *kbuffer_subbuffer()* function returns the pointer to the currently loaded
+subbuffer. That is, the last subbuffer that was loaded by *kbuffer_load_subbuffer()*.
+If no subbuffer was loaded NULL is returned.
+
+RETURN VALUE
+------------
+*kbuffer_alloc()* returns an allocated kbuffer descriptor or NULL on error.
+The returned descriptor must be freed with *kbuffer_free()*
+
+*kbuffer_load_subbuffer()* returns 0 on success and -1 on error.
+
+*kbuffer_subbuffer_size()* returns the index on the subbuffer where the end
+of the last event is located.
+
+*kbuffer_start_of_data()* returns the offset of where the data begins on the
+sub-buffer loaded in _kbuf_.
+
+*kbuffer_subbuffer()* returns the last loaded subbuffer to _kbuf_ that was loaded
+by *kbuffer_load_subbuffer()* or NULL if none was loaded.
+
+*kbuffer_refresh()* returns 0 on success and -1 if _kbuf_ is NULL or it does not
+have a subbuffer loaded via *kbuffer_load_subbuffer()*.
+
+EXAMPLE
+-------
+[source,c]
+--
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include <kbuffer.h>
+
+int main (int argc, char **argv)
+{
+	unsigned long long ts;
+	struct kbuffer *kbuf;
+	struct stat st;
+	char *buf;
+	void *event;
+	int ret;
+	int fd;
+	int i = 0;
+
+	if (argc < 2) {
+		printf("usage: %s raw-subbuffer-page\n", argv[0]);
+		printf(" Try: dd count=1 bs=4096 if=/sys/kernel/tracing/per_cpu/cpu0/trace_pipe_raw of=/tmp/file\n");
+		exit(0);
+	}
+
+	if (stat(argv[1], &st) < 0) {
+		perror("stat");
+		exit(-1);
+	}
+
+	buf = malloc(st.st_size);
+	if (!buf) {
+		perror("Allocating buffer");
+		exit(-1);
+	}
+
+	fd = open(argv[1], O_RDONLY);
+	if (fd < 0) {
+		perror(argv[1]);
+		exit(-1);
+	}
+
+	ret = read(fd, buf, st.st_size);
+	if (ret < 0) {
+		perror("Reading buffer");
+		exit(-1);
+	}
+	close(fd);
+
+	kbuf = kbuffer_alloc(KBUFFER_ENDIAN_SAME_AS_HOST,
+			     KBUFFER_LSIZE_SAME_AS_HOST);
+	if (!kbuf) {
+		perror("Creating kbuffer");
+		exit(-1);
+	}
+	ret = kbuffer_load_subbuffer(kbuf, buf);
+	if (ret < 0) {
+		perror("Loading sub bufer");
+		exit(-1);
+	}
+
+	if (kbuffer_subbuffer_size(kbuf) > st.st_size) {
+		fprintf(stderr, "kbuffer is bigger than raw size %d > %ld\n",
+			kbuffer_subbuffer_size(kbuf), st.st_size);
+		exit(-1);
+	}
+
+	printf("Kbuffer data starts at %d\n", kbuffer_start_of_data(kbuf));
+	do {
+		event = kbuffer_read_event(kbuf, &ts);
+		if (event) {
+			printf(" event %3d ts:%lld\n", i++, ts);
+			event = kbuffer_next_event(kbuf, NULL);
+		}
+	} while (event);
+
+	if (!event)
+		printf("Finished sub buffer\n");
+
+	kbuffer_free(kbuf);
+
+	return 0;
+}
+--
+FILES
+-----
+[verse]
+--
+*event-parse.h*
+	Header file to include in order to have access to the library APIs.
+*-ltraceevent*
+	Linker switch to add when building a program that uses the library.
+--
+
+SEE ALSO
+--------
+*libtraceevent*(3), *trace-cmd*(1)
+
+AUTHOR
+------
+[verse]
+--
+*Steven Rostedt* <rostedt@goodmis.org>, author of *libtraceevent*.
+--
+REPORTING BUGS
+--------------
+Report bugs to  <linux-trace-devel@vger.kernel.org>
+
+LICENSE
+-------
+libtraceevent is Free Software licensed under the GNU LGPL 2.1
+
+RESOURCES
+---------
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

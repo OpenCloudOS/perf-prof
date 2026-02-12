@@ -3,7 +3,7 @@ libtraceevent(3)
 
 NAME
 ----
-tep_find_function,tep_find_function_address - Find function name / start address.
+tep_find_function,tep_find_function_address,tep_find_function_info - Find function name / start address.
 
 SYNOPSIS
 --------
@@ -13,6 +13,8 @@ SYNOPSIS
 
 const char pass:[*]*tep_find_function*(struct tep_handle pass:[*]_tep_, unsigned long long _addr_);
 unsigned long long *tep_find_function_address*(struct tep_handle pass:[*]_tep_, unsigned long long _addr_);
+int *tep_find_function_info*(struct tep_handle pass:[*]_tep_, unsigned long long _addr_, const char pass:[**]_name_,
+			   unsigned long long pass:[*]_start_, unsigned long pass:[*]_size_);
 --
 
 DESCRIPTION
@@ -21,20 +23,28 @@ These functions can be used to find function name and start address, by given
 address. The given address does not have to be exact, it will select the function
 that would contain it.
 
-The _tep_find_function()_ function returns the function name, which contains the
+The *tep_find_function()* function returns the function name, which contains the
 given address _addr_. The _tep_ argument is the trace event parser context.
 
-The _tep_find_function_address()_ function returns the function start address,
+The *tep_find_function_address()* function returns the function start address,
 by given address _addr_. The _addr_ does not have to be exact, it will select the
 function that would contain it. The _tep_ argument is the trace event parser context.
 
+The *tep_find_function_info()* function retrieves the _name_, starting address (_start_),
+and the function text _size_ of the function at _address_, if it is found. Note,
+if the _tep_ handle has a function resolver (used by perf), then _size_ is set to
+zero.
+
 RETURN VALUE
 ------------
-The _tep_find_function()_ function returns the function name, or NULL in case
+The *tep_find_function()* function returns the function name, or NULL in case
 it cannot be found.
 
-The _tep_find_function_address()_ function returns the function start address,
+The *tep_find_function_address()* function returns the function start address,
 or 0 in case it cannot be found.
+
+The *tep_find_function_info()* function returns 1 if a function is found for the
+given address, or 0 if it is not.
 
 EXAMPLE
 -------
@@ -44,12 +54,45 @@ EXAMPLE
 ...
 struct tep_handle *tep = tep_alloc();
 ...
-void show_function( unsigned long long addr)
+void show_function_name(unsigned long long addr)
 {
 	const char *fname = tep_find_function(tep, addr);
-	unsigned long long fstart = tep_find_function_address(tep, addr);
 
-	/* addr is in function named fname, starting at fstart address, at offset (addr - fstart) */
+	if (fname)
+		printf("Found function %s at 0x%0llx\n", fname, addr);
+	else
+		printf("No function found at 0x%0llx\n", addr);
+}
+
+void show_function_start_addr(unsigned long long addr)
+{
+	const char *fname = tep_find_function(tep, addr);
+	unsigned long long fstart;
+
+	if (!fname) {
+		printf("No function found at 0x%0llx\n", addr);
+		return;
+	}
+
+	fstart = tep_find_function_address(tep, addr);
+	printf("Function %s at 0x%llx starts at 0x%0llx\n",
+	       fname, addr, fstart);
+}
+
+void show_function_info(unsigned long long addr)
+{
+	const char *fname;
+	unsigned long long fstart;
+	unsigned long size;
+
+	ret = tep_find_function_info(tep, addr, &fname, &fstart, &size);
+	if (!ret) {
+		printf("No function found at 0x%0lx\n", addr);
+		return;
+	}
+
+	printf("Function %s at 0x%lx starts at 0x%0lx and is %ld in size\n",
+	       fname, addr, fstart, size);
 }
 ...
 --
@@ -66,7 +109,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -85,4 +128,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

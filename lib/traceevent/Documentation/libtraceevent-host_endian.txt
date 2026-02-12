@@ -25,15 +25,15 @@ void *tep_set_local_bigendian*(struct tep_handle pass:[*]_tep_, enum tep_endian 
 DESCRIPTION
 -----------
 
-The _tep_is_bigendian()_ gets the endianness of the machine, executing
+The *tep_is_bigendian()* gets the endianness of the machine, executing
 the function.
 
-The _tep_is_local_bigendian()_ function gets the endianness of the local
+The *tep_is_local_bigendian()* function gets the endianness of the local
 machine, saved in the _tep_ handler. The _tep_ argument is the trace event
-parser context. This API is a bit faster than _tep_is_bigendian()_, as it
+parser context. This API is a bit faster than *tep_is_bigendian()*, as it
 returns cached endianness of the local machine instead of checking it each time.
 
-The _tep_set_local_bigendian()_ function sets the endianness of the local
+The *tep_set_local_bigendian()* function sets the endianness of the local
 machine in the _tep_ handler. The _tep_ argument is trace event parser context.
 The _endian_ argument is the endianness:
 [verse]
@@ -44,10 +44,10 @@ The _endian_ argument is the endianness:
 
 RETURN VALUE
 ------------
-The _tep_is_bigendian()_ function returns non zero if the endianness of the
+The *tep_is_bigendian()* function returns non zero if the endianness of the
 machine, executing the code, is big endian and zero otherwise.
 
-The _tep_is_local_bigendian()_ function returns true, if the endianness of the
+The *tep_is_local_bigendian()* function returns true, if the endianness of the
 local machine, saved in the _tep_ handler, is big endian, or false otherwise.
 
 EXAMPLE
@@ -82,7 +82,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -101,4 +101,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

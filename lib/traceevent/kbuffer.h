@@ -13,11 +13,13 @@
 enum kbuffer_endian {
 	KBUFFER_ENDIAN_BIG,
 	KBUFFER_ENDIAN_LITTLE,
+	KBUFFER_ENDIAN_SAME_AS_HOST,
 };
 
 enum kbuffer_long_size {
 	KBUFFER_LSIZE_4,
 	KBUFFER_LSIZE_8,
+	KBUFFER_LSIZE_SAME_AS_HOST,
 };
 
 enum {
@@ -29,8 +31,10 @@ enum {
 struct kbuffer;
 
 struct kbuffer *kbuffer_alloc(enum kbuffer_long_size size, enum kbuffer_endian endian);
+struct kbuffer *kbuffer_dup(struct kbuffer *kbuf);
 void kbuffer_free(struct kbuffer *kbuf);
 int kbuffer_load_subbuffer(struct kbuffer *kbuf, void *subbuffer);
+int kbuffer_refresh(struct kbuffer *kbuf);
 void *kbuffer_read_event(struct kbuffer *kbuf, unsigned long long *ts);
 void *kbuffer_next_event(struct kbuffer *kbuf, unsigned long long *ts);
 unsigned long long kbuffer_timestamp(struct kbuffer *kbuf);
@@ -40,6 +44,7 @@ unsigned int kbuffer_ptr_delta(struct kbuffer *kbuf, void *ptr);
 void *kbuffer_translate_data(int swap, void *data, unsigned int *size);
 
 void *kbuffer_read_at_offset(struct kbuffer *kbuf, int offset, unsigned long long *ts);
+int kbuffer_read_buffer(struct kbuffer *kbuf, void *buffer, int len);
 
 int kbuffer_curr_index(struct kbuffer *kbuf);
 
@@ -48,6 +53,7 @@ int kbuffer_curr_size(struct kbuffer *kbuf);
 int kbuffer_event_size(struct kbuffer *kbuf);
 int kbuffer_missed_events(struct kbuffer *kbuf);
 int kbuffer_subbuffer_size(struct kbuffer *kbuf);
+void *kbuffer_subbuffer(struct kbuffer *kbuf);
 
 void kbuffer_set_old_format(struct kbuffer *kbuf);
 int kbuffer_start_of_data(struct kbuffer *kbuf);

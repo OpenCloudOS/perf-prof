@@ -18,16 +18,16 @@ void *tep_set_cpus*(struct tep_handle pass:[*]_tep_, int _cpus_);
 
 DESCRIPTION
 -----------
-The _tep_get_cpus()_ function gets the number of CPUs, which have a tracing
+The *tep_get_cpus()* function gets the number of CPUs, which have a tracing
 buffer representing it. The _tep_ argument is trace event parser context.
 
-The _tep_set_cpus()_ function sets the number of CPUs, which have a tracing
+The *tep_set_cpus()* function sets the number of CPUs, which have a tracing
 buffer representing it. The _tep_ argument is trace event parser context.
 The _cpu_ argument is the number of CPUs with tracing data.
 
 RETURN VALUE
 ------------
-The _tep_get_cpus()_ functions returns the number of CPUs, which have tracing
+The *tep_get_cpus()* functions returns the number of CPUs, which have tracing
 data recorded.
 
 EXAMPLE
@@ -55,7 +55,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -74,4 +74,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

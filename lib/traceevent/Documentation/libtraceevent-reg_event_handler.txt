@@ -25,7 +25,7 @@ typedef int (*pass:[*]tep_event_handler_func*)(struct trace_seq pass:[*]s, struc
 
 DESCRIPTION
 -----------
-The _tep_register_event_handler()_ function registers a handler function,
+The *tep_register_event_handler()* function registers a handler function,
 which is going to be called to parse the information for a given event.
 The _tep_ argument is the trace event parser context. The _id_ argument is
 the id of the event. The _sys_name_ argument is the name of the system,
@@ -39,8 +39,8 @@ one. This mechanism allows a developer to override the parsing of a given event.
 If for some reason the default print format is not sufficient, the developer
 can register a function for an event to be used to parse the data instead.
 
-The _tep_unregister_event_handler()_ function unregisters the handler function,
-previously registered with _tep_register_event_handler()_. The _tep_ argument
+The *tep_unregister_event_handler()* function unregisters the handler function,
+previously registered with *tep_register_event_handler()*. The _tep_ argument
 is the trace event parser context. The _id_, _sys_name_, _event_name_, _func_,
 and _context_ are the same arguments, as when the callback function _func_ was
 registered.
@@ -53,13 +53,13 @@ _context_ is custom context, set when the custom event handler is registered.
 
 RETURN VALUE
 ------------
-The _tep_register_event_handler()_ function returns _TEP_REGISTER_SUCCESS_
+The *tep_register_event_handler()* function returns _TEP_REGISTER_SUCCESS_
 if the new handler is registered successfully or
 _TEP_REGISTER_SUCCESS_OVERWRITE_ if an existing handler is overwritten.
 If there is not  enough memory to complete the registration,
 TEP_ERRNO__MEM_ALLOC_FAILED is returned.
 
-The _tep_unregister_event_handler()_ function returns 0 if _func_ was removed
+The *tep_unregister_event_handler()* function returns 0 if _func_ was removed
 successful or, -1 if the event was not found.
 
 The _tep_event_handler_func_ should return -1 in case of an error,
@@ -134,7 +134,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -153,4 +153,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

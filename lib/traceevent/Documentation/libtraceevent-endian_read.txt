@@ -16,14 +16,14 @@ unsigned long long *tep_read_number*(struct tep_handle pass:[*]_tep_, const void
 
 DESCRIPTION
 -----------
-The _tep_read_number()_ function reads an integer from raw data, taking into
+The *tep_read_number()* function reads an integer from raw data, taking into
 account the endianness of the raw data and the current host. The _tep_ argument
 is the trace event parser context. The _ptr_ is a pointer to the raw data, where
 the integer is, and the _size_ is the size of the integer.
 
 RETURN VALUE
 ------------
-The _tep_read_number()_ function returns the integer in the byte order of
+The *tep_read_number()* function returns the integer in the byte order of
 the current host. In case of an error, 0 is returned.
 
 EXAMPLE
@@ -56,7 +56,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -75,4 +75,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

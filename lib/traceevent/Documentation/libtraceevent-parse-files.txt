@@ -1,0 +1,209 @@
+libtraceevent(3)
+================
+
+NAME
+----
+tep_parse_saved_cmdlines, tep_parse_printk_formats, tep_parse_kallsyms,
+tep_parse_last_boot_info, tep_load_modules - Parsing functions to load mappings
+
+SYNOPSIS
+--------
+[verse]
+--
+*#include <event-parse.h>*
+
+int *tep_parse_saved_cmdlines*(struct tep_handle pass:[*]_tep_, const char pass:[*]_buf_);
+int *tep_parse_printk_formats*(struct tep_handle pass:[*]_tep_, const char pass:[*]_buf_);
+int *tep_parse_kallsyms*(struct tep_handle pass:[*]_tep_, const char pass:[*]_buf_);
+int *tep_parse_last_boot_info*(struct tep_handle pass:[*]_tep_, const char pass:[*]_lbi_);
+int *tep_load_modules*(struct tep_handle pass:[*]_tep_, char pass:[*]_modules_, size_t _size_);
+--
+
+DESCRIPTION
+-----------
+*tep_parse_saved_cmdlines()* is a helper function to parse content in the tracefs
+file system of the "saved_cmdlines" file (stored in a string buffer passed in by _buf_)
+and loads the mapping of the process IDs (pid) to the comm names in the
+_tep_ handler. The events store the pid and this is used to be able to show the
+process names associated to those process ids. It parses the string _buf_ that
+holds the content of saved_cmdlines and ends with a nul character ('\0').
+
+*tep_parse_printk_formats()* is a helper function to parse content in the tracefs
+file system of the "printk_formats" file (stored in a string buffer passed in by _buf_)
+and loads the mapping of addresses of strings that may be referenced by events.
+Events only store the address of constant strings in the kernel, and the mapping
+of their address to the string is exported to user space in the printk_formats
+file. It parses the string _buf_ that holds the content of printk_formats and
+ends with a nul character ('\0').
+
+*tep_parse_kallsyms()* is a helper function to parse the Linux kernel /proc/kallsyms format
+(stored in a string buffer passed in by _buf_) and load the functions into the
+_tep_ handler such that function IP addresses can be mapped to their name when
+parsing events with %pS in the print format field. It parses the string _buf_ that
+holds the content of /proc/kallsyms and ends with a nul character ('\0').
+
+*tep_parse_last_boot_info()* loads information from the last_boot_info file of
+a persistent ring buffer instance. If a tracefs instance is declared as a
+persistent ring buffer and contains data from a previous boot, the last_boot_info
+file will have the addresses of the kernel as well as modules. It will use
+this information to base the function offsets in the binary buffer to match
+the function offsets in the kallsyms (loaded by *tep_parse_kallsyms()*)
+into the _tep_ handler. The _lbi_ is a nul terminated string that contains
+the content of the last_boot_info file from the persistent ring buffer instance.
+
+*tep_load_modules()* loads the contents of the file /proc/modules into the _tep_
+handler. This will be used to match the modules found in the last_boot_info (loaded
+by *tep_parse_last_boot_info()*) to match the offsets of the binary data in
+in a persistent ring buffer that matches the address of a module from the previous
+boot to a module address found in _modules_. The _modules_ parameter does not need
+to be nul terminated, but _size_ is used to denote the size of the _modules_ string.
+This function is useless if *tep_parse_last_boot_info()* isnt used.
+
+RETURN VALUE
+------------
+The *tep_parse_saved_cmdlines*() function returns 0 in case of success, or -1
+in case of an error.
+
+The *tep_parse_printk_formats*() function returns 0 in case of success, or -1
+in case of an error.
+
+The *tep_parse_kallsyms*() function returns 0 in case of success, or -1
+in case of an error.
+
+The *tep_parse_last_boot_info*() function retuns 0 in case of success, or -1
+in case of error.
+
+The *tep_load_modules*() function returns 0 in case of success, or -1
+in case of error.
+
+EXAMPLE
+-------
+[source,c]
+--
+...
+#include <event-parse.h>
+#include <tracefs.h>
+#include <stdlib.h>
+
+int load_cmdlines(struct tep_handle *tep)
+{
+        char *buf = NULL;
+        int r;
+
+        buf = tracefs_instance_file_read(NULL, "saved_cmdlines", NULL);
+        if (!buf)
+                return -1;
+        r = tep_parse_saved_cmdlines(tep, buf);
+        free(buf);
+        return r;
+}
+
+int load_print_strings(struct tep_handle *tep)
+{
+        char *buf = NULL;
+        int r;
+
+        buf = tracefs_instance_file_read(NULL, "printk_formats", NULL);
+        if (!buf)
+                return -1;
+        r = tep_parse_printk_formats(tep, buf);
+        free(buf);
+        return r;
+}
+
+static char *read_file(const char *file, size_t *size)
+{
+        FILE *fp;
+	char *line = NULL;
+	char *buf = NULL;
+	size_t sz = 0;
+        size_t len = 0;
+	int r;
+
+        fp = fopen(file, "r");
+        while ((r = getline(&line, &sz, fp)) >= 0) {
+                buf = realloc(buf, len + r + 1);
+                memcpy(buf + len, line, r);
+                len += r;
+        }
+        free(line);
+        fclose(fp);
+        if (!buf)
+                return NULL;
+        buf[len] = 0;
+	*size = len;
+	return buf;
+}
+
+int load_kallsyms(struct tep_handle *tep)
+{
+        char *buf;
+        size_t sz;
+        int r;
+
+	buf = read_file("/proc/kallsyms", &sz);
+	if (!buf)
+		return -1;
+        r = tep_parse_kallsyms(tep, buf);
+        free(buf);
+        return r;
+}
+
+int load_last_boot(struct tep_handle *tep, struct tracefs_instance *instance)
+{
+        char *buf;
+        size_t sz;
+        int r;
+
+	buf = tracefs_instance_file_read(instance, "last_boot_info", NULL);
+	if (!buf)
+		return 0;
+
+	r = tep_parse_last_boot_info(tep, buf);
+	free(buf);
+	if (r < 0)
+		return r;
+
+	buf = read_file("/proc/modules", &sz);
+	if (!buf)
+		return -1;
+        r = tep_parse_kallsyms(tep, buf);
+        free(buf);
+        return r;
+}
+...
+--
+
+FILES
+-----
+[verse]
+--
+*event-parse.h*
+	Header file to include in order to have access to the library APIs.
+*-ltraceevent*
+	Linker switch to add when building a program that uses the library.
+--
+
+SEE ALSO
+--------
+*libtraceevent*(3), *trace-cmd*(1), *tep_register_comm*(3), *tep_register_function*(3),
+*tep_register_print_string*(3)
+
+AUTHOR
+------
+[verse]
+--
+*Steven Rostedt* <rostedt@goodmis.org>, author of *libtraceevent*.
+*Tzvetomir Stoyanov* <tz.stoyanov@gmail.com>, coauthor of *libtraceevent*.
+--
+REPORTING BUGS
+--------------
+Report bugs to  <linux-trace-devel@vger.kernel.org>
+
+LICENSE
+-------
+libtraceevent is Free Software licensed under the GNU LGPL 2.1
+
+RESOURCES
+---------
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

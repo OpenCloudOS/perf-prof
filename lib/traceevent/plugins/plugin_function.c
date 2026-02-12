@@ -10,6 +10,11 @@
 #include "event-utils.h"
 #include "trace-seq.h"
 
+#define __weak __attribute__((weak))
+
+/* Export this for applications to override it */
+__weak const char *tep_func_repeat_format = "%6.1000d";
+
 static struct func_stack {
 	int size;
 	char **stack;
@@ -65,7 +70,7 @@ static void add_child(struct func_stack *stack, const char *child, int pos)
 		ptr = realloc(stack->stack, sizeof(char *) *
 			      (stack->size + STK_BLK));
 		if (!ptr) {
-			warning("could not allocate plugin memory\n");
+			tep_warning("could not allocate plugin memory\n");
 			return;
 		}
 
@@ -91,7 +96,7 @@ static int add_and_get_index(const char *parent, const char *child, int cpu)
 
 		ptr = realloc(fstack, sizeof(*fstack) * (cpu + 1));
 		if (!ptr) {
-			warning("could not allocate plugin memory\n");
+			tep_warning("could not allocate plugin memory\n");
 			return 0;
 		}
 
@@ -128,6 +133,34 @@ static void show_function(struct trace_seq *s, struct tep_handle *tep,
 	}
 }
 
+/* Returns true if it printed args, otherwise it returns false */
+static bool print_args(struct trace_seq *s, struct tep_event *event,
+		       struct tep_record *record, const char *func)
+{
+	struct tep_format_field *field;
+	void *args;
+	int len;
+
+	field = tep_find_field(event, "args");
+	if (!field)
+		return false;
+
+	len = record->size - field->offset;
+
+	/* todo make this tep long size */
+	if (len < 3 * sizeof(long))
+		return false;
+
+	args = record->data + field->offset;
+
+	trace_seq_putc(s, '(');
+
+	tep_btf_print_args(event->tep, s, args, len / sizeof(long), sizeof(long), func);
+
+	trace_seq_putc(s, ')');
+	return true;
+}
+
 static int function_handler(struct trace_seq *s, struct tep_record *record,
 			    struct tep_event *event, void *context)
 {
@@ -158,6 +191,8 @@ static int function_handler(struct trace_seq *s, struct tep_record *record,
 	else
 		trace_seq_printf(s, "0x%llx", function);
 
+	print_args(s, event, record, func);
+
 	if (ftrace_parent->set) {
 		trace_seq_printf(s, " <-- ");
 		if (parent)
@@ -165,6 +200,36 @@ static int function_handler(struct trace_seq *s, struct tep_record *record,
 		else
 			trace_seq_printf(s, "0x%llx", pfunction);
 	}
+
+	return 0;
+}
+
+static int trace_func_repeat_handler(struct trace_seq *s, struct tep_record *record,
+				    struct tep_event *event, void *context)
+{
+	struct tep_handle *tep = event->tep;
+	unsigned long long count, top_delta, bottom_delta;
+	struct tep_record dummy;
+
+	function_handler(s, record, event, context);
+
+	if (tep_get_field_val(s, event, "count", record, &count, 1))
+		return trace_seq_putc(s, '!');
+
+	if (tep_get_field_val(s, event, "top_delta_ts", record, &top_delta, 1))
+		return trace_seq_putc(s, '!');
+
+	if (tep_get_field_val(s, event, "bottom_delta_ts", record, &bottom_delta, 1))
+		return trace_seq_putc(s, '!');
+
+	trace_seq_printf(s, " (count: %lld  last_ts: ", count);
+
+	memcpy(&dummy, record, sizeof(dummy));
+	dummy.ts -= (top_delta << 32) | bottom_delta;
+
+	tep_print_event(tep, s, &dummy, tep_func_repeat_format, TEP_PRINT_TIME);
+
+	trace_seq_puts(s, ")");
 
 	return 0;
 }
@@ -198,9 +263,11 @@ trace_stack_handler(struct trace_seq *s, struct tep_record *record,
 			break;
 
 		func = tep_find_function(event->tep, addr);
-		if (func)
-			trace_seq_printf(s, "=> %s (%llx)\n", func, addr);
-		else
+		if (func) {
+			trace_seq_puts(s, "=> ");
+			show_function(s, event->tep, func, addr);
+			trace_seq_printf(s, " (%llx)\n", addr);
+		} else
 			trace_seq_printf(s, "=> %llx\n", addr);
 	}
 
@@ -209,7 +276,7 @@ trace_stack_handler(struct trace_seq *s, struct tep_record *record,
 
 static int
 trace_raw_data_handler(struct trace_seq *s, struct tep_record *record,
-		    struct tep_event *event, void *context)
+		       struct tep_event *event, void *context)
 {
 	struct tep_format_field *field;
 	unsigned long long id;
@@ -255,6 +322,9 @@ int TEP_PLUGIN_LOADER(struct tep_handle *tep)
 
 	tep_register_event_handler(tep, -1, "ftrace", "raw_data",
 				      trace_raw_data_handler, NULL);
+
+	tep_register_event_handler(tep, -1, "ftrace", "func_repeats",
+				      trace_func_repeat_handler, NULL);
 
 	tep_plugin_add_options("ftrace", plugin_options);
 

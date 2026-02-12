@@ -23,11 +23,11 @@ void *tep_set_file_bigendian*(struct tep_handle pass:[*]_tep_, enum tep_endian _
 --
 DESCRIPTION
 -----------
-The _tep_is_file_bigendian()_ function gets the endianness of the raw data,
+The *tep_is_file_bigendian()* function gets the endianness of the raw data,
 being accessed by the tep handler. The _tep_ argument is trace event parser
 context.
 
-The _tep_set_file_bigendian()_ function sets the endianness of raw data being
+The *tep_set_file_bigendian()* function sets the endianness of raw data being
 accessed by the tep handler. The _tep_ argument is trace event parser context.
 [verse]
 --
@@ -37,7 +37,7 @@ The _endian_ argument is the endianness:
 --
 RETURN VALUE
 ------------
-The _tep_is_file_bigendian()_ function returns true if the data is in bigendian
+The *tep_is_file_bigendian()* function returns true if the data is in bigendian
 format, false otherwise.
 
 EXAMPLE
@@ -69,7 +69,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -88,4 +88,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

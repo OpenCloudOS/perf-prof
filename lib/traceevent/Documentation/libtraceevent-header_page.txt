@@ -22,26 +22,26 @@ These functions retrieve information from kernel context, stored in tracefs
 events/header_page. Old kernels do not have header page info, so default values
 from user space context are used.
 
-The _tep_get_header_page_size()_ function returns the size of a long integer,
+The *tep_get_header_page_size()* function returns the size of a long integer,
 in kernel context. The _tep_ argument is trace event parser context.
 This information is retrieved from tracefs events/header_page, "commit" field.
 
-The _tep_get_header_timestamp_size()_ function returns the size of timestamps,
+The *tep_get_header_timestamp_size()* function returns the size of timestamps,
 in kernel context. The _tep_ argument is trace event parser context. This
 information is retrieved from tracefs events/header_page, "timestamp" field.
 
-The _tep_is_old_format()_ function returns true if the kernel predates
+The *tep_is_old_format()* function returns true if the kernel predates
 the addition of events/header_page, otherwise it returns false.
 
 RETURN VALUE
 ------------
-The _tep_get_header_page_size()_ function returns the size of a long integer,
+The *tep_get_header_page_size()* function returns the size of a long integer,
 in bytes.
 
-The _tep_get_header_timestamp_size()_ function returns the size of timestamps,
+The *tep_get_header_timestamp_size()* function returns the size of timestamps,
 in bytes.
 
-The _tep_is_old_format()_ function returns true, if an old kernel is used to
+The *tep_is_old_format()* function returns true, if an old kernel is used to
 generate the tracing data, which has no event/header_page. If the kernel is new,
 or _tep_ is NULL, false is returned.
 
@@ -80,7 +80,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -99,4 +99,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

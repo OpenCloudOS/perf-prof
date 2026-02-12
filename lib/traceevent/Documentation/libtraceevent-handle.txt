@@ -3,7 +3,7 @@ libtraceevent(3)
 
 NAME
 ----
-tep_alloc, tep_free,tep_ref, tep_unref,tep_get_ref - Create, destroy, manage
+tep_alloc, tep_free,tep_ref, tep_unref,tep_get_ref, tep_kbuffer - Create, destroy, manage
 references of trace event parser context.
 
 SYNOPSIS
@@ -17,6 +17,7 @@ void *tep_free*(struct tep_handle pass:[*]_tep_);
 void *tep_ref*(struct tep_handle pass:[*]_tep_);
 void *tep_unref*(struct tep_handle pass:[*]_tep_);
 int *tep_get_ref*(struct tep_handle pass:[*]_tep_);
+struct kbuffer pass:[*]*tep_kbuffer*(struct tep_handle pass:[*]_tep_);
 --
 
 DESCRIPTION
@@ -25,28 +26,35 @@ These are the main functions to create and destroy tep_handle - the main
 structure, representing the trace event parser context. This context is used as
 the input parameter of most library APIs.
 
-The _tep_alloc()_ function allocates and initializes the tep context.
+The *tep_alloc()* function allocates and initializes the tep context.
 
-The _tep_free()_ function will decrement the reference of the _tep_ handler.
+The *tep_free()* function will decrement the reference of the _tep_ handler.
 When there is no more references, then it will free the handler, as well
 as clean up all its resources that it had used. The argument _tep_ is
 the pointer to the trace event parser context.
 
-The _tep_ref()_ function adds a reference to the _tep_ handler.
+The *tep_ref()* function adds a reference to the _tep_ handler.
 
-The _tep_unref()_ function removes a reference from the _tep_ handler. When
+The *tep_unref()* function removes a reference from the _tep_ handler. When
 the last reference is removed, the _tep_ is destroyed, and all resources that
 it had used are cleaned up.
 
-The _tep_ref_get()_ functions gets the current references of the _tep_ handler.
+The *tep_ref_get()* functions gets the current references of the _tep_ handler.
+
+The *tep_kbuffer()* function allocates a kbuffer descriptor that can be used to
+parse raw data that is represented by the _tep_ handle descriptor. It must be freed
+with *kbuf_free(3)*.
 
 RETURN VALUE
 ------------
-_tep_alloc()_ returns a pointer to a newly created tep_handle structure.
+*tep_alloc()* returns a pointer to a newly created tep_handle structure.
 NULL is returned in case there is not enough free memory to allocate it.
 
-_tep_ref_get()_ returns the current references of _tep_.
+*tep_ref_get()* returns the current references of _tep_.
 If _tep_ is NULL, 0 is returned.
+
+*tep_kbuffer()* returns a kbuffer descriptor that can parse the raw data that
+represents the tep handle. Must be freed with *kbuf_free(3)*.
 
 EXAMPLE
 -------
@@ -79,7 +87,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -98,4 +106,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

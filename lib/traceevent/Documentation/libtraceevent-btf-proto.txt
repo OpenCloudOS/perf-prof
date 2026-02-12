@@ -1,0 +1,124 @@
+libtraceevent(3)
+================
+
+NAME
+----
+tep_btf_list_args - Show the arguments of a function from BTF
+
+SYNOPSIS
+--------
+[verse]
+--
+*#include <event-parse.h>*
+
+int *tep_btf_list_args*(struct tep_handle pass:[*]_tep_, struct trace_seq pass:[*]_s_, const char pass:[*]_func_);
+--
+
+DESCRIPTION
+-----------
+If the Linux kernel has BTF configured, then a binary file will exist
+in the path of */sys/kernel/btf/vmlinux*. If this file is read into memory
+and passed to *tep_load_btf()* function, then it can be used to read the arguments
+of a given function, if that function data is found within the BTF file.
+
+The *tep_btf_print_args()* takes a _tep_ handle, a trace_seq _s_ pointer
+(that was initialized by *trace_seq_init(3)*), and a _func_ string that is
+the name of the function to find the BTF information to use to print the function's prototype.
+If BTF is not loaded or the _func_ name is not found it will return a negative.
+
+RETURN VALUE
+------------
+*tep_btf_list_args()* returns the number of arguments read on success and -1 on failure
+(for example, if the function is not found).
+
+EXAMPLE
+-------
+[source,c]
+--
+#include <stdlib.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <event-parse.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define BTF_FILE "/sys/kernel/btf/vmlinux"
+
+int main(int argc, char **argv)
+{
+	struct tep_handle *tep;
+	struct trace_seq s;
+	struct stat st;
+	char *buf;
+	int fd, r, z;
+
+	if (argc < 2)
+		exit(-1);
+
+	if (stat(BTF_FILE, &st) < 0) {
+		perror(BTF_FILE);
+		exit(-1);
+	}
+
+	buf = malloc(st.st_size);
+	if (!buf)
+		exit(-1);
+	fd = open(BTF_FILE, O_RDONLY);
+	if (fd < 0) {
+		perror(BTF_FILE);
+		exit(-1);
+	}
+	for (z = 0; z < st.st_size; ) {
+		r = read(fd, buf + z, st.st_size - z);
+		if (r <= 0)
+			break;
+		z += r;
+	}
+	close(fd);
+	tep = tep_alloc();
+	if (!tep)
+		exit(-1);
+
+	tep_load_btf(tep, buf, z);
+	free(buf);
+
+	trace_seq_init(&s);
+	tep_btf_list_args(tep, &s, argv[1]);
+	printf("%s(", argv[1]);
+	trace_seq_do_printf(&s);
+	printf(")\n");
+	exit(0);
+}
+
+--
+FILES
+-----
+[verse]
+--
+*event-parse.h*
+	Header file to include in order to have access to the library APIs.
+*-ltraceevent*
+	Linker switch to add when building a program that uses the library.
+--
+
+SEE ALSO
+--------
+*tep_btf_load*(3), *tep_btf_print_args*(3), *libtraceevent*(3), *trace-cmd*(1)
+
+AUTHOR
+------
+[verse]
+--
+*Steven Rostedt* <rostedt@goodmis.org>, author of *libtraceevent*.
+--
+REPORTING BUGS
+--------------
+Report bugs to  <linux-trace-devel@vger.kernel.org>
+
+LICENSE
+-------
+libtraceevent is Free Software licensed under the GNU LGPL 2.1
+
+RESOURCES
+---------
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

@@ -14,6 +14,8 @@ struct func_list;
 struct event_handler;
 struct func_resolver;
 struct tep_plugins_dir;
+struct tep_btf;
+struct tep_mod_addr;
 
 #define __hidden __attribute__((visibility ("hidden")))
 
@@ -45,6 +47,14 @@ struct tep_handle {
 	struct func_resolver *func_resolver;
 	struct func_list *funclist;
 	unsigned int func_count;
+	unsigned long long func_offset;
+	unsigned long long mod_addr;
+	unsigned long long _text_addr;
+	struct tep_mod_addr *mod_addrs;
+	struct tep_mod_addr *proc_mods;
+	int nr_mod_addrs;
+	int nr_proc_mods;
+
 
 	struct printk_map *printk_map;
 	struct printk_list *printklist;
@@ -85,6 +95,12 @@ struct tep_handle {
 	struct tep_event *last_event;
 
 	struct tep_plugins_dir *plugins_dir;
+
+	const char *input_buf;
+	unsigned long long input_buf_ptr;
+	unsigned long long input_buf_siz;
+
+	struct tep_btf *btf;
 };
 
 enum tep_print_parse_type {
@@ -113,11 +129,14 @@ unsigned int data2host4(struct tep_handle *tep, unsigned int data);
 unsigned long long data2host8(struct tep_handle *tep, unsigned long long data);
 
 /* access to the internal parser */
-int peek_char(void);
-void init_input_buf(const char *buf, unsigned long long size);
-unsigned long long get_input_buf_ptr(void);
-const char *get_input_buf(void);
-enum tep_event_type read_token(char **tok);
+int peek_char(struct tep_handle *tep);
+void init_input_buf(struct tep_handle *tep, const char *buf, unsigned long long size);
+unsigned long long get_input_buf_ptr(struct tep_handle *tep);
+const char *get_input_buf(struct tep_handle *tep);
+enum tep_event_type read_token(struct tep_handle *tep, char **tok);
 void free_token(char *tok);
+
+/* BTF routines */
+void btf_free(struct tep_btf *btf);
 
 #endif /* _PARSE_EVENTS_INT_H */

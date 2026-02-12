@@ -3,7 +3,8 @@ libtraceevent(3)
 
 NAME
 ----
-tep_load_plugins, tep_unload_plugins, tep_load_plugins_hook - Load / unload traceevent plugins.
+tep_load_plugins, tep_unload_plugins, tep_load_plugins_hook, tep_add_plugin_path,
+tep_plugin_add_option - Load / unload traceevent plugins.
 
 SYNOPSIS
 --------
@@ -19,11 +20,14 @@ void *tep_load_plugins_hook*(struct tep_handle pass:[*]_tep_, const char pass:[*
 					       const char pass:[*]name,
 					       void pass:[*]data),
 			   void pass:[*]_data_);
+int *tep_add_plugin_path*(struct tep_handle pass:[*]tep, char pass:[*]path,
+			  enum tep_plugin_load_priority prio);
+int *tep_plugin_add_option*(const char pass:[*]_name_, const char pass:[*]_val_);
 --
 
 DESCRIPTION
 -----------
-The _tep_load_plugins()_ function loads all plugins, located in the plugin
+The *tep_load_plugins()* function loads all plugins, located in the plugin
 directories. The _tep_ argument is trace event parser context.
 The plugin directories are :
 [verse]
@@ -37,31 +41,53 @@ The plugin directories are :
 	- Directories, specified in _tep_->plugins_dir with priority TEP_PLUGIN_LAST
 --
 Loading of plugins can be controlled by the _tep_flags_, using the
-_tep_set_flag()_ API:
+*tep_set_flag()* API:
 [verse]
 --
 	_TEP_DISABLE_SYS_PLUGINS_	- do not load plugins, located in
 					the system's plugin directory.
 	_TEP_DISABLE_PLUGINS_		- do not load any plugins.
 --
-The _tep_set_flag()_ API needs to be called before _tep_load_plugins()_, if
+The *tep_set_flag()* API needs to be called before *tep_load_plugins()*, if
 loading of all plugins is not the desired case.
 
-The _tep_unload_plugins()_ function unloads the plugins, previously loaded by
-_tep_load_plugins()_. The _tep_ argument is trace event parser context. The
+The *tep_unload_plugins()* function unloads the plugins, previously loaded by
+*tep_load_plugins()*. The _tep_ argument is trace event parser context. The
 _plugin_list_ is the list of loaded plugins, returned by
-the _tep_load_plugins()_ function.
+the *tep_load_plugins()* function.
 
-The _tep_load_plugins_hook_ function walks through all directories with plugins
-and calls user specified _load_plugin()_ hook for each plugin file. Only files
+The *tep_load_plugins_hook()* function walks through all directories with plugins
+and calls user specified *load_plugin()* hook for each plugin file. Only files
 with given _suffix_ are considered to be plugins. The _data_ is a user specified
-context, passed to _load_plugin()_. Directories and the walk order are the same
-as in _tep_load_plugins()_ API.
+context, passed to *load_plugin()*. Directories and the walk order are the same
+as in *tep_load_plugins()* API.
+
+The *tep_add_plugin_path()* functions adds additional directories with plugins in
+the _tep_->plugins_dir list. It must be called before *tep_load_plugins()* in order
+for the plugins from the new directories to be loaded. The _tep_ argument is
+the trace event parser context. The _path_ is the full path to the new plugin
+directory. The _prio_ argument specifies the loading priority order for the
+new directory of plugins. The loading priority is important in case of different
+versions of the same plugin located in multiple plugin directories.The last loaded
+plugin wins. The priority can be:
+[verse]
+--
+	_TEP_PLUGIN_FIRST_	- Load plugins from this directory first
+	_TEP_PLUGIN_LAST_	- Load plugins from this directory last
+--
+Where the plugins in TEP_PLUGIN_LAST" will take precedence over the
+plugins in the other directories.
+
+The *tep_plugin_add_option()* sets options defined by a plugin. The _name_ is the
+name of the option to set to _val_. Plugins can add options to change its behavior
+and *tep_plugin_add_option()* is used by the application to make those modifications.
+
 
 RETURN VALUE
 ------------
-The _tep_load_plugins()_ function returns a list of successfully loaded plugins,
+The *tep_load_plugins()* function returns a list of successfully loaded plugins,
 or NULL in case no plugins are loaded.
+The *tep_add_plugin_path()* function returns -1 in case of an error, 0 otherwise.
 
 EXAMPLE
 -------
@@ -70,6 +96,8 @@ EXAMPLE
 #include <event-parse.h>
 ...
 struct tep_handle *tep = tep_alloc();
+...
+tep_add_plugin_path(tep, "~/dev_plugins", TEP_PLUGIN_LAST);
 ...
 struct tep_plugin_list *plugins = tep_load_plugins(tep);
 if (plugins == NULL) {
@@ -100,7 +128,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_, _tep_set_flag(3)_
+*libtraceevent*(3), *trace-cmd*(1), *tep_set_flag*(3)
 
 AUTHOR
 ------
@@ -119,4 +147,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

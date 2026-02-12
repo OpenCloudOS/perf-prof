@@ -37,17 +37,17 @@ _TEP_DISABLE_PLUGINS_ - disable all library plugins:
 			- in directory, defined by the environment variable _TRACEEVENT_PLUGIN_DIR_
 			- in user's home directory, _~/.traceevent/plugins_
 --
-Note: plugin related flags must me set before calling _tep_load_plugins()_ API.
+Note: plugin related flags must me set before calling *tep_load_plugins()* API.
 
-The _tep_set_flag()_ function sets _flag_ to _tep_ context.
+The *tep_set_flag()* function sets _flag_ to _tep_ context.
 
-The _tep_clear_flag()_ function clears _flag_ from _tep_ context.
+The *tep_clear_flag()* function clears _flag_ from _tep_ context.
 
-The _tep_test_flag()_ function tests if _flag_ is set to _tep_ context.
+The *tep_test_flag()* function tests if _flag_ is set to _tep_ context.
 
 RETURN VALUE
 ------------
-_tep_test_flag()_ function returns true if _flag_ is set, false otherwise.
+*tep_test_flag()* function returns true if _flag_ is set, false otherwise.
 
 EXAMPLE
 -------
@@ -82,7 +82,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -101,4 +101,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

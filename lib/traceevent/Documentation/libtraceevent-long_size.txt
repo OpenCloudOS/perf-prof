@@ -18,16 +18,16 @@ void *tep_set_long_size*(struct tep_handle pass:[*]_tep_, int _long_size_);
 
 DESCRIPTION
 -----------
-The _tep_get_long_size()_ function returns the size of a long integer on the machine,
+The *tep_get_long_size()* function returns the size of a long integer on the machine,
 where the trace is generated. The _tep_ argument is trace event parser context.
 
-The _tep_set_long_size()_ function sets the size of a long integer on the machine,
+The *tep_set_long_size()* function sets the size of a long integer on the machine,
 where the trace is generated. The _tep_ argument is trace event parser context.
 The _long_size_ is the size of a long integer, in bytes.
 
 RETURN VALUE
 ------------
-The _tep_get_long_size()_ function returns the size of a long integer on the machine,
+The *tep_get_long_size()* function returns the size of a long integer on the machine,
 where the trace is generated, in bytes.
 
 EXAMPLE
@@ -56,7 +56,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -75,4 +75,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

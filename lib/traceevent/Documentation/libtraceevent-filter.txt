@@ -34,53 +34,53 @@ events when outputting them. Each event can be filtered based on its parameters,
 described in the event's format file. This set of functions can be used to
 create, delete, modify and attach event filters.
 
-The _tep_filter_alloc()_ function creates a new event filter. The _tep_ argument
+The *tep_filter_alloc()* function creates a new event filter. The _tep_ argument
 is the trace event parser context.
 
-The _tep_filter_free()_ function frees an event filter and all resources that it
+The *tep_filter_free()* function frees an event filter and all resources that it
 had used.
 
-The _tep_filter_reset()_ function removes all rules from an event filter and
+The *tep_filter_reset()* function removes all rules from an event filter and
 resets it.
 
-The _tep_filter_add_filter_str()_ function adds a new rule to the _filter_. The
+The *tep_filter_add_filter_str()* function adds a new rule to the _filter_. The
 _filter_str_ argument is the filter string, that contains the rule.
 
-The _tep_event_filtered()_ function checks if the event with _event_id_ has
+The *tep_event_filtered()* function checks if the event with _event_id_ has
 _filter_.
 
-The _tep_filter_remove_event()_ function removes a _filter_ for an event with
+The *tep_filter_remove_event()* function removes a _filter_ for an event with
 _event_id_.
 
-The _tep_filter_match()_ function tests if a _record_ matches given _filter_.
+The *tep_filter_match()* function tests if a _record_ matches given _filter_.
 
-The _tep_filter_copy()_ function copies a _source_ filter into a _dest_ filter.
+The *tep_filter_copy()* function copies a _source_ filter into a _dest_ filter.
 
-The _tep_filter_compare()_ function compares two filers - _filter1_ and _filter2_.
+The *tep_filter_compare()* function compares two filers - _filter1_ and _filter2_.
 
-The _tep_filter_make_string()_ function constructs a string, displaying
+The *tep_filter_make_string()* function constructs a string, displaying
 the _filter_ contents for given _event_id_.
 
-The _tep_filter_strerror()_ function copies the _filter_ error buffer into the
+The *tep_filter_strerror()* function copies the _filter_ error buffer into the
 given _buf_ with the size _buflen_. If the error buffer is empty, in the _buf_
 is copied a string, describing the error _err_.
 
 RETURN VALUE
 ------------
-The _tep_filter_alloc()_ function returns a pointer to the newly created event
+The *tep_filter_alloc()* function returns a pointer to the newly created event
 filter, or NULL in case of an error.
 
-The _tep_filter_add_filter_str()_ function returns 0 if the rule was
-successfully added or a negative error code.  Use _tep_filter_strerror()_ to see
+The *tep_filter_add_filter_str()* function returns 0 if the rule was
+successfully added or a negative error code.  Use *tep_filter_strerror()* to see
 actual error message in case of an error.
 
-The _tep_event_filtered()_ function returns 1 if the filter is found for given
+The *tep_event_filtered()* function returns 1 if the filter is found for given
 event, or 0 otherwise.
 
-The _tep_filter_remove_event()_ function returns 1 if the vent was removed, or
+The *tep_filter_remove_event()* function returns 1 if the vent was removed, or
 0 if the event was not found.
 
-The _tep_filter_match()_ function returns _tep_errno_, according to the result:
+The *tep_filter_match()* function returns _tep_errno_, according to the result:
 [verse]
 --
 _pass:[TEP_ERRNO__FILTER_MATCH]_	- filter found for event, the record matches.
@@ -90,16 +90,16 @@ _pass:[TEP_ERRNO__NO_FILTER]_		- no rules in the filter.
 --
 or any other _tep_errno_, if an error occurred during the test.
 
-The _tep_filter_copy()_ function returns 0 on success or -1 if not all rules
+The *tep_filter_copy()* function returns 0 on success or -1 if not all rules
  were copied.
 
-The _tep_filter_compare()_ function returns 1 if the two filters hold the same
+The *tep_filter_compare()* function returns 1 if the two filters hold the same
 content, or 0 if they do not.
 
-The _tep_filter_make_string()_ function returns a string, which must be freed
+The *tep_filter_make_string()* function returns a string, which must be freed
 with free(), or NULL in case of an error.
 
-The _tep_filter_strerror()_ function returns 0 if message was filled
+The *tep_filter_strerror()* function returns 0 if message was filled
 successfully, or -1 in case of an error.
 
 EXAMPLE
@@ -187,7 +187,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -206,4 +206,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

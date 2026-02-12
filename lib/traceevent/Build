@@ -1,6 +1,7 @@
 libtraceevent-y += event-parse.o
 libtraceevent-y += event-plugin.o
 libtraceevent-y += trace-seq.o
+libtraceevent-y += trace-btf.o
 libtraceevent-y += parse-filter.o
 libtraceevent-y += parse-utils.o
 libtraceevent-y += kbuffer-parse.o

@@ -23,19 +23,19 @@ DESCRIPTION
 -----------
 These functions can be used to find a field and retrieve its value.
 
-The _tep_get_any_field_val()_ function searches in the _record_ for a field
+The *tep_get_any_field_val()* function searches in the _record_ for a field
 with _name_, part of the _event_. If the field is found, its value is stored in
 _val_. If there is an error and _err_ is not zero, then an error string is
 written into _s_.
 
-The _tep_get_common_field_val()_ function does the same as
-_tep_get_any_field_val()_, but searches only in the common fields. This works
+The *tep_get_common_field_val()* function does the same as
+*tep_get_any_field_val()*, but searches only in the common fields. This works
 for any event as all events include the common fields.
 
-The _tep_get_field_val()_ function does the same as _tep_get_any_field_val()_,
+The *tep_get_field_val()* function does the same as *tep_get_any_field_val()*,
 but searches only in the event specific fields.
 
-The _tep_get_field_raw()_ function searches in the _record_ for a field with
+The *tep_get_field_raw()* function searches in the _record_ for a field with
 _name_, part of the _event_. If the field is found, a pointer to where the field
 exists in the record's raw data is returned. The size of the data is stored in
 _len_. If there is an error and _err_ is not zero, then an error string is
@@ -43,10 +43,10 @@ written into _s_.
 
 RETURN VALUE
 ------------
-The _tep_get_any_field_val()_, _tep_get_common_field_val()_ and
-_tep_get_field_val()_ functions return 0 on success, or -1 in case of an error.
+The *tep_get_any_field_val()*, *tep_get_common_field_val()* and
+*tep_get_field_val()* functions return 0 on success, or -1 in case of an error.
 
-The _tep_get_field_raw()_ function returns a pointer to field's raw data, and
+The *tep_get_field_raw()* function returns a pointer to field's raw data, and
 places the length of this data in _len_. In case of an error NULL is returned.
 
 EXAMPLE
@@ -64,10 +64,10 @@ void process_record(struct tep_record *record)
 {
 	int len;
 	char *comm;
-	struct tep_event_format *event;
+	struct tep_event *event;
 	unsigned long long val;
 
-	event = tep_find_event_by_record(pevent, record);
+	event = tep_find_event_by_record(tep, record);
 	if (event != NULL) {
 		if (tep_get_common_field_val(NULL, event, "common_type",
 					     record, &val, 0) == 0) {
@@ -100,7 +100,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -119,4 +119,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

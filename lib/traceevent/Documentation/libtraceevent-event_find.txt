@@ -3,7 +3,7 @@ libtraceevent(3)
 
 NAME
 ----
-tep_find_event,tep_find_event_by_name,tep_find_event_by_record -
+tep_find_event,tep_find_event_by_name,tep_find_event_by_record, tep_record_is_event -
 Find events by given key.
 
 SYNOPSIS
@@ -15,6 +15,7 @@ SYNOPSIS
 struct tep_event pass:[*]*tep_find_event*(struct tep_handle pass:[*]_tep_, int _id_);
 struct tep_event pass:[*]*tep_find_event_by_name*(struct tep_handle pass:[*]_tep_, const char pass:[*]_sys_, const char pass:[*]_name_);
 struct tep_event pass:[*]*tep_find_event_by_record*(struct tep_handle pass:[*]_tep_, struct tep_record pass:[*]_record_);
+bool *tep_record_is_event*(struct tep_record pass:[*]record, struct tep_event pass:[*]event);
 --
 
 DESCRIPTION
@@ -23,20 +24,24 @@ This set of functions can be used to search for an event, based on a given
 criteria. All functions require a pointer to a _tep_, trace event parser
 context.
 
-The _tep_find_event()_ function searches for an event by given event _id_. The
+The *tep_find_event()* function searches for an event by given event _id_. The
 event ID is assigned dynamically and can be viewed in event's format file,
 "ID" field.
 
-The tep_find_event_by_name()_ function searches for an event by given
+The *tep_find_event_by_name()* function searches for an event by given
 event _name_, under the system _sys_. If the _sys_ is NULL (not specified),
 the first event with _name_ is returned.
 
-The tep_find_event_by_record()_ function searches for an event from a given
+The *tep_find_event_by_record()* function searches for an event from a given
 _record_.
+
+The *tep_record_is_event()* function tests if the given _record_ is of the type
+of the _event_. This is normally used to know if the _record_ being processed is
+of an _event_ where further processing should be done.
 
 RETURN VALUE
 ------------
-All these functions return a pointer to the found event, or NULL if there is no
+All these functions except *tep_record_is_event()* return a pointer to the found event, or NULL if there is no
 such event.
 
 EXAMPLE
@@ -81,7 +86,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -100,4 +105,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

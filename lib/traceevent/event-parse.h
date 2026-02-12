@@ -3,8 +3,8 @@
  * Copyright (C) 2009, 2010 Red Hat Inc, Steven Rostedt <srostedt@redhat.com>
  *
  */
-#ifndef _PARSE_EVENTS_H
-#define _PARSE_EVENTS_H
+#ifndef __TEP_PARSE_EVENTS_H
+#define __TEP_PARSE_EVENTS_H
 
 #include <stdbool.h>
 #include <stdarg.h>
@@ -13,6 +13,10 @@
 #include <string.h>
 
 #include "trace-seq.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifndef __maybe_unused
 #define __maybe_unused __attribute__((unused))
@@ -78,43 +82,13 @@ struct tep_plugin_option {
  *
  *   int TEP_PLUGIN_UNLOADER(struct tep_handle *tep)
  *
- * TEP_PLUGIN_OPTIONS:  (optional)
- *   Plugin options that can be set before loading
- *
- *   struct tep_plugin_option TEP_PLUGIN_OPTIONS[] = {
- *	{
- *		.name = "option-name",
- *		.plugin_alias = "override-file-name", (optional)
- *		.description = "description of option to show users",
- *	},
- *	{
- *		.name = NULL,
- *	},
- *   };
- *
- *   Array must end with .name = NULL;
- *
- *
- *   .plugin_alias is used to give a shorter name to access
- *   the vairable. Useful if a plugin handles more than one event.
- *
- *   If .value is not set, then it is considered a boolean and only
- *   .set will be processed. If .value is defined, then it is considered
- *   a string option and .set will be ignored.
- *
- * TEP_PLUGIN_ALIAS: (optional)
- *   The name to use for finding options (uses filename if not defined)
  */
 #define TEP_PLUGIN_LOADER tep_plugin_loader
 #define TEP_PLUGIN_UNLOADER tep_plugin_unloader
-#define TEP_PLUGIN_OPTIONS tep_plugin_options
-#define TEP_PLUGIN_ALIAS tep_plugin_alias
 #define _MAKE_STR(x)	#x
 #define MAKE_STR(x)	_MAKE_STR(x)
 #define TEP_PLUGIN_LOADER_NAME MAKE_STR(TEP_PLUGIN_LOADER)
 #define TEP_PLUGIN_UNLOADER_NAME MAKE_STR(TEP_PLUGIN_UNLOADER)
-#define TEP_PLUGIN_OPTIONS_NAME MAKE_STR(TEP_PLUGIN_OPTIONS)
-#define TEP_PLUGIN_ALIAS_NAME MAKE_STR(TEP_PLUGIN_ALIAS)
 
 enum tep_format_flags {
 	TEP_FIELD_IS_ARRAY	= 1,
@@ -125,6 +99,7 @@ enum tep_format_flags {
 	TEP_FIELD_IS_LONG	= 32,
 	TEP_FIELD_IS_FLAG	= 64,
 	TEP_FIELD_IS_SYMBOLIC	= 128,
+	TEP_FIELD_IS_RELATIVE	= 256,
 };
 
 struct tep_format_field {
@@ -153,12 +128,19 @@ struct tep_print_arg_atom {
 
 struct tep_print_arg_string {
 	char			*string;
-	int			offset;
+	int			offset;		// for backward compatibility
+	struct tep_format_field	*field;
 };
 
 struct tep_print_arg_bitmask {
 	char			*bitmask;
-	int			offset;
+	int			offset;		// for backward compatibility
+	struct tep_format_field	*field;
+};
+
+struct tep_print_arg_stacktrace {
+	char			*stacktrace;
+	struct tep_format_field	*field;
 };
 
 struct tep_print_arg_field {
@@ -237,6 +219,8 @@ enum tep_print_arg_type {
 	TEP_PRINT_BITMASK,
 	TEP_PRINT_DYNAMIC_ARRAY_LEN,
 	TEP_PRINT_HEX_STR,
+	TEP_PRINT_CPUMASK,
+	TEP_PRINT_STACKTRACE,
 };
 
 struct tep_print_arg {
@@ -253,6 +237,7 @@ struct tep_print_arg {
 		struct tep_print_arg_func	func;
 		struct tep_print_arg_string	string;
 		struct tep_print_arg_bitmask	bitmask;
+		struct tep_print_arg_stacktrace	stacktrace;
 		struct tep_print_arg_op		op;
 		struct tep_print_arg_dynarray	dynarray;
 	};
@@ -324,6 +309,8 @@ enum tep_flag {
 	TEP_NSEC_OUTPUT		= 1,	/* output in NSECS */
 	TEP_DISABLE_SYS_PLUGINS	= 1 << 1,
 	TEP_DISABLE_PLUGINS	= 1 << 2,
+	TEP_NO_PARSING_WARNINGS	= 1 << 3, /* Disable warnings while parsing
+					     event's format strings */
 };
 
 #define TEP_ERRORS 							      \
@@ -428,7 +415,7 @@ static inline int tep_is_bigendian(void)
 /* taken from kernel/trace/trace.h */
 enum trace_flag_type {
 	TRACE_FLAG_IRQS_OFF		= 0x01,
-	TRACE_FLAG_IRQS_NOSUPPORT	= 0x02,
+	TRACE_FLAG_NEED_RESCHED_LAZY	= 0x02,
 	TRACE_FLAG_NEED_RESCHED		= 0x04,
 	TRACE_FLAG_HARDIRQ		= 0x08,
 	TRACE_FLAG_SOFTIRQ		= 0x10,
@@ -442,8 +429,13 @@ int tep_set_function_resolver(struct tep_handle *tep,
 void tep_reset_function_resolver(struct tep_handle *tep);
 int tep_register_comm(struct tep_handle *tep, const char *comm, int pid);
 int tep_override_comm(struct tep_handle *tep, const char *comm, int pid);
+int tep_parse_saved_cmdlines(struct tep_handle *tep, const char *buf);
+int tep_parse_kallsyms(struct tep_handle *tep, const char *kallsyms);
+int tep_parse_last_boot_info(struct tep_handle *tep, const char *lbi);
+int tep_load_modules(struct tep_handle *tep, char *modules, size_t size);
 int tep_register_function(struct tep_handle *tep, char *name,
 			  unsigned long long addr, char *mod);
+int tep_parse_printk_formats(struct tep_handle *tep, const char *buf);
 int tep_register_print_string(struct tep_handle *tep, const char *fmt,
 			      unsigned long long addr);
 bool tep_is_pid_registered(struct tep_handle *tep, int pid);
@@ -520,6 +512,9 @@ struct tep_format_field *tep_find_any_field(struct tep_event *event, const char 
 const char *tep_find_function(struct tep_handle *tep, unsigned long long addr);
 unsigned long long
 tep_find_function_address(struct tep_handle *tep, unsigned long long addr);
+int tep_find_function_info(struct tep_handle *tep, unsigned long long addr,
+			   const char **name, unsigned long long *start,
+			   unsigned long *size);
 unsigned long long tep_read_number(struct tep_handle *tep, const void *ptr, int size);
 int tep_read_number_field(struct tep_format_field *field, const void *data,
 			  unsigned long long *value);
@@ -543,8 +538,17 @@ struct tep_cmdline *tep_data_pid_from_comm(struct tep_handle *tep, const char *c
 					   struct tep_cmdline *next);
 int tep_cmdline_pid(struct tep_handle *tep, struct tep_cmdline *cmdline);
 
-void tep_print_field(struct trace_seq *s, void *data,
-		     struct tep_format_field *field);
+bool tep_record_is_event(struct tep_record *record, struct tep_event *event);
+
+void tep_print_field_content(struct trace_seq *s, void *data, int size,
+			     struct tep_format_field *field);
+void tep_record_print_fields(struct trace_seq *s,
+			     struct tep_record *record,
+			     struct tep_event *event);
+void tep_record_print_selected_fields(struct trace_seq *s,
+				      struct tep_record *record,
+				      struct tep_event *event,
+				      unsigned long long select_mask);
 void tep_print_fields(struct trace_seq *s, void *data,
 		      int size __maybe_unused, struct tep_event *event);
 int tep_strerror(struct tep_handle *tep, enum tep_errno errnum,
@@ -556,6 +560,8 @@ struct tep_event **tep_list_events_copy(struct tep_handle *tep,
 struct tep_format_field **tep_event_common_fields(struct tep_event *event);
 struct tep_format_field **tep_event_fields(struct tep_event *event);
 
+int tep_get_function_count(struct tep_handle *tep);
+
 enum tep_endian {
         TEP_LITTLE_ENDIAN = 0,
         TEP_BIG_ENDIAN
@@ -565,6 +571,9 @@ void tep_set_cpus(struct tep_handle *tep, int cpus);
 int tep_get_long_size(struct tep_handle *tep);
 void tep_set_long_size(struct tep_handle *tep, int long_size);
 int tep_get_page_size(struct tep_handle *tep);
+int tep_get_sub_buffer_size(struct tep_handle *tep);
+int tep_get_sub_buffer_data_size(struct tep_handle *tep);
+int tep_get_sub_buffer_commit_offset(struct tep_handle *tep);
 void tep_set_page_size(struct tep_handle *tep, int _page_size);
 bool tep_is_file_bigendian(struct tep_handle *tep);
 void tep_set_file_bigendian(struct tep_handle *tep, enum tep_endian endian);
@@ -580,6 +589,14 @@ void tep_free(struct tep_handle *tep);
 void tep_ref(struct tep_handle *tep);
 void tep_unref(struct tep_handle *tep);
 int tep_get_ref(struct tep_handle *tep);
+
+struct kbuffer *tep_kbuffer(struct tep_handle *tep);
+
+/* BTF */
+int tep_load_btf(struct tep_handle *tep, void *raw_data, size_t data_size);
+int tep_btf_list_args(struct tep_handle *tep, struct trace_seq *s, const char *func);
+int tep_btf_print_args(struct tep_handle *tep, struct trace_seq *s, void *args,
+		       int nmem, int size, const char *func);
 
 /* for debugging */
 void tep_print_funcs(struct tep_handle *tep);
@@ -748,5 +765,53 @@ int tep_filter_remove_event(struct tep_event_filter *filter,
 int tep_filter_copy(struct tep_event_filter *dest, struct tep_event_filter *source);
 
 int tep_filter_compare(struct tep_event_filter *filter1, struct tep_event_filter *filter2);
+
+/* Control library logs */
+enum tep_loglevel {
+	TEP_LOG_NONE = 0,
+	TEP_LOG_CRITICAL,
+	TEP_LOG_ERROR,
+	TEP_LOG_WARNING,
+	TEP_LOG_INFO,
+	TEP_LOG_DEBUG,
+	TEP_LOG_ALL
+};
+void tep_set_loglevel(enum tep_loglevel level);
+
+/*
+ * Part of the KVM plugin. Will pass the current @event and @record
+ * as well as a pointer to the address to a guest kernel function.
+ * This is currently a weak function defined in the KVM plugin and
+ * should never be called. But a tool can override it, and this will
+ * be called when the kvm plugin has an address it needs the function
+ * name of.
+ *
+ * This function should return the function name for the given address
+ * and optionally, it can update @paddr to include the start of the function
+ * such that the kvm plugin can include an offset.
+ *
+ * For an application to be able to override the weak version in the
+ * plugin, it must be compiled with the gcc -rdynamic option that will
+ * allow the dynamic linker to use the application's function to
+ * override this callback.
+ */
+const char *tep_plugin_kvm_get_func(struct tep_event *event,
+				    struct tep_record *record,
+				    unsigned long long *paddr);
+
+/*
+ * tep_plugin_kvm_put_func() is another weak function that can be used
+ * to call back into the application if the function name returned by
+ * tep_plugin_kvm_get_func() needs to be freed.
+ */
+void tep_plugin_kvm_put_func(const char *func);
+
+/* DEPRECATED */
+void tep_print_field(struct trace_seq *s, void *data,
+		     struct tep_format_field *field);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _PARSE_EVENTS_H */

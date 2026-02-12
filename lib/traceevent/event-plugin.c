@@ -327,7 +327,7 @@ int tep_plugin_add_option(const char *name, const char *val)
 		return -ENOMEM;
 
 	if (parse_option_name(&option_str, &plugin) < 0)
-		return -ENOMEM;
+		goto out_free;
 
 	/* If the option exists, update the val */
 	for (op = trace_plugin_options; op; op = op->next) {
@@ -444,52 +444,36 @@ load_plugin(struct tep_handle *tep, const char *path,
 	    const char *file, void *data)
 {
 	struct tep_plugin_list **plugin_list = data;
-	struct tep_plugin_option *options;
 	tep_plugin_load_func func;
 	struct tep_plugin_list *list;
-	const char *alias;
 	char *plugin;
 	void *handle;
 	int ret;
 
 	ret = asprintf(&plugin, "%s/%s", path, file);
 	if (ret < 0) {
-		warning("could not allocate plugin memory\n");
+		tep_warning("could not allocate plugin memory\n");
 		return;
 	}
 
 	handle = dlopen(plugin, RTLD_NOW | RTLD_GLOBAL);
 	if (!handle) {
-		warning("could not load plugin '%s'\n%s\n",
-			plugin, dlerror());
+		tep_warning("could not load plugin '%s'\n%s\n",
+			    plugin, dlerror());
 		goto out_free;
-	}
-
-	alias = dlsym(handle, TEP_PLUGIN_ALIAS_NAME);
-	if (!alias)
-		alias = file;
-
-	options = dlsym(handle, TEP_PLUGIN_OPTIONS_NAME);
-	if (options) {
-		while (options->name) {
-			ret = update_option(alias, options);
-			if (ret < 0)
-				goto out_free;
-			options++;
-		}
 	}
 
 	func = dlsym(handle, TEP_PLUGIN_LOADER_NAME);
 	if (!func) {
-		warning("could not find func '%s' in plugin '%s'\n%s\n",
-			TEP_PLUGIN_LOADER_NAME, plugin, dlerror());
-		goto out_free;
+		tep_warning("could not find func '%s' in plugin '%s'\n%s\n",
+			    TEP_PLUGIN_LOADER_NAME, plugin, dlerror());
+		goto out_close;
 	}
 
 	list = malloc(sizeof(*list));
 	if (!list) {
-		warning("could not allocate plugin memory\n");
-		goto out_free;
+		tep_warning("could not allocate plugin memory\n");
+		goto out_close;
 	}
 
 	list->next = *plugin_list;
@@ -497,10 +481,12 @@ load_plugin(struct tep_handle *tep, const char *path,
 	list->name = plugin;
 	*plugin_list = list;
 
-	pr_stat("registering plugin: %s", plugin);
+	tep_info("registering plugin: %s", plugin);
 	func(tep);
 	return;
 
+out_close:
+	dlclose(handle);
  out_free:
 	free(plugin);
 }
@@ -616,7 +602,7 @@ void tep_load_plugins_hook(struct tep_handle *tep, const char *suffix,
 
 	ret = asprintf(&path, "%s/%s", home, LOCAL_PLUGIN_DIR);
 	if (ret < 0) {
-		warning("could not allocate plugin memory\n");
+		tep_warning("could not allocate plugin memory\n");
 		return;
 	}
 

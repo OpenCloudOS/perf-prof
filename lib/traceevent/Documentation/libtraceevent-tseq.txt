@@ -32,45 +32,45 @@ DESCRIPTION
 Trace sequences are used to allow a function to call several other functions
 to create a string of data to use.
 
-The _trace_seq_init()_ function initializes the trace sequence _s_.
+The *trace_seq_init()* function initializes the trace sequence _s_.
 
-The _trace_seq_destroy()_ function destroys the trace sequence _s_ and frees
+The *trace_seq_destroy()* function destroys the trace sequence _s_ and frees
 all its resources that it had used.
 
-The _trace_seq_reset()_ function re-initializes the trace sequence _s_. All
+The *trace_seq_reset()* function re-initializes the trace sequence _s_. All
 characters already written in _s_ will be deleted.
 
-The _trace_seq_terminate()_ function terminates the trace sequence _s_. It puts
+The *trace_seq_terminate()* function terminates the trace sequence _s_. It puts
 the null character pass:['\0'] at the end of the buffer.
 
-The _trace_seq_putc()_ function puts a single character _c_ in the trace
+The *trace_seq_putc()* function puts a single character _c_ in the trace
 sequence _s_.
 
-The _trace_seq_puts()_ function puts a NULL terminated string _str_ in the
+The *trace_seq_puts()* function puts a NULL terminated string _str_ in the
 trace sequence _s_.
 
-The _trace_seq_printf()_ function puts a formated string _fmt _with
+The *trace_seq_printf()* function puts a formated string _fmt _with
 variable arguments _..._ in the trace sequence _s_.
 
-The _trace_seq_vprintf()_ function puts a formated string _fmt _with
+The *trace_seq_vprintf()* function puts a formated string _fmt _with
 list of arguments _args_ in the trace sequence _s_.
 
-The _trace_seq_do_printf()_ function prints the buffer of trace sequence _s_ to
+The *trace_seq_do_printf()* function prints the buffer of trace sequence _s_ to
 the standard output stdout.
 
-The _trace_seq_do_fprintf()_ function prints the buffer of trace sequence _s_
+The *trace_seq_do_fprintf()* function prints the buffer of trace sequence _s_
 to the given file _fp_.
 
 RETURN VALUE
 ------------
-Both _trace_seq_putc()_ and _trace_seq_puts()_ functions return the number of
+Both *trace_seq_putc()* and *trace_seq_puts()* functions return the number of
 characters put in the trace sequence, or 0 in case of an error
 
-Both _trace_seq_printf()_ and _trace_seq_vprintf()_ functions return 0 if the
+Both *trace_seq_printf()* and *trace_seq_vprintf()* functions return 0 if the
 trace oversizes the buffer's free space, the number of characters printed, or
 a negative value in case of an error.
 
-Both _trace_seq_do_printf()_ and _trace_seq_do_fprintf()_ functions return the
+Both *trace_seq_do_printf()* and *trace_seq_do_fprintf()* functions return the
 number of printed characters, or -1 in case of an error.
 
 EXAMPLE
@@ -136,7 +136,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -155,4 +155,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

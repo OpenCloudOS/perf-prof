@@ -16,14 +16,14 @@ int *tep_read_number_field*(struct tep_format_field pass:[*]_field_, const void 
 
 DESCRIPTION
 -----------
-The _tep_read_number_field()_ function reads the value of the _field_ from the
+The *tep_read_number_field()* function reads the value of the _field_ from the
 raw _data_ and stores it in the _value_. The function sets the _value_ according
 to the endianness of the raw data and the current machine and stores it in
 _value_.
 
 RETURN VALUE
 ------------
-The _tep_read_number_field()_ function retunrs 0 in case of success, or -1 in
+The *tep_read_number_field()* function retunrs 0 in case of success, or -1 in
 case of an error.
 
 EXAMPLE
@@ -59,7 +59,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -78,4 +78,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

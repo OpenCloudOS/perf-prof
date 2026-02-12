@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 # trace-cmd version
 EP_VERSION = 1
-EP_PATCHLEVEL = 1
+EP_PATCHLEVEL = 9
 EP_EXTRAVERSION = 0
 
 # file format version
@@ -99,7 +99,7 @@ LIB_TARGET  = libtraceevent.a libtraceevent.so.$(EVENT_PARSE_VERSION)
 LIB_INSTALL = libtraceevent.a libtraceevent.so*
 LIB_INSTALL := $(addprefix $(OUTPUT),$(LIB_INSTALL))
 
-INCLUDES = -I. -I $(srctree)/include $(CONFIG_INCLUDES)
+INCLUDES = -I. -I $(srctree)/include -I $(srctree)/include/uapi $(CONFIG_INCLUDES)
 
 # Set compile option CFLAGS
 ifdef EXTRA_CFLAGS

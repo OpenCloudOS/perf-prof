@@ -18,7 +18,7 @@ void *tep_print_event*(struct tep_handle pass:[*]_tep_, struct trace_seqpass:[*]
 DESCRIPTION
 -----------
 
-The _tep_print_event()_ function parses the event information of the given
+The *tep_print_event()* function parses the event information of the given
 _record_ and writes it into the trace sequence _s_, according to the format
 string _fmt_. The desired information is specified after the format string.
 The _fmt_ is printf-like format string, following arguments are supported:
@@ -108,7 +108,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -127,4 +127,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

@@ -17,7 +17,7 @@ enum tep_errno *tep_parse_format*(struct tep_handle pass:[*]_tep_, struct tep_ev
 
 DESCRIPTION
 -----------
-The _tep_parse_event()_ function parses the event format and creates an event
+The *tep_parse_event()* function parses the event format and creates an event
 structure to quickly parse raw data for a given event. The _tep_ argument is
 the trace event parser context. The created event structure is stored in the
 _tep_ context. The _buf_ argument is a buffer with _size_, where the event
@@ -25,13 +25,13 @@ format data is. The event format data can be taken from
 tracefs/events/.../.../format files. The _sys_ argument is the system of
 the event.
 
-The _tep_parse_format()_ function does the same as _tep_parse_event()_. The only
+The *tep_parse_format()* function does the same as *tep_parse_event()*. The only
 difference is in the extra _eventp_ argument, where the newly created event
 structure is returned.
 
 RETURN VALUE
 ------------
-Both _tep_parse_event()_ and _tep_parse_format()_ functions return 0 on success,
+Both *tep_parse_event()* and *tep_parse_format()* functions return 0 on success,
 or TEP_ERRNO__... in case of an error.
 
 EXAMPLE
@@ -68,7 +68,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -87,4 +87,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

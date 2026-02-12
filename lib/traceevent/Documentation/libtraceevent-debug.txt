@@ -1,0 +1,95 @@
+libtraceevent(3)
+================
+
+NAME
+----
+tep_print_printk, tep_print_funcs, tep_set_test_filters, tep_plugin_print_options -
+Print libtraceevent internal information.
+
+SYNOPSIS
+--------
+[verse]
+--
+*#include <event-parse.h>*
+*#include <trace-seq.h>*
+
+void *tep_print_printk*(struct tep_handle pass:[*]tep);
+void *tep_print_funcs*(struct tep_handle pass:[*]tep);
+void *tep_set_test_filters*(struct tep_handle pass:[*]tep, int test_filters);
+void *tep_plugin_print_options*(struct trace_seq pass:[*]s);
+--
+
+DESCRIPTION
+-----------
+The *tep_print_printk()* function prints the printk string formats that were
+stored for this tracing session. The _tep_ argument is trace event parser context.
+
+The *tep_print_funcs()* function prints the stored function name to address mapping
+for this tracing session. The _tep_ argument is trace event parser context.
+
+The *tep_set_test_filters()* function sets a flag to test a filter string. If this
+flag is set, when *tep_filter_add_filter_str()* API as called, it will print the filter
+string instead of adding it. The _tep_ argument is trace event parser context.
+The _test_filters_ argument is the test flag that will be set.
+
+The *tep_plugin_print_options()* function writes a list of the registered plugin options
+into _s_.
+
+EXAMPLE
+-------
+[source,c]
+--
+#include <event-parse.h>
+#include <trace-seq.h>
+...
+struct tep_handle *tep = tep_alloc();
+...
+	tep_print_printk(tep);
+...
+	tep_print_funcs(tep);
+...
+struct tep_event_filter *filter = tep_filter_alloc(tep);
+	tep_set_test_filters(tep, 1);
+	tep_filter_add_filter_str(filter, "sched/sched_wakeup:target_cpu==1");
+	tep_set_test_filters(tep, 0);
+	tep_filter_free(filter);
+...
+struct trace_seq seq;
+trace_seq_init(&seq);
+
+	tep_plugin_print_options(&s);
+...
+--
+
+FILES
+-----
+[verse]
+--
+*event-parse.h*
+	Header file to include in order to have access to the library APIs.
+*-ltraceevent*
+	Linker switch to add when building a program that uses the library.
+--
+
+SEE ALSO
+--------
+*libtraceevent*(3), *trace-cmd*(1)
+
+AUTHOR
+------
+[verse]
+--
+*Steven Rostedt* <rostedt@goodmis.org>, author of *libtraceevent*.
+*Tzvetomir Stoyanov* <tz.stoyanov@gmail.com>, author of this man page.
+--
+REPORTING BUGS
+--------------
+Report bugs to  <linux-trace-devel@vger.kernel.org>
+
+LICENSE
+-------
+libtraceevent is Free Software licensed under the GNU LGPL 2.1
+
+RESOURCES
+---------
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

@@ -30,7 +30,7 @@ struct event_list {
 	struct tep_event	*event;
 };
 
-static void show_error(char *error_buf, const char *fmt, ...)
+static void show_error(struct tep_handle *tep, char *error_buf, const char *fmt, ...)
 {
 	unsigned long long index;
 	const char *input;
@@ -38,8 +38,8 @@ static void show_error(char *error_buf, const char *fmt, ...)
 	int len;
 	int i;
 
-	input = get_input_buf();
-	index = get_input_buf_ptr();
+	input = get_input_buf(tep);
+	index = get_input_buf_ptr(tep);
 	len = input ? strlen(input) : 0;
 
 	if (len) {
@@ -57,20 +57,20 @@ static void show_error(char *error_buf, const char *fmt, ...)
 	va_end(ap);
 }
 
-static enum tep_event_type filter_read_token(char **tok)
+static enum tep_event_type filter_read_token(struct tep_handle *tep, char **tok)
 {
 	enum tep_event_type type;
 	char *token = NULL;
 
 	do {
 		free_token(token);
-		type = read_token(&token);
+		type = read_token(tep, &token);
 	} while (type == TEP_EVENT_NEWLINE || type == TEP_EVENT_SPACE);
 
 	/* If token is = or ! check to see if the next char is ~ */
 	if (token &&
 	    (strcmp(token, "=") == 0 || strcmp(token, "!") == 0) &&
-	    peek_char() == '~') {
+	    peek_char(tep) == '~') {
 		/* append it */
 		*tok = malloc(3);
 		if (*tok == NULL) {
@@ -80,7 +80,7 @@ static enum tep_event_type filter_read_token(char **tok)
 		sprintf(*tok, "%c%c", *token, '~');
 		free_token(token);
 		/* Now remove the '~' from the buffer */
-		read_token(&token);
+		read_token(tep, &token);
 		free_token(token);
 	} else
 		*tok = token;
@@ -337,7 +337,7 @@ create_arg_item(struct tep_event *event, const char *token,
 
 	arg = allocate_arg();
 	if (arg == NULL) {
-		show_error(error_str, "failed to allocate filter arg");
+		show_error(event->tep, error_str, "failed to allocate filter arg");
 		return TEP_ERRNO__MEM_ALLOC_FAILED;
 	}
 
@@ -351,7 +351,7 @@ create_arg_item(struct tep_event *event, const char *token,
 		arg->value.str = strdup(token);
 		if (!arg->value.str) {
 			free_arg(arg);
-			show_error(error_str, "failed to allocate string filter arg");
+			show_error(event->tep, error_str, "failed to allocate string filter arg");
 			return TEP_ERRNO__MEM_ALLOC_FAILED;
 		}
 		break;
@@ -383,7 +383,7 @@ create_arg_item(struct tep_event *event, const char *token,
 		break;
 	default:
 		free_arg(arg);
-		show_error(error_str, "expected a value but found %s", token);
+		show_error(event->tep, error_str, "expected a value but found %s", token);
 		return TEP_ERRNO__UNEXPECTED_TYPE;
 	}
 	*parg = arg;
@@ -437,7 +437,8 @@ create_arg_cmp(enum tep_filter_cmp_type ctype)
 }
 
 static enum tep_errno
-add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str)
+add_right(struct tep_handle *tep, struct tep_filter_arg *op,
+		struct tep_filter_arg *arg, char *error_str)
 {
 	struct tep_filter_arg *left;
 	char *str;
@@ -468,7 +469,7 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 		case TEP_FILTER_ARG_FIELD:
 			break;
 		default:
-			show_error(error_str, "Illegal rvalue");
+			show_error(tep, error_str, "Illegal rvalue");
 			return TEP_ERRNO__ILLEGAL_RVALUE;
 		}
 
@@ -514,7 +515,7 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 
 			/* Left arg must be a field */
 			if (left->type != TEP_FILTER_ARG_FIELD) {
-				show_error(error_str,
+				show_error(tep, error_str,
 					   "Illegal lvalue for string comparison");
 				return TEP_ERRNO__ILLEGAL_LVALUE;
 			}
@@ -532,14 +533,14 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 			case TEP_FILTER_CMP_NOT_REGEX:
 				ret = regcomp(&op->str.reg, str, REG_ICASE|REG_NOSUB);
 				if (ret) {
-					show_error(error_str,
+					show_error(tep, error_str,
 						   "RegEx '%s' did not compute",
 						   str);
 					return TEP_ERRNO__INVALID_REGEX;
 				}
 				break;
 			default:
-				show_error(error_str,
+				show_error(tep, error_str,
 					   "Illegal comparison for string");
 				return TEP_ERRNO__ILLEGAL_STRING_CMP;
 			}
@@ -549,7 +550,7 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 			op->str.field = left->field.field;
 			op->str.val = strdup(str);
 			if (!op->str.val) {
-				show_error(error_str, "Failed to allocate string filter");
+				show_error(tep, error_str, "Failed to allocate string filter");
 				return TEP_ERRNO__MEM_ALLOC_FAILED;
 			}
 			/*
@@ -557,7 +558,7 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 			 */
 			op->str.buffer = malloc(op->str.field->size + 1);
 			if (!op->str.buffer) {
-				show_error(error_str, "Failed to allocate string filter");
+				show_error(tep, error_str, "Failed to allocate string filter");
 				return TEP_ERRNO__MEM_ALLOC_FAILED;
 			}
 			/* Null terminate this buffer */
@@ -575,7 +576,7 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 			switch (op->num.type) {
 			case TEP_FILTER_CMP_REGEX:
 			case TEP_FILTER_CMP_NOT_REGEX:
-				show_error(error_str,
+				show_error(tep, error_str,
 					   "Op not allowed with integers");
 				return TEP_ERRNO__ILLEGAL_INTEGER_CMP;
 
@@ -597,7 +598,7 @@ add_right(struct tep_filter_arg *op, struct tep_filter_arg *arg, char *error_str
 	return 0;
 
  out_fail:
-	show_error(error_str, "Syntax error");
+	show_error(tep, error_str, "Syntax error");
 	return TEP_ERRNO__SYNTAX_ERROR;
 }
 
@@ -748,15 +749,16 @@ enum filter_vals {
 };
 
 static enum tep_errno
-reparent_op_arg(struct tep_filter_arg *parent, struct tep_filter_arg *old_child,
-		struct tep_filter_arg *arg, char *error_str)
+reparent_op_arg(struct tep_handle *tep, struct tep_filter_arg *parent,
+		struct tep_filter_arg *old_child, struct tep_filter_arg *arg,
+		char *error_str)
 {
 	struct tep_filter_arg *other_child;
 	struct tep_filter_arg **ptr;
 
 	if (parent->type != TEP_FILTER_ARG_OP &&
 	    arg->type != TEP_FILTER_ARG_OP) {
-		show_error(error_str, "can not reparent other than OP");
+		show_error(tep, error_str, "can not reparent other than OP");
 		return TEP_ERRNO__REPARENT_NOT_OP;
 	}
 
@@ -768,7 +770,7 @@ reparent_op_arg(struct tep_filter_arg *parent, struct tep_filter_arg *old_child,
 		ptr = &old_child->op.left;
 		other_child = old_child->op.right;
 	} else {
-		show_error(error_str, "Error in reparent op, find other child");
+		show_error(tep, error_str, "Error in reparent op, find other child");
 		return TEP_ERRNO__REPARENT_FAILED;
 	}
 
@@ -789,7 +791,7 @@ reparent_op_arg(struct tep_filter_arg *parent, struct tep_filter_arg *old_child,
 	else if (parent->op.left == old_child)
 		ptr = &parent->op.left;
 	else {
-		show_error(error_str, "Error in reparent op");
+		show_error(tep, error_str, "Error in reparent op");
 		return TEP_ERRNO__REPARENT_FAILED;
 	}
 
@@ -800,8 +802,8 @@ reparent_op_arg(struct tep_filter_arg *parent, struct tep_filter_arg *old_child,
 }
 
 /* Returns either filter_vals (success) or tep_errno (failfure) */
-static int test_arg(struct tep_filter_arg *parent, struct tep_filter_arg *arg,
-		    char *error_str)
+static int test_arg(struct tep_handle *tep, struct tep_filter_arg *parent,
+		struct tep_filter_arg *arg, char *error_str)
 {
 	int lval, rval;
 
@@ -818,47 +820,47 @@ static int test_arg(struct tep_filter_arg *parent, struct tep_filter_arg *arg,
 		return FILTER_VAL_NORM;
 
 	case TEP_FILTER_ARG_EXP:
-		lval = test_arg(arg, arg->exp.left, error_str);
+		lval = test_arg(tep, arg, arg->exp.left, error_str);
 		if (lval != FILTER_VAL_NORM)
 			return lval;
-		rval = test_arg(arg, arg->exp.right, error_str);
+		rval = test_arg(tep, arg, arg->exp.right, error_str);
 		if (rval != FILTER_VAL_NORM)
 			return rval;
 		return FILTER_VAL_NORM;
 
 	case TEP_FILTER_ARG_NUM:
-		lval = test_arg(arg, arg->num.left, error_str);
+		lval = test_arg(tep, arg, arg->num.left, error_str);
 		if (lval != FILTER_VAL_NORM)
 			return lval;
-		rval = test_arg(arg, arg->num.right, error_str);
+		rval = test_arg(tep, arg, arg->num.right, error_str);
 		if (rval != FILTER_VAL_NORM)
 			return rval;
 		return FILTER_VAL_NORM;
 
 	case TEP_FILTER_ARG_OP:
 		if (arg->op.type != TEP_FILTER_OP_NOT) {
-			lval = test_arg(arg, arg->op.left, error_str);
+			lval = test_arg(tep, arg, arg->op.left, error_str);
 			switch (lval) {
 			case FILTER_VAL_NORM:
 				break;
 			case FILTER_VAL_TRUE:
 				if (arg->op.type == TEP_FILTER_OP_OR)
 					return FILTER_VAL_TRUE;
-				rval = test_arg(arg, arg->op.right, error_str);
+				rval = test_arg(tep, arg, arg->op.right, error_str);
 				if (rval != FILTER_VAL_NORM)
 					return rval;
 
-				return reparent_op_arg(parent, arg, arg->op.right,
+				return reparent_op_arg(tep, parent, arg, arg->op.right,
 						       error_str);
 
 			case FILTER_VAL_FALSE:
 				if (arg->op.type == TEP_FILTER_OP_AND)
 					return FILTER_VAL_FALSE;
-				rval = test_arg(arg, arg->op.right, error_str);
+				rval = test_arg(tep, arg, arg->op.right, error_str);
 				if (rval != FILTER_VAL_NORM)
 					return rval;
 
-				return reparent_op_arg(parent, arg, arg->op.right,
+				return reparent_op_arg(tep, parent, arg, arg->op.right,
 						       error_str);
 
 			default:
@@ -866,7 +868,7 @@ static int test_arg(struct tep_filter_arg *parent, struct tep_filter_arg *arg,
 			}
 		}
 
-		rval = test_arg(arg, arg->op.right, error_str);
+		rval = test_arg(tep, arg, arg->op.right, error_str);
 		switch (rval) {
 		case FILTER_VAL_NORM:
 		default:
@@ -878,7 +880,7 @@ static int test_arg(struct tep_filter_arg *parent, struct tep_filter_arg *arg,
 			if (arg->op.type == TEP_FILTER_OP_NOT)
 				return FILTER_VAL_FALSE;
 
-			return reparent_op_arg(parent, arg, arg->op.left,
+			return reparent_op_arg(tep, parent, arg, arg->op.left,
 					       error_str);
 
 		case FILTER_VAL_FALSE:
@@ -887,25 +889,25 @@ static int test_arg(struct tep_filter_arg *parent, struct tep_filter_arg *arg,
 			if (arg->op.type == TEP_FILTER_OP_NOT)
 				return FILTER_VAL_TRUE;
 
-			return reparent_op_arg(parent, arg, arg->op.left,
+			return reparent_op_arg(tep, parent, arg, arg->op.left,
 					       error_str);
 		}
 
 		return rval;
 	default:
-		show_error(error_str, "bad arg in filter tree");
+		show_error(tep, error_str, "bad arg in filter tree");
 		return TEP_ERRNO__BAD_FILTER_ARG;
 	}
 	return FILTER_VAL_NORM;
 }
 
 /* Remove any unknown event fields */
-static int collapse_tree(struct tep_filter_arg *arg,
+static int collapse_tree(struct tep_handle *tep, struct tep_filter_arg *arg,
 			 struct tep_filter_arg **arg_collapsed, char *error_str)
 {
 	int ret;
 
-	ret = test_arg(arg, arg, error_str);
+	ret = test_arg(tep, arg, arg, error_str);
 	switch (ret) {
 	case FILTER_VAL_NORM:
 		break;
@@ -918,7 +920,7 @@ static int collapse_tree(struct tep_filter_arg *arg,
 			arg->type = TEP_FILTER_ARG_BOOLEAN;
 			arg->boolean.value = ret == FILTER_VAL_TRUE;
 		} else {
-			show_error(error_str, "Failed to allocate filter arg");
+			show_error(tep, error_str, "Failed to allocate filter arg");
 			ret = TEP_ERRNO__MEM_ALLOC_FAILED;
 		}
 		break;
@@ -954,7 +956,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 
 	do {
 		free(token);
-		type = filter_read_token(&token);
+		type = filter_read_token(event->tep, &token);
 		switch (type) {
 		case TEP_EVENT_SQUOTE:
 		case TEP_EVENT_DQUOTE:
@@ -965,7 +967,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 			if (!left_item)
 				left_item = arg;
 			else if (current_exp) {
-				ret = add_right(current_exp, arg, error_str);
+				ret = add_right(event->tep, current_exp, arg, error_str);
 				if (ret < 0)
 					goto fail;
 				left_item = NULL;
@@ -985,20 +987,20 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 
 		case TEP_EVENT_DELIM:
 			if (*token == ',') {
-				show_error(error_str, "Illegal token ','");
+				show_error(event->tep, error_str, "Illegal token ','");
 				ret = TEP_ERRNO__ILLEGAL_TOKEN;
 				goto fail;
 			}
 
 			if (*token == '(') {
 				if (left_item) {
-					show_error(error_str,
+					show_error(event->tep, error_str,
 						   "Open paren can not come after item");
 					ret = TEP_ERRNO__INVALID_PAREN;
 					goto fail;
 				}
 				if (current_exp) {
-					show_error(error_str,
+					show_error(event->tep, error_str,
 						   "Open paren can not come after expression");
 					ret = TEP_ERRNO__INVALID_PAREN;
 					goto fail;
@@ -1007,7 +1009,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 				ret = process_filter(event, &arg, error_str, 0);
 				if (ret != TEP_ERRNO__UNBALANCED_PAREN) {
 					if (ret == 0) {
-						show_error(error_str,
+						show_error(event->tep, error_str,
 							   "Unbalanced number of '('");
 						ret = TEP_ERRNO__UNBALANCED_PAREN;
 					}
@@ -1024,7 +1026,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 				}
 
 				if (current_op)
-					ret = add_right(current_op, arg, error_str);
+					ret = add_right(event->tep, current_op, arg, error_str);
 				else
 					current_exp = arg;
 
@@ -1071,7 +1073,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 					goto fail_syntax;
 				break;
 			case OP_NONE:
-				show_error(error_str,
+				show_error(event->tep, error_str,
 					   "Unknown op token %s", token);
 				ret = TEP_ERRNO__UNKNOWN_TOKEN;
 				goto fail;
@@ -1096,14 +1098,14 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 				if (arg == NULL)
 					goto fail_alloc;
 				if (current_op)
-					ret = add_right(current_op, arg, error_str);
+					ret = add_right(event->tep, current_op, arg, error_str);
 				if (ret < 0)
 					goto fail;
 				current_exp = arg;
 				ret = process_filter(event, &arg, error_str, 1);
 				if (ret < 0)
 					goto fail;
-				ret = add_right(current_exp, arg, error_str);
+				ret = add_right(event->tep, current_exp, arg, error_str);
 				if (ret < 0)
 					goto fail;
 				break;
@@ -1118,7 +1120,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 					goto fail_alloc;
 
 				if (current_op)
-					ret = add_right(current_op, arg, error_str);
+					ret = add_right(event->tep,current_op, arg, error_str);
 				if (ret < 0)
 					goto fail;
 				ret = add_left(arg, left_item);
@@ -1150,7 +1152,7 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 	if (!current_op)
 		current_op = current_exp;
 
-	ret = collapse_tree(current_op, parg, error_str);
+	ret = collapse_tree(event->tep, current_op, parg, error_str);
 	/* collapse_tree() may free current_op, and updates parg accordingly */
 	current_op = NULL;
 	if (ret < 0)
@@ -1160,11 +1162,11 @@ process_filter(struct tep_event *event, struct tep_filter_arg **parg,
 	return 0;
 
  fail_alloc:
-	show_error(error_str, "failed to allocate filter arg");
+	show_error(event->tep, error_str, "failed to allocate filter arg");
 	ret = TEP_ERRNO__MEM_ALLOC_FAILED;
 	goto fail;
  fail_syntax:
-	show_error(error_str, "Syntax error");
+	show_error(event->tep, error_str, "Syntax error");
 	ret = TEP_ERRNO__SYNTAX_ERROR;
  fail:
 	free_arg(current_op);
@@ -1180,7 +1182,7 @@ process_event(struct tep_event *event, const char *filter_str,
 {
 	int ret;
 
-	init_input_buf(filter_str, strlen(filter_str));
+	init_input_buf(event->tep, filter_str, strlen(filter_str));
 
 	ret = process_filter(event, parg, error_str, 0);
 	if (ret < 0)
@@ -1238,7 +1240,7 @@ filter_event(struct tep_event_filter *filter, struct tep_event *event,
 static void filter_init_error_buf(struct tep_event_filter *filter)
 {
 	/* clear buffer to reset show error */
-	init_input_buf("", 0);
+	init_input_buf(filter->tep, "", 0);
 	filter->error_buffer[0] = '\0';
 }
 
@@ -1702,8 +1704,8 @@ static const char *get_field_str(struct tep_filter_arg *arg, struct tep_record *
 	struct tep_handle *tep;
 	unsigned long long addr;
 	const char *val = NULL;
+	static char hex[64];
 	unsigned int size;
-	char hex[64];
 
 	/* If the field is not a string convert it */
 	if (arg->str.field->flags & TEP_FIELD_IS_STRING) {
@@ -1712,8 +1714,11 @@ static const char *get_field_str(struct tep_filter_arg *arg, struct tep_record *
 
 		if (arg->str.field->flags & TEP_FIELD_IS_DYNAMIC) {
 			addr = *(unsigned int *)val;
-			val = record->data + (addr & 0xffff);
 			size = addr >> 16;
+			addr &= 0xffff;
+			if (arg->str.field->flags & TEP_FIELD_IS_RELATIVE)
+				addr += arg->str.field->offset + arg->str.field->size;
+			val = record->data + addr;
 		}
 
 		/*

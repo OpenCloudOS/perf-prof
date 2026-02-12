@@ -17,17 +17,17 @@ struct tep_format_field pass:[*]pass:[*]*tep_event_fields*(struct tep_event pass
 
 DESCRIPTION
 -----------
-The _tep_event_common_fields()_ function returns an array of pointers to common
+The *tep_event_common_fields()* function returns an array of pointers to common
 fields for the _event_. The array is allocated in the function and must be freed
 by free(). The last element of the array is NULL.
 
-The _tep_event_fields()_ function returns an array of pointers to event specific
+The *tep_event_fields()* function returns an array of pointers to event specific
 fields for the _event_. The array is allocated in the function and must be freed
 by free(). The last element of the array is NULL.
 
 RETURN VALUE
 ------------
-Both _tep_event_common_fields()_ and _tep_event_fields()_ functions return
+Both *tep_event_common_fields()* and *tep_event_fields()* functions return
 an array of pointers to tep_format_field structures in case of success, or
 NULL in case of an error.
 
@@ -83,7 +83,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -102,4 +102,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

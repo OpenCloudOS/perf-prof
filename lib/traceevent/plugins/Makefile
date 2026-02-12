@@ -138,6 +138,7 @@ PLUGINS += plugin_xen.so
 PLUGINS += plugin_scsi.so
 PLUGINS += plugin_cfg80211.so
 PLUGINS += plugin_tlb.so
+PLUGINS += plugin_net.so
 
 PLUGINS    := $(addprefix $(OUTPUT),$(PLUGINS))
 PLUGINS_IN := $(PLUGINS:.so=-in.o)

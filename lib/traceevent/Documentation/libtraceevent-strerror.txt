@@ -16,7 +16,7 @@ int *tep_strerror*(struct tep_handle pass:[*]_tep_, enum tep_errno _errnum_, cha
 --
 DESCRIPTION
 -----------
-The _tep_strerror()_ function converts tep error number into a human
+The *tep_strerror()* function converts tep error number into a human
 readable string.
 The _tep_ argument is trace event parser context. The _errnum_ is a regular
 errno, defined in errno.h, or a tep error number. The string, describing this
@@ -24,13 +24,13 @@ error number is copied in the _buf_ argument. The _buflen_ argument is
 the size of the _buf_.
 
 It as a thread safe wrapper around strerror_r(). The library function has two
-different behaviors - POSIX and GNU specific. The _tep_strerror()_ API always
+different behaviors - POSIX and GNU specific. The *tep_strerror()* API always
 behaves as the POSIX version - the error string is copied in the user supplied
 buffer.
 
 RETURN VALUE
 ------------
-The _tep_strerror()_ function returns 0, if a valid _errnum_ is passed and the
+The *tep_strerror()* function returns 0, if a valid _errnum_ is passed and the
 string is copied into _buf_. If _errnum_ is not a valid error number,
 -1 is returned and _buf_ is not modified.
 
@@ -63,7 +63,7 @@ FILES
 
 SEE ALSO
 --------
-_libtraceevent(3)_, _trace-cmd(1)_
+*libtraceevent*(3), *trace-cmd*(1)
 
 AUTHOR
 ------
@@ -82,4 +82,4 @@ libtraceevent is Free Software licensed under the GNU LGPL 2.1
 
 RESOURCES
 ---------
-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/

@@ -1,0 +1,208 @@
+libtraceevent(3)
+================
+
+NAME
+----
+kbuffer_timestamp, kbuffer_subbuf_timestamp -
+Functions that read various data of a kbuffer descriptor
+
+SYNOPSIS
+--------
+[verse]
+--
+*#include <kbuffer.h>*
+
+unsigned long long *kbuffer_timestamp*(struct kbuffer pass:[*]_kbuf_);
+unsigned long long *kbuffer_subbuf_timestamp*(struct kbuffer pass:[*]_kbuf_, void pass:[*]_subbuf_);
+--
+
+DESCRIPTION
+-----------
+The function *kbuffer_timestamp()* returns the timestamp of the current event of _kbuf_.
+
+The function *kbuffer_subbuf_timestamp()* returns the timestamp for the sub-buffer
+that was loaded in _kbuf_. This usually is (but not guaranteed to be) the timestamp
+of the first event on the sub-buffer.
+
+The function *kbuffer_start_of_data()* returns the offset of where the delta
+
+RETURN VALUE
+------------
+*kbuffer_read_event()* returns the event that the _kbuf_ descriptor is currently at,
+or NULL if the last event was passed (by *kbuffer_next_event()*).
+
+*kbuffer_next_event()* returns the next event after the current event or NULL if there
+are no more events.
+
+*kbuffer_read_at_offset()* returns the event at a given _offset_ from the start of
+the sub-buffer stored in _kbuf_, or NULL if there exists no event. Note, _offset_
+only needs to be an offset that lands on the record, or is at the start of it. It does
+not need to be exactly at the beginning of the record.
+
+*kbuffer_missed_events()* returns 0 if there were no missed events before loaded sub-buffer.
+Returns -1 if there were an unknown number of missed events, or if the number of missed events
+is known, that number will be returned.
+
+*kbuffer_event_size()* returns the size of the data payload of the current event of _kbuf_.
+
+*kbuffer_curr_size()* returns the size of the entire record of the current event of _kbuf_.
+This includes the size of the meta data for that record.
+
+*kbuf_curr_offset()* returns the offset of the current record from the beginning of the _kbuf_
+sub-buffer.
+
+*kbuf_curr_index()* returns the index of the current record from the beginning of the _kbuf_
+data section.
+
+EXAMPLE
+-------
+[source,c]
+--
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include <kbuffer.h>
+
+int main (int argc, char **argv)
+{
+	unsigned long long ts;
+	struct kbuffer *kbuf;
+	struct stat st;
+	char *buf;
+	void *event;
+	int save_offset = -1;
+	int record_size;
+	int offset;
+	int index;
+	int size;
+	int ret;
+	int fd;
+	int i = 0;
+
+	if (argc < 2) {
+		printf("usage: %s raw-subbuffer-page\n", argv[0]);
+		printf(" Try: dd count=1 bs=4096 if=/sys/kernel/tracing/per_cpu/cpu0/trace_pipe_raw of=/tmp/file\n");
+		exit(0);
+	}
+
+	if (stat(argv[1], &st) < 0) {
+		perror("stat");
+		exit(-1);
+	}
+
+	buf = malloc(st.st_size);
+	if (!buf) {
+		perror("Allocating buffer");
+		exit(-1);
+	}
+
+	fd = open(argv[1], O_RDONLY);
+	if (fd < 0) {
+		perror(argv[1]);
+		exit(-1);
+	}
+
+	ret = read(fd, buf, st.st_size);
+	if (ret < 0) {
+		perror("Reading buffer");
+		exit(-1);
+	}
+	close(fd);
+
+	kbuf = kbuffer_alloc(KBUFFER_ENDIAN_SAME_AS_HOST,
+			     KBUFFER_LSIZE_SAME_AS_HOST);
+	if (!kbuf) {
+		perror("Creating kbuffer");
+		exit(-1);
+	}
+	ret = kbuffer_load_subbuffer(kbuf, buf);
+	if (ret < 0) {
+		perror("Loading sub bufer");
+		exit(-1);
+	}
+
+	if (kbuffer_subbuffer_size(kbuf) > st.st_size) {
+		fprintf(stderr, "kbuffer is bigger than raw size %d > %ld\n",
+			kbuffer_subbuffer_size(kbuf), st.st_size);
+		exit(-1);
+	}
+
+	ret = kbuffer_missed_events(kbuf);
+	if (ret) {
+		if (ret > 0)
+			printf("Missed %d events before this buffer\n", ret);
+		else
+			printf("Missed unknown number of events before this buffer\n");
+	}
+	do {
+		event = kbuffer_read_event(kbuf, &ts);
+		if (event) {
+			record_size = kbuffer_curr_size(kbuf);
+			offset = kbuffer_curr_offset(kbuf);
+			index = kbuffer_curr_index(kbuf);
+			size = kbuffer_event_size(kbuf);
+
+			if (i == 20)
+				save_offset = offset;
+			printf(" event %3d ts:%lld\trecord_size:%d size:%d\tindex:%d offset:%d\n",
+			       i++, ts, record_size, size, index, offset);
+			event = kbuffer_next_event(kbuf, NULL);
+		}
+	} while (event);
+
+	if (!event)
+		printf("Finished sub buffer\n");
+
+	if (save_offset > 0) {
+		event = kbuffer_read_at_offset(kbuf, save_offset, &ts);
+		if (!event) {
+			fprintf(stderr, "Funny, can't find event 20 at offset %d\n", save_offset);
+			exit(-1);
+		}
+		record_size = kbuffer_curr_size(kbuf);
+		offset = kbuffer_curr_offset(kbuf);
+		index = kbuffer_curr_index(kbuf);
+		size = kbuffer_event_size(kbuf);
+
+		printf("\n saved event 20 ts:%lld\trecord_size:%d size:%d\tindex:%d offset:%d\n\n",
+		       ts, record_size, size, index, offset);
+	}
+	kbuffer_free(kbuf);
+
+	return 0;
+}
+--
+FILES
+-----
+[verse]
+--
+*event-parse.h*
+	Header file to include in order to have access to the library APIs.
+*-ltraceevent*
+	Linker switch to add when building a program that uses the library.
+--
+
+SEE ALSO
+--------
+*libtraceevent*(3), *trace-cmd*(1)
+
+AUTHOR
+------
+[verse]
+--
+*Steven Rostedt* <rostedt@goodmis.org>, author of *libtraceevent*.
+--
+REPORTING BUGS
+--------------
+Report bugs to  <linux-trace-devel@vger.kernel.org>
+
+LICENSE
+-------
+libtraceevent is Free Software licensed under the GNU LGPL 2.1
+
+RESOURCES
+---------
+https://git.kernel.org/pub/scm/libs/libtrace/libtraceevent.git/
