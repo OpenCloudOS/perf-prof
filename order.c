@@ -422,6 +422,17 @@ perf_mmap_fix_out_of_order(struct prof_dev *main_dev, struct prof_dev *dev,
 
     if (!heap_event->writable) {
         struct perf_mmap *map = ((struct perf_mmap_event *)heap_event)->map;
+        if (!map->event_copy || map->event_copy_sz < event->header.size) {
+            void *new_copy = malloc(event->header.size);
+            if (!new_copy) {
+                fprintf(stderr, "%s: failed to allocate event_copy\n", __func__);
+                return NULL;
+            }
+            if (map->event_copy)
+                free(map->event_copy);
+            map->event_copy = new_copy;
+            map->event_copy_sz = event->header.size;
+        }
         memcpy(map->event_copy, event, event->header.size);
         event = (union perf_event *)map->event_copy;
     }
