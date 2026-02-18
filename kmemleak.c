@@ -297,6 +297,8 @@ static int add_tp_list(struct prof_dev *dev, struct tp_list *tp_list, bool callc
             return -1;
         }
         perf_evlist__add(evlist, evsel);
+
+        tp->private = tp_list;
     }
     return 0;
 }
@@ -654,16 +656,6 @@ static void report_kmemleak(struct prof_dev *dev)
     ctx->alloc.node_delete = perf_event_backup_node_delete;
 }
 
-static inline bool config_is_alloc(struct kmemleak_ctx *ctx, struct tp *p)
-{
-    struct tp *tp;
-    int i;
-    for_each_real_tp(ctx->tp_alloc, tp, i)
-        if (tp == p)
-            return true;
-    return false;
-}
-
 static inline int kmemleak_event_lost(struct prof_dev *dev, union perf_event *event)
 {
     struct kmemleak_ctx *ctx = dev->private;
@@ -754,9 +746,8 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
             return;
     }
 
-    is_alloc = config_is_alloc(ctx, tp);
-
-    callchain = (is_alloc && dev->env->callchain) || tp->stack;
+    is_alloc = tp->private == ctx->tp_alloc;
+    callchain = tp->stack;
     __raw_size(event, callchain, &raw, &size);
 
     if (dev->env->verbose >= VERBOSE_EVENT) {
