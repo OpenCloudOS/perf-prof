@@ -34,6 +34,7 @@ perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [OPTION]
 - `--than <n>`: 过滤内存分配超过指定时间的泄漏，单位: s/ms/us/*ns
 - `-g, --call-graph`: 启用调用栈记录，用于定位泄漏位置
 - `--flame-graph <file>`: 生成火焰图文件
+- `--comm`: 在泄漏字节报告中显示每个调用栈的分配进程名列表（需配合 `-g` 使用）
 
 ## 核心原理
 
@@ -72,18 +73,28 @@ perf-prof kmemleak --alloc EVENT[...] --free EVENT[...] [OPTION]
 ```
 KMEMLEAK REPORT: 15
       305.266631  4518 [000] kmalloc: call_site=c09f56b9 ptr=f59a7600 bytes_req=1024 bytes_alloc=1024 gfp_flags=208
-         ffffffff81234567 kmalloc
-         ffffffff81abcdef some_function+0x123
-         ffffffff81fedcba caller_function+0x45
+    ffffffff81234567 kmalloc
+    ffffffff81abcdef some_function+0x123
+    ffffffff81fedcba caller_function+0x45
 ```
 
 **泄漏字节报告**（启用 `size` 属性且 `-g`）:
 ```
 LEAKED BYTES REPORT:
 Leak of 524288 bytes in 512 objects allocated from:
-         ffffffff81234567 kmalloc
-         ffffffff81abcdef some_function+0x123
-         ffffffff81fedcba caller_function+0x45
+    ffffffff81234567 kmalloc
+    ffffffff81abcdef some_function+0x123
+    ffffffff81fedcba caller_function+0x45
+```
+
+使用 `--comm` 时，每个调用栈会显示分配进程名列表，按分配次数降序排列：
+```
+LEAKED BYTES REPORT:
+Leak of 524288 bytes in 512 objects allocated from:
+    comms: kworker/0:1(300) systemd(150) bash(62)
+    ffffffff81234567 kmalloc
+    ffffffff81abcdef some_function+0x123
+    ffffffff81fedcba caller_function+0x45
 ```
 
 **统计信息**（程序退出或 SIGUSR1）:
@@ -134,6 +145,10 @@ perf-prof kmemleak \
 # 检测长时间未释放的内存 (>30秒)
 perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/ \
                    --free kmem:kfree//ptr=ptr/ --order -g --than 30s
+
+# 泄漏字节报告中显示分配进程名
+perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ \
+                   --free kmem:kfree//ptr=ptr/ --order -m 128 -g --comm
 ```
 
 ### 性能优化
