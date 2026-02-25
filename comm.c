@@ -18,9 +18,9 @@
 struct pid_comm_node {
     struct rb_node rbnode;
     u64 update_time;
-    bool flush;
-    int pid;
     char comm[TASK_COMM_LEN];
+    int pid;
+    bool flush;
     struct rb_node exit_node;
 };
 
@@ -31,6 +31,7 @@ struct comm_ctx {
     struct rblist exited;
     int task_newtask, task_rename;
     int sched_process_free;
+    struct pid_comm_node *cached_node;
 };
 static struct comm_ctx *global_comm_ctx = NULL;
 static struct list_head global_comm_notify_list = LIST_HEAD_INIT(global_comm_notify_list);
@@ -59,7 +60,10 @@ static struct rb_node *pid_comm_node_new(struct rblist *rlist, const void *new_e
 }
 static void pid_comm_node_delete(struct rblist *rblist, struct rb_node *rb_node)
 {
+    struct comm_ctx *ctx = container_of(rblist, struct comm_ctx, pid_comm);
     struct pid_comm_node *b = container_of(rb_node, struct pid_comm_node, rbnode);
+    if (ctx->cached_node == b)
+        ctx->cached_node = NULL;
     free(b);
 }
 
@@ -357,6 +361,10 @@ char *global_comm_get(int pid)
     if (!global_comm_ctx)
         return NULL;
 
+    if (global_comm_ctx->cached_node &&
+        global_comm_ctx->cached_node->pid == pid)
+        return global_comm_ctx->cached_node->comm;
+
     find.pid = pid;
     rbn = rblist__find(&global_comm_ctx->pid_comm, &find);
     node = rb_entry_safe(rbn, struct pid_comm_node, rbnode);
@@ -366,6 +374,9 @@ char *global_comm_get(int pid)
         rbn = rblist__find(&global_comm_ctx->pid_comm, &find);
         node = rb_entry_safe(rbn, struct pid_comm_node, rbnode);
     }
+
+    if (node)
+        global_comm_ctx->cached_node = node;
 
     return node ? node->comm : NULL;
 }
