@@ -36,7 +36,6 @@ struct kmemleak_ctx {
 struct perf_event_backup {
     struct rb_node rbnode;
     __u64    ptr;
-    unsigned long bytes_alloc;
     char     comm[16];
     int      callchain;
     union perf_event event;
@@ -124,14 +123,13 @@ static void alloc_free_all(struct kmemleak_ctx *ctx)
 }
 
 static __always_inline struct perf_event_backup *alloc_new(struct kmemleak_ctx *ctx, __u64 ptr,
-        unsigned long bytes_alloc, int callchain, union perf_event *event, int pid)
+        int callchain, union perf_event *event, int pid)
 {
     size_t size = offsetof(struct perf_event_backup, event) + event->header.size;
     struct perf_event_backup *b = malloc(size);
     if (b) {
         RB_CLEAR_NODE(&b->rbnode);
         b->ptr = ptr;
-        b->bytes_alloc = bytes_alloc;
         b->callchain = callchain;
         if (ctx->collect_comm) {
             const char *comm = global_comm_get(pid);
@@ -423,27 +421,36 @@ struct leaked_bytes {
     struct comm_entry *comms;
 };
 
-static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_paires *kv_pairs,
-        struct perf_event_backup *alloc)
+static void collect_leaked_bytes(struct prof_dev *dev, struct kmemleak_ctx *ctx,
+            struct key_value_paires *kv_pairs, struct perf_event_backup *alloc)
 {
     union perf_event *event = &alloc->event;
     struct sample_type_callchain *data = (void *)event->sample.array;
 
     if (alloc->callchain) {
-        struct leaked_bytes *leaked = keyvalue_pairs_add_key(kv_pairs, (struct_key *)&data->callchain);
-        leaked->leaked += alloc->bytes_alloc;
-        if (ctx->user)
-            leaked->pid = data->h.tid_entry.pid;
-        else
-            leaked->pid = 0;
+        struct perf_evsel *evsel = perf_evlist__id_to_evsel(dev->evlist, data->h.id, NULL);
+        struct tp *tp = tp_from_evsel(evsel, ctx->tp_alloc);
+        struct leaked_bytes *leaked;
+        unsigned long bytes_alloc = 0;
+        void *raw;
+        int size;
+
+        if (tp && tp->mem_size_prog) {
+            __raw_size(event, true, &raw, &size);
+            bytes_alloc = tp_get_mem_size(tp, GLOBAL(data->h.cpu_entry.cpu, data->h.tid_entry.pid, raw, size));
+        }
+
+        leaked = keyvalue_pairs_add_key(kv_pairs, (struct_key *)&data->callchain);
+        leaked->leaked += bytes_alloc;
+        leaked->pid = ctx->user ? data->h.tid_entry.pid : 0;
 
         if (ctx->collect_comm && alloc->comm[0]) {
             const char *ucomm = unique_string(alloc->comm);
             int i;
             for (i = 0; i < leaked->nr_comm; i++) {
                 if (leaked->comms[i].comm == ucomm) {
+                    leaked->comms[i].bytes += bytes_alloc;
                     leaked->comms[i].n++;
-                    leaked->comms[i].bytes += alloc->bytes_alloc;
                     return;
                 }
             }
@@ -456,8 +463,8 @@ static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_pair
                 leaked->max_comm = new_max;
             }
             leaked->comms[leaked->nr_comm].comm = ucomm;
+            leaked->comms[leaked->nr_comm].bytes = bytes_alloc;
             leaked->comms[leaked->nr_comm].n = 1;
-            leaked->comms[leaked->nr_comm].bytes = alloc->bytes_alloc;
             leaked->nr_comm++;
         }
     }
@@ -597,7 +604,7 @@ static void report_kmemleak(struct prof_dev *dev)
         }
 
         if (kv_pairs && selected) {
-            collect_leaked_bytes(ctx, kv_pairs, alloc);
+            collect_leaked_bytes(dev, ctx, kv_pairs, alloc);
         }
         if ((!kv_pairs && selected) || dev->env->verbose) {
             __raw_size(event, alloc->callchain, &raw, &size);
@@ -685,7 +692,6 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
     struct perf_event_backup *b;
     struct tp *tp = NULL;
     void *ptr = NULL;
-    unsigned long bytes_alloc = 0;
     int rc;
     void *raw;
     int size;
@@ -728,10 +734,8 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
     glo = GLOBAL(data->cpu_entry.cpu, data->tid_entry.pid, raw, size);
     if (is_alloc) {
         ptr = tp_get_mem_ptr(tp, glo);
-        if (tp->mem_size_prog)
-            bytes_alloc = tp_get_mem_size(tp, glo);
 
-        b = alloc_new(ctx, (__u64)ptr, bytes_alloc, callchain, event, data->tid_entry.pid);
+        b = alloc_new(ctx, (__u64)ptr, callchain, event, data->tid_entry.pid);
         if (!b)
             return;
         rc = alloc_insert(&ctx->alloc, b);
