@@ -412,6 +412,7 @@ static void __print_callchain(struct prof_dev *dev, union perf_event *event, boo
 
 struct comm_entry {
     const char *comm;
+    unsigned long bytes;
     int n;
 };
 struct leaked_bytes {
@@ -442,6 +443,7 @@ static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_pair
             for (i = 0; i < leaked->nr_comm; i++) {
                 if (leaked->comms[i].comm == ucomm) {
                     leaked->comms[i].n++;
+                    leaked->comms[i].bytes += alloc->bytes_alloc;
                     return;
                 }
             }
@@ -455,6 +457,7 @@ static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_pair
             }
             leaked->comms[leaked->nr_comm].comm = ucomm;
             leaked->comms[leaked->nr_comm].n = 1;
+            leaked->comms[leaked->nr_comm].bytes = alloc->bytes_alloc;
             leaked->nr_comm++;
         }
     }
@@ -476,6 +479,8 @@ static int __leak_cmp(void **value1, void **value2)
 static int __comm_cmp(const void *a, const void *b)
 {
     const struct comm_entry *ca = a, *cb = b;
+    if (cb->bytes != ca->bytes)
+        return cb->bytes > ca->bytes ? 1 : -1;
     return cb->n - ca->n;
 }
 
@@ -489,7 +494,7 @@ static void __print_leak(void *opaque, struct_key *key, void *value, unsigned in
         qsort(leaked->comms, leaked->nr_comm, sizeof(leaked->comms[0]), __comm_cmp);
         printf("    comms:");
         for (i = 0; i < leaked->nr_comm; i++)
-            printf(" %s(%d)", leaked->comms[i].comm, leaked->comms[i].n);
+            printf(" %s(%lu/%d)", leaked->comms[i].comm, leaked->comms[i].bytes, leaked->comms[i].n);
         printf("\n");
         free(leaked->comms);
     }

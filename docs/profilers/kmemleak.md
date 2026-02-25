@@ -117,27 +117,24 @@ perf-prof kmemleak --alloc kmem:kmalloc//ptr=ptr/size=bytes_alloc/stack/ \
 4. **释放处理**:
    - 从 `alloc` 树中查找对应的 ptr
    - 找到则删除（已正常释放）
-   - 未找到则加入 `gc_free` 树（延迟释放或乱序）
-5. **垃圾回收**: 定期清理 `gc_free` 树中超过1秒的释放事件
+   - 未找到则忽略
 
 **依赖排序**:
 - **强烈建议启用 `--order`**: 保证事件按时间戳顺序处理
 - **不启用排序**: 可能因乱序导致误报（释放事件早于分配事件到达）
 - **事件丢失处理**:
   - 检测到事件丢失时，立即报告当前泄漏
-  - 清空 alloc 和 gc_free 树，重新开始跟踪
+  - 清空 alloc 树，重新开始跟踪
   - 避免因丢失事件导致误报
 
 **数据结构**:
 - `alloc` 红黑树: 存储未释放的分配事件（按 ptr 排序）
-- `gc_free` 红黑树: 存储延迟释放事件（按 time 排序）
 - 每个节点保存完整的 perf_event 数据（包括调用栈）
 
 ### 状态统计
 - **信号处理**
   - **SIGUSR1**: 输出内存泄漏统计信息
     - `ALLOC LIST`: 当前 alloc 树的事件数和内存占用
-    - `FREE LIST`: 当前 gc_free 树的事件数和内存占用
     - `TOTAL`: 累计处理的 alloc 和 free 事件数
   - **SIGUSR2**: 未使用
 
@@ -171,15 +168,16 @@ Leak of 524288 bytes in 512 objects allocated from:
     ffffffff81fedcba caller_function+0x45
 ```
 
-使用 `--comm` 时，每个调用栈会显示分配进程名列表，按分配次数降序排列：
+使用 `--comm` 时，每个调用栈会显示分配进程名列表，按泄漏字节数降序排列：
 ```
 LEAKED BYTES REPORT:
 Leak of 524288 bytes in 512 objects allocated from:
-    comms: kworker/0:1(300) systemd(150) bash(62)
+    comms: kworker/0:1(409600/300) systemd(81920/150) bash(32768/62)
     ffffffff81234567 kmalloc
     ffffffff81abcdef some_function+0x123
     ffffffff81fedcba caller_function+0x45
 ```
+- 格式: `进程名(泄漏字节数/分配次数)`
 
 - **表头含义**:
   - `Leak of X bytes in Y objects`: X 字节泄漏，分布在 Y 个对象中
@@ -190,7 +188,6 @@ Leak of 524288 bytes in 512 objects allocated from:
 ```
 KMEMLEAK STATS:
 ALLOC LIST num 128 mem 65536
-FREE LIST  num 8 mem 4096
 TOTAL alloc 10245 free 10117
 ```
 
@@ -200,7 +197,6 @@ TOTAL alloc 10245 free 10117
   - `alloc/free`: 累计处理的事件数
 - **行**:
   - `ALLOC LIST`: 当前未匹配的分配事件
-  - `FREE LIST`: 当前未匹配的释放事件（垃圾回收队列）
 
 
 ## 分析方法

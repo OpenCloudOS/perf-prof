@@ -87,21 +87,21 @@ Leak of 524288 bytes in 512 objects allocated from:
     ffffffff81fedcba caller_function+0x45
 ```
 
-使用 `--comm` 时，每个调用栈会显示分配进程名列表，按分配次数降序排列：
+使用 `--comm` 时，每个调用栈会显示分配进程名列表，按泄漏字节数降序排列：
 ```
 LEAKED BYTES REPORT:
 Leak of 524288 bytes in 512 objects allocated from:
-    comms: kworker/0:1(300) systemd(150) bash(62)
+    comms: kworker/0:1(409600/300) systemd(81920/150) bash(32768/62)
     ffffffff81234567 kmalloc
     ffffffff81abcdef some_function+0x123
     ffffffff81fedcba caller_function+0x45
 ```
+- 格式: `进程名(泄漏字节数/分配次数)`
 
 **统计信息**（程序退出或 SIGUSR1）:
 ```
 KMEMLEAK STATS:
 ALLOC LIST num 128 mem 65536
-FREE LIST  num 8 mem 4096
 TOTAL alloc 10245 free 10117
 ```
 
