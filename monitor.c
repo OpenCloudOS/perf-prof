@@ -570,6 +570,7 @@ struct option main_options[] = {
     OPT_STRDUP_NONEG( 0 ,            "prio", &env.prio_map, "prio[-prio],...",  "Specify the priority range for real-time and normal scheduling"),
     OPT_STRDUP_NONEG( 0 ,           "query", &env.query,                "SQL",  "Execute SQL query on collected events"),
     OPT_BOOL_NONEG  ( 0 ,          "verify", &env.verify,                       "Validate SQL virtual table implementation and indexing integrity"),
+    OPT_BOOL_NONEG  ( 0 ,            "comm", &env.comm,                         "Show command names"),
 
     OPT_END()
 };

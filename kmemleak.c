@@ -30,12 +30,14 @@ struct kmemleak_ctx {
     struct kmemleak_stat stat;
     struct list_head lost_list;
     bool report_leaked_bytes;
+    bool collect_comm;
     bool user;
 };
 struct perf_event_backup {
     struct rb_node rbnode;
     __u64    ptr;
     unsigned long bytes_alloc;
+    char     comm[16];
     int      callchain;
     union perf_event event;
 };
@@ -122,7 +124,7 @@ static void alloc_free_all(struct kmemleak_ctx *ctx)
 }
 
 static __always_inline struct perf_event_backup *alloc_new(struct kmemleak_ctx *ctx, __u64 ptr,
-        unsigned long bytes_alloc, int callchain, union perf_event *event)
+        unsigned long bytes_alloc, int callchain, union perf_event *event, int pid)
 {
     size_t size = offsetof(struct perf_event_backup, event) + event->header.size;
     struct perf_event_backup *b = malloc(size);
@@ -131,6 +133,16 @@ static __always_inline struct perf_event_backup *alloc_new(struct kmemleak_ctx *
         b->ptr = ptr;
         b->bytes_alloc = bytes_alloc;
         b->callchain = callchain;
+        if (ctx->collect_comm) {
+            const char *comm = global_comm_get(pid);
+            if (comm) {
+                *(u64 *)(b->comm) = *(u64 *)(comm);
+                *(u64 *)(b->comm+8) = *(u64 *)(comm+8);
+            } else
+                strcpy(b->comm, "<...>");
+            b->comm[sizeof(b->comm) - 1] = '\0';
+        } else
+            b->comm[0] = '\0';
         memcpy(&b->event, event, event->header.size);
         ctx->stat.alloc_num ++;
         ctx->stat.alloc_mem += size;
@@ -154,6 +166,7 @@ static int monitor_ctx_init(struct prof_dev *dev)
     INIT_LIST_HEAD(&ctx->lost_list);
 
     tep__ref();
+    global_comm_ref();
     ctx->user = !prof_dev_ins_oncpu(dev);
 
     ctx->alloc = RB_ROOT;
@@ -179,6 +192,7 @@ static void monitor_ctx_exit(struct prof_dev *dev)
     }
     tp_list_free(ctx->tp_alloc);
     tp_list_free(ctx->tp_free);
+    global_comm_unref();
     tep__unref();
     free(ctx);
 }
@@ -265,6 +279,7 @@ static int kmemleak_init(struct prof_dev *dev)
 
     if (ctx->tp_alloc->nr_mem_size == ctx->tp_alloc->nr_real_tp) {
         ctx->report_leaked_bytes = true;
+        ctx->collect_comm = env->comm && env->callchain;
         if (!env->verbose && !env->callchain)
             fprintf(stderr, "Support LEAKED BYTES REPORT, need -g to enable callchain.\n");
         if (!env->verbose && env->callchain && env->flame_graph)
@@ -395,12 +410,20 @@ static void __print_callchain(struct prof_dev *dev, union perf_event *event, boo
     }
 }
 
+struct comm_entry {
+    const char *comm;
+    int n;
+};
 struct leaked_bytes {
     unsigned long leaked;
     int pid;
+    int nr_comm;
+    int max_comm;
+    struct comm_entry *comms;
 };
 
-static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_paires *kv_pairs, struct perf_event_backup *alloc)
+static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_paires *kv_pairs,
+        struct perf_event_backup *alloc)
 {
     union perf_event *event = &alloc->event;
     struct sample_type_callchain *data = (void *)event->sample.array;
@@ -412,6 +435,28 @@ static void collect_leaked_bytes(struct kmemleak_ctx *ctx, struct key_value_pair
             leaked->pid = data->h.tid_entry.pid;
         else
             leaked->pid = 0;
+
+        if (ctx->collect_comm && alloc->comm[0]) {
+            const char *ucomm = unique_string(alloc->comm);
+            int i;
+            for (i = 0; i < leaked->nr_comm; i++) {
+                if (leaked->comms[i].comm == ucomm) {
+                    leaked->comms[i].n++;
+                    return;
+                }
+            }
+            if (leaked->nr_comm >= leaked->max_comm) {
+                int new_max = leaked->max_comm ? leaked->max_comm * 2 : 4;
+                struct comm_entry *new_comms = realloc(leaked->comms, new_max * sizeof(*new_comms));
+                if (!new_comms)
+                    return;
+                leaked->comms = new_comms;
+                leaked->max_comm = new_max;
+            }
+            leaked->comms[leaked->nr_comm].comm = ucomm;
+            leaked->comms[leaked->nr_comm].n = 1;
+            leaked->nr_comm++;
+        }
     }
 }
 
@@ -428,11 +473,26 @@ static int __leak_cmp(void **value1, void **value2)
         return b1->pid - b2->pid;
 }
 
+static int __comm_cmp(const void *a, const void *b)
+{
+    const struct comm_entry *ca = a, *cb = b;
+    return cb->n - ca->n;
+}
+
 static void __print_leak(void *opaque, struct_key *key, void *value, unsigned int n)
 {
     struct kmemleak_ctx *ctx = opaque;
     struct leaked_bytes *leaked = value;
     printf("Leak of %lu bytes in %u objects allocated from:\n", leaked->leaked, n);
+    if (leaked->nr_comm > 0) {
+        int i;
+        qsort(leaked->comms, leaked->nr_comm, sizeof(leaked->comms[0]), __comm_cmp);
+        printf("    comms:");
+        for (i = 0; i < leaked->nr_comm; i++)
+            printf(" %s(%d)", leaked->comms[i].comm, leaked->comms[i].n);
+        printf("\n");
+        free(leaked->comms);
+    }
     print_callchain_common(ctx->cc, key, leaked->pid);
 }
 
@@ -666,7 +726,7 @@ static void kmemleak_sample(struct prof_dev *dev, union perf_event *event, int i
         if (tp->mem_size_prog)
             bytes_alloc = tp_get_mem_size(tp, glo);
 
-        b = alloc_new(ctx, (__u64)ptr, bytes_alloc, callchain, event);
+        b = alloc_new(ctx, (__u64)ptr, bytes_alloc, callchain, event, data->tid_entry.pid);
         if (!b)
             return;
         rc = alloc_insert(&ctx->alloc, b);
@@ -769,6 +829,7 @@ static const char *kmemleak_desc[] = PROFILER_DESC("kmemleak",
 static const char *kmemleak_argv[] = PROFILER_ARGV("kmemleak",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "event", "alloc", "free", "call-graph", "flame-graph",
+    "comm\nShow alloc events comm.",
     "than\nMemory allocation exceeded the specified time.");
 struct monitor kmemleak = {
     .name = "kmemleak",

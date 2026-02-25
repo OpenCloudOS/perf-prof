@@ -183,6 +183,7 @@ struct env {
     u64  clock_offset;
     int usage_self;
     bool using_ptrace;
+    bool comm;
 
     /* kcore profiler */
     bool string;
