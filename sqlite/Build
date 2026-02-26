@@ -1,5 +1,6 @@
 perf-prof-y += sqlite3.o
-CFLAGS_REMOVE_sqlite3.o += $(INCLUDES) $(EXTRA_WARNINGS) -Werror -Wall -Wno-shadow
+CFLAGS_REMOVE_sqlite3.o += $(CFLAGS)
+CFLAGS_sqlite3.o += -O3 -g -fvisibility=hidden
 CFLAGS_sqlite3.o += -DSQLITE_THREADSAFE=0
 CFLAGS_sqlite3.o += -DSQLITE_DEFAULT_MEMSTATUS=0
 CFLAGS_sqlite3.o += -DSQLITE_OMIT_DEPRECATED
