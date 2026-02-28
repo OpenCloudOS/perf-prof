@@ -43,6 +43,9 @@ perf-prof-$(CONFIG_LIBBPF) += bpf_kvm_exit.o
 perf-prof-y += misc.o
 perf-prof-y += sql.o
 perf-prof-$(CONFIG_LIBPYTHON) += python.o
+ifneq ($(PYTHON_PREFIX),)
+CFLAGS_python.o := -DPYTHON_HOME=$(PYTHON_PREFIX)
+endif
 
 bin-y += perf-prof
 

@@ -1,3 +1,6 @@
+#ifdef HAVE_LIBPYTHON
+#include <Python.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -1134,7 +1137,6 @@ void heatmap_write(struct heatmap *heatmap, unsigned long time, unsigned long la
 
 
 #ifdef HAVE_LIBPYTHON
-#include <Python.h>
 
 /*
  * Cached Python string objects for callchain dict keys.
@@ -1193,7 +1195,7 @@ static int init_callchain_key_cache(void)
  *
  * Returns a new reference to a Python list, or NULL on error.
  */
-PyObject *callchain_to_pylist(struct callchain *callchain, u32 pid, int flags)
+void *callchain_to_pylist(struct callchain *callchain, u32 pid, int flags)
 {
     PyObject *list, *frame_dict, *val;
     u64 i;

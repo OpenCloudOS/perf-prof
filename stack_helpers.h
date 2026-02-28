@@ -77,8 +77,6 @@ void heatmap_close(struct heatmap *heatmap);
 void heatmap_write(struct heatmap *heatmap, unsigned long time, unsigned long latency);
 
 #ifdef HAVE_LIBPYTHON
-#undef _GNU_SOURCE
-#include <Python.h>
 /*
  * Convert callchain to Python list of frame dicts.
  * Each dict: {'addr': int, 'symbol': str, 'offset': int, 'kernel': bool, 'dso': str}
@@ -89,7 +87,7 @@ void heatmap_write(struct heatmap *heatmap, unsigned long time, unsigned long la
  * @flags: CALLCHAIN_KERNEL and/or CALLCHAIN_USER flags
  * Returns: New reference to Python list, or NULL on error
  */
-PyObject *callchain_to_pylist(struct callchain *callchain, u32 pid, int flags);
+void *callchain_to_pylist(struct callchain *callchain, u32 pid, int flags);
 
 /* Initialize/cleanup symbol resolution for callchain_to_pylist */
 int callchain_pylist_init(int flags);

@@ -2261,6 +2261,20 @@ static int python_script_init(struct python_ctx *ctx)
         return -1;
     }
 
+    /* Set PYTHONHOME for standalone Python distributions */
+#ifdef PYTHON_HOME
+    {
+        wchar_t *python_home;
+        python_home = Py_DecodeLocale(__stringify(PYTHON_HOME), NULL);
+        if (python_home) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            Py_SetPythonHome(python_home);
+#pragma GCC diagnostic pop
+        }
+    }
+#endif
+
     /* Initialize Python */
     Py_Initialize();
     if (!Py_IsInitialized()) {
@@ -2276,6 +2290,19 @@ static int python_script_init(struct python_ctx *ctx)
 
     /* Set sys.argv from script arguments */
     if (script_argc > 0 && script_argv) {
+#if PY_VERSION_HEX >= 0x030b0000  /* Python 3.11+: PySys_SetArgvEx deprecated */
+        PyObject *argv_list = PyList_New(script_argc);
+        if (argv_list) {
+            int i;
+            for (i = 0; i < script_argc; i++) {
+                PyObject *arg = PyUnicode_DecodeFSDefault(script_argv[i]);
+                if (!arg) { script_argc = i; break; }
+                PyList_SET_ITEM(argv_list, i, arg);  /* steals ref */
+            }
+            PySys_SetObject("argv", argv_list);
+            Py_DECREF(argv_list);
+        }
+#else
         wchar_t **wargv = calloc(script_argc, sizeof(wchar_t *));
         if (wargv) {
             int i;
@@ -2292,6 +2319,7 @@ static int python_script_init(struct python_ctx *ctx)
                 PyMem_RawFree(wargv[i]);
             free(wargv);
         }
+#endif
     }
 
     /* Set stdout and stderr to line-buffered mode if not already */
@@ -3205,6 +3233,11 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    Python scripts or modules. PerfEvent provides lazy field evaluation.",
     "    Arguments after module name are available via sys.argv.",
     "",
+#ifdef PYTHON_HOME
+    "PYTHONHOME",
+    "    " __stringify(PYTHON_HOME),
+    "",
+#endif
     "MODULE TYPES",
     "    Python script       myscript.py or /path/to/myscript.py",
     "    Cython module       mymodule.cpython-36m-x86_64-linux-gnu.so",
@@ -3229,7 +3262,6 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    __sample__(event)       - Default handler (event includes _event field)",
     "",
     "  PERFEVENT OBJECT FIELDS",
-    "",
     "    Tracepoint events (-e sys:name):",
     "    _pid, _tid              - Process/thread ID",
     "    _time                   - Event timestamp (ns)",
