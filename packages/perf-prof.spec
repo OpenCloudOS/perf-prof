@@ -1,5 +1,6 @@
 %define release 1.virt
-%define TRACEEVENT_DIR /usr/lib64/%{name}-traceevent
+%define LIB_DIR /usr/lib64/%{name}
+%define TRACEEVENT_DIR %{LIB_DIR}/traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
 %define has_btf %(test -f /sys/kernel/btf/vmlinux && echo 1 || echo 0)
 %define has_tcmalloc %(test -f /usr/include/gperftools/tcmalloc.h && echo 1 || echo 0)
