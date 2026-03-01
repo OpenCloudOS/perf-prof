@@ -24,6 +24,7 @@
 #include <stack_helpers.h>
 #include <event-parse-local.h>
 #include <linux/bitmap.h>
+#include <linux/stringify.h>
 #include <asm/perf_regs.h>
 
 /*
