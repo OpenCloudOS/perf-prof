@@ -77,6 +77,23 @@ make CROSS_COMPILE=aarch64-linux-gnu-
 make LLVM=1
 ```
 
+### 使用 Standalone Python 构建
+
+无需安装系统 python3-devel，可使用 [python-build-standalone](https://github.com/astral-sh/python-build-standalone) 启用 Python 分析器：
+
+```bash
+# 下载（自动检测架构，默认 Python 3.12）
+packages/download-python-standalone.sh
+
+# 解压
+tar xzf cpython-*.tar.gz
+
+# 使用 standalone Python 构建
+make PYTHON=python/bin/python3
+```
+
+`PYTHON=` 选项会自动检测 standalone Python 的路径，设置 `PYTHONHOME`，并添加 `-Wl,-rpath` 链接 bundled libpython。可通过 `PYTHON_HOME=` 覆盖安装路径。
+
 ## 快速入门
 
 ### 列出可用分析器

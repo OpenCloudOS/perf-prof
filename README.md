@@ -69,6 +69,23 @@ make CROSS_COMPILE=aarch64-linux-gnu-
 make LLVM=1
 ```
 
+### Build with Standalone Python
+
+To enable the Python profiler without system python3-devel, use [python-build-standalone](https://github.com/astral-sh/python-build-standalone):
+
+```bash
+# Download (auto-detects arch, default Python 3.12)
+packages/download-python-standalone.sh
+
+# Extract
+tar xzf cpython-*.tar.gz
+
+# Build with standalone Python
+make PYTHON=python/bin/python3
+```
+
+The `PYTHON=` option automatically detects the standalone Python prefix, sets `PYTHONHOME`, and adds `-Wl,-rpath` for the bundled libpython. You can override `PYTHON_HOME=` to set a different install path.
+
 ## Quick Start
 
 ### List Available Profilers
