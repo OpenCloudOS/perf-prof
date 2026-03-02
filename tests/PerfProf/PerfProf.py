@@ -335,6 +335,22 @@ class PerfProf(object):
         return os.path.exists(pmu_path)
 
     @staticmethod
+    def standalone_python():
+        """Return the path to standalone python3 binary, or None if not standalone."""
+        perf_prof = PerfProf(['python', '-h'])
+        found_pythonhome = False
+        for std, line in perf_prof.run(_args_print=False):
+            if found_pythonhome:
+                path = line.strip()
+                python3 = os.path.join(path, 'bin', 'python3')
+                if os.path.isfile(python3):
+                    return python3
+                return None
+            if 'PYTHONHOME' in line:
+                found_pythonhome = True
+        return None
+
+    @staticmethod
     def btf_exists():
         return os.path.exists("/sys/kernel/btf/vmlinux")
 

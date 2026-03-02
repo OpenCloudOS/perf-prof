@@ -666,10 +666,19 @@ def compile_cython_module(pyx_content, module_name):
     """
     Compile a Cython module and return the path to the .so file.
     Returns None if Cython is not available or compilation fails.
+
+    When perf-prof is built with standalone python, use its python3
+    to compile so the .so ABI matches the embedded interpreter.
     """
+    python3 = PerfProf.standalone_python() or sys.executable
+
     try:
-        import Cython
-    except ImportError:
+        subprocess.run(
+            [python3, '-c', 'import Cython, setuptools'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
+        ).check_returncode()
+    except Exception:
+        print(f"Cython test skipped: install with '{python3} -m pip install Cython setuptools'")
         return None
 
     # Create temporary directory for compilation
@@ -696,7 +705,7 @@ setup(
     # Compile the module
     try:
         result = subprocess.run(
-            [sys.executable, 'setup.py', 'build_ext', '--inplace'],
+            [python3, 'setup.py', 'build_ext', '--inplace'],
             cwd=tmpdir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
