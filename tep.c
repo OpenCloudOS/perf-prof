@@ -15,7 +15,7 @@
 #include <stack_helpers.h>
 #include <api/fs/fs.h>
 #include <trace_helpers.h>
-
+#include <event-parse-local.h>
 
 #define PLUGINS_DIR "/usr/lib64/perf-prof/traceevent/plugins"
 
@@ -357,6 +357,47 @@ bool tep__event_field_size(int id, const char *field)
     tep__unref();
 
     return size;
+}
+
+/*
+ * Check if a string field should be treated as binary data.
+ *
+ * Determination order:
+ *  1. %p format in print_fmt → binary (pointer-formatted data, e.g., %pI4, %pM)
+ *  2. %s format in print_fmt → string
+ *  3. u8 or unsigned char type → binary
+ *     Uses strstr instead of TEP_FIELD_IS_SIGNED because kernel commit
+ *     3bc753c06dd0 ("kbuild: treat char as always unsigned") makes char
+ *     unsigned, so IS_SIGNED is unreliable for distinguishing char arrays.
+ *  4. Otherwise → string
+ *
+ * Returns true if the field's IS_STRING flag should be cleared.
+ */
+bool tep__string_field_as_binary(struct tep_event *event, struct tep_format_field *field)
+{
+    struct tep_print_parse *parse = event->print_fmt.print_cache;
+
+    if (!(field->flags & TEP_FIELD_IS_STRING))
+        return false;
+
+    while (parse) {
+        if (parse->type == PRINT_FMT_ARG_POINTER &&
+            parse->arg && parse->arg->type == TEP_PRINT_FIELD) {
+            if (strcmp(parse->arg->field.name, field->name) == 0)
+                return true;
+        }
+        if (parse->type == PRINT_FMT_ARG_STRING &&
+            parse->arg && parse->arg->type == TEP_PRINT_FIELD) {
+            if (strcmp(parse->arg->field.name, field->name) == 0)
+                return false;
+        }
+        parse = parse->next;
+    }
+
+    if (strstr(field->type, "u8") || strstr(field->type, "unsigned"))
+        return true;
+
+    return false;
 }
 
 int tep__event_size(int id)

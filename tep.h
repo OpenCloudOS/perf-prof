@@ -18,6 +18,7 @@ const char *tep__pid_to_comm(int pid);
 void tep__print_event(unsigned long long ts, int cpu, void *data, int size);
 bool tep__event_has_field(int id, const char *field);
 bool tep__event_field_size(int id, const char *field);
+bool tep__string_field_as_binary(struct tep_event *event, struct tep_format_field *field);
 int tep__event_size(int id);
 
 typedef struct global_var_declare event_fields;

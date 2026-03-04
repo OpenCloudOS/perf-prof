@@ -450,11 +450,6 @@ static void arg_pointer_register(struct sql_tp_ctx *ctx)
                         ctx->sqlite_funcs[func].data_type = data_type;
                         ctx->sqlite_funcs[func].func_name = arg_pointer_func[func];
                     }
-                    if (data_type == SQLITE_BLOB) {
-                        struct tep_format_field *field = tep_find_field(event, field_name);
-                        if (field)
-                            field->flags &= ~TEP_FIELD_IS_STRING;
-                    }
                 }
             }
             parse = parse->next;
@@ -728,7 +723,12 @@ static struct sql_tp_ctx *sql_tp_common_init(sqlite3 *sql, struct tp_list *tp_li
             }
             priv->fields = fields;
 
-            for (j = 0; priv->fields && priv->fields[j]; j++);
+            for (j = 0; fields && fields[j]; j++) {
+                if ((fields[j]->flags & TEP_FIELD_IS_STRING) &&
+                    tep__string_field_as_binary(event, fields[j])) {
+                    fields[j]->flags &= ~TEP_FIELD_IS_STRING;
+                }
+            }
             /*
             * nr_fields = 8 system columns + j event-specific columns
             * System columns: _pid, _tid, _time, _cpu, _period,

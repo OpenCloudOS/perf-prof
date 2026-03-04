@@ -22,7 +22,6 @@
 #include <tep.h>
 #include <trace_helpers.h>
 #include <stack_helpers.h>
-#include <event-parse-local.h>
 #include <linux/bitmap.h>
 #include <linux/stringify.h>
 #include <asm/perf_regs.h>
@@ -1935,42 +1934,6 @@ static char *build_handler_name(const char *sys, const char *name, const char *a
 }
 
 /*
- * Check if a field requires special pointer format output (e.g., %pI4, %pM).
- * These fields have TEP_FIELD_IS_STRING flag but should be treated as binary data.
- * Returns true if the field's IS_STRING flag should be cleared.
- *
- * Reference: arg_pointer_register() in sqlite/perf_tp.c
- */
-static bool field_needs_binary_output(struct tep_event *event, const char *field_name)
-{
-    struct tep_print_parse *parse = event->print_fmt.print_cache;
-
-    while (parse) {
-        if (parse->type == PRINT_FMT_ARG_POINTER &&
-            parse->arg && parse->arg->type == TEP_PRINT_FIELD) {
-            if (strcmp(parse->arg->field.name, field_name) == 0) {
-                const char *format = parse->format;
-
-                /* Skip to 'p' in format string */
-                while (*format) if (*format++ == 'p') break;
-                switch (*format) {
-                    case 'I': /* %pI4, %pi4, %pI6, %pi6, %pIS, %piS */
-                    case 'i':
-                    case 'U': /* %pUb, %pUB, %pUl, %pUL */
-                    case 'M': /* %pM, %pMR, %pMF, %pm, %pmR */
-                    case 'm':
-                        return true;
-                    default:
-                        break;
-                }
-            }
-        }
-        parse = parse->next;
-    }
-    return false;
-}
-
-/*
  * Initialize common key cache with interned strings.
  * Interned strings are guaranteed unique and allow pointer comparison.
  */
@@ -2077,7 +2040,7 @@ static int cache_event_fields(struct python_ctx *ctx)
                  * These fields (e.g., IP addresses, MAC addresses, UUIDs) have IS_STRING
                  * flag but their data should be treated as binary (bytes in Python). */
                 if ((field->flags & TEP_FIELD_IS_STRING) &&
-                    field_needs_binary_output(event, field->name)) {
+                    tep__string_field_as_binary(event, field)) {
                     field->flags &= ~TEP_FIELD_IS_STRING;
                 }
 
@@ -2934,7 +2897,7 @@ static const char *python_type_hint(struct tep_event *event, struct tep_format_f
 {
     if (field->flags & TEP_FIELD_IS_STRING) {
         /* Check if field needs binary output despite having IS_STRING flag */
-        if (field_needs_binary_output(event, field->name))
+        if (tep__string_field_as_binary(event, field))
             return "bytes";
         return "str";
     } else if (field->flags & TEP_FIELD_IS_ARRAY)
