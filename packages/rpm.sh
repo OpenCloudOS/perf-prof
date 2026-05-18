@@ -42,59 +42,16 @@ sym_ver_le_217()
 }
 
 # Download python-build-standalone to rpmbuild SOURCES
-#
-# Package selection:
-#   - Version: PYTHON_VERSION env var, default 3.12 (stable, widely compatible)
-#   - Architecture: auto-detected via uname -m (x86_64, aarch64)
-#   - Variant: install_only_stripped — minimal runtime without debug symbols,
-#     pre-installed layout (bin/ lib/ include/), ready to use directly
-#   - Stability: alpha/beta/rc versions are filtered out, highest patch version selected
-#
-# Source: https://github.com/astral-sh/python-build-standalone
-# Asset naming: cpython-{ver}+{tag}-{arch}-unknown-linux-gnu-install_only_stripped.tar.gz
 download_python_standalone()
 {
-    local pyver="${PYTHON_VERSION:-3.12}"
-    local variant="$(uname -m)-unknown-linux-gnu-install_only_stripped"
     local src=$1
+    local script_dir=$(cd "$(dirname "$0")" && pwd)
+    local pyver="${PYTHON_VERSION:-3.12}"
 
-    echo "Fetching latest python-build-standalone release info..." 1>&2
-    local release_json=$(curl -sfL https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json)
-    local pbs_tag=$(echo "$release_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['tag'])")
-    local prefix=$(echo "$release_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['asset_url_prefix'])")
-
-    echo "Latest release tag: $pbs_tag" 1>&2
-
-    local asset_name=$(curl -sf "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${pbs_tag}" \
-      | python3 -c "
-import json, sys, re
-data = json.load(sys.stdin)
-pattern = re.compile(r'^cpython-${pyver}\.\d+(\+|\-).*${variant}\.tar\.gz\$')
-matches = [a['name'] for a in data['assets'] if pattern.match(a['name'])]
-stable = [m for m in matches if not re.search(r'(a|b|rc)\d+', m)]
-if stable:
-    matches = stable
-if matches:
-    matches.sort(key=lambda x: [int(n) for n in re.search(r'cpython-(\d+)\.(\d+)\.(\d+)', x).groups()], reverse=True)
-    print(matches[0])
-else:
-    sys.exit(1)
-")
-
-    if [ -z "$asset_name" ]; then
-        echo "ERROR: No matching python-build-standalone for cpython-${pyver}.x ${variant}" 1>&2
-        exit 1
-    fi
-
-    # Check if already downloaded
-    if [ -f "$src/$asset_name" ]; then
-        echo "Python standalone already exists: $asset_name" 1>&2
-    else
-        echo "Downloading: $asset_name" 1>&2
-        curl -fL --progress-bar -o "$src/$asset_name" "${prefix}/${asset_name}"
-    fi
-
-    echo "$asset_name"
+    # Run script, all output goes directly to terminal
+    (cd "$src" && "$script_dir/download-python-standalone.sh" ${PYTHON_VERSION:+$PYTHON_VERSION}) 1>&2
+    # Return the latest matching file
+    ls -t "$src"/cpython-${pyver}.*-$(uname -m)-*install_only_stripped.tar.gz 2>/dev/null | head -1 | xargs basename
 }
 
 src=$(rpmbuild --eval '%{_sourcedir}')
