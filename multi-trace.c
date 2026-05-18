@@ -2427,7 +2427,7 @@ static int rundelay_filter(struct prof_dev *dev)
 {
     struct env *env = dev->env;
     struct multi_trace_ctx *ctx = dev->private;
-    int i, j;
+    int i, j, len;
     int sched_wakeup = tep__event_id("sched", "sched_wakeup");
     int sched_wakeup_new = tep__event_id("sched", "sched_wakeup_new");
     int sched_switch = tep__event_id("sched", "sched_switch");
@@ -2450,16 +2450,23 @@ static int rundelay_filter(struct prof_dev *dev)
                     }
                 } else if (tp->id == sched_switch) {
                     if (i == 0) {
-                        int preempt = kernel_release() >= KERNEL_VERSION(4, 14, 0) ? TASK_REPORT_MAX : 0;
-
                         if (tp_set_key(tp, "prev_pid") == 0)
                             match ++;
+
+                        // prev_state==0: TASK_RUNNING (voluntary yield, migration, etc.)
+                        // prev_state==TASK_REPORT_MAX: preempted (4.14+)
+                        // Both cases the task remains runnable and incurs scheduling delay.
+                        if (kernel_release() >= KERNEL_VERSION(4, 14, 0))
+                            len = snprintf(buff, sizeof(buff), "(prev_state==%d||prev_state==0)", TASK_REPORT_MAX);
+                        else
+                            len = snprintf(buff, sizeof(buff), "prev_state==0");
+
                         tp_filter = tp_filter_new(ctx->thread_map, "prev_pid", env->filter, "prev_comm");
                         if (tp_filter) {
-                            snprintf(buff, sizeof(buff), "prev_state==%d && (%s)", preempt, tp_filter->filter);
+                            snprintf(buff+len, sizeof(buff)-len, " && (%s)", tp_filter->filter);
                             filter = buff;
                         } else {
-                            snprintf(buff, sizeof(buff), "prev_state==%d&&prev_pid>0", preempt);
+                            snprintf(buff+len, sizeof(buff)-len, " && prev_pid>0");
                             tp_update_filter(tp, buff);
                         }
                     }
