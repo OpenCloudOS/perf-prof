@@ -1063,7 +1063,7 @@ class TestPythonProfilerEventSource:
         """Test profile as profiler event source with basic counting"""
         script_path = write_script(PROFILE_COUNTER_SCRIPT)
         try:
-            prof = PerfProf(['python', '-e', 'profile', '-C', '0', '-i', '1000', '-m', '64', script_path])
+            prof = PerfProf(['python', '-e', 'profile/-F 99/', '-C', '0', '-i', '1000', '-m', '64', script_path])
             for std, line in prof.run(runtime, memleak_check):
                 result_check(std, line, runtime, memleak_check)
         finally:
@@ -1131,7 +1131,7 @@ class TestPythonProfilerEventSource:
 
     def test_profile_help_template(self, runtime, memleak_check):
         """Test help template generation for profiler event source"""
-        prof = PerfProf(['python', '-e', 'profile', 'help'])
+        prof = PerfProf(['python', '-e', 'profile/-F 99/', 'help'])
         output = []
         for std, line in prof.run(None, memleak_check):
             output.append(line)
@@ -1144,7 +1144,7 @@ class TestPythonProfilerEventSource:
 
     def test_combined_help_template(self, runtime, memleak_check):
         """Test help template with mixed tracepoint + profiler events"""
-        prof = PerfProf(['python', '-e', 'sched:sched_wakeup,profile', 'help'])
+        prof = PerfProf(['python', '-e', 'sched:sched_wakeup,profile/-F 99/', 'help'])
         output = []
         for std, line in prof.run(None, memleak_check):
             output.append(line)
