@@ -14,8 +14,8 @@ index 57dec64..328fd40 100644
  	__attribute__((format(printf, 2, 3)));
 diff --git a/sqlite/sqlite3.c b/sqlite/sqlite3.c
 index 912ac26..9e32368 100644
---- a/sqlite/sqlite3.c
-+++ b/sqlite/sqlite3.c
+--- a/src/sqlite/sqlite3.c
++++ b/src/sqlite/sqlite3.c
 @@ -1,3 +1,4 @@
 +asm (".symver fcntl64, fcntl@GLIBC_");
  /******************************************************************************

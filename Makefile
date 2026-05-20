@@ -29,12 +29,13 @@ INCLUDES = \
 -I$(srctree)/lib/traceevent \
 -I$(srctree)/lib/subcmd \
 -I$(srctree)/lib/ \
--I$(srctree)/sqlite/ \
 -I$(srctree)/include \
 -I$(srctree)/include/uapi \
 -I$(srctree)/arch/$(SRCARCH)/include \
 -I$(srctree)/arch/$(SRCARCH)/include/uapi \
--I$(srctree)/
+-I$(srctree)/ \
+-I$(srctree)/src/
+
 
 EXTRA_CFLAGS := -O3 -g
 

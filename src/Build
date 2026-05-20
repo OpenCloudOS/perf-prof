@@ -1,0 +1,49 @@
+perf-prof-y += trace_helpers.o uprobe_helpers.o stack_helpers.o latency_helpers.o
+perf-prof-y += count_helpers.o localtime.o
+perf-prof-$(CONFIG_LIBUNWIND) += dwarf_unwind.o
+perf-prof-y += filter/
+perf-prof-y += monitor.o tep.o timer.o convert.o net.o event-spread.o vcpu_info.o
+perf-prof-y += sched.o comm.o perfeval.o ptrace.o pystack.o
+CFLAGS_pystack.o := -Wno-address-of-packed-member
+perf-prof-$(CONFIG_LIBBPF) += bpf-skel/
+perf-prof-y += sqlite/
+
+perf-prof-y += split-lock.o
+perf-prof-y += profile.o
+perf-prof-y += trace.o
+perf-prof-y += task-state.o
+perf-prof-y += watchdog.o
+perf-prof-y += kmemleak.o
+perf-prof-y += percpu-stat.o
+perf-prof-y += kvm-exit.o
+perf-prof-y += num-dist.o
+perf-prof-y += top.o
+perf-prof-y += order.o
+perf-prof-y += blktrace.o
+perf-prof-y += multi-trace.o two-event.o
+perf-prof-y += oncpu.o
+perf-prof-y += help.o
+perf-prof-y += ldlat-loads.o
+perf-prof-y += page-faults.o
+perf-prof-y += hrtimer.o
+perf-prof-y += event-care.o
+perf-prof-y += hrcount.o
+ifeq ($(SRCARCH),x86)
+perf-prof-y += kvmmmu.o
+endif
+perf-prof-y += usdt.o
+perf-prof-y += expr.o
+perf-prof-y += breakpoint.o
+perf-prof-y += hwstat.o
+perf-prof-y += llcstat.o
+perf-prof-y += tlbstat.o
+perf-prof-y += list.o
+perf-prof-y += kcore.o
+perf-prof-$(CONFIG_LIBBPF) += bpf_kvm_exit.o
+perf-prof-y += misc.o
+perf-prof-y += sql.o
+perf-prof-$(CONFIG_LIBPYTHON) += python.o
+ifneq ($(PYTHON_HOME),)
+CFLAGS_python.o := -DPYTHON_HOME=$(PYTHON_HOME)
+endif
+

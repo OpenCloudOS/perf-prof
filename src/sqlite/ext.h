@@ -9,7 +9,7 @@
 #include <tep.h>
 #include <linux/rblist.h>
 
-#include <sqlite3.h>
+#include <sqlite/sqlite3.h>
 
 /*
  * Perf event sample layout matching the sample_type configuration:
