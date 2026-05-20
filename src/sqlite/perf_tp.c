@@ -469,6 +469,7 @@ static void sqlite_symbolic(sqlite3_context *context, int argc, sqlite3_value **
     const char *field_name;
     const char *symbol = NULL;
     struct tp *tp;
+    int type0, type1;
     int i, j;
 
     /* Validate argument count */
@@ -477,9 +478,16 @@ static void sqlite_symbolic(sqlite3_context *context, int argc, sqlite3_value **
         return;
     }
 
+    type0 = sqlite3_value_type(argv[0]);
+
     if (argc == 1) {
+        /* Handle NULL input - SQL null propagation */
+        if (type0 == SQLITE_NULL) {
+            sqlite3_result_null(context);
+            return;
+        }
         /* Validate first argument type (value) */
-        if (sqlite3_value_type(argv[0]) != SQLITE_INTEGER) {
+        if (type0 != SQLITE_INTEGER) {
             sqlite3_result_error(context, "symbolic() argument must be INTEGER", -1);
             return;
         }
@@ -488,14 +496,22 @@ static void sqlite_symbolic(sqlite3_context *context, int argc, sqlite3_value **
         goto found;
     }
 
+    type1 = sqlite3_value_type(argv[1]);
+
+    /* Handle NULL input - SQL null propagation */
+    if (type0 == SQLITE_NULL || type1 == SQLITE_NULL) {
+        sqlite3_result_null(context);
+        return;
+    }
+
     /* Validate first argument type (table_field_name) */
-    if (sqlite3_value_type(argv[0]) != SQLITE_TEXT) {
+    if (type0 != SQLITE_TEXT) {
         sqlite3_result_error(context, "symbolic() first argument must be TEXT", -1);
         return;
     }
 
     /* Validate second argument type (value) */
-    if (sqlite3_value_type(argv[1]) != SQLITE_INTEGER) {
+    if (type1 != SQLITE_INTEGER) {
         sqlite3_result_error(context, "symbolic() second argument must be INTEGER", -1);
         return;
     }
@@ -556,6 +572,7 @@ static void sqlite_ksymbol(sqlite3_context *context, int argc, sqlite3_value **a
     long func = (long)(long *)sqlite3_user_data(context);
     long long value;
     const char *symbol = NULL;
+    int type0;
 
     /* Validate argument count */
     if (argc != 1) {
@@ -563,8 +580,16 @@ static void sqlite_ksymbol(sqlite3_context *context, int argc, sqlite3_value **a
         return;
     }
 
+    type0 = sqlite3_value_type(argv[0]);
+
+    /* Handle NULL input - SQL null propagation */
+    if (type0 == SQLITE_NULL) {
+        sqlite3_result_null(context);
+        return;
+    }
+
     /* Validate argument type (value) */
-    if (sqlite3_value_type(argv[0]) != SQLITE_INTEGER) {
+    if (type0 != SQLITE_INTEGER) {
         sqlite3_result_error(context, "ksymbol() argument must be INTEGER", -1);
         return;
     }
@@ -593,6 +618,7 @@ static void sqlite_blob(sqlite3_context *context, int argc, sqlite3_value **argv
     uint32_t addr;
     const unsigned char *u;
     char *symbol = NULL;
+    int type0;
 
     /* Validate argument count */
     if (argc != 1) {
@@ -601,8 +627,16 @@ static void sqlite_blob(sqlite3_context *context, int argc, sqlite3_value **argv
         return;
     }
 
+    type0 = sqlite3_value_type(argv[0]);
+
+    /* Handle NULL input - SQL null propagation */
+    if (type0 == SQLITE_NULL) {
+        sqlite3_result_null(context);
+        return;
+    }
+
     /* Validate argument type */
-    if (sqlite3_value_type(argv[0]) != SQLITE_BLOB) {
+    if (type0 != SQLITE_BLOB) {
         snprintf(buf, sizeof(buf), "%s() argument must be BLOB", arg_pointer_func[func]);
         sqlite3_result_error(context, buf, -1);
         return;
