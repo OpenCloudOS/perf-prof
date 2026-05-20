@@ -317,28 +317,30 @@ pytest --runtime=20 --memleak-check=2000
 
 ```
 perf-prof/
-├── *.c                   # Core profiler modules (30+ profilers)
+├── src/                  # Project source code
+│   ├── *.c              # Core framework and profiler modules (30+ profilers)
+│   ├── bpf-skel/        # BPF skeleton programs
+│   ├── filter/          # Event filters (BPF, tracepoint, PMU)
+│   └── sqlite/          # SQLite amalgamation source code and extension modules
 ├── lib/                  # Base libraries (libperf, libtraceevent, libbpf)
 ├── arch/                 # Architecture-specific code
-├── bpf-skel/             # BPF skeleton programs
-├── filter/               # Event filters (BPF, tracepoint, PMU)
-├── sqlite/               # SQLite amalgamation source code and extension modules
 ├── include/              # Included header files
 ├── tests/                # Test suite
 ├── docs/                 # Documentation
+├── packages/             # Packaging scripts and patches
 └── skills/               # AI-assisted analysis skill packages
 ```
 
 ### Core Components
 
 **Monitoring Framework:**
-- `monitor.c/h` - Core framework
-- `tep.c/h` - Trace event parser
-- `trace_helpers.c/h` - Trace event utilities
-- `stack_helpers.c/h` - Stack traversal and symbol resolution
+- `src/monitor.c/h` - Core framework
+- `src/tep.c/h` - Trace event parser
+- `src/trace_helpers.c/h` - Trace event utilities
+- `src/stack_helpers.c/h` - Stack traversal and symbol resolution
 
 **Profiling Units:**
-- Each profiler is an independent `.c` file
+- Each profiler is an independent `.c` file in `src/`
 - Registered via `PROFILER_REGISTER()` macro
 - Supports `init`, `deinit`, `interval`, `read`, `sample` callbacks
 
@@ -350,11 +352,11 @@ Event Source → Filters → Ring Buffer → Sort → Profiler → Output
 
 ### Adding a New Profiler
 
-1. Create source file `new_profiler.c`
+1. Create source file `src/new_profiler.c`
 2. Implement `profiler` structure with required callbacks
 3. Define `name`, `desc`, `argc`, `option`
 4. Register with `PROFILER_REGISTER()`
-5. Add to `Build` file: `perf-prof-y += new_profiler.o`
+5. Add to `src/Build` file: `perf-prof-y += new_profiler.o`
 6. Add test in `tests/` directory
 
 ## Contributing

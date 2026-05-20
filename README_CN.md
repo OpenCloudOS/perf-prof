@@ -321,28 +321,30 @@ pytest --runtime=20 --memleak-check=2000
 
 ```
 perf-prof/
-├── *.c                   # 核心分析器模块（30+ 个分析器）
+├── src/                  # 项目源码
+│   ├── *.c              # 核心框架和分析器模块（30+ 个分析器）
+│   ├── bpf-skel/        # BPF skeleton 程序
+│   ├── filter/          # 事件过滤器（BPF, tracepoint, PMU）
+│   └── sqlite/          # SQLite源码和扩展模块
 ├── lib/                  # 基础库（libperf, libtraceevent, libbpf）
 ├── arch/                 # 架构相关代码
-├── bpf-skel/             # BPF skeleton 程序
-├── filter/               # 事件过滤器（BPF, tracepoint, PMU）
-├── sqlite/               # SQLite源码和扩展模块
 ├── include/              # 包含头文件
 ├── tests/                # 测试套件
 ├── docs/                 # 文档
+├── packages/             # 打包脚本和补丁
 └── skills/               # AI 辅助分析技能包
 ```
 
 ### 核心组件
 
 **监控框架：**
-- `monitor.c/h` - 核心框架
-- `tep.c/h` - Trace 事件解析器
-- `trace_helpers.c/h` - Trace 事件工具
-- `stack_helpers.c/h` - 栈遍历和符号解析
+- `src/monitor.c/h` - 核心框架
+- `src/tep.c/h` - Trace 事件解析器
+- `src/trace_helpers.c/h` - Trace 事件工具
+- `src/stack_helpers.c/h` - 栈遍历和符号解析
 
 **分析单元：**
-- 每个分析器都是独立的 `.c` 文件
+- 每个分析器都是 `src/` 下独立的 `.c` 文件
 - 通过 `PROFILER_REGISTER()` 宏注册
 - 支持 `init`, `deinit`, `interval`, `read`, `sample` 回调
 
@@ -354,11 +356,11 @@ perf-prof/
 
 ### 添加新分析器
 
-1. 创建源文件 `new_profiler.c`
+1. 创建源文件 `src/new_profiler.c`
 2. 实现 `profiler` 结构体及所需回调
 3. 定义 `name`, `desc`, `argc`, `option`
 4. 使用 `PROFILER_REGISTER()` 注册
-5. 在 `Build` 文件中添加：`perf-prof-y += new_profiler.o`
+5. 在 `src/Build` 文件中添加：`perf-prof-y += new_profiler.o`
 6. 在 `tests/` 目录中添加测试
 
 ## 贡献
