@@ -573,7 +573,8 @@ static void perf_evlist__set_mmap_first(struct perf_evlist *evlist, struct perf_
 static int
 mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 	       int idx, struct perf_mmap_param *mp, int cpu_idx,
-	       int thread, int *_output, int *_output_overwrite)
+	       int thread, int *_output, int *_output_overwrite,
+	       bool wakeup_events_only)
 {
 	int evlist_cpu = perf_cpu_map__cpu(evlist->all_cpus, cpu_idx);
 	struct perf_evsel *evsel;
@@ -590,6 +591,21 @@ mmap_per_evsel(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 		cpu = perf_cpu_map__idx(evsel->cpus, evlist_cpu);
 		if (cpu == -1)
 			continue;
+
+		/*
+		 * Split watermark and wakeup_events events into two passes:
+		 * Pass 1 (wakeup_events_only=false): mmap watermark events first,
+		 *   so the ringbuffer watermark is set correctly.
+		 * Pass 2 (wakeup_events_only=true): wakeup_events events use
+		 *   SET_OUTPUT to share the existing ringbuffer.
+		 */
+		if (wakeup_events_only) {
+			if (evsel->attr.watermark)
+				continue;
+		} else {
+			if (!evsel->attr.watermark)
+				continue;
+		}
 
 		map = ops->get(evlist, overwrite, idx);
 		if (map == NULL)
@@ -663,8 +679,13 @@ mmap_per_thread(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 		if (ops->idx)
 			ops->idx(evlist, mp, thread, false);
 
+		/* Pass 1: watermark events first (create mmap with correct watermark) */
 		if (mmap_per_evsel(evlist, ops, thread, mp, 0, thread,
-				   &output, &output_overwrite))
+				   &output, &output_overwrite, false))
+			goto out_unmap;
+		/* Pass 2: wakeup_events events (SET_OUTPUT to existing mmap) */
+		if (mmap_per_evsel(evlist, ops, thread, mp, 0, thread,
+				   &output, &output_overwrite, true))
 			goto out_unmap;
 	}
 
@@ -691,8 +712,15 @@ mmap_per_cpu(struct perf_evlist *evlist, struct perf_evlist_mmap_ops *ops,
 			ops->idx(evlist, mp, cpu, true);
 
 		for (thread = 0; thread < nr_threads; thread++) {
+			/* Pass 1: watermark events first (create mmap with correct watermark) */
 			if (mmap_per_evsel(evlist, ops, cpu, mp, cpu,
-					   thread, &output, &output_overwrite))
+					   thread, &output, &output_overwrite, false))
+				goto out_unmap;
+		}
+		for (thread = 0; thread < nr_threads; thread++) {
+			/* Pass 2: wakeup_events events (SET_OUTPUT to existing mmap) */
+			if (mmap_per_evsel(evlist, ops, cpu, mp, cpu,
+					   thread, &output, &output_overwrite, true))
 				goto out_unmap;
 		}
 	}
