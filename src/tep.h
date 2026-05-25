@@ -111,6 +111,9 @@ struct tp {
     // cpus
     struct perf_cpu_map *cpus;
 
+    // wakeup control: per-event wakeup_events (batch=N attr)
+    int batch;
+
     // default tp_matcher
     struct expr_prog *tp_cpu_prog;
     struct expr_prog *tp_pid_prog;

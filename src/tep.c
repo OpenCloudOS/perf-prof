@@ -1014,6 +1014,9 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
                     }
                 } else if (strcmp(attr, "index") == 0) {
                     tp->index = value;
+                } else if (strcmp(attr, "batch") == 0) {
+                    tp->batch = value ? atoi(value) : 1;
+                    if (tp->batch < 1) tp->batch = 1;
                 } else if (*attr) {
                     fprintf(stderr, "Syntax error: Unknown attr %s\n", attr);
                     goto err_out;
@@ -1434,6 +1437,12 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *tmpl)
             attr->exclude_callchain_user = 0;
             tp->dwarf_unwind = 1;
         }
+    }
+
+    // batch=N: per-event wakeup_events control
+    if (tp->batch > 0) {
+        attr->watermark = 0;
+        attr->wakeup_events = tp->batch;
     }
 
     evsel = perf_evsel__new(attr);

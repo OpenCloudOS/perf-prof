@@ -522,6 +522,7 @@ struct option main_options[] = {
                                                                 "      stack: sample_type PERF_SAMPLE_CALLCHAIN\n"
                                                                 "      max-stack=int : sample_max_stack\n"
                                                                 "      alias=str: event alias\n"
+                                                                "      batch=N: batch N events before processing, Dflt: use watermark\n"
                                                                 "      exec=EXPR: a public expression executed by any profiler\n"
                                                                 "      cpus=cpu[-cpu]: attach to a different cpu list.\n"
                                                                 "      top-by=EXPR: add to top, sort by this field\n"
