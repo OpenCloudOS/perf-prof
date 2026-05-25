@@ -221,3 +221,15 @@ def test_wildcard_multiple_events(runtime, memleak_check):
     prof = PerfProf(['trace', '-e', 'sched:sched_wak*,sched:sched_switch', '-C', '0', '-m', '64'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def test_batch_attr(runtime, memleak_check):
+    #perf-prof trace -e 'sched:sched_switch//batch=1/' -C 0 -m 64 -N 10
+    prof = PerfProf(['trace', '-e', 'sched:sched_switch//batch=1/', '-C', '0', '-m', '64', '-N', '10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_batch_attr_mixed(runtime, memleak_check):
+    #perf-prof trace -e 'sched:sched_wakeup,sched:sched_switch//batch=1/' -C 0 -m 64 --order -N 10
+    prof = PerfProf(['trace', '-e', 'sched:sched_wakeup,sched:sched_switch//batch=1/', '-C', '0', '-m', '64', '--order', '-N', '10'])
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
