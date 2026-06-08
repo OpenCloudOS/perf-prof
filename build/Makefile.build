@@ -49,7 +49,10 @@ subdir-y     :=
 subdir-obj-y :=
 
 # Build definitions
-build-file := $(dir)/Build
+# Prefer 'Build.bin' over 'Build' so the top-level manifest can avoid the
+# case-insensitive collision with the 'build/' directory on macOS / Windows
+# filesystems. Subdirectories keep using 'Build'.
+build-file := $(or $(wildcard $(dir)/Build.bin),$(dir)/Build)
 -include $(build-file)
 
 quiet_cmd_flex  = FLEX    $@
