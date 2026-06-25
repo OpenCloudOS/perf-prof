@@ -2297,6 +2297,14 @@ static int python_script_init(struct python_ctx *ctx)
 #endif
     }
 
+    /* sys.argv has taken its own copy; release the array allocated in python_argc_init. */
+    if (script_argv) {
+        free(script_argv);
+        script_argv = NULL;
+        script_argc = 0;
+        script_path = NULL;
+    }
+
     /* Set stdout and stderr to line-buffered mode if not already */
     if (PyRun_SimpleString(
             "import sys, os\n"
@@ -2571,18 +2579,47 @@ static void python_call_lost(struct python_ctx *ctx, u64 lost_start, u64 lost_en
 /*
  * python_argc_init - Parse extra command line arguments (script.py [script args...])
  * Called before init() to capture the script path and arguments.
- * Usage: perf-prof python -e EVENT -- script.py --script-opts
+ * Usage:
+ *   perf-prof python -e EVENT -- script.py [script-opts]
+ *   perf-prof python -e EVENT -- script.py [script-opts] -- workload [workload-opts]
+ *
+ * The second '--' separates script arguments from the workload command line.
+ * Script arguments are copied to a private array; the workload portion is
+ * moved to the front of argv and the new argc is returned so that main()
+ * can hand it off to workload_prepare().
  */
 static int python_argc_init(int argc, char *argv[])
 {
-    if (argc >= 1) {
-        script_path = argv[0];
-        script_argc = argc;
-        script_argv = argv;
-    } else {
-        script_path = NULL;
-        script_argc = 0;
-        script_argv = NULL;
+    int script_end = argc;
+    int i;
+
+    script_path = NULL;
+    script_argc = 0;
+    script_argv = NULL;
+
+    for (i = 0; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] == '-' && argv[i][2] == '\0') {
+            script_end = i;
+            break;
+        }
+    }
+
+    if (script_end >= 1) {
+        script_argv = calloc(script_end + 1, sizeof(char *));
+        if (!script_argv)
+            return argc;
+        for (i = 0; i < script_end; i++)
+            script_argv[i] = argv[i];
+        script_argv[script_end] = NULL;
+        script_path = script_argv[0];
+        script_argc = script_end;
+    }
+
+    if (script_end < argc) {
+        int remain = argc - script_end - 1;
+        memmove(argv, argv + script_end + 1, remain * sizeof(argv[0]));
+        argv[remain] = NULL;
+        return remain;
     }
     return 0;
 }
@@ -3272,7 +3309,9 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    "PROGRAME" python -e sched:sched_wakeup,sched:sched_switch -i 1000 analyzer.py",
     "    "PROGRAME" python -e 'sched:sched_wakeup/pid>1000/' -C 0-3 filter.py",
     "    "PROGRAME" python -e 'sched:sched_wakeup//alias=w1/,sched:sched_wakeup//alias=w2/' multi.py",
-    "    "PROGRAME" python -e sched:sched_wakeup -g callstack.py  # with callchain");
+    "    "PROGRAME" python -e sched:sched_wakeup -g callstack.py  # with callchain",
+    "    "PROGRAME" python -e sched:sched_switch -- analyzer.py --top 10 -- ./workload arg1 arg2",
+    "                                              # script args before second '--', workload after");
 
 static const char *python_argv[] = PROFILER_ARGV("python",
     PROFILER_ARGV_OPTION,
