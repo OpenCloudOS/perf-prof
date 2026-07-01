@@ -50,7 +50,7 @@ struct tp {
     // kprobe, uprobe
     char *kprobe_func;
     char *uprobe_path;
-    int uprobe_offset;
+    int probe_offset;
 
     struct expr_prog *ftrace_filter;
 
@@ -200,7 +200,6 @@ enum {
 };
 extern int kprobe_type;
 extern int uprobe_type;
-
 
 static inline bool tp_is_dev(struct tp *tp)
 {

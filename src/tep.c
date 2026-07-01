@@ -602,43 +602,316 @@ static char *rm_quotes(char *s, char fill)
     return s;
 }
 
-static int tp_kprobe_uprobe(struct tp *tp, char *sys, char *name)
+enum event_head_kind {
+    EVT_HEAD_TRACEPOINT,   /* sys:name */
+    EVT_HEAD_PROFILER,     /* profiler[/option/...] or profiler:X (e.g., bpf:kvm_exit) */
+    EVT_HEAD_KPROBE,       /* kprobe:[module:]fn[+off] | kprobe:0xADDR */
+    EVT_HEAD_KRETPROBE,    /* kretprobe:[module:]fn    | kretprobe:0xADDR */
+    EVT_HEAD_UPROBE,       /* uprobe:binary:fn[+off]   | uprobe:binary:offset */
+    EVT_HEAD_URETPROBE,    /* uretprobe:binary:fn      | uretprobe:binary:offset */
+};
+
+struct event_head {
+    enum event_head_kind kind;
+    /* For tracepoint & probe: `sys` and `body` are '\0'-terminated slices of
+     * the original event string (the ':' between them has been overwritten
+     * with '\0'). For profiler: `sys` is the profiler name; `body` is NULL. */
+    char *sys;
+    char *body;
+    /* Points at the '/' that starts /filter/... within the event string,
+     * or NULL if there is no /filter/ block. Not '\0'-terminated by the
+     * parser — the caller is responsible for splitting further. */
+    char *head_end;
+};
+
+static bool head_starts_with(const char *s, const char *prefix, char **rest)
 {
-    int id = -1;
-    char *path;
+    size_t n = strlen(prefix);
+    if (strncmp(s, prefix, n) == 0) {
+        if (rest) *rest = (char *)s + n;
+        return true;
+    }
+    return false;
+}
+
+/* For kprobe/kretprobe head, first '/' is the filter delimiter — head has no
+ * '/' inside. */
+static char *kprobe_head_end(char *body)
+{
+    return next_sep(body, '/');
+}
+
+/* For uprobe/uretprobe, head is "binary:target". `binary` may contain '/',
+ * but not ':' (matching bpftrace); if the binary path really needs a ':',
+ * quote it as '"…"'. Find the first ':' at the top level → target start,
+ * then find the first '/' after target → filter delimiter. */
+static char *uprobe_head_end(char *body)
+{
+    char *colon = next_sep(body, ':');
+    if (!colon)
+        return NULL; /* malformed; caller detects via tp_kprobe_uprobe */
+    return next_sep(colon + 1, '/');
+}
+
+/*
+ * Classify an event head; leave the input string untouched.
+ *
+ * `out->sys` and `out->body` are pointers *into* @s but the parser writes
+ * NO '\0' anywhere: sys and body are not independent C strings on return.
+ * `out->head_end` points at the '/' that starts /filter/... (or NULL).
+ *
+ * The caller is responsible for any splitting it needs, e.g.:
+ *   if (head.head_end) *head.head_end = '\0';   // detach filter
+ *   if (head.body)     head.body[-1]  = '\0';   // detach sys from body
+ */
+static int parse_event_head(char *s, struct event_head *out)
+{
+    char *rest = NULL;
+    char *colon;
+    char *slash_naive;
+    profiler *prof;
+
+    memset(out, 0, sizeof(*out));
+
+    if (head_starts_with(s, "kprobe:", &rest)) {
+        out->kind = EVT_HEAD_KPROBE;
+        out->sys = s;
+        out->body = rest;
+        out->head_end = kprobe_head_end(rest);
+        return 0;
+    }
+    if (head_starts_with(s, "kretprobe:", &rest)) {
+        out->kind = EVT_HEAD_KRETPROBE;
+        out->sys = s;
+        out->body = rest;
+        out->head_end = kprobe_head_end(rest);
+        return 0;
+    }
+    if (head_starts_with(s, "uprobe:", &rest)) {
+        out->kind = EVT_HEAD_UPROBE;
+        out->sys = s;
+        out->body = rest;
+        out->head_end = uprobe_head_end(rest);
+        return 0;
+    }
+    if (head_starts_with(s, "uretprobe:", &rest)) {
+        out->kind = EVT_HEAD_URETPROBE;
+        out->sys = s;
+        out->body = rest;
+        out->head_end = uprobe_head_end(rest);
+        return 0;
+    }
+
+    /* Non-probe. Determine tracepoint vs profiler.
+     *
+     * A profiler name may itself contain ':' (e.g. "bpf:kvm_exit" is a single
+     * profiler name registered via MONITOR_REGISTER). So the whole head — up
+     * to the first '/' if any — must be tried against monitor_find() FIRST.
+     * Only if that fails, and the head contains ':', do we fall back to
+     * "sys:name" tracepoint parsing.
+     *
+     * monitor_find() needs a null-terminated string, so temporarily terminate
+     * at slash_naive and restore before returning — the input must be pristine
+     * on any return path. */
+    slash_naive = next_sep(s, '/');
+    if (slash_naive) *slash_naive = '\0';
+    prof = monitor_find(s);
+    if (slash_naive) *slash_naive = '/';
+
+    if (prof) {
+        out->kind = EVT_HEAD_PROFILER;
+        out->sys = s;
+        out->body = NULL;
+        out->head_end = slash_naive;
+        return 0;
+    }
+
+    colon = strchr(s, ':');
+    if (colon && (!slash_naive || colon < slash_naive)) {
+        /* tracepoint sys:name */
+        out->kind = EVT_HEAD_TRACEPOINT;
+        out->sys = s;
+        out->body = colon + 1;
+        out->head_end = slash_naive;
+        return 0;
+    }
+
+    /* No ':' in head, and monitor_find() didn't recognize it either — treat
+     * as profiler; the caller will produce a "profiler X not found" error
+     * once it re-runs monitor_find(). */
+    out->kind = EVT_HEAD_PROFILER;
+    out->sys = s;
+    out->body = NULL;
+    out->head_end = slash_naive;
+    return 0;
+}
+
+static int parse_offset(const char *s, unsigned long *out)
+{
+    char *end = NULL;
+    unsigned long v;
+    if (!s || !*s) return -1;
+    v = strtoul(s, &end, 0); /* auto-detects 0x prefix */
+    if (!end || *end) return -1;
+    *out = v;
+    return 0;
+}
+
+/*
+ * Fill tp->{kprobe_func, uprobe_path, probe_offset} from a probe body.
+ *
+ * `kind` is one of EVT_HEAD_K{,RET}PROBE / EVT_HEAD_U{,RET}PROBE.
+ * `body` is the substring AFTER the leading "sys:" prefix, with any /filter/
+ *        already stripped (i.e., the head's target-only portion).
+ *
+ * Formats accepted:
+ *   k[ret]probe:  fn | fn+off | module:fn | module:fn+off | 0xADDR
+ *                 (kretprobe rejects +off)
+ *   uprobe:       /path/to/bin:fn | /path/to/bin:fn+off | /path/to/bin:offset
+ *   uretprobe:    /path/to/bin:fn | /path/to/bin:offset
+ *                 (rejects fn+off; a bare offset is allowed to disambiguate
+ *                  duplicate-named symbols in the binary)
+ *
+ * Returns id (KPROBE / KRETPROBE / UPROBE / URETPROBE) or -1.
+ */
+static int tp_kprobe_uprobe(struct tp *tp, enum event_head_kind kind, char *body, char **name_out)
+{
+    int id;
+    bool is_ret;
+    bool is_uprobe;
     char resolved_path[PATH_MAX];
 
-    // kprobe:func
-    // kretprobe:func
-    // uprobe:"func@path" | uprobe:func@"path"
-    // uretprobe:"func@path" | uretprobe:func@"path"
-    if (strcmp(sys, "kprobe") == 0) {
-        id = kprobe_type ? KPROBE : -1;
-        tp->kprobe_func = name;
-    } else if (strcmp(sys, "kretprobe") == 0) {
-        id = kprobe_type ? KRETPROBE : -1;
-        tp->kprobe_func = name;
-    } else if (strcmp(sys, "uprobe") == 0) {
-        id = uprobe_type ? UPROBE : -1;
-        goto uprobe;
-    } else if (strcmp(sys, "uretprobe") == 0) {
-        id = uprobe_type ? URETPROBE : -1;
-    uprobe:
-        tp->uprobe_path = NULL;
-        tp->uprobe_offset = 0;
-        path = strchr(name, '@');
-        if (path) {
-            *path++ = '\0';
-            path = rm_quotes(path, '\0');
-            if (id > 0 &&
-                realpath(path, resolved_path) &&
-                access(resolved_path, X_OK) == 0) {
-                tp->uprobe_path = path;
-                tp->uprobe_offset = syms__file_offset(resolved_path, name);
+    switch (kind) {
+    case EVT_HEAD_KPROBE:    id = kprobe_type ? KPROBE    : -1; is_ret = false; is_uprobe = false; break;
+    case EVT_HEAD_KRETPROBE: id = kprobe_type ? KRETPROBE : -1; is_ret = true;  is_uprobe = false; break;
+    case EVT_HEAD_UPROBE:    id = uprobe_type ? UPROBE    : -1; is_ret = false; is_uprobe = true;  break;
+    case EVT_HEAD_URETPROBE: id = uprobe_type ? URETPROBE : -1; is_ret = true;  is_uprobe = true;  break;
+    case EVT_HEAD_TRACEPOINT:
+    case EVT_HEAD_PROFILER:
+    default: return -1;
+    }
+    if (id < 0)
+        return -1;
+
+    tp->kprobe_func = NULL;
+    tp->uprobe_path = NULL;
+    tp->probe_offset = 0;
+
+    if (is_uprobe) {
+        /* body = "/path/to/bin:target" (binary contains no ':' at top level;
+         * a binary path with a literal ':' can be quoted). */
+        char *first_colon = next_sep(body, ':');
+        char *target;
+        char *plus;
+        unsigned long off = 0;
+
+        if (!first_colon || first_colon == body) {
+            fprintf(stderr, "uprobe: expected 'binary:target', got '%s'\n", body);
+            return -1;
+        }
+        *first_colon = '\0';
+        target = first_colon + 1;
+        body = rm_quotes(body, '\0');
+
+        if (!realpath(body, resolved_path) ||
+            access(resolved_path, X_OK) != 0) {
+            fprintf(stderr, "uprobe: binary '%s' not accessible\n", body);
+            return -1;
+        }
+        tp->uprobe_path = body;
+        *name_out = target;
+
+        plus = strchr(target, '+');
+        if (plus) {
+            if (is_ret) {
+                fprintf(stderr, "uretprobe: '+offset' not supported\n");
+                return -1;
+            }
+            *plus = '\0';
+            if (parse_offset(plus + 1, &off) < 0) {
+                fprintf(stderr, "uprobe:%s:%s bad offset '+%s'\n", body, target, plus + 1);
+                return -1;
             }
         }
-        if (!tp->uprobe_offset)
-            id = -1;
+        if (*target) {
+            unsigned long sym_off = syms__file_offset(resolved_path, target);
+            if (sym_off) {
+                tp->probe_offset = sym_off + off;
+            } else if (plus) {
+                fprintf(stderr, "uprobe symbol '%s' not found in %s\n",
+                        target, resolved_path);
+                return -1;
+            } else {
+                unsigned long num_off;
+                if (parse_offset(target, &num_off) < 0) {
+                    fprintf(stderr, "uprobe: '%s' is neither a symbol in %s nor a valid offset\n",
+                            target, resolved_path);
+                    return -1;
+                }
+                tp->probe_offset = num_off;
+            }
+        } else {
+            fprintf(stderr, "uprobe: empty target after '%s:' (expected fn, fn+off, or offset)\n", body);
+            return -1;
+        }
+        if (!tp->probe_offset) {
+            fprintf(stderr, "uprobe: resolved offset for '%s' is 0 in %s\n",
+                    target, resolved_path);
+            return -1;
+        }
+        return id;
+    }
+
+    /* k[ret]probe */
+    {
+        char *plus;
+        unsigned long off = 0;
+        char *first_colon = strchr(body, ':');
+
+        /* "0xADDR" (or decimal address) form: only valid when there is no
+         * module prefix and no '+offset'. */
+        if (!first_colon &&
+            body[0] == '0' && (body[1] == 'x' || body[1] == 'X')) {
+            unsigned long addr;
+            if (strchr(body, '+')) {
+                fprintf(stderr, "%s: '+offset' not allowed with absolute address '%s'\n",
+                        is_ret ? "kretprobe" : "kprobe", body);
+                return -1;
+            }
+            if (parse_offset(body, &addr) < 0) {
+                fprintf(stderr, "kprobe: bad address '%s'\n", body);
+                return -1;
+            }
+            tp->kprobe_func = NULL;
+            tp->probe_offset = addr;
+            *name_out = body;
+            return id;
+        }
+
+        /* Symbol form: fn | fn+off | module:fn | module:fn+off.
+         * Kernel accepts "module:fn" via kprobe_func passthrough. */
+        plus = strchr(first_colon ? first_colon + 1 : body, '+');
+        if (plus) {
+            if (is_ret) {
+                fprintf(stderr, "kretprobe: '+offset' not supported\n");
+                return -1;
+            }
+            *plus = '\0';
+            if (parse_offset(plus + 1, &off) < 0) {
+                fprintf(stderr, "kprobe:%s bad offset '+%s'\n", body, plus + 1);
+                return -1;
+            }
+        }
+
+        if (!*body || (first_colon && !first_colon[1])) {
+            fprintf(stderr, "%s:%s empty function name (expected fn, fn+off, module:fn, or 0xADDR)\n",
+                    is_ret ? "kretprobe" : "kprobe", body);
+            return -1;
+        }
+
+        tp->kprobe_func = body;
+        tp->probe_offset = off;
+        *name_out = first_colon ? first_colon + 1 : body;
     }
     return id;
 }
@@ -706,17 +979,27 @@ static char *expand_event_wildcards(const char *event_str)
     while ((sep = next_sep(s, ',')) != NULL || *s) {
         char *event_name = s;
         char *slash;
+        struct event_head head;
 
         if (sep) {
             *sep = '\0';
             s = sep + 1;
         }
-        slash = strchr(event_name, '/');
+
+        /* Classify the head. Only tracepoints (sys:name) support wildcards.
+         * Probe events may embed '/' in the head (e.g. uprobe binary paths),
+         * so a naive strchr('/') would misidentify path separators as the
+         * filter delimiter. parse_event_head() writes no '\0' anywhere, so
+         * event_name stays a complete string and non-tracepoints pass
+         * through verbatim. */
+        parse_event_head(event_name, &head);
+
+        slash = head.head_end;
         if (slash)
             *slash = '\0';
 
         // Check if event name (before any '/') contains wildcard
-        if (has_wildcard(event_name)) {
+        if (head.kind == EVT_HEAD_TRACEPOINT && has_wildcard(event_name)) {
             // Expand this event pattern
             // If there were attributes after the event, append them to each expanded event
             char *expanded = expand_wildcard_events(event_name, slash);
@@ -732,6 +1015,8 @@ static char *expand_event_wildcards(const char *event_str)
                 *slash = '/';
             result = straddf(result, free, "%s,", event_name);
         }
+
+        if (sep) *sep = ',';
 
         if (!result || !sep)
             break;
@@ -807,10 +1092,10 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     for (i = 0; i < nr_tp; i++) {
         struct tp *tp = &tp_list->tp[i];
         struct tep_event *event = NULL;
-        char *slash = NULL;
         char *sys = NULL;
         char *name = NULL;
         char *filter = NULL;
+        char *attr = NULL;
         int stack = 0;
         int max_stack = 0;
         bool top_by;
@@ -820,24 +1105,34 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
         struct expr_prog *prog = NULL;
         profiler *prof = NULL;
         struct env *env = NULL;
+        struct event_head head;
 
         tp->dev = dev;
 
-        s = tp->name;
-        slash = next_sep(s, '/');
-        if (slash) {
-            *slash = '\0';
-            filter = slash + 1;
-            slash = next_sep(filter, '/');
-            if (!slash)
+        parse_event_head(tp->name, &head);
+
+        filter = head.head_end;
+        if (filter) {
+            *filter++ = '\0';
+            attr = next_sep(filter, '/');
+            if (!attr) {
+                fprintf(stderr, "malformed event: %s: /filter/ATTR/../ block "
+                                "must be closed with '/'\n", tp->name);
                 goto err_out;
-            *slash = '\0';
+            }
+            *attr++ = '\0';
         }
 
-        sys = s = tp->name;
-        sep = strchr(s, ':');
-        if (!sep) { // profiler/option/
-        profiler:
+        /* parse_event_head leaves the input untouched. For tracepoint /
+         * probe events, split sys from body by terminating the ':' between
+         * them. For profiler heads, `body` is NULL and the ':' inside
+         * "bpf:kvm_exit"-style names must be preserved as part of `sys`. */
+        if (head.body)
+            head.body[-1] = '\0';
+
+        switch (head.kind) {
+        case EVT_HEAD_PROFILER:
+            sys = head.sys;
             prof = monitor_find(sys);
             if (!prof) {
                 fprintf(stderr, "profiler %s not found\n", sys);
@@ -845,12 +1140,13 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             }
             if (filter && filter[0])
                 filter[-1] = ' ';
-
             rm_quotes(filter, ' ');
 
-            env = parse_string_options(s);
-            if (!env)
+            env = parse_string_options(sys);
+            if (!env) {
+                fprintf(stderr, "profiler %s: bad option string\n", sys);
                 goto err_out;
+            }
             // --tsc, --kvmclock remains the same.
             env->tsc = dev->env->tsc;
             env->clock_offset = dev->env->clock_offset;
@@ -864,38 +1160,43 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
             prof_dev_use(tp->source_dev);
             name = sys;
             sys = NULL;
-        } else { // sys:name/filter/
-            *sep = '\0';
+            break;
 
-            name = sep + 1;
-            name = rm_quotes(name, '\0');
-
+        case EVT_HEAD_TRACEPOINT:
+            sys = head.sys;
+            name = rm_quotes(head.body, '\0');
             id = tep__event_id(sys, name);
             if (id < 0) {
-                id = tp_kprobe_uprobe(tp, sys, name);
-                if (id < 0) {
-                    *sep = ':';
-                    if (monitor_find(sys)) // e.g. bpf:kvm-exit
-                        goto profiler;
-                    fprintf(stderr, "%s not found\n", sys);
-                    goto err_out;
-                }
-            } else {
-                event = tep_find_event_by_name(tep, sys, name);
-                if (!event)
-                    goto err_out;
+                fprintf(stderr, "%s:%s not found\n", sys, name);
+                goto err_out;
             }
-
-            // Remove single and double quotes around filter
+            event = tep_find_event_by_name(tep, sys, name);
+            if (!event)
+                goto err_out;
             filter = rm_quotes(filter, '\0');
+            break;
+
+        case EVT_HEAD_KPROBE:
+        case EVT_HEAD_KRETPROBE:
+        case EVT_HEAD_UPROBE:
+        case EVT_HEAD_URETPROBE:
+            sys = head.sys;
+            id = tp_kprobe_uprobe(tp, head.kind, head.body, &name);
+            if (id < 0)
+                goto err_out;
+            filter = rm_quotes(filter, '\0');
+            break;
+
+        default:
+            goto err_out;
         }
+
         // ATTR
-        if (slash) {
-            *slash = '\0';
-            s = slash + 1;
+        if (attr) {
+            s = attr;
             while ((sep = next_sep(s, '/')) != NULL) {
-                char *attr = s;
                 char *value = NULL;
+                attr = s;
                 *sep = '\0';
                 s = sep + 1;
                 if ((sep = next_sep(attr, '=')) != NULL) {
@@ -1408,6 +1709,7 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *tmpl)
         case KPROBE:
             attr->type = kprobe_type;
             attr->kprobe_func = (__u64)tp->kprobe_func;
+            attr->probe_offset = tp->probe_offset;
             break;
 
         case URETPROBE:
@@ -1416,7 +1718,7 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *tmpl)
         case UPROBE:
             attr->type = uprobe_type;
             attr->uprobe_path = (__u64)tp->uprobe_path;
-            attr->probe_offset = tp->uprobe_offset;
+            attr->probe_offset = tp->probe_offset;
             break;
         default:
             return NULL;
