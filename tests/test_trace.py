@@ -176,8 +176,8 @@ def test_uprobe(runtime, memleak_check):
     if not os.path.exists(libc_path):
         pytest.skip(libc_path + " does not exist")
 
-    e = 'uprobe:printf@"' + libc_path + '"/cpu==0/'
-    #perf-prof trace -e uprobe:printf@"/lib64/libc.so.6"
+    e = 'uprobe:' + libc_path + ':printf/cpu==0/'
+    #perf-prof trace -e 'uprobe:/lib64/libc.so.6:printf/cpu==0/'
     prof = PerfProf(['trace', '-e', e, '-m', '64'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
@@ -192,8 +192,8 @@ def test_uretprobe(runtime, memleak_check):
     if not os.path.exists(libc_path):
         pytest.skip(libc_path + " does not exist")
 
-    e = 'uretprobe:printf@"' + libc_path + '"'
-    #perf-prof trace -e uretprobe:printf@"/lib64/libc.so.6" -C 0
+    e = 'uretprobe:' + libc_path + ':printf'
+    #perf-prof trace -e uretprobe:/lib64/libc.so.6:printf -C 0
     prof = PerfProf(['trace', '-e', e, '-C', '0', '-m', '64'])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
