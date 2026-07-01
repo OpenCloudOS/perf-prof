@@ -222,10 +222,14 @@ perf-prof follows a three-layer event selection specification:
 
 ```
 EVENT: sys:name[/filter/ATTR/ATTR/.../]
-       kprobe:func[/filter/ATTR/ATTR/.../]
-       kretprobe:func[/filter/ATTR/ATTR/.../]
-       uprobe:func@"file"[/filter/ATTR/ATTR/.../]
-       uretprobe:func@"file"[/filter/ATTR/ATTR/.../]
+       kprobe[:module]:fn[+off][/filter/ATTR/ATTR/.../]
+       kprobe:0xADDR[/filter/ATTR/ATTR/.../]
+       kretprobe[:module]:fn[/filter/ATTR/ATTR/.../]
+       kretprobe:0xADDR[/filter/ATTR/ATTR/.../]
+       uprobe:BINARY:fn[+off][/filter/ATTR/ATTR/.../]
+       uprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
+       uretprobe:BINARY:fn[/filter/ATTR/ATTR/.../]
+       uretprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
 ```
 
 #### Filter Syntax (in-kernel execution)

@@ -36,8 +36,8 @@ perf-prof python -e EVENT[,EVENT...] [选项] [--] module [args...]
 - `-e, --event <EVENT,...>`: **[必需]** 事件选择器
   - **tracepoint**: `sys:name[/filter/ATTR/.../]` - 系统tracepoint事件
   - **profiler**: `profiler[/option/ATTR/.../]` - 嵌入其他分析器作为事件源
-  - **kprobe/kretprobe**: `kprobe:func[/filter/ATTR/.../]`
-  - **uprobe/uretprobe**: `uprobe:func@"file"[/filter/ATTR/.../]`
+  - **kprobe/kretprobe**: `kprobe[:module]:fn[+off][/filter/ATTR/.../]` 或 `kprobe:0xADDR[/filter/ATTR/.../]`（bpftrace 风格；`kretprobe` 不支持 `+off`）
+  - **uprobe/uretprobe**: `uprobe:BINARY:fn[+off][/filter/ATTR/.../]` 或 `uprobe:BINARY:offset[/filter/ATTR/.../]`（bpftrace 风格；`uretprobe` 不支持 `+off`）
 - `module`: **[必需]** Python脚本或模块（位置参数）
 - `args...`: 传递给脚本的参数（通过`sys.argv`访问，用`--`分隔）
 

@@ -156,7 +156,7 @@ perf-prof sql -e 'sched:sched_wakeup/prio<10/alias=high_prio/,sched:sched_wakeup
 - **自定义事件**: 通过 `-e` 选项指定
   - 支持所有tracepoint事件: `sys:name`
   - 支持通配符: `sched:*`, `irq:irq_*`
-  - 支持kprobe/uprobe: `kprobe:function`, `uprobe:func@"file"`
+  - 支持kprobe/uprobe（bpftrace 风格）: `kprobe[:module]:fn[+off]`, `kprobe:0xADDR`, `uprobe:BINARY:fn[+off]`, `uprobe:BINARY:offset`
   - **过滤器**: 支持trace event过滤器语法，在内核态过滤事件
     - 示例: `-e 'sched:sched_wakeup/pid>1000 && prio<10/'`
     - trace event过滤器失败时在用户态执行过滤

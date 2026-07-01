@@ -46,10 +46,10 @@ PROFILER OPTION:
 - `-e, --event <EVENT,...>` - 事件选择器，支持多种事件源类型
   - **tracepoint**: `sys:name[/filter/ATTR/.../]` - 系统 tracepoint 事件
   - **profiler**: `profiler[/option/ATTR/.../]` - 嵌入其他分析器作为事件源
-  - **kprobe**: `kprobe:func[/filter/ATTR/.../]` - 内核函数探针
-  - **kretprobe**: `kretprobe:func[/filter/ATTR/.../]` - 内核函数返回探针
-  - **uprobe**: `uprobe:func@"file"[/filter/ATTR/.../]` - 用户态函数探针
-  - **uretprobe**: `uretprobe:func@"file"[/filter/ATTR/.../]` - 用户态函数返回探针
+  - **kprobe**: `kprobe[:module]:fn[+off][/filter/ATTR/.../]` 或 `kprobe:0xADDR[/filter/ATTR/.../]` - 内核函数探针（bpftrace 风格）
+  - **kretprobe**: `kretprobe[:module]:fn[/filter/ATTR/.../]` 或 `kretprobe:0xADDR[/filter/ATTR/.../]` - 内核函数返回探针
+  - **uprobe**: `uprobe:BINARY:fn[+off][/filter/ATTR/.../]` 或 `uprobe:BINARY:offset[/filter/ATTR/.../]` - 用户态函数探针
+  - **uretprobe**: `uretprobe:BINARY:fn[/filter/ATTR/.../]` 或 `uretprobe:BINARY:offset[/filter/ATTR/.../]` - 用户态函数返回探针
   - **通配符**: 支持 `*, ?, []` 通配符匹配多个事件
 
 - `-g, --call-graph` - 启用调用图记录，为所有事件记录调用栈
@@ -75,7 +75,7 @@ perf-prof trace -e 'sched:sched_wak*' -C 0
 perf-prof trace -e 'kprobe:try_to_wake_up' -C 0
 
 # uprobe 跟踪用户态函数
-perf-prof trace -e 'uprobe:printf@"/lib64/libc.so.6"' -m 64
+perf-prof trace -e 'uprobe:/lib64/libc.so.6:printf' -m 64
 
 # 联合分析：嵌入其他分析器
 perf-prof trace -e 'task-state,page-faults/-N 10/,raw_syscalls:sys_enter' --order
@@ -348,7 +348,7 @@ perf-prof trace -e 'sched:*' -C 0 -N 1000 | grep -i wakeup
 perf-prof trace -e 'kprobe:schedule' -g --flame-graph schedule.folded
 
 # 技巧 3: 跟踪用户态库函数调用
-perf-prof trace -e 'uprobe:malloc@"/lib64/libc.so.6"' -p 1234
+perf-prof trace -e 'uprobe:/lib64/libc.so.6:malloc' -p 1234
 
 # 技巧 4: 周期性生成火焰图，观察时间变化
 perf-prof trace -e 'sched:sched_wakeup' -g --flame-graph wakeup.folded -i 5000

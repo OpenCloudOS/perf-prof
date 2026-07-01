@@ -230,10 +230,14 @@ perf-prof 遵循三层事件选择规范：
 
 ```
 EVENT: sys:name[/filter/ATTR/ATTR/.../]
-       kprobe:func[/filter/ATTR/ATTR/.../]
-       kretprobe:func[/filter/ATTR/ATTR/.../]
-       uprobe:func@"file"[/filter/ATTR/ATTR/.../]
-       uretprobe:func@"file"[/filter/ATTR/ATTR/.../]
+       kprobe[:module]:fn[+off][/filter/ATTR/ATTR/.../]
+       kprobe:0xADDR[/filter/ATTR/ATTR/.../]
+       kretprobe[:module]:fn[/filter/ATTR/ATTR/.../]
+       kretprobe:0xADDR[/filter/ATTR/ATTR/.../]
+       uprobe:BINARY:fn[+off][/filter/ATTR/ATTR/.../]
+       uprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
+       uretprobe:BINARY:fn[/filter/ATTR/ATTR/.../]
+       uretprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
 ```
 
 #### 过滤器语法（内核态执行）

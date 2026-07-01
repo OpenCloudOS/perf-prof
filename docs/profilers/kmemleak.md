@@ -299,8 +299,8 @@ perf-prof kmemleak \
 
 # 5. 用户态内存泄漏 (需要 uprobe 支持)
 perf-prof kmemleak \
-    --alloc 'uprobe:malloc@"/lib64/libc.so.6"//ptr=$retval/' \
-    --free 'uprobe:free@"/lib64/libc.so.6"//ptr=ptr/' -p <pid> --order -g
+    --alloc 'uprobe:/lib64/libc.so.6:malloc//ptr=$retval/' \
+    --free 'uprobe:/lib64/libc.so.6:free//ptr=ptr/' -p <pid> --order -g
 
 # 6. 实时监控泄漏趋势
 while true; do

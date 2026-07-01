@@ -293,17 +293,25 @@ perf-prof top -h
 
 4. **动态探针**（当系统事件不满足需求时）：
    ```bash
-   # kprobe - 内核函数探针
-   -e 'kprobe:try_to_wake_up'
+   # kprobe - 内核函数探针（bpftrace 风格）
+   -e 'kprobe:try_to_wake_up'                  # 挂到内核符号
+   -e 'kprobe:try_to_wake_up+8'                # 符号内偏移
+   -e 'kprobe:kvm:vcpu_load'                   # 指定内核模块（module:fn）
+   -e 'kprobe:0xffffffff810bc4c0'              # 使用绝对地址（不能与 +off 同时用）
 
-   # kretprobe - 内核函数返回探针
+   # kretprobe - 内核函数返回探针（不支持 +off）
    -e 'kretprobe:try_to_wake_up'
+   -e 'kretprobe:kvm:vcpu_load'
+   -e 'kretprobe:0xffffffff810bc4c0'
 
-   # uprobe - 用户态函数探针，二进制路径带有'/'，必须使用双引号
-   -e 'uprobe:func@"/path/to/binary"'
+   # uprobe - 用户态函数探针（bpftrace 风格，BINARY 直接写路径，无需 @"..."）
+   -e 'uprobe:/lib64/libc.so.6:printf'         # 挂到符号
+   -e 'uprobe:/lib64/libc.so.6:printf+16'      # 符号内偏移
+   -e 'uprobe:/lib64/libc.so.6:0x123abc'       # 直接使用文件偏移
 
-   # uretprobe - 用户态函数返回探针，二进制路径带有'/'，必须使用双引号
-   -e 'uretprobe:func@"/path/to/binary"'
+   # uretprobe - 用户态函数返回探针（不支持 +off）
+   -e 'uretprobe:/lib64/libc.so.6:printf'
+   -e 'uretprobe:/lib64/libc.so.6:0x123abc'
    ```
 
 5. **新增动态探针**（当系统事件不满足要求且动态探针无法使用或需要增加参数时）：
@@ -328,7 +336,7 @@ perf-prof top -h
 
 1. **确定事件格式**：参考 [基本格式](#基本格式) 选择事件类型
    - tracepoint事件：`sys:name`
-   - 动态探针：`kprobe:func`、`uprobe:func@"file"`
+   - 动态探针：`kprobe[:module]:fn[+off]`、`kprobe:0xADDR`、`uprobe:BINARY:fn[+off]`、`uprobe:BINARY:offset`（bpftrace 风格）
 
 2. **配置过滤器**（可选，内核态执行）：
    参考 [过滤器语法](#过滤器语法) 和 [Event_filtering.md](references/Event_filtering.md)
@@ -621,10 +629,14 @@ perf-prof <profiler> [事件选项] -i 1000 [其他选项]
 EVENT,EVENT,...
 EVENT: sys:name[/filter/ATTR/ATTR/.../]
       profiler[/option/ATTR/ATTR/.../]
-      kprobe:func[/filter/ATTR/ATTR/.../]
-      kretprobe:func[/filter/ATTR/ATTR/.../]
-      uprobe:func@"file"[/filter/ATTR/ATTR/.../]
-      uretprobe:func@"file"[/filter/ATTR/ATTR/.../]
+      kprobe[:module]:fn[+off][/filter/ATTR/ATTR/.../]
+      kprobe:0xADDR[/filter/ATTR/ATTR/.../]
+      kretprobe[:module]:fn[/filter/ATTR/ATTR/.../]
+      kretprobe:0xADDR[/filter/ATTR/ATTR/.../]
+      uprobe:BINARY:fn[+off][/filter/ATTR/ATTR/.../]
+      uprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
+      uretprobe:BINARY:fn[/filter/ATTR/ATTR/.../]
+      uretprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
 filter: trace events filter
 ```
 

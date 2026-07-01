@@ -178,8 +178,8 @@ multi-trace支持自定义tracepoint、kprobe和uprobe事件作为分析源。
   - `PERF_SAMPLE_CALLCHAIN`: 可选，通过`stack`属性为事件启用堆栈采样
 - **事件类型**:
   - tracepoint事件：`sys:name`格式
-  - kprobe事件：`kprobe:func`格式
-  - uprobe事件：`uprobe:func@"file"`格式
+  - kprobe事件：`kprobe[:module]:fn[+off]` 或 `kprobe:0xADDR`（bpftrace 风格）
+  - uprobe事件：`uprobe:BINARY:fn[+off]` 或 `uprobe:BINARY:offset`（bpftrace 风格）
 - **过滤器**: 每个事件`filter`指定过滤器，支持trace event过滤器语法
 - **事件属性**:
   | 属性 | 格式 | 说明 |
