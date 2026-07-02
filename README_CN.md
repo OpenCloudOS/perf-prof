@@ -238,6 +238,10 @@ EVENT: sys:name[/filter/ATTR/ATTR/.../]
        uprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
        uretprobe:BINARY:fn[/filter/ATTR/ATTR/.../]
        uretprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
+
+       当 `fn` 在 BINARY 中对应多个偏移（如 glibc 多版本符号、
+       同名 static 函数）时，解析器会列出每个候选偏移及其符号
+       并拒绝启动。用 `uprobe:BINARY:0x<offset>` 精确指定即可。
 ```
 
 #### 过滤器语法（内核态执行）

@@ -230,6 +230,11 @@ EVENT: sys:name[/filter/ATTR/ATTR/.../]
        uprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
        uretprobe:BINARY:fn[/filter/ATTR/ATTR/.../]
        uretprobe:BINARY:offset[/filter/ATTR/ATTR/.../]
+
+       When `fn` maps to multiple offsets in BINARY (e.g. glibc versioned
+       symbols, or duplicate static functions), the parser lists every
+       candidate offset with its symbol names and rejects the event.
+       Retry with `uprobe:BINARY:0x<offset>` to pick one.
 ```
 
 #### Filter Syntax (in-kernel execution)

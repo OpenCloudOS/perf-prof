@@ -1,9 +1,9 @@
 ---
 name: perf-prof
 metadata:
-  version: "0.1"
+  version: "0.2.0"
   source: https://github.com/OpenCloudOS/perf-prof.git
-description: 使用perf-prof进行Linux系统问题分析。perf-prof是基于perf_event的系统级分析工具，事件在内存中实时处理，可长期运行。触发场景：(1) CPU使用率高、热点分析 (2) 进程状态异常(D/S状态多) (3) 延迟抖动、响应慢 (4) 内存泄露或增长异常 (5) 块设备IO慢 (6) 虚拟机性能问题 (7) 事件聚合统计 (8) 自定义脚本分析。核心分析器：profile(CPU采样)、task-state(进程状态)、multi-trace(延迟分析)、kmemleak(内存泄露)、blktrace(IO延迟)、top/sql(聚合统计)、kvm-exit(虚拟化退出)、rundelay(调度延迟)、syscalls(系统调用耗时)、python(自定义脚本分析)。适用于：性能问题定位、内核/应用开发调试、学习理解Linux内核机制（调度、内存、IO、中断等）。English: Linux system performance analysis with perf-prof, a perf_event-based tool for real-time in-memory event processing. Triggers: high CPU usage, hotspot profiling, process state issues (D/S states), latency spikes, slow response, memory leak detection, memory growth, block device IO slowness, VM performance issues, event aggregation, custom script analysis. Key profilers: profile (CPU sampling), task-state (process state), multi-trace (latency analysis), kmemleak (memory leak), blktrace (IO latency), top/sql (aggregation), kvm-exit (virtualization exit), rundelay (scheduling delay), syscalls (syscall latency), python (custom scripting).
+description: 使用perf-prof进行Linux系统问题分析。perf-prof是基于perf_event的系统级分析工具，事件在内存中实时处理，可长期运行。触发场景：(1) CPU使用率高、热点分析 (2) 进程状态异常(D/S状态多) (3) 延迟抖动、响应慢 (4) 内存泄露或增长异常 (5) 块设备IO慢 (6) 虚拟机性能问题 (7) 事件聚合统计 (8) 自定义脚本分析。核心分析器：profile(CPU采样)、task-state(进程状态)、multi-trace(延迟分析)、kmemleak(内存泄露)、blktrace(IO延迟)、top/sql(聚合统计)、kvm-exit(虚拟化退出)、rundelay(调度延迟)、syscalls(系统调用耗时)、python(自定义脚本分析)。适用于：性能问题定位、内核/应用开发调试、学习理解Linux内核机制（调度、内存、IO、中断等）。
 ---
 
 # perf-prof 系统性能分析
@@ -308,6 +308,8 @@ perf-prof top -h
    -e 'uprobe:/lib64/libc.so.6:printf'         # 挂到符号
    -e 'uprobe:/lib64/libc.so.6:printf+16'      # 符号内偏移
    -e 'uprobe:/lib64/libc.so.6:0x123abc'       # 直接使用文件偏移
+   # 若符号在二进制中不唯一（多版本 / 同名 static），会列出所有候选偏移并拒绝启动，
+   # 按提示改用 uprobe:BINARY:0x<offset> 精确指定即可。
 
    # uretprobe - 用户态函数返回探针（不支持 +off）
    -e 'uretprobe:/lib64/libc.so.6:printf'

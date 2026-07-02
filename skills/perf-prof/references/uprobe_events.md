@@ -97,6 +97,34 @@ p[:[GRP/][EVENT]] PATH:OFFSET%return [FETCHARGS]    # uretprobe - 另一种语�
 echo func_name | perf-prof --symbols /path/to/binary
 ```
 
+若同一符号名在二进制中对应多个偏移（如 glibc 多版本符号
+`sched_setaffinity` 的 `@GLIBC_2.3.3` / `@@GLIBC_2.3.4`），stdout
+仍输出**首命中**偏移以保持 pprof 协议兼容，同时向 stderr 输出
+`warning: symbol 'X' has N candidates ...`，把每个候选偏移及其上的
+所有符号名一并列出，用户据此改用 `binary:0x<offset>` 精确指定。
+
+配合 `addr2line` 可以把候选偏移反查到源码文件与行号，再挑对应
+版本的偏移下探针。注意：`addr2line` 的第二列参数是运行时虚拟
+地址（即 ELF `.text` 里的 `sh_addr`），不是文件偏移。可用 `nm`
+读取带版本符号的运行时地址：
+
+```bash
+nm -D /lib64/libc.so.6 | grep sched_setaffinity
+# 000000000012c520 T sched_setaffinity@@GLIBC_2.3.4
+# 000000000012c580 T sched_setaffinity@GLIBC_2.3.3
+
+addr2line -f -e /lib64/libc.so.6 0x12c520 0x12c580
+# 输出示例：
+#   __sched_setaffinity_new
+#   glibc/posix/sched_setaffinity.c:34
+#   __sched_setaffinity_old
+#   glibc/posix/sched_setaffinity_old.c:29
+```
+
+选定版本后仍用 perf-prof 报错里给出的**文件偏移**下探针（如
+`uprobe:/lib64/libc.so.6:0x124520`）——perf-prof 展示的偏移已减去
+`sh_addr - sh_offset`，直接可用。
+
 ### 方法 2：使用 nm
 
 ```bash

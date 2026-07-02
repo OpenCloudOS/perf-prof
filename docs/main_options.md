@@ -399,6 +399,7 @@ perf-prof 工具提供了丰富的选项参数，用于控制分析器的行为�
 - `--symbols`                    映射地址为对应的符号，或者找符号在二进制内的文件偏移
   - **变量名**: `symbols`
   - **类型**: boolean
+  - **多义符号**: 若同一符号名在二进制中对应多个不同偏移（如 glibc 多版本符号 `sched_setaffinity` 分别指向 `@GLIBC_2.3.3` / `@@GLIBC_2.3.4`），仍在 stdout 输出**首命中**偏移以保持 pprof 协议兼容，同时向 stderr 输出 `warning: symbol 'X' has N candidates ...`，列出每个候选偏移及其上的所有符号（含 alias），用户可据此改用 `binary:0x<offset>` 精确指定。
 
 - `--device <device>`            指定块设备
   - **变量名**: `device`

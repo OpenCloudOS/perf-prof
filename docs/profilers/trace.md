@@ -77,6 +77,16 @@ perf-prof trace -e 'kprobe:try_to_wake_up' -C 0
 # uprobe 跟踪用户态函数
 perf-prof trace -e 'uprobe:/lib64/libc.so.6:printf' -m 64
 
+# 若符号在二进制中不唯一（如 glibc 多版本符号 sched_setaffinity 存在
+# @GLIBC_2.3.3 与 @@GLIBC_2.3.4 两个版本），解析器会列出候选并拒绝：
+#   uprobe: symbol 'sched_setaffinity' has 2 candidates in /lib64/libc.so.6:
+#     0x124520  ..., sched_setaffinity, sched_setaffinity@@GLIBC_2.3.4
+#     0x124580  ..., sched_setaffinity, sched_setaffinity@GLIBC_2.3.3
+#   Try one of:
+#     -e uprobe:/lib64/libc.so.6:0x124520
+#     -e uprobe:/lib64/libc.so.6:0x124580
+# 直接把想要的偏移贴回命令即可。
+
 # 联合分析：嵌入其他分析器
 perf-prof trace -e 'task-state,page-faults/-N 10/,raw_syscalls:sys_enter' --order
 

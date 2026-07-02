@@ -136,6 +136,8 @@ perf-prof trace -e 'kprobe:schedule' -g --flame-graph schedule.folded
 
 # 跟踪用户态库函数
 perf-prof trace -e 'uprobe:/lib64/libc.so.6:malloc' -p 1234
+# 符号在二进制中不唯一时（如 glibc 多版本符号），解析器会列出所有
+# 候选偏移并拒绝启动，按提示改用 uprobe:BINARY:0x<offset> 即可。
 
 # 周期性生成火焰图
 perf-prof trace -e 'sched:sched_wakeup' -g --flame-graph wakeup.folded -i 5000
