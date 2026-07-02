@@ -1714,8 +1714,13 @@ struct perf_evsel *tp_evsel_new(struct tp *tp, struct perf_event_attr *tmpl)
             // passthrough
         case KPROBE:
             attr->type = kprobe_type;
-            attr->kprobe_func = (__u64)tp->kprobe_func;
-            attr->probe_offset = tp->probe_offset;
+            if (tp->kprobe_func) {
+                attr->kprobe_func = (__u64)tp->kprobe_func;
+                attr->probe_offset = tp->probe_offset;
+            } else {
+                attr->kprobe_func = 0;
+                attr->kprobe_addr = tp->probe_offset;
+            }
             break;
 
         case URETPROBE:
