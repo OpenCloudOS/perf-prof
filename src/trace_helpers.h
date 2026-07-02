@@ -60,7 +60,8 @@ bool dso__get_unwind_data(struct dso *dso, struct dso_unwind_data *data);
 
 static inline const char *sym__name(const struct sym *sym) { return sym->demangled ?: sym->name; }
 void syms__convert(FILE *fin, FILE *fout, char *binpath);
-unsigned long syms__file_offset(const char *binpath, const char *func);
+unsigned long syms__file_offset(const char *binpath, const char *func,
+                                char **err_msg);
 
 struct syms_cache;
 

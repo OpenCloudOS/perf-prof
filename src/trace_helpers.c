@@ -1298,23 +1298,118 @@ static const struct sym *obj__demangle_sym(struct object *obj, struct sym *sym)
     return sym;
 }
 
-static const struct sym *obj__find_name(struct object *obj, const char *name)
+/*
+ * Return the number of syms in obj whose name matches `name`.
+ * If out != NULL and count > 0, malloc a `struct sym *` pointer array
+ * of that length and store it in *out; each element points into
+ * obj->syms (do NOT free the pointed-to syms; caller frees only *out).
+ * If out == NULL, only the count is returned (no allocation).
+ * Returns -1 on load failure.
+ *
+ * Because obj->syms is sorted by start (see qsort in
+ * obj__load_sym_table_from_elf), the emitted pointers are also sorted
+ * by start; caller can dedup adjacent entries with the same start to
+ * collapse weak alias, and can walk (*out)[i] backward/forward through
+ * obj->syms to gather cross-name alias sharing that start.
+ */
+static int obj__find_name_all(struct object *obj, const char *name,
+                              struct sym ***out)
 {
-    int i;
+    struct sym **arr = NULL;
+    int i, n = 0, cap = 0;
 
     if (!obj)
-        return NULL;
+        return 0;
 
-    // get the object that actually stores the symbols
     obj = obj->buildid_obj;
     if (!obj->syms && obj__load_sym_table(obj))
-        return NULL;
+        return -1;
 
     for (i = 0; i < obj->syms_sz; i++) {
-        if (strcmp(obj->syms[i].name, name) == 0)
-            return obj__demangle_sym(obj, &obj->syms[i]);
+        if (strcmp(obj->syms[i].name, name) != 0)
+            continue;
+        if (out) {
+            if (n + 1 > cap) {
+                int new_cap = cap ? cap * 2 : 4;
+                struct sym **tmp = realloc(arr, sizeof(*arr) * new_cap);
+                if (!tmp) {
+                    free(arr);
+                    return -1;
+                }
+                arr = tmp;
+                cap = new_cap;
+            }
+            arr[n] = &obj->syms[i];
+        }
+        n++;
     }
-    return NULL;
+
+    if (out)
+        *out = arr;
+    return n;
+}
+
+/*
+ * Format a multi-line candidate description into a fresh malloc'd
+ * buffer returned via *out (caller frees). `matches` is a pointer
+ * array of `n` syms sorted by start (e.g. from obj__find_name_all).
+ *
+ * Layout (one line per distinct start; per-line names are the input
+ * name plus any cross-name alias found by walking obj->syms outward
+ * from matches[i] while start remains equal, joined with ", "):
+ *   0x<off>  sym1[, sym2, ...]
+ *
+ * offset uses the same convention as syms__file_offset()'s return
+ * value and --symbols stdout:
+ *     sym.start - (obj->sh_addr - obj->sh_offset)
+ */
+static void obj__format_candidates(struct object *obj,
+                                   struct sym **matches, int n,
+                                   char **out)
+{
+    FILE *fp;
+    char *buf = NULL;
+    size_t sz = 0;
+    unsigned long delta;
+    int i;
+
+    *out = NULL;
+    fp = open_memstream(&buf, &sz);
+    if (!fp)
+        return;
+
+    obj = obj->buildid_obj;
+    delta = obj->sh_addr - obj->sh_offset;
+
+    for (i = 0; i < n; i++) {
+        struct sym *s = matches[i];
+        long idx = s - obj->syms;
+        long j;
+        int first = 1;
+
+        /* Dedup by start against previous entry (matches sorted). */
+        if (i > 0 && matches[i - 1]->start == s->start)
+            continue;
+
+        fprintf(fp, "  0x%lx  ", s->start - delta);
+
+        /* Walk backward in obj->syms for alias with same start. */
+        for (j = idx - 1; j >= 0 && obj->syms[j].start == s->start; j--)
+            ;
+        j++;
+        for (; j < obj->syms_sz && obj->syms[j].start == s->start; j++) {
+            /* Skip duplicate name entries at the same offset (e.g. a
+             * symbol recorded in both .symtab and .dynsym). */
+            if (!first && strcmp(obj->syms[j].name, obj->syms[j-1].name) == 0)
+                continue;
+            fprintf(fp, "%s%s", first ? "" : ", ", obj->syms[j].name);
+            first = 0;
+        }
+        fputc('\n', fp);
+    }
+
+    fclose(fp);
+    *out = buf;
 }
 
 static const struct sym *obj__find_offset(struct object *obj, uint64_t offset)
@@ -1701,17 +1796,39 @@ void syms__convert(FILE *fin, FILE *fout, char *binpath)
             }
             fprintf(fout, "??\n");
         } else {
-            const struct sym *sym;
-            int n = strlen(line);
-            if (line[n-1] == '\n')
-                line[n-1] = '\0';
+            struct sym **matches = NULL;
+            int n_match, ngroups = 0;
+            int nlen = strlen(line);
+            if (line[nlen-1] == '\n')
+                line[nlen-1] = '\0';
 
-            sym = obj__find_name(obj, line);
-            if (sym) {
-                // byte offset from the beginning of the file.
-                fprintf(fout, "0x%lx\n", sym->start - (obj->sh_addr - obj->sh_offset));
+            n_match = obj__find_name_all(obj, line, &matches);
+            if (n_match > 0) {
+                unsigned long delta = obj->buildid_obj->sh_addr -
+                                      obj->buildid_obj->sh_offset;
+                int i;
+                for (i = 0; i < n_match; i++) {
+                    if (i == 0 || matches[i]->start != matches[i-1]->start)
+                        ngroups++;
+                }
+                /* stdout: keep first-match for pprof compatibility. */
+                fprintf(fout, "0x%lx\n", matches[0]->start - delta);
+                if (ngroups >= 2) {
+                    char *diag = NULL;
+                    obj__format_candidates(obj, matches, n_match, &diag);
+                    fprintf(stderr,
+                        "warning: symbol '%s' has %d candidates in %s:\n"
+                        "%s"
+                        "using 0x%lx (first match); pass '0x<offset>' explicitly to disambiguate.\n",
+                        line, ngroups, binpath,
+                        diag ? diag : "",
+                        matches[0]->start - delta);
+                    free(diag);
+                }
+                free(matches);
                 goto next_line;
             }
+            free(matches);
         }
 
 next_line:
@@ -1723,18 +1840,63 @@ next_line:
     obj__put(obj);
 }
 
-unsigned long syms__file_offset(const char *binpath, const char *func)
+unsigned long syms__file_offset(const char *binpath, const char *func,
+                                char **err_msg)
 {
     struct object *obj;
-    const struct sym *sym;
+    struct sym **matches = NULL;
+    unsigned long ret = 0;
+    int n_match, ngroups = 0, i;
+
+    if (err_msg)
+        *err_msg = NULL;
 
     obj = obj__get(binpath, 0);
-    if (obj) {
-        sym = obj__find_name(obj, func);
-        if (sym)
-            return sym->start - (obj->sh_addr - obj->sh_offset);
+    if (!obj)
+        return 0;
+
+    n_match = obj__find_name_all(obj, func, &matches);
+    if (n_match <= 0)
+        goto out;
+
+    for (i = 0; i < n_match; i++) {
+        if (i == 0 || matches[i]->start != matches[i-1]->start)
+            ngroups++;
     }
-    return 0;
+
+    if (ngroups == 1) {
+        ret = matches[0]->start -
+              (obj->buildid_obj->sh_addr - obj->buildid_obj->sh_offset);
+    } else if (err_msg) {
+        char *diag = NULL;
+        FILE *fp;
+        char *buf = NULL;
+        size_t sz = 0;
+
+        obj__format_candidates(obj, matches, n_match, &diag);
+        fp = open_memstream(&buf, &sz);
+        if (fp) {
+            fprintf(fp, "uprobe: symbol '%s' has %d candidates in %s:\n"
+                        "%s"
+                        "Try one of:\n",
+                        func, ngroups, binpath, diag ? diag : "");
+            for (i = 0; i < n_match; i++) {
+                if (i > 0 && matches[i]->start == matches[i-1]->start)
+                    continue;
+                fprintf(fp, "  -e uprobe:%s:0x%lx\n", binpath,
+                        matches[i]->start -
+                        (obj->buildid_obj->sh_addr - obj->buildid_obj->sh_offset));
+            }
+            fclose(fp);
+            *err_msg = buf;
+        }
+        free(diag);
+    }
+
+out:
+    free(matches);
+    obj__put(obj);
+    return ret;
 }
 
 struct syms_cache_node {

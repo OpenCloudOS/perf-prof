@@ -834,7 +834,13 @@ static int tp_kprobe_uprobe(struct tp *tp, enum event_head_kind kind, char *body
             }
         }
         if (*target) {
-            unsigned long sym_off = syms__file_offset(resolved_path, target);
+            char *err_msg = NULL;
+            unsigned long sym_off = syms__file_offset(resolved_path, target, &err_msg);
+            if (err_msg) {
+                fputs(err_msg, stderr);
+                free(err_msg);
+                return -1;
+            }
             if (sym_off) {
                 tp->probe_offset = sym_off + off;
             } else if (plus) {
