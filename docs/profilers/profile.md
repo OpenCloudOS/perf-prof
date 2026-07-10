@@ -25,6 +25,9 @@ perf-prof profile -F <freq> [选项]
 - `-m, --mmap-pages`: 默认为 2，启用 `-g` 时自动翻倍为 4
 - `-i, --interval`: 不指定时实时输出每个采样事件
 
+> **控制运行时长：用外部 `timeout N`，不要用 `-- sleep N`**。
+> perf-prof 会把 `--` 之后的命令当作 workload 进程附着并只采样它，`-- sleep N` 只会采样 sleep 本身，与 `perf record -- sleep N` 的语义完全不同。正确写法：`timeout 60 perf-prof profile -F 997 -g --flame-graph cpu.folded`，或直接 Ctrl-C。
+
 ### FILTER OPTION
 支持所有标准过滤器选项，常用组合：
 - `--exclude-user`: 只分析内核态热点
@@ -298,8 +301,9 @@ perf-prof profile -F 997 --than 30 -g
 
 **4. 生成火焰图**：
 ```bash
-# 采样 60 秒生成火焰图
-perf-prof profile -F 997 -g --flame-graph cpu.folded -- sleep 60
+# 采样 60 秒生成火焰图（用外部 timeout 控制时长；不要用 `-- sleep 60`，
+# perf-prof 会把 sleep 当 workload 附着并只采样 sleep 进程）
+timeout 60 perf-prof profile -F 997 -g --flame-graph cpu.folded
 flamegraph.pl cpu.folded > cpu.svg
 ```
 
@@ -314,10 +318,10 @@ flamegraph.pl cpu.folded > cpu.svg
 **完全基于实际数据**：
 ```bash
 # 第一步：全系统采样 30 秒，识别热点进程
-perf-prof profile -F 997 -g -- sleep 30
+timeout 30 perf-prof profile -F 997 -g
 
 # 第二步：针对热点进程详细分析
-perf-prof profile -F 997 -p <hot_pid> -g --flame-graph cpu.folded -- sleep 60
+timeout 60 perf-prof profile -F 997 -p <hot_pid> -g --flame-graph cpu.folded
 
 # 第三步：如果是内核热点，排除用户态噪声
 perf-prof profile -F 997 -p <hot_pid> --exclude-user -g --flame-graph kernel.folded
@@ -413,15 +417,15 @@ perf-prof profile -F 997 --tif_need_resched -g --flame-graph sched_delay.folded
 **采样频率优化**：
 - **生产环境（99Hz）**: 极低开销，长期监控
   ```bash
-  perf-prof profile -F 99 -g --flame-graph production.folded -- sleep 300
+  timeout 300 perf-prof profile -F 99 -g --flame-graph production.folded
   ```
 - **问题诊断（997Hz）**: 平衡精度和开销，推荐默认值
   ```bash
-  perf-prof profile -F 997 -g --flame-graph diagnosis.folded -- sleep 60
+  timeout 60 perf-prof profile -F 997 -g --flame-graph diagnosis.folded
   ```
 - **深度剖析（4999Hz）**: 高精度，短期使用
   ```bash
-  perf-prof profile -F 4999 -g -m 128 --flame-graph deep.folded -- sleep 10
+  timeout 10 perf-prof profile -F 4999 -g -m 128 --flame-graph deep.folded
   ```
 
 **过滤器优化**：
@@ -449,7 +453,7 @@ perf-prof profile -F 997 --tif_need_resched -g --flame-graph sched_delay.folded
 **火焰图优化**：
 - **单次生成（默认）**: 适合固定时间窗口分析
   ```bash
-  perf-prof profile -F 997 -g --flame-graph cpu.folded -- sleep 60
+  timeout 60 perf-prof profile -F 997 -g --flame-graph cpu.folded
   ```
 - **周期生成（-i）**: 适合观察时间序列变化
   ```bash
@@ -476,7 +480,7 @@ perf-prof profile -F 997 -g --flame-graph deep_stack.folded
 **与 top 分析器配合**：
 ```bash
 # 第一步：用 top 统计进程被唤醒的次数
-perf-prof top -e sched:sched_wakeup//comm=comm/ --only-comm -i 1000 -- sleep 60
+timeout 60 perf-prof top -e sched:sched_wakeup//comm=comm/ --only-comm -i 1000
 
 # 第二步：用 profile 分析唤醒最频繁的进程的 CPU 热点
 perf-prof profile -F 997 -p <hot_pid> -g --flame-graph wakeup_hot.folded
@@ -494,7 +498,7 @@ perf-prof profile -F 997 -C 0 -g --flame-graph cpu0.folded
 **与 task-state 分析器配合**：
 ```bash
 # 第一步：用 task-state 统计进程运行时间
-perf-prof task-state -p <pid> -i 1000 -- sleep 60
+timeout 60 perf-prof task-state -p <pid> -i 1000
 
 # 第二步：如果发现 R 状态时间长，用 profile 分析在做什么
 perf-prof profile -F 997 -p <pid> -g --flame-graph running.folded
@@ -503,16 +507,16 @@ perf-prof profile -F 997 -p <pid> -g --flame-graph running.folded
 **多阶段分析示例**：
 ```bash
 # 阶段 1：全系统扫描（低频，低开销）
-perf-prof profile -F 99 -g --flame-graph phase1.folded -- sleep 60
+timeout 60 perf-prof profile -F 99 -g --flame-graph phase1.folded
 
 # 阶段 2：针对热点进程（中频）
-perf-prof profile -F 997 -p <pid> -g --flame-graph phase2.folded -- sleep 60
+timeout 60 perf-prof profile -F 997 -p <pid> -g --flame-graph phase2.folded
 
 # 阶段 3：内核态深度剖析（高频）
-perf-prof profile -F 4999 -p <pid> --exclude-user -g -m 128 --flame-graph phase3.folded -- sleep 30
+timeout 30 perf-prof profile -F 4999 -p <pid> --exclude-user -g -m 128 --flame-graph phase3.folded
 
 # 阶段 4：用户态深度剖析（高频）
-perf-prof profile -F 4999 -p <pid> --exclude-kernel -g -m 128 --flame-graph phase4.folded -- sleep 30
+timeout 30 perf-prof profile -F 4999 -p <pid> --exclude-kernel -g -m 128 --flame-graph phase4.folded
 ```
 
 ## 相关资源

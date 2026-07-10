@@ -114,8 +114,9 @@ perf-prof profile -F 997 --exclude-kernel -g   # 只看用户态
 # 3. 设置过滤阈值
 perf-prof profile -F 997 --than 30 -g          # 只关注 >30% 的热点
 
-# 4. 生成火焰图
-perf-prof profile -F 997 -g --flame-graph cpu.folded -- sleep 60
+# 4. 生成火焰图（用外部 timeout 控制时长；不要用 `-- sleep`，
+#    perf-prof 会把 sleep 当 workload 附着并只采样 sleep 进程）
+timeout 60 perf-prof profile -F 997 -g --flame-graph cpu.folded
 flamegraph.pl cpu.folded > cpu.svg
 ```
 
@@ -156,7 +157,7 @@ perf-prof profile -F 4000 -g -m 64 --flame-graph high_freq.folded
 perf-prof profile -F 10000 -g -m 256 --flame-graph extreme.folded
 
 # 生产环境低开销
-perf-prof profile -F 99 -g --flame-graph production.folded -- sleep 300
+timeout 300 perf-prof profile -F 99 -g --flame-graph production.folded
 ```
 
 ## 相关资源
