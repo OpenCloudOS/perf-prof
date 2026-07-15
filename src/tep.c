@@ -818,7 +818,13 @@ static int tp_kprobe_uprobe(struct tp *tp, enum event_head_kind kind, char *body
             fprintf(stderr, "uprobe: binary '%s' not accessible\n", body);
             return -1;
         }
-        tp->uprobe_path = body;
+        tp->uprobe_path = strdup(resolved_path);
+        if (!tp->uprobe_path)
+            return -1;
+        /* Pin the parsed symbol table so subsequent syms__file_offset()
+         * for the same binary in this tp_list_new() reuses it. Balanced
+         * by syms__file_unpin() at the tp_list_new() exit. */
+        syms__file_pin(tp->uprobe_path);
         *name_out = target;
 
         plus = strchr(target, '+');
@@ -1388,10 +1394,19 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
 
     tp_list->need_stream_id = (tp_list->nr_need_stack && tp_list->nr_need_stack != tp_list->nr_real_tp);
 
+    for (i = 0; i < nr_tp; i++) {
+        if (tp_list->tp[i].uprobe_path)
+            syms__file_unpin(tp_list->tp[i].uprobe_path);
+    }
+
     tep__unref();
     return tp_list;
 
 err_out:
+    for (i = 0; i < nr_tp; i++) {
+        if (tp_list->tp[i].uprobe_path)
+            syms__file_unpin(tp_list->tp[i].uprobe_path);
+    }
     tep__unref();
     tp_list_free(tp_list);
     return NULL;
@@ -1408,6 +1423,8 @@ void tp_list_free(struct tp_list *tp_list)
             prof_dev_unuse(tp->source_dev);
         if (tp->filter)
             free(tp->filter);
+        if (tp->uprobe_path)
+            free(tp->uprobe_path);
         if (tp->ftrace_filter)
             expr_destroy(tp->ftrace_filter);
         for (j = 0; j < tp->nr_top; j++) {

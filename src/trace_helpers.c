@@ -1846,6 +1846,34 @@ next_line:
     obj__put(obj);
 }
 
+/*
+ * Keep the parsed symbol table for `binpath` alive across a burst of
+ * syms__file_offset() calls (e.g. every uprobe target in one -e
+ * expression against the same binary). Without a pin, each call would
+ * obj__get()/obj__put() the object down to refcnt=0, causing
+ * object_node_delete() to free obj->syms/strs and force a full ELF
+ * re-parse on the next call.
+ *
+ * `binpath` must be the same string later passed to
+ * syms__file_offset() so the rblist key matches; the caller typically
+ * pins on tp->uprobe_path and unpins on the same field.
+ */
+void syms__file_pin(const char *binpath)
+{
+    (void)obj__get(binpath, 0);
+}
+
+void syms__file_unpin(const char *binpath)
+{
+    struct object *obj = obj__get(binpath, 0);
+    if (!obj)
+        return;
+    /* Drop the reference we just took to look it up, then drop the
+     * one taken by the earlier syms__file_pin(). */
+    obj__put(obj);
+    obj__put(obj);
+}
+
 unsigned long syms__file_offset(const char *binpath, const char *func,
                                 char **err_msg)
 {

@@ -63,6 +63,17 @@ void syms__convert(FILE *fin, FILE *fout, char *binpath);
 unsigned long syms__file_offset(const char *binpath, const char *func,
                                 char **err_msg);
 
+/*
+ * Pin the parsed symbol table for `binpath` so a burst of
+ * syms__file_offset() calls against the same binary share one ELF
+ * parse instead of dropping the table between calls. `binpath` must
+ * be the same string (same rblist key) that syms__file_offset()
+ * will be called with -- callers typically pass tp->uprobe_path.
+ * Each successful pin must be balanced by exactly one unpin.
+ */
+void syms__file_pin(const char *binpath);
+void syms__file_unpin(const char *binpath);
+
 struct syms_cache;
 
 struct syms_cache *syms_cache__new(void);
