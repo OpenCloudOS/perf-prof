@@ -1317,6 +1317,7 @@ static int obj__find_name_all(struct object *obj, const char *name,
 {
     struct sym **arr = NULL;
     int i, n = 0, cap = 0;
+    size_t namelen = strlen(name);
 
     if (!obj)
         return 0;
@@ -1326,7 +1327,12 @@ static int obj__find_name_all(struct object *obj, const char *name,
         return -1;
 
     for (i = 0; i < obj->syms_sz; i++) {
-        if (strcmp(obj->syms[i].name, name) != 0)
+        const char *sn = obj->syms[i].name;
+        if (strncmp(sn, name, namelen) != 0)
+            continue;
+        /* Accept exact match or GCC/LLVM clone suffix
+         * (.lto_priv.N, .constprop.N, .isra.N, .part.N, .cold). */
+        if (sn[namelen] != '\0' && sn[namelen] != '.')
             continue;
         if (out) {
             if (n + 1 > cap) {
@@ -1872,14 +1878,26 @@ unsigned long syms__file_offset(const char *binpath, const char *func,
         FILE *fp;
         char *buf = NULL;
         size_t sz = 0;
+        size_t funclen = strlen(func);
+        int has_clone = 0;
+
+        for (i = 0; i < n_match; i++) {
+            if (matches[i]->name[funclen] == '.') {
+                has_clone = 1;
+                break;
+            }
+        }
 
         obj__format_candidates(obj, matches, n_match, &diag);
         fp = open_memstream(&buf, &sz);
         if (fp) {
             fprintf(fp, "uprobe: symbol '%s' has %d candidates in %s:\n"
-                        "%s"
-                        "Try one of:\n",
+                        "%s",
                         func, ngroups, binpath, diag ? diag : "");
+            if (has_clone)
+                fprintf(fp, "note: matched compiler clone(s) "
+                            "(.lto_priv/.constprop/.isra/.part/.cold)\n");
+            fprintf(fp, "Try one of:\n");
             for (i = 0; i < n_match; i++) {
                 if (i > 0 && matches[i]->start == matches[i-1]->start)
                     continue;
