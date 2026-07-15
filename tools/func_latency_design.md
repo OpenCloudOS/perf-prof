@@ -1,4 +1,4 @@
-# func_trace 设计文档
+# func_latency 设计文档
 
 ## 1. 背景与动机
 
@@ -47,14 +47,14 @@
                                                        │ PerfEvent obj
                                                        ▼
                               ┌────────────────────────────────────┐
-                              │  func_trace.py  (Python callback)  │
+                              │  func_latency.py  (Python callback)  │
                               │  - per-tid call stack              │
                               │  - path-keyed sample list          │
                               │  - percentile & tree renderer      │
                               └────────────────────────────────────┘
                                                        ▲
                               ┌────────────────────────┴───────────┐
-                              │  func_trace.sh                     │
+                              │  func_latency.sh                     │
                               │  组装 -e 字符串, 透传 perf-prof 选项 │
                               └────────────────────────────────────┘
 ```
@@ -63,13 +63,13 @@
 
 | 组件 | 语言 | 职责 |
 |---|---|---|
-| `func_trace.sh` | bash | 命令行接口；把 `-b/-u/-k` 转成 perf-prof 的 `-e` 事件串；其它参数原样透传 |
+| `func_latency.sh` | bash | 命令行接口；把 `-b/-u/-k` 转成 perf-prof 的 `-e` 事件串；其它参数原样透传 |
 | `perf-prof python` | C | 事件采集、ringbuffer 管理、tracepoint 字段解析，调用 Python 回调 |
-| `func_trace.py` | Python | 事件语义处理、状态维护、聚合、输出 |
+| `func_latency.py` | Python | 事件语义处理、状态维护、聚合、输出 |
 
 ## 4. 组件详细设计
 
-### 4.1 func_trace.sh —— 命令行封装
+### 4.1 func_latency.sh —— 命令行封装
 
 **参数分成两类**：
 
@@ -98,12 +98,12 @@ kprobe:<kfunc1>,kretprobe:<kfunc1>,
 每个 `-u FUNC` 展开成 uprobe + uretprobe 一对；每个 `-k FUNC` 展开成
 kprobe + kretprobe 一对。用逗号连接后作为单个 `-e` 参数传给 perf-prof。
 
-**默认 Python 模块**：若透传参数里没有 `--`，脚本自动追加 `-- <script_dir>/func_trace.py`；
+**默认 Python 模块**：若透传参数里没有 `--`，脚本自动追加 `-- <script_dir>/func_latency.py`；
 若用户已经写了 `--`，则完全按用户的走，脚本不再插手。
 
 **dry-run**：`-n` 打印最终命令（`printf %q` 转义），不 exec，便于排错。
 
-### 4.2 func_trace.py —— 事件处理与聚合
+### 4.2 func_latency.py —— 事件处理与聚合
 
 #### 4.2.1 事件解析
 
@@ -219,7 +219,7 @@ root_func_A                                 10    5000.00   200.00   500.00   48
 ### 5.1 命令行
 
 ```bash
-./func_trace.sh -b BINARY [-u FUNC]... [-k FUNC]... [perf-prof options]
+./func_latency.sh -b BINARY [-u FUNC]... [-k FUNC]... [perf-prof options]
 ```
 
 **本脚本参数**：
@@ -246,7 +246,7 @@ root_func_A                                 10    5000.00   200.00   500.00   48
 
 ```bash
 # 基本用法：追踪二进制内的一组用户态函数
-./func_trace.sh \
+./func_latency.sh \
   -b /path/to/target_binary \
   -u root_func_A \
   -u root_func_B \
@@ -256,10 +256,10 @@ root_func_A                                 10    5000.00   200.00   500.00   48
   -i 5000
 
 # 混入内核函数（会以 [K] 标记）
-./func_trace.sh -b /path/to/target_binary -u root_func_A -k some_kernel_func -i 3000
+./func_latency.sh -b /path/to/target_binary -u root_func_A -k some_kernel_func -i 3000
 
 # 只看事件串，不真跑
-./func_trace.sh -b /path/to/target_binary -u root_func_A -n
+./func_latency.sh -b /path/to/target_binary -u root_func_A -n
 ```
 
 ## 6. 边界与限制
@@ -304,8 +304,8 @@ root_func_A                                 10    5000.00   200.00   500.00   48
 
 | 文件 | 大小量级 | 说明 |
 |---|---|---|
-| `func_trace.sh` | ~100 行 | shell 前端，命令行解析 + 透传 |
-| `func_trace.py` | ~150 行 | perf-prof python 回调，全部聚合逻辑 |
-| `func_trace_design.md` | 本文 | 设计文档 |
+| `func_latency.sh` | ~100 行 | shell 前端，命令行解析 + 透传 |
+| `func_latency.py` | ~150 行 | perf-prof python 回调，全部聚合逻辑 |
+| `func_latency_design.md` | 本文 | 设计文档 |
 
 三个文件同目录、独立自洽，可整体复制到其它项目。

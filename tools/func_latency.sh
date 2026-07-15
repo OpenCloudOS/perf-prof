@@ -1,8 +1,8 @@
 #!/bin/bash
-# Assemble and run a perf-prof python command for func_trace.py.
+# Assemble and run a perf-prof python command for func_latency.py.
 #
 # Usage:
-#   ./func_trace.sh -b BINARY [-u FUNC]... [-k FUNC]... [perf-prof options]
+#   ./func_latency.sh -b BINARY [-u FUNC]... [-k FUNC]... [perf-prof options]
 #
 # The script owns only three options; everything else is passed through
 # verbatim to perf-prof.
@@ -18,10 +18,10 @@
 # because a function's entry and return may be observed on different CPUs
 # and only strict time-order guarantees correct pairing.
 # If no `--` separator is present in the pass-through args, the default
-# python module `<script_dir>/func_trace.py` is appended.
+# python module `<script_dir>/func_latency.py` is appended.
 #
 # Example:
-#   ./func_trace.sh \
+#   ./func_latency.sh \
 #     -b /path/to/target_binary \
 #     -u root_func_A \
 #     -u child_func_1 \
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-default_py="$script_dir/func_trace.py"
+default_py="$script_dir/func_latency.py"
 
 usage() {
     awk 'NR==1{next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
