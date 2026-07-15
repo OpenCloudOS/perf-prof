@@ -2,8 +2,8 @@
 Function call duration / relationship analyzer.
 
 Uses __sample__ and parses event._event:
-  uprobe:<func>    / uretprobe:<func>    -> user-space
-  kprobe:<func>    / kretprobe:<func>    -> kernel-space (marked [K] in output)
+  uprobe:<func>    / uretprobe:<func>    -> user-space (branch marked |-)
+  kprobe:<func>    / kretprobe:<func>    -> kernel-space (branch marked |→)
 
 Tracked functions can be added or removed simply by changing perf-prof's -e
 flag; no code edits required here.
@@ -115,10 +115,11 @@ def _fmt_row(label, count, total_ns, min_ns, avg_ns, p50, p95, p99, max_ns):
             + ''.join(f"{v:>{TIME_W}}" for v in vals))
 
 
-def _prefix(depth):
+def _prefix(depth, kernel=False):
     if depth == 0:
         return ''
-    return '  ' + '|  ' * (depth - 1) + '|- '
+    branch = '|→ ' if kernel else '|- '
+    return '  ' + '|  ' * (depth - 1) + branch
 
 
 def _dump():
@@ -157,9 +158,7 @@ def _dump():
         def walk(path, depth):
             st = stats[path]
             name = path[-1]
-            if kernel_func.get(name):
-                name = '[K] ' + name
-            print(_fmt_row(_prefix(depth) + name,
+            print(_fmt_row(_prefix(depth, kernel_func.get(name)) + name,
                            st['count'], st['total'], st['min'], st['avg'],
                            st['p50'], st['p95'], st['p99'], st['max']))
             for child in children.get(path, ()):
