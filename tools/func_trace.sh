@@ -14,6 +14,9 @@
 #   -n          dry-run: print the assembled command, do not exec
 #
 # Any other argument is forwarded to perf-prof (e.g. -p, -C, -i, -m, -o).
+# --order is injected automatically if the user did not already pass it,
+# because a function's entry and return may be observed on different CPUs
+# and only strict time-order guarantees correct pairing.
 # If no `--` separator is present in the pass-through args, the default
 # python module `<script_dir>/func_trace.py` is appended.
 #
@@ -76,6 +79,21 @@ for f in "${kern_funcs[@]}"; do
 done
 
 IFS=',' event_arg="${events[*]}"
+
+# Inject --order unless the user already asked for it. Entry/return of the
+# same function can be observed on different CPUs, so strict time-order
+# merging across per-CPU ringbuffers is required for correct pairing.
+has_order=0
+for a in "${passthrough[@]:-}"; do
+    [[ "$a" == "--order" ]] && { has_order=1; break; }
+done
+if (( ! has_order )); then
+    if [[ ${#passthrough[@]} -gt 0 ]]; then
+        passthrough=(--order "${passthrough[@]}")
+    else
+        passthrough=(--order)
+    fi
+fi
 
 # If user did not supply `--`, append the default python module.
 has_dashdash=0

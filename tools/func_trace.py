@@ -17,6 +17,7 @@ that window; pending (unreturned) frames are preserved across dumps.
 """
 
 from collections import defaultdict
+from datetime import datetime
 
 # tid -> [(func, path_tuple, start_ns), ...]
 call_stacks = defaultdict(list)
@@ -124,6 +125,7 @@ def _dump():
     global unmatched_returns
 
     if path_samples:
+        print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         # path -> children list, preserving first-seen (insertion) order
         children = defaultdict(list)
         for path in path_samples:
