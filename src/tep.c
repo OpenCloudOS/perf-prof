@@ -1640,6 +1640,7 @@ void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, i
         struct trace_entry *entry = data;
         int pid = entry->common_pid;
         char *comm = global_comm_get(pid);
+        char *name = tp->id <= TRACE_EVENT_TYPE_MAX ? tp->name : (tp->alias ? : tp->name);
 
         printf("%16s %6u ", comm ? : "<...>", pid);
         trace_print_lat_fmt(entry);
@@ -1650,7 +1651,7 @@ void tp_print_event(struct tp *tp, unsigned long long ts, int cpu, void *data, i
 
         ts = (ts + 500) / 1000; // us
         printf(" %llu.%06llu: %s:%s:%s", ts/USEC_PER_SEC, ts%USEC_PER_SEC,
-               tp->sys, tp->name, tp->id <= URETPROBE ? "" : "\n");
+               tp->sys, name, tp->id <= URETPROBE ? "" : "\n");
 
         if (tp->id <= TRACE_EVENT_TYPE_MAX) {
             struct tep_record record = {.size = size, .data = data};
