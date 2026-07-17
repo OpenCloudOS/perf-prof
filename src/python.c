@@ -1808,8 +1808,13 @@ static PyTypeObject PerfEventType = {
  * Provides:
  *   - PerfEvent type: Lazy-evaluated event object with fields and methods
  *
- * The perf_prof module exposes the PerfEvent and PerfEventIter types,
- * which are used to represent perf events passed to Python script handlers.
+ * The perf_prof module exposes the PerfEvent type, which is used to
+ * represent perf events passed to Python script handlers.
+ *
+ * Note: PerfEventIterator is intentionally NOT exposed on the module.
+ * It is an internal type returned by iter(PerfEvent) and only surfaces
+ * via `for field, value in event:`. Users never construct or reference
+ * it by name, so keeping it hidden avoids polluting the module namespace.
  * ============================================================================
  */
 
@@ -2977,6 +2982,8 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("#\n");
     printf("# PerfEvent object fields:\n");
     printf("#\n");
+    printf("# from perf_prof import PerfEvent  # optional, for isinstance()/type hints\n");
+    printf("#\n");
     printf("#   Tracepoint events (-e sys:name):\n");
     printf("#   _pid, _tid    : Process/thread ID (int)\n");
     printf("#   _time         : Event timestamp in nanoseconds (int)\n");
@@ -3112,7 +3119,7 @@ static void python_help_script_template(struct help_ctx *hctx)
                 if (tp->alias)
                     printf(" (alias: %s)", tp->alias);
                 printf("\n");
-                printf("    event is a PerfEvent object with lazy field evaluation.\n");
+                printf("    event: PerfEvent  (lazy-evaluated event object)\n");
 
                 /* Document event-specific fields */
                 if (event) {
@@ -3166,7 +3173,7 @@ static void python_help_script_template(struct help_ctx *hctx)
                 if (tp->alias)
                     printf(" (alias: %s)", tp->alias);
                 printf("\n");
-                printf("    event is a PerfEvent object with lazy field evaluation.\n");
+                printf("    event: PerfEvent  (lazy-evaluated event object)\n");
                 printf("    \"\"\"\n");
 
                 printf("    global event_count\n");
@@ -3197,7 +3204,7 @@ static void python_help_script_template(struct help_ctx *hctx)
     printf("def __sample__(event):\n");
     printf("    \"\"\"\n");
     printf("    Default handler for all events without specific handlers.\n");
-    printf("    event is a PerfEvent object. The _event field has format 'sys:name' or 'sys:alias'.\n");
+    printf("    event: PerfEvent — the _event field has format 'sys:name' or 'sys:alias'.\n");
     printf("    \"\"\"\n");
     printf("    global event_count\n");
     printf("    event_count += 1\n");
@@ -3252,6 +3259,12 @@ static const char *python_desc[] = PROFILER_DESC("python",
     "    Shared library      mymodule.so",
     "",
     "SCRIPT SYNTAX",
+    "  BUILT-IN MODULE",
+    "    perf_prof               - Built-in module exposing:",
+    "                                PerfEvent  - event type passed to handlers",
+    "                              Import for isinstance() / type hints:",
+    "                                from perf_prof import PerfEvent",
+    "",
     "  CALLBACK FUNCTIONS",
     "    __init__()              - Called once before event processing",
     "    __exit__()              - Called once before program exit",
