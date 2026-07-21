@@ -387,25 +387,41 @@ static PyObject *parse_event_field(void *raw_data, struct tep_format_field *fiel
         }
         value = PyBytes_FromStringAndSize((char *)ptr, len);
     } else {
-        /* Numeric field */
+        /* Numeric field.
+         * Don't use `?:` to pick between signed/unsigned loads — C's usual
+         * arithmetic conversions promote the whole expression to the wider
+         * unsigned type, so a signed int `-4` becomes `0xFFFFFFFC` once
+         * assigned to `long long`. Branch on is_signed and use the matching
+         * PyLong converter instead. */
         bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
-        long long val = 0;
 
-        if (field->size == 1)
-            val = is_signed ? *(char *)(base + field->offset)
-                            : *(unsigned char *)(base + field->offset);
-        else if (field->size == 2)
-            val = is_signed ? *(short *)(base + field->offset)
-                            : *(unsigned short *)(base + field->offset);
-        else if (field->size == 4)
-            val = is_signed ? *(int *)(base + field->offset)
-                            : *(unsigned int *)(base + field->offset);
-        else if (field->size == 8)
-            val = is_signed ? *(long long *)(base + field->offset)
-                            : *(unsigned long long *)(base + field->offset);
+        if (is_signed) {
+            long long val = 0;
+            if (field->size == 1)
+                val = *(signed char *)(base + field->offset);
+            else if (field->size == 2)
+                val = *(short *)(base + field->offset);
+            else if (field->size == 4)
+                val = *(int *)(base + field->offset);
+            else if (field->size == 8)
+                val = *(long long *)(base + field->offset);
 
-        if (field->size <= 8)
-            value = PyLong_FromLongLong(val);
+            if (field->size <= 8)
+                value = PyLong_FromLongLong(val);
+        } else {
+            unsigned long long val = 0;
+            if (field->size == 1)
+                val = *(unsigned char *)(base + field->offset);
+            else if (field->size == 2)
+                val = *(unsigned short *)(base + field->offset);
+            else if (field->size == 4)
+                val = *(unsigned int *)(base + field->offset);
+            else if (field->size == 8)
+                val = *(unsigned long long *)(base + field->offset);
+
+            if (field->size <= 8)
+                value = PyLong_FromUnsignedLongLong(val);
+        }
     }
 
     return value;
