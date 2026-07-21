@@ -1007,19 +1007,31 @@ static int sql_tp_file_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_
             //   - unsigned char 255 should bind as 255, not -1
             //   - signed char -1 should bind as -1, not 255
             // Using proper type casts ensures correct sign/zero extension to int64.
+            //
+            // Don't collapse the two branches with `is_signed ? *(int *) : *(unsigned int *)` —
+            // C's usual arithmetic conversions promote the whole `?:` expression to the
+            // wider unsigned type, so a signed `-4` becomes `0xFFFFFFFC` once assigned to
+            // `long long`. Branch on is_signed instead.
             bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
-            if (field->size == 1)
-                val = is_signed ? *(char *)(base + field->offset)
-                                : *(unsigned char *)(base + field->offset);
-            else if (field->size == 2)
-                val = is_signed ? *(short *)(base + field->offset)
-                                : *(unsigned short *)(base + field->offset);
-            else if (field->size == 4)
-                val = is_signed ? *(int *)(base + field->offset)
-                                : *(unsigned int *)(base + field->offset);
-            else if (field->size == 8)
-                val = is_signed ? *(long long *)(base + field->offset)
-                                : *(unsigned long long *)(base + field->offset);
+            if (is_signed) {
+                if (field->size == 1)
+                    val = *(signed char *)(base + field->offset);
+                else if (field->size == 2)
+                    val = *(short *)(base + field->offset);
+                else if (field->size == 4)
+                    val = *(int *)(base + field->offset);
+                else if (field->size == 8)
+                    val = *(long long *)(base + field->offset);
+            } else {
+                if (field->size == 1)
+                    val = *(unsigned char *)(base + field->offset);
+                else if (field->size == 2)
+                    val = *(unsigned short *)(base + field->offset);
+                else if (field->size == 4)
+                    val = *(unsigned int *)(base + field->offset);
+                else if (field->size == 8)
+                    val = *(unsigned long long *)(base + field->offset);
+            }
 
             if (field->size <= 8)
                 sqlite3_bind_int64(priv->insert_stmt, idx++, val);
@@ -1849,20 +1861,29 @@ static inline sqlite3_int64 perf_tp_field(struct tp_private *priv, struct tp_eve
                     return (sqlite3_int64)base + field->offset;
                 }
             }
-            // INTEGER: Numeric fields
+            // INTEGER: Numeric fields.
+            // See the comment in sql_tp_file_sample() for why is_signed is on
+            // an if/else instead of a `?:` expression.
             is_signed = field->flags & TEP_FIELD_IS_SIGNED;
-            if (field->size == 1)
-                val = is_signed ? *(char *)(base + field->offset)
-                                : *(unsigned char *)(base + field->offset);
-            else if (field->size == 2)
-                val = is_signed ? *(short *)(base + field->offset)
-                                : *(unsigned short *)(base + field->offset);
-            else if (field->size == 4)
-                val = is_signed ? *(int *)(base + field->offset)
-                                : *(unsigned int *)(base + field->offset);
-            else if (field->size == 8)
-                val = is_signed ? *(long long *)(base + field->offset)
-                                : *(unsigned long long *)(base + field->offset);
+            if (is_signed) {
+                if (field->size == 1)
+                    val = *(signed char *)(base + field->offset);
+                else if (field->size == 2)
+                    val = *(short *)(base + field->offset);
+                else if (field->size == 4)
+                    val = *(int *)(base + field->offset);
+                else if (field->size == 8)
+                    val = *(long long *)(base + field->offset);
+            } else {
+                if (field->size == 1)
+                    val = *(unsigned char *)(base + field->offset);
+                else if (field->size == 2)
+                    val = *(unsigned short *)(base + field->offset);
+                else if (field->size == 4)
+                    val = *(unsigned int *)(base + field->offset);
+                else if (field->size == 8)
+                    val = *(unsigned long long *)(base + field->offset);
+            }
 
             return val;
         }
@@ -2759,20 +2780,29 @@ static int perf_tp_xColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, i
                 }
                 sqlite3_result_blob(ctx, ptr, len, SQLITE_STATIC);
             } else {
-                // INTEGER: Numeric fields
+                // INTEGER: Numeric fields.
+                // See the comment in sql_tp_file_sample() for why is_signed is on
+                // an if/else instead of a `?:` expression.
                 bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
-                if (field->size == 1)
-                    val = is_signed ? *(char *)(base + field->offset)
-                                    : *(unsigned char *)(base + field->offset);
-                else if (field->size == 2)
-                    val = is_signed ? *(short *)(base + field->offset)
-                                    : *(unsigned short *)(base + field->offset);
-                else if (field->size == 4)
-                    val = is_signed ? *(int *)(base + field->offset)
-                                    : *(unsigned int *)(base + field->offset);
-                else if (field->size == 8)
-                    val = is_signed ? *(long long *)(base + field->offset)
-                                    : *(unsigned long long *)(base + field->offset);
+                if (is_signed) {
+                    if (field->size == 1)
+                        val = *(signed char *)(base + field->offset);
+                    else if (field->size == 2)
+                        val = *(short *)(base + field->offset);
+                    else if (field->size == 4)
+                        val = *(int *)(base + field->offset);
+                    else if (field->size == 8)
+                        val = *(long long *)(base + field->offset);
+                } else {
+                    if (field->size == 1)
+                        val = *(unsigned char *)(base + field->offset);
+                    else if (field->size == 2)
+                        val = *(unsigned short *)(base + field->offset);
+                    else if (field->size == 4)
+                        val = *(unsigned int *)(base + field->offset);
+                    else if (field->size == 8)
+                        val = *(unsigned long long *)(base + field->offset);
+                }
 
                 if (field->size <= 8)
                     sqlite3_result_int64(ctx, val);
@@ -3009,20 +3039,29 @@ static int sql_tp_mem_sample(struct sql_tp_ctx *ctx, struct tp *tp, union perf_e
                 // Use SQLITE_STATIC for zero-copy: data valid during sqlite3_step()
                 sqlite3_bind_blob(priv->mem_insert_stmt, idx++, ptr, len, SQLITE_STATIC);
             } else {
-                // INTEGER: Numeric fields
+                // INTEGER: Numeric fields.
+                // See the comment in sql_tp_file_sample() for why is_signed is on
+                // an if/else instead of a `?:` expression.
                 bool is_signed = field->flags & TEP_FIELD_IS_SIGNED;
-                if (field->size == 1)
-                    val = is_signed ? *(char *)(base + field->offset)
-                                    : *(unsigned char *)(base + field->offset);
-                else if (field->size == 2)
-                    val = is_signed ? *(short *)(base + field->offset)
-                                    : *(unsigned short *)(base + field->offset);
-                else if (field->size == 4)
-                    val = is_signed ? *(int *)(base + field->offset)
-                                    : *(unsigned int *)(base + field->offset);
-                else if (field->size == 8)
-                    val = is_signed ? *(long long *)(base + field->offset)
-                                    : *(unsigned long long *)(base + field->offset);
+                if (is_signed) {
+                    if (field->size == 1)
+                        val = *(signed char *)(base + field->offset);
+                    else if (field->size == 2)
+                        val = *(short *)(base + field->offset);
+                    else if (field->size == 4)
+                        val = *(int *)(base + field->offset);
+                    else if (field->size == 8)
+                        val = *(long long *)(base + field->offset);
+                } else {
+                    if (field->size == 1)
+                        val = *(unsigned char *)(base + field->offset);
+                    else if (field->size == 2)
+                        val = *(unsigned short *)(base + field->offset);
+                    else if (field->size == 4)
+                        val = *(unsigned int *)(base + field->offset);
+                    else if (field->size == 8)
+                        val = *(unsigned long long *)(base + field->offset);
+                }
 
                 if (field->size <= 8)
                     sqlite3_bind_int64(priv->mem_insert_stmt, idx++, val);
