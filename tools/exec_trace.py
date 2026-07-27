@@ -1,34 +1,66 @@
 #!/usr/bin/env -S perf-prof python -e sched:sched_process_exec//batch=1/ --order -m 64
 #
-# exec_trace.py - Trace process exec events with optional context
+# exec_trace.py - Snapshot the on-CPU process context on every event
 #
-# Traces sched:sched_process_exec, prints cmdline (from /proc/<pid>/cmdline)
-# plus per-request context (parent, cwd, uid, env, real exe, stdio) at exec
-# time. Uses batch=1 for immediate event delivery.
+# NOTE ON THE NAME: this script started as an exec-only tracer, hence the name
+# and the default shebang. It has since been generalized: at every sampled
+# event, it prints the on-CPU process's cmdline and /proc-based context. Use
+# it whenever you have a tracepoint / kprobe / uprobe that marks an interesting
+# moment and want to know "who was doing this, with what cmdline, from where,
+# under which uid, launched by whom" -- e.g. someone unloading a kernel module,
+# writing to a sysctl, opening a suspicious file, entering a rare syscall. The
+# `exec_trace` name is retained for backwards compatibility; think of it as
+# "trace anything, get exec-like context".
+#
+# The shebang defaults to sched:sched_process_exec so `./exec_trace.py` is a
+# ready-made exec tracer. Override -e for anything else:
+#   perf-prof python -e <EVENT> -- exec_trace.py [options]
+#
+# The event handler is `__sample__`, which perf-prof python calls for every
+# event that has no event-specific handler. That is why any -e event works.
+#
+# When the sampled event has a `filename` field (e.g. sched:sched_process_exec,
+# syscalls:sys_enter_execve), --name/--path match against it and it is
+# appended after '(cmdline unavailable)' when /proc is unreachable. Events
+# without `filename` are passed through; --name/--path are simply ignored.
+#
+# The PID used for /proc lookups is always `event._pid` (the PID recorded in
+# the perf sample header, i.e. the task that was on-CPU when the event fired).
+# We deliberately do NOT use `event.pid`: many events carry a `pid` field that
+# means something else -- e.g. sched:sched_wakeup's `pid` is the wakee, not
+# the runner. Using `_pid` keeps the /proc context consistent across arbitrary
+# events. Events with _pid == 0 (idle task) are dropped -- /proc/0 has nothing
+# useful.
 #
 # Usage:
-#   perf-prof python -e 'sched:sched_process_exec//batch=1/' \
-#       --order -m 64 -- exec_trace.py [options]
-#   or:
+#   # Default (shebang): every exec
 #   chmod +x exec_trace.py
 #   ./exec_trace.py [options]
 #
+#   # Any other event: who unloaded a module, who wrote to a sysctl, ...
+#   perf-prof python -e 'kprobes:free_module' \
+#       --order -m 64 -- exec_trace.py --parent --uid
+#
+#   perf-prof python -e 'syscalls:sys_enter_execve//batch=1/' \
+#       --order -m 64 -- exec_trace.py [options]
+#
 # Options:
-#   --name <pattern>  Filter by process name (supports shell wildcards: * ? [])
-#                     Matches against the basename of the exec filename.
-#                     Can be specified multiple times.
-#   --path <pattern>  Filter by full path (supports shell wildcards)
-#                     Can be specified multiple times.
+#   --name <pattern>  Filter by process name (shell wildcards: * ? []).
+#                     Matches basename(event.filename). Ignored on events
+#                     that don't carry a filename field. Repeatable.
+#   --path <pattern>  Filter by full event.filename (wildcards). Ignored on
+#                     events without filename. Repeatable.
 #   --parent          Also print parent process (PPID + cmdline), read from
-#                     /proc/<pid>/status at exec time.
+#                     /proc/<pid>/status at event time.
 #   --cwd             Also print working directory, read from /proc/<pid>/cwd.
 #   --uid             Also print uid/gid (real/effective) and loginuid,
 #                     read from /proc/<pid>/{status,loginuid}.
 #   --env KEY[,KEY..] Also print selected environment variables, read from
 #                     /proc/<pid>/environ. Repeatable; comma-separated list.
 #   --exe             Also print real executable path (readlink /proc/<pid>/exe).
-#                     Marks a mismatch vs event.filename with '!=' (e.g. shebang,
-#                     symlink, memfd, deleted).
+#                     If the event has a `filename` field and its basename
+#                     differs from the exe basename, a `filename:` line is
+#                     appended (shebang / symlink / memfd / deleted).
 #   --std             Also print stdin/stdout/stderr targets
 #                     (readlink /proc/<pid>/fd/{0,1,2}).
 #
@@ -42,62 +74,75 @@ from datetime import datetime
 # Parse script arguments
 parser = argparse.ArgumentParser(
     prog='exec_trace.py',
-    description='Trace exec events (cmdline + optional context) '
-                'from sched:sched_process_exec.',
+    description='Snapshot the on-CPU process context on every event.',
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog="""\
 Output layout:
-  [YYYY-MM-DD HH:MM:SS.uuuuuu] CPU:N   PID:P        <cmdline>
+  [YYYY-MM-DD HH:MM:SS.uuuuuu] CPU:N   PID:P   [event]   <cmdline>
       parent:   PPID:Q      <parent cmdline>          (--parent)
       cwd:      <path>                                (--cwd)
       uid:      uid=r/e gid=r/e loginuid=N            (--uid)
       env:      KEY=val KEY=val ...                   (--env KEY[,KEY..])
       exe:      <readlink /proc/<pid>/exe>            (--exe)
-      filename: <event.filename>  (!= exe)            (--exe, mismatch only)
+      filename: <event.filename>  (!= exe)            (--exe, mismatch only,
+                                                       when event has filename)
       stdin:    <fd target>                           (--std)
       stdout:   <fd target>                           (--std)
       stderr:   <fd target>                           (--std)
 
 Examples:
-  # Capture all ps executions
-  ./exec_trace.py --name ps
-
-  # Multiple name filters
-  ./exec_trace.py --name ps --name top
-
-  # Wildcards on basename
-  ./exec_trace.py --name 'python*'
-
-  # Wildcards on full path
-  ./exec_trace.py --path '/usr/local/bin/*'
-
-  # No filter — capture every exec (loud on busy systems)
+  # Default: capture every exec (uses the shebang's -e sched:sched_process_exec)
   ./exec_trace.py
+
+  # Same, filtered by name
+  ./exec_trace.py --name ps
+  ./exec_trace.py --name 'python*'
+  ./exec_trace.py --path '/usr/local/bin/*'
 
   # Parent + cwd context: who launched it and from where
   ./exec_trace.py --parent --cwd
 
-  # Identity + LD_PRELOAD/PATH — spot setuid escalation & lib hijack
+  # Identity + LD_PRELOAD/PATH -- spot setuid escalation & lib hijack
   ./exec_trace.py --uid --env LD_PRELOAD,PATH
 
-  # Real binary + stdio redirections — spot shebang/memfd/deleted, and IO layout
+  # Real binary + stdio redirections -- spot shebang/memfd/deleted, and IO layout
   ./exec_trace.py --exe --std
+
+  # Trace fork instead of exec (no filename field on this event)
+  perf-prof python -e 'sched:sched_process_fork' \\
+      --order -m 64 -- exec_trace.py --parent --cwd --uid
+
+  # Trace any syscall entry, with cmdline context
+  perf-prof python -e 'syscalls:sys_enter_openat' \\
+      --order -m 64 -- exec_trace.py --parent
+
+  # Who unloaded a kernel module? (the motivating example)
+  perf-prof python -e 'kprobes:free_module' \\
+      --order -m 64 -- exec_trace.py --parent --uid
 
   # Kernel-side filter for high-volume systems (much cheaper than --name)
   perf-prof python -e 'sched:sched_process_exec/filename~"*/ps"/batch=1/' \\
       --order -m 64 -- exec_trace.py
 
 Notes:
-  - filename is the raw event field (bprm->filename); it may differ from the
-    real binary (readlink /proc/pid/exe) — shebang scripts, symlinks, memfd,
-    or deleted files show a mismatch under --exe.
-  - Context is read from /proc/<pid>/* at exec time. Very short-lived processes
-    can exit before /proc is readable → the line marks '(gone)' or '(unavailable)'.
+  - When /proc is unreachable (process gone, wrong PID, ns mismatch), the
+    main line always shows '(cmdline unavailable)'. If the event carries a
+    `filename` field, it is appended after that marker so the "what was
+    tried" is still visible.
+  - For events without `filename`, --name / --path are ignored (nothing to
+    match on) and the event passes through.
+  - Context is read from /proc/<pid>/* at event time. Very short-lived
+    processes can exit before /proc is readable -> the line marks '(gone)'
+    or '(unavailable)'. The PID used is always event._pid (the sample-header
+    PID, i.e. the task on-CPU when the event fired). Events sampled on the
+    idle task (_pid == 0) are dropped -- /proc/0 has nothing useful.
 """)
 parser.add_argument('--name', action='append', default=[], metavar='PAT',
-                    help='Filter by basename (wildcard supported, repeatable)')
+                    help='Filter by basename of event.filename '
+                         '(wildcard, repeatable); ignored on events without filename')
 parser.add_argument('--path', action='append', default=[], metavar='PAT',
-                    help='Filter by full path (wildcard supported, repeatable)')
+                    help='Filter by full event.filename '
+                         '(wildcard, repeatable); ignored on events without filename')
 parser.add_argument('--parent', action='store_true',
                     help='Also print parent process (PPID + cmdline)')
 parser.add_argument('--cwd', action='store_true',
@@ -130,8 +175,18 @@ stats = {
 
 
 def _match(filename):
-    """Check if filename matches any filter pattern. No filter means match all."""
+    """Check if event.filename matches any filter pattern.
+
+    - No filter set    -> match all.
+    - Event has no filename -> --name/--path can't be evaluated; ignore them
+      and let the event through (so cross-event tracing with a name filter
+      still works for events that happen to lack the field).
+    - Filter set, filename present -> fnmatch on basename (--name) or full
+      path (--path); any hit wins.
+    """
     if not args.name and not args.path:
+        return True
+    if filename is None:
         return True
     basename = os.path.basename(filename)
     for pat in args.name:
@@ -248,6 +303,17 @@ def _read_fd(pid, fd):
         return None
 
 
+def _event_filename(event):
+    """Return event.filename if the event has that field, else None.
+
+    Accessing a missing attribute on a PerfEvent raises AttributeError; treat
+    that (and any decoding trouble) as "no filename on this event"."""
+    try:
+        return event.filename
+    except (AttributeError, KeyError):
+        return None
+
+
 def __init__():
     """Called once before event processing starts."""
     filters = args.name + args.path
@@ -261,7 +327,7 @@ def __init__():
     if args.std:    ctx.append('std')
     ctx_str = ', '.join(ctx) if ctx else '(none)'
     print(f"{'='*72}")
-    print(f"  exec tracer")
+    print(f"  event tracer (default: sched:sched_process_exec)")
     print(f"  Filter:  {filter_str}")
     print(f"  Context: {ctx_str}")
     print(f"  Press Ctrl-C to stop.")
@@ -275,24 +341,31 @@ def __exit__():
     print()
     print(f"{'='*72}")
     print(f"  Summary:")
-    print(f"    Total exec events:      {stats['total']}")
+    print(f"    Total events:           {stats['total']}")
     print(f"    Matched:                {stats['matched']}")
     print(f"    Cmdline captured:       {stats['cmdline_ok']}")
     print(f"    Cmdline missed (exited):{stats['cmdline_fail']}")
     print(f"{'='*72}")
 
 
-def sched__sched_process_exec(event):
-    """Handler for sched:sched_process_exec events."""
+def __sample__(event):
+    """Default handler: fires for every event without a name-specific handler."""
     stats['total'] += 1
 
-    filename = event.filename
+    filename = _event_filename(event)
     if not _match(filename):
         return
 
-    stats['matched'] += 1
     pid = event._pid
+    # PID 0 is the idle task -- there's nothing readable under /proc/0 and
+    # printing "swapper" per event is pure noise. Drop these silently; they
+    # come from events sampled while the CPU was idle.
+    if pid == 0:
+        return
+
+    stats['matched'] += 1
     cpu = event._cpu
+    ev_name = event._event
 
     # Format timestamp
     realtime = event._realtime
@@ -304,10 +377,14 @@ def sched__sched_process_exec(event):
 
     if cmdline:
         stats['cmdline_ok'] += 1
-        print(f"[{ts}] CPU:{cpu:<3d} PID:{pid:<7d}  {cmdline}")
+        print(f"[{ts}] CPU:{cpu:<3d} PID:{pid:<7d} [{ev_name}] {cmdline}")
     else:
         stats['cmdline_fail'] += 1
-        print(f"[{ts}] CPU:{cpu:<3d} PID:{pid:<7d}  {filename} (cmdline unavailable)")
+        # /proc is unreachable (process gone, PID mismatch, etc). Always mark
+        # the failure explicitly; append event.filename after it when the
+        # event carries one, so the "what was tried" is still visible.
+        suffix = f' {filename}' if filename else ''
+        print(f"[{ts}] CPU:{cpu:<3d} PID:{pid:<7d} [{ev_name}] (cmdline unavailable){suffix}")
 
     # Optional context (read now, before parent may exit)
     # Layout: 4-space indent, label padded to 8, values aligned by :<7d for PID
@@ -343,7 +420,8 @@ def sched__sched_process_exec(event):
             # Strip kernel-appended ' (deleted)' before comparing basenames, but
             # keep the marker in the printed value so it's still visible.
             exe_cmp = exe[:-len(' (deleted)')] if exe.endswith(' (deleted)') else exe
-            if os.path.basename(exe_cmp) == os.path.basename(filename):
+            # Compare against filename only when the event actually carries one.
+            if filename is None or os.path.basename(exe_cmp) == os.path.basename(filename):
                 print(f"    {'exe:':<8} {exe}")
             else:
                 # Mismatch: print exe first, then the raw event filename so the
@@ -353,7 +431,7 @@ def sched__sched_process_exec(event):
                 print(f"    {'filename:':<8} {filename}  (!= exe)")
 
     if args.std:
-        # 0=stdin 1=stdout 2=stderr; each fd may be closed → '(closed)'
+        # 0=stdin 1=stdout 2=stderr; each fd may be closed -> '(closed)'
         for fd, label in ((0, 'stdin'), (1, 'stdout'), (2, 'stderr')):
             tgt = _read_fd(pid, fd)
             print(f"    {label+':':<8} {tgt if tgt else '(closed)'}")
