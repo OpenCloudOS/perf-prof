@@ -63,6 +63,10 @@
 #                     appended (shebang / symlink / memfd / deleted).
 #   --std             Also print stdin/stdout/stderr targets
 #                     (readlink /proc/<pid>/fd/{0,1,2}).
+#   --tree            Walk the PPid chain from the on-CPU process up to PID 1
+#                     and print each level with its cmdline. Supersedes
+#                     --parent. Stops early on unreachable PPid, loop, or
+#                     depth cap (32 levels).
 #
 
 import sys
@@ -89,6 +93,11 @@ Output layout:
       stdin:    <fd target>                           (--std)
       stdout:   <fd target>                           (--std)
       stderr:   <fd target>                           (--std)
+      tree:                                            (--tree, always last)
+          PID:1   /sbin/init
+            `- PID:X   /usr/bin/sshd -D
+              `- PID:Y   -bash
+                `- PID:P   <cmdline of on-CPU process>
 
 Examples:
   # Default: capture every exec (uses the shebang's -e sched:sched_process_exec)
@@ -101,6 +110,9 @@ Examples:
 
   # Parent + cwd context: who launched it and from where
   ./exec_trace.py --parent --cwd
+
+  # Full ancestor chain up to init -- who's ultimately responsible
+  ./exec_trace.py --tree
 
   # Identity + LD_PRELOAD/PATH -- spot setuid escalation & lib hijack
   ./exec_trace.py --uid --env LD_PRELOAD,PATH
@@ -116,9 +128,9 @@ Examples:
   perf-prof python -e 'syscalls:sys_enter_openat' \\
       --order -m 64 -- exec_trace.py --parent
 
-  # Who unloaded a kernel module? (the motivating example)
+  # Who unloaded a kernel module? Full chain -- init->systemd->sshd->bash->rmmod
   perf-prof python -e 'kprobes:free_module' \\
-      --order -m 64 -- exec_trace.py --parent --uid
+      --order -m 64 -- exec_trace.py --tree --uid
 
   # Kernel-side filter for high-volume systems (much cheaper than --name)
   perf-prof python -e 'sched:sched_process_exec/filename~"*/ps"/batch=1/' \\
@@ -155,6 +167,9 @@ parser.add_argument('--exe', action='store_true',
                     help='Also print real executable path (/proc/<pid>/exe)')
 parser.add_argument('--std', action='store_true',
                     help='Also print stdin/stdout/stderr targets (/proc/<pid>/fd/{0,1,2})')
+parser.add_argument('--tree', action='store_true',
+                    help='Print the full ancestor chain up to init (PID 1), '
+                         'one level per line with cmdline; supersedes --parent')
 args = parser.parse_args()
 
 # Flatten --env KEY,KEY --env KEY into a single ordered list, drop dupes/blanks
@@ -314,17 +329,29 @@ def _event_filename(event):
         return None
 
 
+# PID 1 (init) cmdline cache. Populated at __init__ time when --tree is on;
+# every event's ancestor walk terminates at PID 1, so caching the very hot
+# top of the chain saves one /proc read per event. init changes its cmdline
+# at most on service manager re-exec (systemctl daemon-reexec) -- rare enough
+# that a session-lifetime cache is a safe trade for the saved I/O.
+_INIT_CMDLINE = None
+
+
 def __init__():
     """Called once before event processing starts."""
+    global _INIT_CMDLINE
+    if args.tree:
+        _INIT_CMDLINE = _read_proc_cmdline(1)
     filters = args.name + args.path
     filter_str = ', '.join(filters) if filters else '(all)'
     ctx = []
-    if args.parent: ctx.append('parent')
+    if args.parent and not args.tree: ctx.append('parent')
     if args.cwd:    ctx.append('cwd')
     if args.uid:    ctx.append('uid')
     if env_keys:    ctx.append('env=' + ','.join(env_keys))
     if args.exe:    ctx.append('exe')
     if args.std:    ctx.append('std')
+    if args.tree:   ctx.append('tree')
     ctx_str = ', '.join(ctx) if ctx else '(none)'
     print(f"{'='*72}")
     print(f"  event tracer (default: sched:sched_process_exec)")
@@ -388,7 +415,12 @@ def __sample__(event):
 
     # Optional context (read now, before parent may exit)
     # Layout: 4-space indent, label padded to 8, values aligned by :<7d for PID
-    if args.parent:
+    # --tree is intentionally emitted LAST: its output is multi-line and does
+    # not fit the "label: value" alignment of the other rows, so keeping it
+    # at the bottom avoids visually splitting the compact context block.
+    if args.parent and not args.tree:
+        # --tree already covers "who's the parent" (as its penultimate row),
+        # so suppress --parent when both are on to avoid double-printing.
         ppid = _read_ppid(pid)
         if ppid is not None:
             pcmd = _read_proc_cmdline(ppid) or '(gone)'
@@ -435,3 +467,51 @@ def __sample__(event):
         for fd, label in ((0, 'stdin'), (1, 'stdout'), (2, 'stderr')):
             tgt = _read_fd(pid, fd)
             print(f"    {label+':':<8} {tgt if tgt else '(closed)'}")
+
+    if args.tree:
+        # Walk PPid chain up to init (PID 1). Guard against read failures,
+        # loops, and pathological depth so a broken /proc can't hang us.
+        # Kept last so its multi-line output doesn't split the aligned
+        # "label: value" rows above.
+        MAX_DEPTH = 32
+        chain = [(pid, cmdline)]   # start with the on-CPU process itself
+        seen = {pid}
+        cur = pid
+        depth = 0
+        stop_reason = None
+        while depth < MAX_DEPTH:
+            ppid = _read_ppid(cur)
+            if ppid is None:
+                stop_reason = 'ppid unavailable'
+                break
+            if ppid == 0:
+                # PPid 0 is the kernel (swapper); typical for kthreads.
+                stop_reason = 'reached kernel'
+                break
+            if ppid in seen:
+                stop_reason = f'loop at PID {ppid}'
+                break
+            seen.add(ppid)
+            if ppid == 1:
+                # PID 1 cmdline is cached at startup -- init rarely changes
+                # it (only on `systemctl daemon-reexec` style re-exec), and
+                # every tree walk terminates here, so skip the per-event
+                # /proc read.
+                chain.append((1, _INIT_CMDLINE))
+                break
+            chain.append((ppid, _read_proc_cmdline(ppid)))
+            cur = ppid
+            depth += 1
+        else:
+            stop_reason = f'depth limit ({MAX_DEPTH})'
+
+        # Print oldest-first, so pid 1 is at the top and the on-CPU process
+        # is at the bottom -- reads like a call chain.
+        print(f"    tree:")
+        for level, (p, cmd) in enumerate(reversed(chain)):
+            indent = '        ' + '  ' * level
+            arrow = '' if level == 0 else '`- '
+            shown = cmd if cmd else '(gone)'
+            print(f"{indent}{arrow}PID:{p:<7d} {shown}")
+        if stop_reason:
+            print(f"        (stopped: {stop_reason})")

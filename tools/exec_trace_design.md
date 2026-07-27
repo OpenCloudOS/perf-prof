@@ -63,6 +63,7 @@ kprobe / uprobe，脚本的核心逻辑（读 `/proc/<pid>/*`、格式化输出�
    其它事件启用 `--name/--path` 时会被丢弃（无从匹配）。
 5. **可选的进程上下文**，逐项开关，默认全部关闭以保留最紧凑输出：
    - `--parent`：父进程 PID + cmdline
+   - `--tree`：向上递归 PPid 直到 PID 1，逐层打印祖先 cmdline；覆盖 `--parent`
    - `--cwd`：工作目录
    - `--uid`：real/effective uid/gid + loginuid
    - `--env KEY[,KEY..]`：选择性打印环境变量
@@ -250,6 +251,35 @@ basename 而非全路径比较：symlink 的 dirname 天然不同（`/usr/bin/py
 **--env 顺序**：保留用户指定的 KEY 顺序（`--env A,B` 与 `--env B,A` 输出
 不同），便于列 grep；漏掉的 KEY 显式 `(unset)`，让"没设"和"没读到"分明。
 
+**--tree（祖先链）**：从事件当时的 on-CPU 进程出发，反复读
+`/proc/<pid>/status` 的 `PPid:` 字段向上追溯，直到 PID 1（init）——这样能
+一眼看出"是 init/systemd/sshd/bash/rmmod 这条链在卸载模块"，而不是只知道
+最外层是谁在直接调。
+
+设计要点：
+
+- **打印位置固定放在所有上下文块之后**。tree 是多行输出，行内格式又是缩
+  进树而不是 `label: value`，与前面的 parent/cwd/uid/env/exe/std 这些整
+  齐对齐的一行行放在一起会破坏视觉列对齐；放最后可以让"整齐的元数据块 +
+  独立的树块"各自成段。
+- 输出**倒序**（PID 1 在最上、当前进程在最下），像调用链一样从"责任源
+  头"读到"事件当事人"，缩进和 `` `- `` 箭头强化层级视觉。
+- 与 `--parent` 组合时**抑制 `--parent`**：`--parent` 是 tree depth=1 的
+  特例，同时打两遍冗余；仅在没开 `--tree` 时才输出 parent 行。
+- 终止条件三类，每一种都有明确的 `(stopped: ...)` 尾行：
+  - 到达 PID 1 → 正常结束，不打尾行；
+  - `PPid` 读不到 → `ppid unavailable`（进程已退，或 procfs 不可读）；
+  - `PPid == 0` → `reached kernel`（当前是 kthread，父是 swapper）；
+  - 出现环 → `loop at PID N`（procfs 竞态或极端异常）；
+  - 超过 32 层深度上限 → `depth limit (32)`。
+- **32 层硬上限**：真实系统的进程树深度个位数就够（init → systemd →
+  service → shell → user program），32 已经宽裕；只是防止极端异常（procfs
+  在切换 PID 视图时出现循环等）把脚本挂死。命中上限本身是异常信号，用
+  尾行显式暴露。
+- **祖先 cmdline 可能为空**：内核线程、僵尸、已回收进程读不到
+  `/proc/<ppid>/cmdline`，用 `(gone)` 顶位——保证层级完整，不会因为中间
+  某一层拿不到而中断整条链。
+
 ### 4.5 生命周期
 
 - `__init__`：打印 header，汇总过滤条件和已启用上下文，作为运行时留痕。
@@ -272,6 +302,7 @@ perf-prof python -e <EVENT> --order -m 64 -- exec_trace.py [options]
 | `--name PAT` | 按 basename(event.filename) 过滤（fnmatch），可重复。无 filename 的事件忽略此项 |
 | `--path PAT` | 按完整 event.filename 过滤（fnmatch），可重复。无 filename 的事件忽略此项 |
 | `--parent`   | 打印父进程 PID + cmdline |
+| `--tree`     | 递归向上打印祖先链直到 PID 1（覆盖 `--parent`，深度上限 32） |
 | `--cwd`      | 打印工作目录 |
 | `--uid`      | 打印 uid/gid（real/effective）和 loginuid |
 | `--env K[,K..]` | 打印选择的环境变量，可重复 |
@@ -306,6 +337,10 @@ perf-prof python -e 'sched:sched_process_fork' \
 perf-prof python -e 'syscalls:sys_enter_openat' \
     --order -m 64 -- exec_trace.py --parent
 
+# 谁卸载了内核模块？打印完整祖先链
+perf-prof python -e 'kprobes:free_module' \
+    --order -m 64 -- exec_trace.py --tree --uid
+
 # 高频系统，把过滤下推到内核
 perf-prof python -e 'sched:sched_process_exec/filename~"*/ps"/batch=1/' \
     --order -m 64 -- exec_trace.py
@@ -325,6 +360,18 @@ perf-prof python -e 'sched:sched_process_exec/filename~"*/ps"/batch=1/' \
     uid:     uid=0/0 gid=0/0 loginuid=1000
     exe:     /usr/bin/bash
     filename: /tmp/deploy.sh  (!= exe)
+```
+
+带 `--tree` 时（示例：谁在 rmmod）：
+
+```
+[2026-07-17 10:24:52.117008] CPU:0   PID:20732   [kprobes:free_module] rmmod nf_conntrack
+    tree:
+        PID:1       /sbin/init splash
+          `- PID:987     /usr/lib/systemd/systemd --user
+            `- PID:5011    sshd: alice [priv]
+              `- PID:5013    -bash
+                `- PID:20732   rmmod nf_conntrack
 ```
 
 ## 6. 边界与限制
