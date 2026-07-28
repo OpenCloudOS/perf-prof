@@ -7,6 +7,7 @@
 
 struct ksym {
 	const char *name;
+	const char *module;   /* NULL when the symbol is in the core kernel */
 	unsigned long addr;
 };
 
@@ -16,8 +17,14 @@ struct ksyms *ksyms__load(void);
 void ksyms__free(struct ksyms *ksyms);
 const struct ksym *ksyms__map_addr(const struct ksyms *ksyms,
 				   unsigned long addr);
+/*
+ * Look up a kernel symbol by name and (optional) module.
+ *   module == NULL: match by name only, regardless of module.
+ *   module != NULL: match only symbols in that specific module.
+ */
 const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
-				     const char *name);
+				     const char *name,
+				     const char *module);
 void ksym__register_unregister(struct ksyms *ksyms, struct perf_record_ksymbol *ksymbol);
 
 

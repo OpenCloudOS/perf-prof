@@ -87,6 +87,7 @@ void ksym__register_unregister(struct ksyms *ksyms, struct perf_record_ksymbol *
         int name_len = strlen(ksymbol->name);
         dyn = malloc(sizeof(*dyn) + name_len + 1);
         dyn->sym.name = dyn->name;
+        dyn->sym.module = NULL;
         dyn->sym.addr = ksymbol->addr;
         dyn->len = ksymbol->len;
         dyn->type = ksymbol->ksym_type; // PERF_RECORD_KSYMBOL_TYPE_*
@@ -95,26 +96,54 @@ void ksym__register_unregister(struct ksyms *ksyms, struct perf_record_ksymbol *
     }
 }
 
-static int ksyms__add_symbol(struct ksyms *ksyms, const char *name, unsigned long addr)
+/*
+ * Reserve `need` bytes in ksyms->strs and return the offset where the
+ * caller should copy its bytes. Caller is responsible for bumping
+ * ksyms->strs_sz after the copy.
+ * Returns -1 on OOM.
+ */
+static int ksyms__strs_reserve(struct ksyms *ksyms, size_t need)
 {
-    size_t new_cap, name_len = strlen(name) + 1;
+    size_t new_cap;
+    void *tmp;
+
+    if (ksyms->strs_sz + need <= (size_t)ksyms->strs_cap)
+        return ksyms->strs_sz;
+
+    new_cap = ksyms->strs_cap * 4 / 3;
+    if (new_cap < ksyms->strs_sz + need)
+        new_cap = ksyms->strs_sz + need;
+    if (new_cap < 1024)
+        new_cap = 1024;
+    tmp = realloc(ksyms->strs, new_cap);
+    if (!tmp)
+        return -1;
+    ksyms->strs = tmp;
+    ksyms->strs_cap = new_cap;
+    return ksyms->strs_sz;
+}
+
+/*
+ * Add a symbol. `mod_off` is the offset (into ksyms->strs) of the
+ * NUL-terminated module name, or -1 if the symbol belongs to the core
+ * kernel (no module).
+ * While building, sym->name / sym->module hold plain offsets and are
+ * rebased into real pointers once the strs buffer is finalized.
+ */
+static int ksyms__add_symbol(struct ksyms *ksyms, const char *name,
+                             unsigned long addr, int mod_off)
+{
+    size_t name_len = strlen(name) + 1;
+    int name_off;
     struct ksym *ksym;
     void *tmp;
 
-    if (ksyms->strs_sz + name_len > ksyms->strs_cap) {
-        new_cap = ksyms->strs_cap * 4 / 3;
-        if (new_cap < ksyms->strs_sz + name_len)
-            new_cap = ksyms->strs_sz + name_len;
-        if (new_cap < 1024)
-            new_cap = 1024;
-        tmp = realloc(ksyms->strs, new_cap);
-        if (!tmp)
-            return -1;
-        ksyms->strs = tmp;
-        ksyms->strs_cap = new_cap;
-    }
+    name_off = ksyms__strs_reserve(ksyms, name_len);
+    if (name_off < 0)
+        return -1;
+
     if (ksyms->syms_sz + 1 > ksyms->syms_cap) {
-        new_cap = ksyms->syms_cap * 4 / 3;
+        size_t new_cap = ksyms->syms_cap * 4 / 3;
         if (new_cap < 1024)
             new_cap = 1024;
         tmp = realloc(ksyms->syms, sizeof(*ksyms->syms) * new_cap);
@@ -125,11 +154,13 @@ static int ksyms__add_symbol(struct ksyms *ksyms, const char *name, unsigned lon
     }
 
     ksym = &ksyms->syms[ksyms->syms_sz];
-    /* while constructing, re-use pointer as just a plain offset */
-    ksym->name = (void *)(unsigned long)ksyms->strs_sz;
+    /* while constructing, re-use pointers as just plain offsets */
+    ksym->name = (void *)(unsigned long)name_off;
+    ksym->module = (mod_off < 0) ? NULL
+                                 : (void *)(unsigned long)mod_off;
     ksym->addr = addr;
 
-    memcpy(ksyms->strs + ksyms->strs_sz, name, name_len);
+    memcpy(ksyms->strs + name_off, name, name_len);
     ksyms->strs_sz += name_len;
     ksyms->syms_sz++;
 
@@ -147,15 +178,26 @@ static int ksym_cmp(const void *p1, const void *p2)
 
 struct ksyms *ksyms__load(void)
 {
-    char sym_type, sym_name[256];
+    char line[512];
+    char sym_type, sym_name[256], sym_mod[128];
     struct ksyms *ksyms;
     unsigned long sym_addr;
-    int i, ret;
+    /*
+     * Offset (into ksyms->strs) of the last module string we wrote,
+     * along with its content. /proc/kallsyms groups entries from the
+     * same module consecutively, so we can dedupe most module names
+     * against just the previous one instead of a full lookup.
+     */
+    int last_mod_off = -1;
+    char last_mod[128];
+    int i, n;
     FILE *f;
 
     ksyms = calloc(1, sizeof(*ksyms));
     if (!ksyms)
         return NULL;
+
+    last_mod[0] = '\0';
 
     /*
      * Enable BPF JIT symbols temporarily for early kernels (< 5.5)
@@ -166,22 +208,79 @@ struct ksyms *ksyms__load(void)
     if (!f)
         goto err_out1;
 
-    while (true) {
-        ret = fscanf(f, "%lx %c %s%*[^\n]\n",
-                 &sym_addr, &sym_type, sym_name);
-        if (ret == EOF && feof(f))
-            break;
-        if (ret != 3)
-            goto err_out;
-        if (ksyms__add_symbol(ksyms, sym_name, sym_addr))
+    while (fgets(line, sizeof(line), f)) {
+        int mod_off = -1;
+
+        sym_mod[0] = '\0';
+        /*
+         * Try to parse "<addr> <type> <name> [<module>]" first, then
+         * fall back to the module-less form. Both name and module have
+         * a bounded max length; overly-long fields are truncated by
+         * the width specifier below (which is harmless — real kernel
+         * symbol / module names fit well within these limits).
+         */
+        n = sscanf(line, "%lx %c %255s [%127[^]]]",
+                   &sym_addr, &sym_type, sym_name, sym_mod);
+        if (n < 3) {
+            n = sscanf(line, "%lx %c %255s",
+                       &sym_addr, &sym_type, sym_name);
+            if (n != 3)
+                goto err_out;
+        }
+
+        if (sym_mod[0]) {
+            if (last_mod_off >= 0 && strcmp(last_mod, sym_mod) == 0) {
+                mod_off = last_mod_off;
+            } else {
+                size_t mod_len = strlen(sym_mod) + 1;
+                mod_off = ksyms__strs_reserve(ksyms, mod_len);
+                if (mod_off < 0)
+                    goto err_out;
+                memcpy(ksyms->strs + mod_off, sym_mod, mod_len);
+                ksyms->strs_sz += mod_len;
+                last_mod_off = mod_off;
+                strcpy(last_mod, sym_mod);
+            }
+        }
+
+        if (ksyms__add_symbol(ksyms, sym_name, sym_addr, mod_off))
             goto err_out;
     }
+    if (ferror(f))
+        goto err_out;
     fclose(f);
     sysctl_bpf_jit_kallsyms(0);
 
+    /*
+     * Shrink over-allocated buffers to actual size. Do this BEFORE
+     * rebasing the offset-based name/module fields to pointers, since
+     * realloc() may move ksyms->strs.
+     * A shrinking realloc() is expected to succeed; if it doesn't we
+     * keep the original (larger) buffer and continue.
+     */
+    if (ksyms->strs_sz && ksyms->strs_sz < ksyms->strs_cap) {
+        void *tmp = realloc(ksyms->strs, ksyms->strs_sz);
+        if (tmp) {
+            ksyms->strs = tmp;
+            ksyms->strs_cap = ksyms->strs_sz;
+        }
+    }
+    if (ksyms->syms_sz && ksyms->syms_sz < ksyms->syms_cap) {
+        void *tmp = realloc(ksyms->syms,
+                            sizeof(*ksyms->syms) * ksyms->syms_sz);
+        if (tmp) {
+            ksyms->syms = tmp;
+            ksyms->syms_cap = ksyms->syms_sz;
+        }
+    }
+
     /* now when strings are finalized, adjust pointers properly */
-    for (i = 0; i < ksyms->syms_sz; i++)
-        ksyms->syms[i].name += (unsigned long)ksyms->strs;
+    for (i = 0; i < ksyms->syms_sz; i++) {
+        ksyms->syms[i].name = ksyms->strs + (unsigned long)ksyms->syms[i].name;
+        if (ksyms->syms[i].module)
+            ksyms->syms[i].module = ksyms->strs +
+                                    (unsigned long)ksyms->syms[i].module;
+    }
 
     qsort(ksyms->syms, ksyms->syms_sz, sizeof(*ksyms->syms), ksym_cmp);
 
@@ -237,13 +336,20 @@ const struct ksym *ksyms__map_addr(const struct ksyms *ksyms,
 }
 
 const struct ksym *ksyms__get_symbol(const struct ksyms *ksyms,
-                     const char *name)
+                     const char *name, const char *module)
 {
     int i;
 
     for (i = 0; i < ksyms->syms_sz; i++) {
-        if (strcmp(ksyms->syms[i].name, name) == 0)
-            return &ksyms->syms[i];
+        const struct ksym *ks = &ksyms->syms[i];
+
+        if (strcmp(ks->name, name) != 0)
+            continue;
+        if (module != NULL) {
+            if (ks->module == NULL || strcmp(ks->module, module) != 0)
+                continue;
+        }
+        return ks;
     }
 
     return NULL;

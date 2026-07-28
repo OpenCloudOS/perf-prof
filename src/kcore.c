@@ -118,7 +118,7 @@ static int kcore_argc_init(int argc, char *argv[])
     if (kaddr_end == argv[0]) {
         struct ksyms *ksyms = ksyms__load();
         if (ksyms) {
-            const struct ksym *ksym = ksyms__get_symbol(ksyms, argv[0]);
+            const struct ksym *ksym = ksyms__get_symbol(ksyms, argv[0], NULL);
             if (ksym)
                 kaddr = ksym->addr;
             ksyms__free(ksyms);

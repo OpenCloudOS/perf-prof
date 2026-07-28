@@ -267,7 +267,7 @@ static int watchdog_stage_filter(struct prof_dev *dev)
     if (!ksyms)
         return -1;
 
-    ksym = ksyms__get_symbol(ksyms, "watchdog_timer_fn");
+    ksym = ksyms__get_symbol(ksyms, "watchdog_timer_fn", NULL);
     if (!ksym)
         goto failed;
 
