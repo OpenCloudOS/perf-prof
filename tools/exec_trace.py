@@ -77,6 +77,10 @@
 #                     perf-prof python already owns --cgroups; the shell
 #                     concatenates the shebang line and long-option prefix
 #                     matching would fold --cgroup into it.
+#   --sched           Print scheduler parameters: policy (SCHED_NORMAL /
+#                     FIFO / RR / BATCH / IDLE / DEADLINE), nice, real-time
+#                     priority, and Cpus_allowed_list. Read from
+#                     /proc/<pid>/stat + /proc/<pid>/status.
 #
 
 import sys
@@ -103,6 +107,7 @@ Output layout:
       stdin:    <fd target>                           (--std)
       stdout:   <fd target>                           (--std)
       stderr:   <fd target>                           (--std)
+      sched:    policy=... nice=N rtprio=P cpus=list  (--sched)
       cgroup:                                         (--cgroup-path [SUBSYS,..])
           <controllers>   <path>
           ...
@@ -131,6 +136,9 @@ Examples:
   ./exec_trace.py --cgroup-path             # all subsystems
   ./exec_trace.py --cgroup-path memory,cpu  # only these controllers
   ./exec_trace.py --cgroup-path unified     # only cgroup v2 unified row
+
+  # Scheduler parameters: policy / nice / rtprio / cpus_allowed
+  ./exec_trace.py --sched
 
   # Identity + LD_PRELOAD/PATH -- spot setuid escalation & lib hijack
   ./exec_trace.py --uid --env LD_PRELOAD,PATH
@@ -191,6 +199,8 @@ parser.add_argument('--tree', action='store_true',
 parser.add_argument('--cgroup-path', nargs='?', const='', default=None, metavar='SUBSYS[,SUBSYS..]',
                     help='Print /proc/<pid>/cgroup; no arg = all subsystems, '
                          'or a comma list to filter (substring match)')
+parser.add_argument('--sched', action='store_true',
+                    help='Also print scheduler params (policy, nice, rtprio, cpus_allowed)')
 args = parser.parse_args()
 
 # Flatten --env KEY,KEY --env KEY into a single ordered list, drop dupes/blanks
@@ -395,6 +405,74 @@ def _read_fd(pid, fd):
         return None
 
 
+# Kernel scheduler policy IDs (from include/uapi/linux/sched.h). Kept as a
+# module-level dict so a rare policy (e.g. DEADLINE) prints its numeric id
+# with a "?" tag rather than blowing up.
+_SCHED_POLICY = {
+    0: 'SCHED_NORMAL',
+    1: 'SCHED_FIFO',
+    2: 'SCHED_RR',
+    3: 'SCHED_BATCH',
+    5: 'SCHED_IDLE',
+    6: 'SCHED_DEADLINE',
+}
+
+
+def _read_sched(pid):
+    """Return (policy_name, nice, rtprio, cpus_allowed) or None on failure.
+
+    Sources:
+      - /proc/<pid>/stat  : nice (field 19 overall), rt_priority (40),
+                            policy (41). The 2nd field is `(comm)` which can
+                            contain spaces and parens, so we split from the
+                            last ')' rather than the first.
+      - /proc/<pid>/status: Cpus_allowed_list line (kernel already renders it
+                            as a comma-separated range list, e.g. `0-3,7`).
+
+    Any component that can't be parsed is returned as None so the caller can
+    render `?` in its place instead of silently dropping the whole line.
+    """
+    policy = nice = rtprio = None
+    try:
+        with open(f'/proc/{pid}/stat', 'r') as f:
+            raw = f.read()
+    except (IOError, OSError):
+        return None
+    # comm is field 2 wrapped in (); split at the last ')' to survive names
+    # containing ')' or spaces.
+    rpar = raw.rfind(')')
+    if rpar >= 0:
+        rest = raw[rpar+1:].split()
+        # After (comm), 1-indexed fields (per proc(5)):
+        #   1=state ... 17=nice ... 38=rt_priority 39=policy
+        # rest[] is 0-indexed, so nice=rest[16], rtprio=rest[37], policy=rest[38].
+        try:
+            nice = int(rest[16])
+        except (IndexError, ValueError):
+            pass
+        try:
+            rtprio = int(rest[37])
+        except (IndexError, ValueError):
+            pass
+        try:
+            policy = int(rest[38])
+        except (IndexError, ValueError):
+            pass
+
+    cpus_allowed = None
+    try:
+        with open(f'/proc/{pid}/status', 'r') as f:
+            for line in f:
+                if line.startswith('Cpus_allowed_list:'):
+                    cpus_allowed = line.split(':', 1)[1].strip()
+                    break
+    except (IOError, OSError):
+        pass
+
+    policy_name = _SCHED_POLICY.get(policy, f'?({policy})' if policy is not None else None)
+    return policy_name, nice, rtprio, cpus_allowed
+
+
 def _event_filename(event):
     """Return event.filename if the event has that field, else None.
 
@@ -428,6 +506,7 @@ def __init__():
     if env_keys:    ctx.append('env=' + ','.join(env_keys))
     if args.exe:    ctx.append('exe')
     if args.std:    ctx.append('std')
+    if args.sched:  ctx.append('sched')
     if cgroup_filter is not None:
         ctx.append('cgroup=' + (','.join(sorted(cgroup_filter)) or 'all'))
     if args.tree:   ctx.append('tree')
@@ -546,6 +625,16 @@ def __sample__(event):
         for fd, label in ((0, 'stdin'), (1, 'stdout'), (2, 'stderr')):
             tgt = _read_fd(pid, fd)
             print(f"    {label+':':<8} {tgt if tgt else '(closed)'}")
+
+    if args.sched:
+        info = _read_sched(pid)
+        if info is None:
+            print(f"    {'sched:':<8} (unavailable)")
+        else:
+            policy_name, nice, rtprio, cpus = info
+            def _fmt(v): return str(v) if v is not None else '?'
+            print(f"    {'sched:':<8} policy={_fmt(policy_name)} nice={_fmt(nice)} "
+                  f"rtprio={_fmt(rtprio)} cpus_allowed={cpus if cpus else '?'}")
 
     if cgroup_filter is not None:
         # Kept with the other multi-line blocks (before --tree) since a v1

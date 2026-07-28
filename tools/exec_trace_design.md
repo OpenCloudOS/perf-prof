@@ -70,6 +70,7 @@ kprobe / uprobe，脚本的核心逻辑（读 `/proc/<pid>/*`、格式化输出�
    - `--exe`：真实二进制（`/proc/<pid>/exe`），若事件带 filename 且不匹配时给出提示
    - `--std`：stdin/stdout/stderr 各自的 fd 目标
    - `--cgroup-path [SUBSYS,..]`：`/proc/<pid>/cgroup` 所在 cgroup 路径；不带参数打全部，带参数只保留匹配的子系统。命名 `--cgroup-path` 而非 `--cgroup`，是为了避开 `perf-prof python --cgroups` 的长选项前缀缩写匹配
+   - `--sched`：调度策略（policy）、nice、rtprio、`Cpus_allowed_list`。读自 `/proc/<pid>/{stat,status}`
 6. 默认 shebang 里带 `//batch=1/` 事件属性做**每事件立即唤醒**，避免
    exec 到打印之间被 batching 延迟拖长；同时不影响用户覆盖 `-e` 后自选
    的事件属性。
@@ -278,6 +279,26 @@ basename 而非全路径比较：symlink 的 dirname 天然不同（`/usr/bin/py
 - **匹配为空时显式说 `(no match for ...)`**：让"文件读到了、只是没这个子
   系统"和"读不到（unavailable）"两种失败可分。
 
+**--sched（调度参数）**：单行输出
+`policy=... nice=N rtprio=P cpus_allowed=list`。设计要点：
+
+- **数据来源固定两处**：
+  - `/proc/<pid>/stat` 里 `nice`（第 19 字段）、`rt_priority`（第 40 字段）、
+    `policy`（第 41 字段）。`comm` 是第 2 字段、外面有括号且可能含空格或 `)`
+    自身，因此不能简单 `split()`；从**最后一个 `)`** 之后再切分。
+  - `/proc/<pid>/status` 里 `Cpus_allowed_list:` 内核已经渲染成
+    `0-3,7` 这种紧凑格式，直接原样透出，不再自己去做位图↔range 转换。
+- **policy 数字映射**：内核 `SCHED_NORMAL/FIFO/RR/BATCH/IDLE/DEADLINE`
+  分别是 0/1/2/3/5/6（`include/uapi/linux/sched.h`）。用模块级 dict 做映
+  射，命中不到时打 `?(N)` 而不是直接 `KeyError`——留一个"新加的 policy 我
+  们还没登记"的可见信号。
+- **单行、可与其它 label:value 对齐**：所以位置放在 `--std` 与
+  `--cgroup-path` 之间，跟 uid/cwd/env/exe 这些整齐块一起排列；不占多行块
+  的位置。
+- **命名就叫 `--sched`**：`perf-prof python` 的选项集里没有 `--sched*` 长
+  选项（只有别的 profiler 用的 ebpf `--sched_policy`，不会走 python 分析器
+  的解析路径），所以不像 `--cgroup` 那样需要加连字符。
+
 **--tree（祖先链）**：从事件当时的 on-CPU 进程出发，反复读
 `/proc/<pid>/status` 的 `PPid:` 字段向上追溯，直到 PID 1（init）——这样能
 一眼看出"是 init/systemd/sshd/bash/rmmod 这条链在卸载模块"，而不是只知道
@@ -336,6 +357,7 @@ perf-prof python -e <EVENT> --order -m 64 -- exec_trace.py [options]
 | `--exe`      | 打印真实二进制路径；事件带 filename 且不一致时追加 `filename` 行 |
 | `--std`      | 打印 stdin/stdout/stderr 目标 |
 | `--cgroup-path [SUBSYS,..]` | 打印 `/proc/<pid>/cgroup`。无参数展示全部；带逗号分隔子系统列表则只保留匹配行（子串匹配；`unified` 匹配 cgroup v2 空 controllers 行）。命名带 `-path` 是为了避开 `perf-prof python --cgroups` 的前缀匹配 |
+| `--sched`    | 打印调度参数：policy（SCHED_NORMAL/FIFO/RR/BATCH/IDLE/DEADLINE）、nice、rtprio、Cpus_allowed_list |
 
 `-h` 输出完整帮助（含 Output layout、多个 Examples、Notes 段落）。
 
@@ -356,6 +378,9 @@ perf-prof python -e <EVENT> --order -m 64 -- exec_trace.py [options]
 
 # 排查 fileless / 已删除二进制
 ./exec_trace.py --exe
+
+# 看事件当事进程的调度参数（policy / nice / rtprio / cpus_allowed）
+./exec_trace.py --sched
 
 # 换成 fork 事件（无 filename 字段，--name/--path 不适用）
 perf-prof python -e 'sched:sched_process_fork' \
