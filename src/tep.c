@@ -879,6 +879,10 @@ static int tp_kprobe_uprobe(struct tp *tp, enum event_head_kind kind, char *body
         char *plus;
         unsigned long off = 0;
         char *first_colon = strchr(body, ':');
+        char *module = NULL;
+        char *fn;
+        struct ksyms *ksyms;
+        const struct ksym *ksym;
 
         /* "0xADDR" (or decimal address) form: only valid when there is no
          * module prefix and no '+offset'. */
@@ -920,6 +924,50 @@ static int tp_kprobe_uprobe(struct tp *tp, enum event_head_kind kind, char *body
                     is_ret ? "kretprobe" : "kprobe", body);
             return -1;
         }
+
+        /* Split "module:fn" for the symbol-table lookup. body itself is
+         * left intact (still "module:fn") so it can be handed to the
+         * kernel as kprobe_func — the kernel parses the module prefix
+         * itself. */
+        if (first_colon) {
+            *first_colon = '\0';
+            module = body;
+            fn = first_colon + 1;
+        } else {
+            fn = body;
+        }
+
+        /* Verify the target function exists in /proc/kallsyms.
+         * ksyms is pinned here (via ksyms_get) so a burst of kprobes
+         * in a single -e reuses one parsed symbol table. The matching
+         * ksyms_put() is issued at tp_list_new() exit, keyed on
+         * tp->kprobe_func being non-NULL — mirroring the uprobe_path
+         * pin/unpin pattern. */
+        ksyms = ksyms_get();
+        if (!ksyms) {
+            fprintf(stderr, "%s: cannot load /proc/kallsyms to verify '%s'\n",
+                    is_ret ? "kretprobe" : "kprobe", fn);
+            if (first_colon)
+                *first_colon = ':';
+            return -1;
+        }
+        ksym = ksyms__get_symbol(ksyms, fn, module);
+        if (!ksym) {
+            if (module)
+                fprintf(stderr, "%s: symbol '%s' not found in module '%s' (/proc/kallsyms)\n",
+                        is_ret ? "kretprobe" : "kprobe", fn, module);
+            else
+                fprintf(stderr, "%s: symbol '%s' not found in /proc/kallsyms\n",
+                        is_ret ? "kretprobe" : "kprobe", fn);
+            ksyms_put();
+            if (first_colon)
+                *first_colon = ':';
+            return -1;
+        }
+
+        /* Restore body to its original "module:fn" form for the kernel. */
+        if (first_colon)
+            *first_colon = ':';
 
         tp->kprobe_func = body;
         tp->probe_offset = off;
@@ -1397,6 +1445,8 @@ struct tp_list *tp_list_new(struct prof_dev *dev, char *event_str)
     for (i = 0; i < nr_tp; i++) {
         if (tp_list->tp[i].uprobe_path)
             syms__file_unpin(tp_list->tp[i].uprobe_path);
+        if (tp_list->tp[i].kprobe_func)
+            ksyms_put();
     }
 
     tep__unref();
@@ -1406,6 +1456,8 @@ err_out:
     for (i = 0; i < nr_tp; i++) {
         if (tp_list->tp[i].uprobe_path)
             syms__file_unpin(tp_list->tp[i].uprobe_path);
+        if (tp_list->tp[i].kprobe_func)
+            ksyms_put();
     }
     tep__unref();
     tp_list_free(tp_list);

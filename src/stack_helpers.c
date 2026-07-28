@@ -158,6 +158,18 @@ char *function_resolver(void *priv, unsigned long long *addrp, char **modp)
     return NULL;
 }
 
+struct ksyms *ksyms_get(void)
+{
+    if (global_syms_ref(true, false, false) == 0)
+        return ctx.ksyms;
+    return NULL;
+}
+
+void ksyms_put(void)
+{
+    global_syms_unref(true, false, false);
+}
+
 static void callchain_ctx_debug_init(struct callchain_ctx *cc, bool kernel, bool user, FILE *fout)
 {
     cc->kernel = kernel;
