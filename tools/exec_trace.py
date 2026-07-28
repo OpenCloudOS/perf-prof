@@ -67,6 +67,16 @@
 #                     and print each level with its cmdline. Supersedes
 #                     --parent. Stops early on unreachable PPid, loop, or
 #                     depth cap (32 levels).
+#   --cgroup-path [SUBSYS,..]
+#                     Print /proc/<pid>/cgroup. Without an argument, all
+#                     subsystems are shown; with a comma-separated list,
+#                     only rows whose controllers match are kept (substring:
+#                     `cpu` matches the joined `cpu,cpuacct`; `unified`
+#                     matches cgroup v2 rows with empty controllers).
+#                     Named --cgroup-path rather than --cgroup because
+#                     perf-prof python already owns --cgroups; the shell
+#                     concatenates the shebang line and long-option prefix
+#                     matching would fold --cgroup into it.
 #
 
 import sys
@@ -93,7 +103,10 @@ Output layout:
       stdin:    <fd target>                           (--std)
       stdout:   <fd target>                           (--std)
       stderr:   <fd target>                           (--std)
-      tree:                                            (--tree, always last)
+      cgroup:                                         (--cgroup-path [SUBSYS,..])
+          <controllers>   <path>
+          ...
+      tree:                                           (--tree, always last)
           PID:1   /sbin/init
             `- PID:X   /usr/bin/sshd -D
               `- PID:Y   -bash
@@ -113,6 +126,11 @@ Examples:
 
   # Full ancestor chain up to init -- who's ultimately responsible
   ./exec_trace.py --tree
+
+  # Container context: which cgroups is this process in?
+  ./exec_trace.py --cgroup-path             # all subsystems
+  ./exec_trace.py --cgroup-path memory,cpu  # only these controllers
+  ./exec_trace.py --cgroup-path unified     # only cgroup v2 unified row
 
   # Identity + LD_PRELOAD/PATH -- spot setuid escalation & lib hijack
   ./exec_trace.py --uid --env LD_PRELOAD,PATH
@@ -170,6 +188,9 @@ parser.add_argument('--std', action='store_true',
 parser.add_argument('--tree', action='store_true',
                     help='Print the full ancestor chain up to init (PID 1), '
                          'one level per line with cmdline; supersedes --parent')
+parser.add_argument('--cgroup-path', nargs='?', const='', default=None, metavar='SUBSYS[,SUBSYS..]',
+                    help='Print /proc/<pid>/cgroup; no arg = all subsystems, '
+                         'or a comma list to filter (substring match)')
 args = parser.parse_args()
 
 # Flatten --env KEY,KEY --env KEY into a single ordered list, drop dupes/blanks
@@ -179,6 +200,19 @@ for spec in args.env:
         k = k.strip()
         if k and k not in env_keys:
             env_keys.append(k)
+
+# --cgroup-path parsing:
+#   None         -> option not given, row skipped entirely.
+#   ''           -> given without argument, show all rows.
+#   set([...])   -> filter to rows whose controllers include any of these
+#                   substrings. `unified` matches cgroup v2 rows whose
+#                   controllers field is empty.
+if args.cgroup_path is None:
+    cgroup_filter = None
+elif args.cgroup_path == '':
+    cgroup_filter = set()          # empty set => "all rows"
+else:
+    cgroup_filter = {s.strip() for s in args.cgroup_path.split(',') if s.strip()}
 
 # Statistics
 stats = {
@@ -308,6 +342,49 @@ def _read_exe(pid):
         return None
 
 
+def _read_cgroup(pid, wanted):
+    """Read /proc/<pid>/cgroup and return a list of (controllers, path) rows.
+
+    Format per line is `hier_id:controllers:path`. `controllers` is a
+    comma-separated list of subsystem names, or empty on cgroup v2's unified
+    hierarchy (hier_id=0). To let users say `--cgroup-path cpu` and still
+    match the joined controller `cpu,cpuacct`, we compare each requested
+    subsys against every controller name on the row (substring match).
+
+    - wanted == set()   -> return every row (all subsystems).
+    - wanted == {names} -> keep rows whose controller list intersects.
+      The pseudo-name `unified` matches rows with empty controllers
+      (cgroup v2), and `systemd` also matches `name=systemd`.
+    """
+    try:
+        with open(f'/proc/{pid}/cgroup', 'r') as f:
+            raw = f.read()
+    except (IOError, OSError):
+        return None
+    rows = []
+    for line in raw.splitlines():
+        parts = line.split(':', 2)
+        if len(parts) != 3:
+            continue
+        controllers, path = parts[1], parts[2]
+        if not wanted:
+            rows.append((controllers, path))
+            continue
+        # Build the set of "names" this row is known by.
+        names = set()
+        if controllers:
+            for c in controllers.split(','):
+                names.add(c)
+                # `name=systemd` is also findable as `systemd`.
+                if c.startswith('name='):
+                    names.add(c[len('name='):])
+        else:
+            names.add('unified')
+        if names & wanted:
+            rows.append((controllers, path))
+    return rows
+
+
 def _read_fd(pid, fd):
     """Readlink /proc/<pid>/fd/<fd>. Returns the target string, or None if the
     fd is closed / unreadable. Targets can be paths, 'pipe:[N]', 'socket:[N]',
@@ -351,6 +428,8 @@ def __init__():
     if env_keys:    ctx.append('env=' + ','.join(env_keys))
     if args.exe:    ctx.append('exe')
     if args.std:    ctx.append('std')
+    if cgroup_filter is not None:
+        ctx.append('cgroup=' + (','.join(sorted(cgroup_filter)) or 'all'))
     if args.tree:   ctx.append('tree')
     ctx_str = ', '.join(ctx) if ctx else '(none)'
     print(f"{'='*72}")
@@ -467,6 +546,25 @@ def __sample__(event):
         for fd, label in ((0, 'stdin'), (1, 'stdout'), (2, 'stderr')):
             tgt = _read_fd(pid, fd)
             print(f"    {label+':':<8} {tgt if tgt else '(closed)'}")
+
+    if cgroup_filter is not None:
+        # Kept with the other multi-line blocks (before --tree) since a v1
+        # setup emits one line per controller and would break the aligned
+        # "label: value" column above.
+        rows = _read_cgroup(pid, cgroup_filter)
+        if rows is None:
+            print(f"    {'cgroup:':<8} (unavailable)")
+        elif not rows:
+            # File readable but nothing matched the user's --cgroup-path filter.
+            filt = ','.join(sorted(cgroup_filter)) if cgroup_filter else '(all)'
+            print(f"    {'cgroup:':<8} (no match for {filt})")
+        else:
+            print(f"    cgroup:")
+            # Fixed column width. Widest common controller is 'net_cls,net_prio'
+            # (16 chars); 20 leaves room without measuring per event.
+            for controllers, path in rows:
+                label = controllers if controllers else '(unified)'
+                print(f"        {label:<20}  {path}")
 
     if args.tree:
         # Walk PPid chain up to init (PID 1). Guard against read failures,

@@ -69,6 +69,7 @@ kprobe / uprobe，脚本的核心逻辑（读 `/proc/<pid>/*`、格式化输出�
    - `--env KEY[,KEY..]`：选择性打印环境变量
    - `--exe`：真实二进制（`/proc/<pid>/exe`），若事件带 filename 且不匹配时给出提示
    - `--std`：stdin/stdout/stderr 各自的 fd 目标
+   - `--cgroup-path [SUBSYS,..]`：`/proc/<pid>/cgroup` 所在 cgroup 路径；不带参数打全部，带参数只保留匹配的子系统。命名 `--cgroup-path` 而非 `--cgroup`，是为了避开 `perf-prof python --cgroups` 的长选项前缀缩写匹配
 6. 默认 shebang 里带 `//batch=1/` 事件属性做**每事件立即唤醒**，避免
    exec 到打印之间被 batching 延迟拖长；同时不影响用户覆盖 `-e` 后自选
    的事件属性。
@@ -251,6 +252,32 @@ basename 而非全路径比较：symlink 的 dirname 天然不同（`/usr/bin/py
 **--env 顺序**：保留用户指定的 KEY 顺序（`--env A,B` 与 `--env B,A` 输出
 不同），便于列 grep；漏掉的 KEY 显式 `(unset)`，让"没设"和"没读到"分明。
 
+**--cgroup-path（cgroup 路径）**：直接把 `/proc/<pid>/cgroup` 摊平打印。
+设计要点：
+
+- **命名 `--cgroup-path` 而非 `--cgroup`**：`perf-prof python` 自身有
+  `--cgroups <cgroup,...>` 选项（把 python 分析器 attach 到指定 cgroup），
+  而 subcmd 的 `parse-options` 支持长选项**前缀缩写匹配**
+  （`lib/subcmd/parse-options.c:449`）。shebang 模式下 kernel 把整行拼成
+  `perf-prof python ... exec_trace.py --cgroup xxx` 一起交给 perf-prof
+  解析，`--cgroup` 会被贪匹配成 `--cgroups`，把 `xxx` 吃走后再报错。中
+  间加一个 `-` 就打破前缀关系，脚本的选项就能干净地穿透到 python argparse。
+- **有无参数两种模式**：`--cgroup-path` 无参 → 全部 controllers 行；
+  `--cgroup-path cpu,memory` → 只保留匹配的行。
+- **子串匹配、覆盖 v1 的联合 controller**：kernel 会把 `cpu,cpuacct`、
+  `net_cls,net_prio` 这种绑在一起的 controller 放在同一行。用户输入
+  `--cgroup-path cpu` 是"我想看 cpu 这一支"的意思，因此匹配拆分后的每
+  个名字，命中任一即保留。
+- **`name=systemd` 也接受 `systemd`**：cgroup v1 的 named hierarchy 表
+  达为 `name=systemd`；`--cgroup-path systemd` 也认这一行。
+- **`unified` 关键字对应 cgroup v2**：v2 unified hierarchy 那行
+  `hier_id=0`、`controllers` 为空，用 `--cgroup-path unified` 明确匹配。
+- **和 `--tree` 一样放到多行块位置**：v1 有十几行输出，与前面对齐的
+  label:value 一行行混在一起会撑破视觉；放在 `--std` 之后、`--tree` 之
+  前，保证"整齐块 → 多行块"两段分明。
+- **匹配为空时显式说 `(no match for ...)`**：让"文件读到了、只是没这个子
+  系统"和"读不到（unavailable）"两种失败可分。
+
 **--tree（祖先链）**：从事件当时的 on-CPU 进程出发，反复读
 `/proc/<pid>/status` 的 `PPid:` 字段向上追溯，直到 PID 1（init）——这样能
 一眼看出"是 init/systemd/sshd/bash/rmmod 这条链在卸载模块"，而不是只知道
@@ -308,6 +335,7 @@ perf-prof python -e <EVENT> --order -m 64 -- exec_trace.py [options]
 | `--env K[,K..]` | 打印选择的环境变量，可重复 |
 | `--exe`      | 打印真实二进制路径；事件带 filename 且不一致时追加 `filename` 行 |
 | `--std`      | 打印 stdin/stdout/stderr 目标 |
+| `--cgroup-path [SUBSYS,..]` | 打印 `/proc/<pid>/cgroup`。无参数展示全部；带逗号分隔子系统列表则只保留匹配行（子串匹配；`unified` 匹配 cgroup v2 空 controllers 行）。命名带 `-path` 是为了避开 `perf-prof python --cgroups` 的前缀匹配 |
 
 `-h` 输出完整帮助（含 Output layout、多个 Examples、Notes 段落）。
 
@@ -393,11 +421,11 @@ perf-prof python -e 'sched:sched_process_exec/filename~"*/ps"/batch=1/' \
 
 以下方向留出了口子，但当前实现里没有：
 
-1. **`--ancestors`（祖先链）**：把父→父→...→自身按 `→` 折叠成一行；实现要
-   点是递归 `/proc/<pid>/status` 的 `PPid`，遇到已退出祖先显示占位。上一
-   轮讨论过折叠 vs 缩进两种呈现，倾向折叠以不吞屏。
-2. **`--cgroup` / `--ns`**：容器场景下把 `/proc/<pid>/cgroup` 与 `ns/*`
-   inode 打出来，直接看到进程属于哪个容器 / pid ns。
+1. **`--ancestors`（折叠祖先链）**：`--tree` 的单行版，把父→父→...→自身
+   用 `→` 折叠成一行。tree 好读、ancestors 好 grep，面向不同人。
+2. **`--ns`**：把 `/proc/<pid>/ns/{pid,mnt,net,...}` 的 inode 打出来，直
+   接看到进程属于哪个 pid/mnt/net namespace，容器场景下与 `--cgroup-path` 配
+   合定位跨 host 视角。
 3. **`--exit`**：额外挂 `sched:sched_process_exit`，按 PID 配对算存活时间
    —— 用来定位"频繁 fork 的短命进程"。现在 `__sample__` 已经能吃多事件，
    实现主要成本是配对状态机与内存回收，而不是多事件本身。
