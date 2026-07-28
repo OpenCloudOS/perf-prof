@@ -71,12 +71,16 @@ if [[ ${#user_funcs[@]} -gt 0 ]]; then
 fi
 
 events=()
-for f in "${user_funcs[@]}"; do
-    events+=("uprobe:${binary}:${f}" "uretprobe:${binary}:${f}")
-done
-for f in "${kern_funcs[@]}"; do
-    events+=("kprobe:${f}" "kretprobe:${f}")
-done
+if (( ${#user_funcs[@]} > 0 )); then
+    for f in "${user_funcs[@]}"; do
+        events+=("uprobe:${binary}:${f}" "uretprobe:${binary}:${f}")
+    done
+fi
+if (( ${#kern_funcs[@]} > 0 )); then
+    for f in "${kern_funcs[@]}"; do
+        events+=("kprobe:${f}" "kretprobe:${f}")
+    done
+fi
 
 IFS=',' event_arg="${events[*]}"
 
@@ -84,11 +88,13 @@ IFS=',' event_arg="${events[*]}"
 # same function can be observed on different CPUs, so strict time-order
 # merging across per-CPU ringbuffers is required for correct pairing.
 has_order=0
-for a in "${passthrough[@]:-}"; do
-    [[ "$a" == "--order" ]] && { has_order=1; break; }
-done
+if (( ${#passthrough[@]} > 0 )); then
+    for a in "${passthrough[@]}"; do
+        [[ "$a" == "--order" ]] && { has_order=1; break; }
+    done
+fi
 if (( ! has_order )); then
-    if [[ ${#passthrough[@]} -gt 0 ]]; then
+    if (( ${#passthrough[@]} > 0 )); then
         passthrough=(--order "${passthrough[@]}")
     else
         passthrough=(--order)
@@ -97,9 +103,11 @@ fi
 
 # If user did not supply `--`, append the default python module.
 has_dashdash=0
-for a in "${passthrough[@]:-}"; do
-    [[ "$a" == "--" ]] && { has_dashdash=1; break; }
-done
+if (( ${#passthrough[@]} > 0 )); then
+    for a in "${passthrough[@]}"; do
+        [[ "$a" == "--" ]] && { has_dashdash=1; break; }
+    done
+fi
 if (( ! has_dashdash )); then
     [[ -f "$default_py" ]] || { echo "error: default python script not found: $default_py" >&2; exit 1; }
     passthrough+=(-- "$default_py")
