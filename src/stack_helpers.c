@@ -19,6 +19,20 @@
 
 #define ALIGN(x, a)  __ALIGN_KERNEL((x), (a))
 
+/*
+ * Return the DSO display string for a kernel ksym:
+ *   symbol from a loadable module -> "[<module>]"
+ *   symbol from vmlinux           -> "[kernel]"
+ * NULL ksym is treated as core kernel so unresolved kernel frames
+ * still get a sensible DSO tag.
+ */
+static inline const char *ksym_dso(const struct ksym *ksym)
+{
+    if (ksym && ksym->module)
+        return ksym->module;
+    return "kernel";
+}
+
 static struct global_syms {
     struct ksyms *ksyms;
     struct syms_cache *syms_cache;
@@ -29,7 +43,7 @@ static struct global_syms {
 } ctx;
 
 /*
- * ffffffff81ad6db9 system_call_fastpath+0x16 ([kernel.kallsyms])
+ * ffffffff81ad6db9 system_call_fastpath+0x16 ([kernel])
  * 00007efd88d7ea20 __write_nocancel+0x7 (/usr/lib64/libc-2.17.so)
  * addr             symbol  +offset      (dso)
  *
@@ -237,7 +251,7 @@ static int __print_callchain_kernel(struct callchain_ctx *cc, u64 ip, bool *prin
                 len += fprintf(cc->fout, "Unknown");
         }
         if (cc->dso)
-            len += fprintf(cc->fout, "%s([kernel.kallsyms])", len ? " " : "");
+            len += fprintf(cc->fout, "%s([%s])", len ? " " : "", ksym_dso(ksym));
     }
     *printed = len > 0;
     return len_sep + len;
@@ -459,8 +473,8 @@ void print_callchain_common_cbs(struct callchain_ctx *cc, struct callchain *call
 
         if (kernel) {
             const struct ksym *ksym = cc->kernel ? ksyms__map_addr(ctx.ksyms, ip) : NULL;
-            fprintf(cc->fout, "    %016llx %s+0x%llx ([kernel.kallsyms])\n", ip, ksym ? ksym->name : "Unknown",
-                                ksym ? ip - ksym->addr : 0L);
+            fprintf(cc->fout, "    %016llx %s+0x%llx ([%s])\n", ip, ksym ? ksym->name : "Unknown",
+                                ksym ? ip - ksym->addr : 0L, ksym_dso(ksym));
         } else if (user) {
             struct dso *dso = NULL;
             uint64_t offset;
@@ -631,7 +645,7 @@ static void print2string_callchain(struct callchain_ctx *cc, struct callchain *c
                     len += snprintf(buff+len, sizeof(buff)-len, "+0x%lx", ksym ? ip - ksym->addr : 0L);
             }
             if (cc->dso)
-                len += snprintf(buff+len, sizeof(buff)-len, "%s([kernel.kallsyms])", len ? " " : "");
+                len += snprintf(buff+len, sizeof(buff)-len, "%s([%s])", len ? " " : "", ksym_dso(ksym));
             // Convert to unique string.
             callchain->ips[i] = (__u64)(void *)unique_string(buff);
         } else if (user && cc->print2string_user) {
@@ -1336,7 +1350,7 @@ static int init_callchain_key_cache(void)
  *   - symbol: str (function name or "Unknown")
  *   - offset: int (offset from symbol start)
  *   - kernel: bool (True if kernel frame, False if user frame)
- *   - dso: str (DSO name or "[kernel.kallsyms]" or "Unknown")
+ *   - dso: str ("[kernel]" or "[<module>]" for kernel frames, DSO path or "Unknown" for user)
  *
  * Frames are ordered from stack top to bottom (caller direction).
  *
@@ -1419,7 +1433,7 @@ void *callchain_to_pylist(struct callchain *callchain, u32 pid, int flags)
                            PyLong_FromUnsignedLongLong(ksym ? ip - ksym->addr : 0));
             SET_FRAME_ITEM(frame_dict, key_kernel, Py_True); Py_INCREF(Py_True);
             SET_FRAME_ITEM(frame_dict, key_dso,
-                           PyUnicode_FromString("[kernel.kallsyms]"));
+                           PyUnicode_FromFormat("[%s]", ksym_dso(ksym)));
 
         } else if (user) {
             struct dso *dso = NULL;
