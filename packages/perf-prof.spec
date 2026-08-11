@@ -9,6 +9,7 @@
 %define LIB_DIR /usr/lib64/%{name}
 %define TRACEEVENT_DIR %{LIB_DIR}/traceevent
 %define PLUGINS_DIR %{TRACEEVENT_DIR}/plugins
+%define TOOLS_DIR /usr/share/%{name}/tools
 %define has_btf %(test -f /sys/kernel/btf/vmlinux && echo 1 || echo 0)
 %define has_tcmalloc %(test -f /usr/include/gperftools/tcmalloc.h && echo 1 || echo 0)
 
@@ -21,8 +22,13 @@
 %global __strip /usr/bin/llvm-strip
 # Use standalone python3 to byte-compile .py files instead of system python
 %global __brp_python_bytecompile %{_rpmconfigdir}/brp-python-bytecompile "%{_builddir}/python/bin/python3" 0 1
-# Skip shebang mangling for bundled python stdlib files
-%global __brp_mangle_shebangs_exclude_from %{PYTHON_DIR}
+# Skip shebang mangling for the bundled python stdlib and the perf-prof tools:
+# the tools use `#!/usr/bin/env -S perf-prof python ...` shebangs, which
+# brp-mangle-shebangs would corrupt (it strips `env`, leaving `-S` as the interpreter).
+%global __brp_mangle_shebangs_exclude_from (%{PYTHON_DIR}|%{TOOLS_DIR})
+%else
+# Skip shebang mangling for the perf-prof tools (env -S shebang would be corrupted).
+%global __brp_mangle_shebangs_exclude_from %{TOOLS_DIR}
 %endif
 
 
@@ -103,6 +109,15 @@ install -m 0755 -o root -g root lib/traceevent/plugins/*.so %{buildroot}%{PLUGIN
 cp packages/%{name} %{buildroot}/etc/bash_completion.d/
 cp 'docs/perf-prof User Guide.pdf' %{buildroot}/usr/share/doc/%{name}
 
+# Install the standalone analysis tools (see tools/). The release tarball only
+# contains git-tracked files, so install everything under tools/ except the
+# design docs (*.md). Executable bits are preserved from git: analysis scripts
+# are 0755 with a `#!/usr/bin/env -S perf-prof python ...` shebang (exempted
+# from brp-mangle-shebangs above), while modules loaded by those scripts
+# (e.g. func_latency.py, imported by func_latency.sh from the same dir) are 0644.
+mkdir -p %{buildroot}%{TOOLS_DIR}
+find tools -maxdepth 1 -type f ! -name '*.md' -exec cp -a {} %{buildroot}%{TOOLS_DIR}/ \;
+
 %if %{standalone}
 # Install python-build-standalone runtime
 mkdir -p %{buildroot}%{PYTHON_DIR}
@@ -121,6 +136,7 @@ patchelf --set-rpath %{PYTHON_DIR}/lib %{buildroot}/usr/bin/%{name}
 /usr/bin/flamegraph.pl
 /usr/bin/trace2heatmap.pl
 %{PLUGINS_DIR}
+%{TOOLS_DIR}
 %if %{standalone}
 %{PYTHON_DIR}
 %endif
