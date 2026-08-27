@@ -35,6 +35,42 @@ struct extra_rundelay {
     u32 switches;
 };
 
+#if defined(__i386__) || defined(__x86_64__)
+static int kvm_exit_reason_in_args(void)
+{
+    int version = kernel_release();
+
+    if (version < 0) {
+        fprintf(stderr, "Failed to determine kernel version\n");
+        return -1;
+    }
+    return version < KERNEL_VERSION(5, 16, 0);
+}
+
+static int kvm_exit_select_prog(struct kvm_exit_bpf *obj)
+{
+    int reason_in_args = kvm_exit_reason_in_args();
+
+    if (reason_in_args < 0)
+        return -1;
+    if (reason_in_args) {
+        bpf_program__set_autoload(obj->progs.kvm_exit, false);
+        bpf_program__set_autoload(obj->progs.kvm_exit_pid, false);
+    } else {
+        bpf_program__set_autoload(obj->progs.kvm_exit_legacy, false);
+        bpf_program__set_autoload(obj->progs.kvm_exit_pid_legacy, false);
+    }
+
+    return 0;
+}
+#else
+static int kvm_exit_select_prog(struct kvm_exit_bpf *obj)
+{
+    (void)obj;
+    return 0;
+}
+#endif
+
 static int comm_notify(struct comm_notify *notify, int pid, int state, u64 free_time)
 {
     if (state == NOTIFY_COMM_DELETE) {
@@ -58,6 +94,8 @@ static int monitor_ctx_init(struct prof_dev *dev)
     ctx->obj = kvm_exit_bpf__open();
     if (!ctx->obj)
         goto free_ctx;
+    if (kvm_exit_select_prog(ctx->obj) < 0)
+        goto destroy;
 
     ctx->lat_dist = latency_dist_new_quantile(env->perins, true, sizeof(struct extra_rundelay));
     if (!ctx->lat_dist)
@@ -170,6 +208,9 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
             ctx->obj->bss->percpu_event[i].latency = INT64_MAX;
 
         bpf_program__set_autoload(ctx->obj->progs.kvm_exit_pid, 0);
+#if defined(__i386__) || defined(__x86_64__)
+        bpf_program__set_autoload(ctx->obj->progs.kvm_exit_pid_legacy, 0);
+#endif
         bpf_program__set_autoload(ctx->obj->progs.kvm_entry_pid, 0);
     } else {
         // can only be bound to cpu
@@ -185,6 +226,9 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
         ctx->obj->rodata->filter_pid = tgid;
 
         bpf_program__set_autoload(ctx->obj->progs.kvm_exit, 0);
+#if defined(__i386__) || defined(__x86_64__)
+        bpf_program__set_autoload(ctx->obj->progs.kvm_exit_legacy, 0);
+#endif
         bpf_program__set_autoload(ctx->obj->progs.kvm_entry, 0);
         bpf_program__set_autoload(ctx->obj->progs.sched_switch, 0);
 
@@ -196,6 +240,7 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
         if (!tgiddev)
             goto failed;
         perf_thread_map__put(tgidmap);
+        tgidmap = NULL;
     }
 
     ctx->obj->rodata->filter_latency = dev->env->threshold ? : 1000000 /* 1ms */;
@@ -463,6 +508,12 @@ static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm_exit",
     "Attach modes",
     "    -C cpus    System-wide monitoring on specified CPUs",
     "    -p pid     Process-specific monitoring (tracks all vcpu threads)",
+    "",
+    "TRACEPOINTS AND COMPATIBILITY",
+    "    Requires kvm:kvm_exit and kvm:kvm_entry; system-wide mode also uses",
+    "    sched:sched_switch. On x86 kernels before Linux 5.16, exit_reason is",
+    "    read from raw tracepoint arguments. On Linux 5.16 and later, fields",
+    "    are read from the trace event entry. arm64 keeps the raw tracepoint path.",
     "",
     "BPF-EVENT FIELDS",
     "    u32 exit_reason   # VM exit reason code",

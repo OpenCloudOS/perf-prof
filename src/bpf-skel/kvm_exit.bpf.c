@@ -22,15 +22,7 @@ struct {
     __type(value, struct kvm_vcpu_event);
 } kvm_vcpu SEC(".maps");
 
-
-SEC("raw_tp/kvm_exit")
-#ifdef __TARGET_ARCH_arm64
-#define _exit_reason  EXIT_REASON((u32)ret, esr_ec)
-#define _isa   KVM_ISA_ARM
-int BPF_PROG(kvm_exit, int ret, unsigned int esr_ec, unsigned long vcpu_pc)
-#else
-int BPF_PROG(kvm_exit, u32 _exit_reason, void *vcpu, u32 _isa)
-#endif
+static __always_inline int kvm_exit_oncpu(u32 exit_reason, u32 isa)
 {
     struct kvm_vcpu_event *data;
     u64 cpu = bpf_get_smp_processor_id();
@@ -39,17 +31,45 @@ int BPF_PROG(kvm_exit, u32 _exit_reason, void *vcpu, u32 _isa)
         return 0;
 
     data = &percpu_event[cpu];
-    data->exit_reason = _exit_reason;
+    data->exit_reason = exit_reason;
     data->latency = bpf_ktime_get_ns();
 
     if (!data->pid) {
         u64 id = bpf_get_current_pid_tgid();
         data->tgid = (u32)(id >> 32);
         data->pid = (u32)id;
-        data->isa = _isa;
+        data->isa = isa;
     }
     return 0;
 }
+
+#ifdef __TARGET_ARCH_arm64
+SEC("raw_tp/kvm_exit")
+int BPF_PROG(kvm_exit, int ret, unsigned int esr_ec, unsigned long vcpu_pc)
+{
+    return kvm_exit_oncpu(EXIT_REASON((u32)ret, esr_ec), KVM_ISA_ARM);
+}
+#else
+struct kvm_exit_trace_ctx {
+    struct trace_entry ent;
+    unsigned int exit_reason;
+    unsigned long guest_rip;
+    u32 isa;
+};
+
+SEC("tp/kvm/kvm_exit")
+int kvm_exit(struct kvm_exit_trace_ctx *ctx)
+{
+    kvm_exit_oncpu(ctx->exit_reason, ctx->isa);
+    return 1;
+}
+
+SEC("raw_tp/kvm_exit")
+int BPF_PROG(kvm_exit_legacy, u32 exit_reason, void *vcpu, u32 isa)
+{
+    return kvm_exit_oncpu(exit_reason, isa);
+}
+#endif
 
 SEC("raw_tp/kvm_entry")
 int BPF_PROG(kvm_entry) // int vcpu_id | unsigned long vcpu_pc
@@ -162,12 +182,7 @@ int BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_s
     return 0;
 }
 
-SEC("raw_tp/kvm_exit")
-#ifdef __TARGET_ARCH_arm64
-int BPF_PROG(kvm_exit_pid, int ret, unsigned int esr_ec, unsigned long vcpu_pc)
-#else
-int BPF_PROG(kvm_exit_pid, u32 _exit_reason, void *vcpu, u32 _isa)
-#endif
+static __always_inline int kvm_exit_track_pid(u32 exit_reason, u32 isa)
 {
     static struct kvm_vcpu_event zero;
     struct kvm_vcpu_event *data;
@@ -185,14 +200,35 @@ int BPF_PROG(kvm_exit_pid, u32 _exit_reason, void *vcpu, u32 _isa)
         if (data) {
             data->tgid = (u32)(id >> 32);
             data->pid = (u32)id;
-            data->isa = _isa;
+            data->isa = isa;
         } else
             return 0;
     }
-    data->exit_reason = _exit_reason;
+    data->exit_reason = exit_reason;
     data->latency = bpf_ktime_get_ns();
     return 0;
 }
+
+#ifdef __TARGET_ARCH_arm64
+SEC("raw_tp/kvm_exit")
+int BPF_PROG(kvm_exit_pid, int ret, unsigned int esr_ec, unsigned long vcpu_pc)
+{
+    return kvm_exit_track_pid(EXIT_REASON((u32)ret, esr_ec), KVM_ISA_ARM);
+}
+#else
+SEC("tp/kvm/kvm_exit")
+int kvm_exit_pid(struct kvm_exit_trace_ctx *ctx)
+{
+    kvm_exit_track_pid(ctx->exit_reason, ctx->isa);
+    return 1;
+}
+
+SEC("raw_tp/kvm_exit")
+int BPF_PROG(kvm_exit_pid_legacy, u32 exit_reason, void *vcpu, u32 isa)
+{
+    return kvm_exit_track_pid(exit_reason, isa);
+}
+#endif
 
 SEC("raw_tp/kvm_entry")
 int BPF_PROG(kvm_entry_pid) // int vcpu_id | unsigned long vcpu_pc
