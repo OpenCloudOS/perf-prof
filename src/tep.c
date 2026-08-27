@@ -220,15 +220,27 @@ int tep__event_id(const char *sys, const char *name)
         size_t size = 65536;
         char *buff = malloc(size);
 
+        if (!buff)
+            goto unref;
         fp = fopen(format, "r");
+        if (!fp) {
+            free(buff);
+            goto unref;
+        }
         size = fread(buff, 1, size, fp);
+        if (ferror(fp) || size == 0) {
+            fclose(fp);
+            free(buff);
+            goto unref;
+        }
         fclose(fp);
 
-        tep_parse_format(tep, &event, buff, size, sys);
-
+        if (tep_parse_format(tep, &event, buff, size, sys) != TEP_ERRNO__SUCCESS)
+            event = NULL;
         free(buff);
 
-        id = event->id;
+        if (event)
+            id = event->id;
     }
 unref:
     tep__unref();
