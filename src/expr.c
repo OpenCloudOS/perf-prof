@@ -53,6 +53,9 @@
 #include <arpa/inet.h>
 
 #include <monitor.h>
+#ifdef CONFIG_LIBBPF
+#include <linux/filter.h>
+#endif
 #include <tep.h>
 #include <expr.h>
 #include <stack_helpers.h>
@@ -905,6 +908,436 @@ void expr_dump(struct expr_prog *prog)
         }
     }
 }
+
+
+#ifdef CONFIG_LIBBPF
+
+/*
+ * eBPF backend: translate the compiled instruction stream into BPF
+ * instructions, for use as a kernel-side filter on a BPF-generated event.
+ *
+ * Calling convention of the generated code, matching the expr_filter()
+ * placeholder that it replaces (see src/bpf-skel/expr_filter.bpf.h):
+ *   r1 - pointer to the event struct on entry
+ *   r0 - result; non-zero keeps the event, zero drops it
+ *
+ * Global variables are bound the same way as for the userspace VM: their
+ * address is `prog->data + offset`, so an `IMM addr; LI type` pair is
+ * exactly `*(type *)(event + offset)` and folds into a single BPF_LDX_MEM.
+ * Assignment is the mirror image, `IMM addr; PSH; <value>; SI type` becoming
+ * a BPF_STX_MEM; see the SI case for why writing the event is allowed.
+ *
+ * The expression VM is stack based, but expr() only ever emits the pattern
+ * `<sub-expression>; PSH; <sub-expression>; <binop>`, so the stack depth at
+ * every point is known statically. Stack slot N is therefore mapped to a
+ * register, avoiding any memory traffic. r1 holds the event pointer and
+ * r0 the accumulator, leaving r2..r9 for slots.
+ *
+ * Note the verifier requires a subprogram to write r6-r9 before reading
+ * them, which is satisfied because a slot is always pushed before use.
+ */
+
+#define BPF_A          BPF_REG_0          /* accumulator, mirrors VM's `a' */
+#define BPF_EVENT      BPF_REG_1          /* event pointer, never clobbered */
+#define BPF_SLOT_FIRST BPF_REG_2
+#define BPF_SLOT_LAST  BPF_REG_9
+#define BPF_NR_SLOTS   (BPF_SLOT_LAST - BPF_SLOT_FIRST + 1)
+
+/* Upper bound on emitted instructions per VM instruction: the comparison
+ * ops expand to 3, and a signed division expands to more. */
+#define BPF_INSN_PER_OP 8
+
+struct bpf_emit {
+    struct bpf_insn *insn;
+    int nr_insn;
+    int max_insn;
+    int depth;          /* current stack depth, in slots */
+    int failed;
+    const char *err;
+    /* Map from VM instruction index to emitted instruction index, so that
+     * jump targets can be resolved once everything has been emitted. */
+    int *pc_map;
+    int nr_pc;
+    /* Emitted jumps awaiting resolution, and the VM pc each targets. Only
+     * these are patched; branches emitted for comparisons already hold a
+     * correct relative offset. */
+    int *fixup_at;
+    int *fixup_to;
+    int nr_fixup;
+};
+
+static void emit(struct bpf_emit *e, struct bpf_insn insn)
+{
+    if (e->failed)
+        return;
+    if (e->nr_insn >= e->max_insn) {
+        e->failed = 1;
+        e->err = "instruction buffer overflow";
+        return;
+    }
+    e->insn[e->nr_insn++] = insn;
+}
+
+static void emit_fail(struct bpf_emit *e, const char *err)
+{
+    if (!e->failed) {
+        e->failed = 1;
+        e->err = err;
+    }
+}
+
+/* Register holding stack slot `n' (0 is the bottom of the expression stack). */
+static int slot_reg(struct bpf_emit *e, int n)
+{
+    if (n < 0 || n >= BPF_NR_SLOTS) {
+        emit_fail(e, "expression too deeply nested for register allocation");
+        return BPF_SLOT_FIRST;
+    }
+    return BPF_SLOT_FIRST + n;
+}
+
+/* Convert an LI/SI type operand into a BPF load/store size. */
+static int bpf_size_of(struct bpf_emit *e, long type)
+{
+    if (type >= PTR)
+        return BPF_DW;
+    switch (type & ~UNSIGNED) {
+        case CHAR:  return BPF_B;
+        case SHORT: return BPF_H;
+        case INT:   return BPF_W;
+        case LONG:  return BPF_DW;
+        default:
+            emit_fail(e, "unsupported type in load");
+            return BPF_DW;
+    }
+}
+
+/*
+ * Emit `a = (slot <cond> a)`. eBPF has no set-on-condition, so materialise
+ * the boolean with a branch. The comparison must happen before the result
+ * register is written, because the right operand lives in the accumulator:
+ *      if (slot <cond> a) goto +2; a = 0; goto +1; a = 1
+ */
+static void emit_cmp(struct bpf_emit *e, int op, int lhs)
+{
+    emit(e, BPF_JMP_REG(op, lhs, BPF_A, 2));
+    emit(e, BPF_MOV64_IMM(BPF_A, 0));
+    emit(e, BPF_JMP_A(1));
+    emit(e, BPF_MOV64_IMM(BPF_A, 1));
+}
+
+/*
+ * Translate the program. Returns a malloc'd instruction array, or NULL on
+ * failure (with a diagnostic printed).
+ */
+struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
+{
+    struct bpf_emit e = {};
+    long *pc, *insn_end;
+    long *base;
+    int i, lhs;
+
+    if (!prog || !prog->insn)
+        return NULL;
+
+    base = prog->insn;
+    insn_end = base + prog->nr_insn;
+
+    e.max_insn = prog->nr_insn * BPF_INSN_PER_OP + 8;
+    e.insn = calloc(e.max_insn, sizeof(*e.insn));
+    e.pc_map = calloc(prog->nr_insn + 1, sizeof(*e.pc_map));
+    e.fixup_at = calloc(prog->nr_insn + 1, sizeof(*e.fixup_at));
+    e.fixup_to = calloc(prog->nr_insn + 1, sizeof(*e.fixup_to));
+    if (!e.insn || !e.pc_map || !e.fixup_at || !e.fixup_to)
+        goto out;
+
+    for (i = 0; i <= prog->nr_insn; i++)
+        e.pc_map[i] = -1;
+
+    /* prog->insn[0] is unused: expr_compile() pre-increments before storing. */
+    pc = base + 1;
+    while (pc < insn_end && !e.failed) {
+        long op = *pc;
+
+        e.pc_map[pc - base] = e.nr_insn;
+        pc++;
+
+        switch (op) {
+            case IMM: {
+                long v = *pc++;
+                /* An IMM naming a global, immediately dereferenced by LI, is
+                 * a field access: fold the pair into one load off the event
+                 * pointer. */
+                if (prog->data && pc < insn_end && *pc == LI &&
+                    v >= (long)prog->data && v < (long)prog->data + prog->datasize) {
+                    long type = pc[1];
+                    int off = (int)(v - (long)prog->data);
+                    int sz = bpf_size_of(&e, type);
+
+                    e.pc_map[pc - base] = e.nr_insn;
+                    pc += 2;
+                    emit(&e, BPF_LDX_MEM(sz, BPF_A, BPF_EVENT, off));
+                    /* Narrow loads zero-extend; sign-extend by hand so that
+                     * signed comparisons behave like the userspace VM. */
+                    if (!(type & UNSIGNED) && type < PTR && sz != BPF_DW) {
+                        int bits = sz == BPF_B ? 56 : (sz == BPF_H ? 48 : 32);
+                        emit(&e, BPF_ALU64_IMM(BPF_LSH, BPF_A, bits));
+                        emit(&e, BPF_ALU64_IMM(BPF_ARSH, BPF_A, bits));
+                    }
+                } else if (prog->data &&
+                           v >= (long)prog->data &&
+                           v < (long)prog->data + prog->datasize) {
+                    /* Address of a field, e.g. `&pid'. */
+                    emit(&e, BPF_MOV64_REG(BPF_A, BPF_EVENT));
+                    emit(&e, BPF_ALU64_IMM(BPF_ADD, BPF_A, (int)(v - (long)prog->data)));
+                } else if (prog->str && v >= (long)prog->str) {
+                    emit_fail(&e, "string literals are not supported by the BPF backend");
+                } else {
+                    emit(&e, BPF_MOV64_IMM(BPF_A, (int)v));
+                    if (v != (int)v)
+                        emit_fail(&e, "64-bit immediate is not supported by the BPF backend");
+                }
+                break;
+            }
+            case LI: {
+                /* A dereference that was not folded above: the address is in
+                 * the accumulator. */
+                int sz = bpf_size_of(&e, *pc++);
+                emit(&e, BPF_LDX_MEM(sz, BPF_A, BPF_A, 0));
+                break;
+            }
+            case PSH:
+                emit(&e, BPF_MOV64_REG(slot_reg(&e, e.depth), BPF_A));
+                e.depth++;
+                if (e.depth > BPF_NR_SLOTS)
+                    emit_fail(&e, "expression too deeply nested for register allocation");
+                break;
+
+            case BZ:
+            case BNZ: {
+                long target = *pc++;
+                int at = e.nr_insn;
+
+                emit(&e, BPF_JMP_IMM(op == BZ ? BPF_JEQ : BPF_JNE, BPF_A, 0, 0));
+                if (!e.failed) {
+                    e.fixup_at[e.nr_fixup] = at;
+                    e.fixup_to[e.nr_fixup] = (int)(((long *)target) - base);
+                    e.nr_fixup++;
+                }
+                break;
+            }
+            case JMP: {
+                long target = *pc++;
+                int at = e.nr_insn;
+
+                emit(&e, BPF_JMP_A(0));
+                if (!e.failed) {
+                    e.fixup_at[e.nr_fixup] = at;
+                    e.fixup_to[e.nr_fixup] = (int)(((long *)target) - base);
+                    e.nr_fixup++;
+                }
+                break;
+            }
+
+            case EXIT:
+                emit(&e, BPF_EXIT_INSN());
+                break;
+
+            /* Binary operators: the left operand was pushed, the right is in
+             * the accumulator. */
+            case OR: case XOR: case AND: case SHL: case SHR: case SAR:
+            case ADD: case SUB: case MUL: case DIVu: case MODu:
+            case EQ: case NE:
+            case LT: case GT: case LE: case GE:
+            case LTu: case GTu: case LEu: case GEu: {
+                if (e.depth <= 0) {
+                    emit_fail(&e, "stack underflow");
+                    break;
+                }
+                e.depth--;
+                lhs = slot_reg(&e, e.depth);
+
+                switch (op) {
+                    /* Arithmetic and bitwise: a = lhs <op> a. Operands are
+                     * reversed relative to BPF's dst <op>= src, so compute
+                     * into the slot register and move back. */
+                    case OR:   emit(&e, BPF_ALU64_REG(BPF_OR,  lhs, BPF_A)); goto commit;
+                    case XOR:  emit(&e, BPF_ALU64_REG(BPF_XOR, lhs, BPF_A)); goto commit;
+                    case AND:  emit(&e, BPF_ALU64_REG(BPF_AND, lhs, BPF_A)); goto commit;
+                    case SHL:  emit(&e, BPF_ALU64_REG(BPF_LSH, lhs, BPF_A)); goto commit;
+                    case SHR:  emit(&e, BPF_ALU64_REG(BPF_RSH, lhs, BPF_A)); goto commit;
+                    case SAR:  emit(&e, BPF_ALU64_REG(BPF_ARSH, lhs, BPF_A)); goto commit;
+                    case ADD:  emit(&e, BPF_ALU64_REG(BPF_ADD, lhs, BPF_A)); goto commit;
+                    case SUB:  emit(&e, BPF_ALU64_REG(BPF_SUB, lhs, BPF_A)); goto commit;
+                    case MUL:  emit(&e, BPF_ALU64_REG(BPF_MUL, lhs, BPF_A)); goto commit;
+                    case DIVu: emit(&e, BPF_ALU64_REG(BPF_DIV, lhs, BPF_A)); goto commit;
+                    case MODu: emit(&e, BPF_ALU64_REG(BPF_MOD, lhs, BPF_A)); goto commit;
+                    commit:
+                        emit(&e, BPF_MOV64_REG(BPF_A, lhs));
+                        break;
+
+                    case EQ:  emit_cmp(&e, BPF_JEQ, lhs); break;
+                    case NE:  emit_cmp(&e, BPF_JNE, lhs); break;
+                    case LT:  emit_cmp(&e, BPF_JSLT, lhs); break;
+                    case GT:  emit_cmp(&e, BPF_JSGT, lhs); break;
+                    case LE:  emit_cmp(&e, BPF_JSLE, lhs); break;
+                    case GE:  emit_cmp(&e, BPF_JSGE, lhs); break;
+                    case LTu: emit_cmp(&e, BPF_JLT, lhs); break;
+                    case GTu: emit_cmp(&e, BPF_JGT, lhs); break;
+                    case LEu: emit_cmp(&e, BPF_JLE, lhs); break;
+                    case GEu: emit_cmp(&e, BPF_JGE, lhs); break;
+                    default:  emit_fail(&e, "unsupported binary operator"); break;
+                }
+                break;
+            }
+
+            /* Signed division and modulo need a sign-correction sequence;
+             * BPF_SDIV/BPF_SMOD only exist on 6.7+. Not worth it yet. */
+            case DIV:
+            case MOD:
+                emit_fail(&e, "signed division is not supported by the BPF backend");
+                break;
+
+            /*
+             * Store to an event field: `*sp++ = a', so the slot holds the
+             * destination address (an `IMM addr' that was not folded into a
+             * load) and the accumulator holds the value.
+             *
+             * Writing to the event is deliberately allowed, for two reasons.
+             * First, a filter sometimes needs to correct or annotate what it
+             * is about to emit -- masking a field, rescaling a latency -- and
+             * doing that here is cheaper than shipping the event to userspace
+             * only to rewrite it. Second, the expression language has no
+             * variables of its own, so an otherwise unused event field is the
+             * only place to keep a temporary: `sched_latency = latency /
+             * switches, sched_latency > 100' has to put the quotient
+             * somewhere.
+             *
+             * This requires the event to live in writable memory, which holds
+             * for the .bss and map-value storage event sources use, and the
+             * verifier enforces the bounds either way.
+             *
+             * Note the event may be storage the BPF program keeps across
+             * events rather than a scratch copy, so writing a field the
+             * program still needs can perturb later events too.
+             */
+            case SI: {
+                int sz = bpf_size_of(&e, *pc++);
+
+                if (e.depth <= 0) {
+                    emit_fail(&e, "stack underflow");
+                    break;
+                }
+                e.depth--;
+                /* The slot holds a complete address, hence offset 0. The
+                 * accumulator keeps the stored value, so an assignment still
+                 * evaluates to it. */
+                emit(&e, BPF_STX_MEM(sz, slot_reg(&e, e.depth), BPF_A, 0));
+                break;
+            }
+
+            case NTHL:
+                emit(&e, BPF_ENDIAN(BPF_TO_BE, BPF_A, 32));
+                break;
+            case NTHS:
+                emit(&e, BPF_ENDIAN(BPF_TO_BE, BPF_A, 16));
+                break;
+
+            case PRTF:      emit_fail(&e, "printf() is not supported by the BPF backend"); break;
+            case KSYM:      emit_fail(&e, "ksymbol() is not supported by the BPF backend"); break;
+            case COMM:      emit_fail(&e, "comm_get() is not supported by the BPF backend"); break;
+            case STRNCMP:   emit_fail(&e, "strncmp() is not supported by the BPF backend"); break;
+            case MATCH:     emit_fail(&e, "~ is not supported by the BPF backend"); break;
+            case STREQ:
+            case STRNE:     emit_fail(&e, "string comparison is not supported by the BPF backend"); break;
+            case SYSCALL:   emit_fail(&e, "syscall_name() is not supported by the BPF backend"); break;
+            case KVMEXIT:   emit_fail(&e, "exit_reason_str() is not supported by the BPF backend"); break;
+            case SYSTEM:    emit_fail(&e, "system() is not supported by the BPF backend"); break;
+            case ADJ:       emit_fail(&e, "function calls are not supported by the BPF backend"); break;
+
+            /*
+             * Everything the VM can emit is handled above, so reaching here
+             * means expr_compile() grew an opcode this backend has not been
+             * taught. Not implemented, in the order they appear in the opcode
+             * enum:
+             *
+             *   LEA, JSR, ENT, LEV  frame and call setup. expr_compile() never
+             *                       emits these: it only ever assigns symbol
+             *                       classes Glo and Sys, so there are no
+             *                       locals to address and no user-defined
+             *                       functions to call.
+             *   JMP, BZ, BNZ        handled; listed only because they are the
+             *                       ones whose targets need fixing up.
+             *
+             * and, handled above by failing with a specific message rather
+             * than silently: DIV, MOD (signed division needs a sign-correction
+             * sequence; BPF_SDIV/BPF_SMOD are 6.7+), ADJ (function calls), and
+             * every builtin that returns or inspects a string -- PRTF, KSYM,
+             * COMM, STRNCMP, MATCH, STREQ, STRNE, SYSCALL, KVMEXIT, SYSTEM.
+             * Those need either userspace state (a symbol table, a pid->comm
+             * cache) or unbounded loops, neither of which exists here.
+             */
+            default:
+                emit_fail(&e, "unsupported instruction");
+                break;
+        }
+    }
+
+    if (e.failed)
+        goto out;
+
+    e.pc_map[prog->nr_insn] = e.nr_insn;
+
+    /* Resolve the recorded jumps. */
+    for (i = 0; i < e.nr_fixup; i++) {
+        struct bpf_insn *ins = &e.insn[e.fixup_at[i]];
+        int target_pc = e.fixup_to[i];
+        int target;
+
+        if (target_pc < 0 || target_pc > prog->nr_insn ||
+            e.pc_map[target_pc] < 0) {
+            emit_fail(&e, "unresolved jump target");
+            goto out;
+        }
+        target = e.pc_map[target_pc];
+        /* BPF jump offsets are relative to the next instruction. */
+        ins->off = target - e.fixup_at[i] - 1;
+    }
+
+    /* The placeholder is 2 instructions long, and libbpf relocates BTF
+     * line_info using the original count while validating against the new
+     * one, so never emit fewer than that. */
+    while (e.nr_insn < 2)
+        emit(&e, BPF_EXIT_INSN());
+
+    free(e.pc_map);
+    free(e.fixup_at);
+    free(e.fixup_to);
+    *nr_insn = e.nr_insn;
+    return e.insn;
+
+out:
+    if (e.err)
+        fprintf(stderr, "expr: cannot compile to BPF: %s\n", e.err);
+    free(e.pc_map);
+    free(e.fixup_at);
+    free(e.fixup_to);
+    free(e.insn);
+    return NULL;
+}
+
+void expr_bpf_dump(struct bpf_insn *insn, int nr_insn)
+{
+    int i;
+
+    printf("BPF instruction:\n");
+    for (i = 0; i < nr_insn; i++)
+        printf("  %3d: code=0x%02x dst=r%u src=r%u off=%-4d imm=%d\n",
+               i, insn[i].code, insn[i].dst_reg, insn[i].src_reg,
+               insn[i].off, insn[i].imm);
+}
+
+#endif /* CONFIG_LIBBPF */
 
 
 /*
