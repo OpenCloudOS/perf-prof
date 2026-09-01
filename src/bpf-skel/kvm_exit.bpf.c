@@ -5,13 +5,13 @@
 
 #include "kvm_exit.h"
 #include "perf_output.bpf.h"
+#include "expr_filter.bpf.h"
 
 #define MAX_CPUS 4096
 #define MAX_VCPUS 8192
 #define INT64_MAX 9223372036854775807UL
 
 const volatile unsigned int filter_pid = 0;
-const volatile int64_t filter_latency = 0;
 unsigned char work_cpus[MAX_CPUS] = {0};
 struct kvm_vcpu_event percpu_event[MAX_CPUS] = {0};
 
@@ -21,6 +21,10 @@ struct {
     __type(key, int);
     __type(value, struct kvm_vcpu_event);
 } kvm_vcpu SEC(".maps");
+
+/* Kernel-side expression filter for the kvm_vcpu_event event source.
+ * See expr_filter.bpf.h. */
+DEFINE_EXPR_FILTER(struct kvm_vcpu_event)
 
 static __always_inline int kvm_exit_oncpu(u32 exit_reason, u32 isa)
 {
@@ -82,7 +86,19 @@ int BPF_PROG(kvm_entry) // int vcpu_id | unsigned long vcpu_pc
 
     data = &percpu_event[cpu];
     data->latency = bpf_ktime_get_ns() - (u64)data->latency;
-    if (data->latency > filter_latency) {
+    /*
+     * A vcpu first seen at sched_switch has no kvm_exit to pair with and gets
+     * an INT64_MAX latency, which comes out negative here. Drop those before
+     * the filter runs, so an expression never sees a bogus first event.
+     */
+    if (data->latency > 0) {
+        /*
+         * Resolve run_delay and sched_latency before filtering, not just
+         * before output: until this runs, run_delay still holds the raw
+         * sched_info.run_delay snapshot taken at sched_switch rather than the
+         * delta, and sched_latency is stale. An expression referring to either
+         * would otherwise see a meaningless value.
+         */
         if (data->switches) {
             struct task_struct *task = (void *)bpf_get_current_task();
             u64 run_delay = BPF_CORE_READ(task, sched_info.run_delay);
@@ -91,7 +107,8 @@ int BPF_PROG(kvm_entry) // int vcpu_id | unsigned long vcpu_pc
             data->run_delay = 0;
             data->sched_latency = 0;
         }
-        perf_output(ctx, data, sizeof(*data));
+        if (expr_filter(data))
+            perf_output(ctx, data, sizeof(*data));
     }
     data->switches = 0;
     return 0;
@@ -172,9 +189,10 @@ int BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_s
             curr->sched_latency = (time ?: bpf_ktime_get_ns()) - (u64)next_event->sched_latency;
         } else {
             /*
-             * For a newly generated vCPU, setting a INT64_MAX latency can ensure
-             * that it does not generate incorrect output in kvm_entry.
-             * (data->latency > filter_latency) condition is not met.
+             * A newly generated vCPU has no kvm_exit to pair with, so give it
+             * a latency far in the future: kvm_entry subtracts it from the
+             * current time, and the resulting negative value is what marks the
+             * event as bogus for anything that looks at it.
              */
             curr->latency = INT64_MAX;
         }
@@ -244,7 +262,13 @@ int BPF_PROG(kvm_entry_pid) // int vcpu_id | unsigned long vcpu_pc
     data = bpf_map_lookup_elem(&kvm_vcpu, &pid);
     if (data) {
         data->latency = bpf_ktime_get_ns() - data->latency;
-        if (data->latency > filter_latency)
+        /*
+         * This path reports only up to run_delay, and never computes
+         * run_delay/sched_latency, so a filter must not rely on them here.
+         * The map entry only exists once kvm_exit_track_pid() has run, which
+         * is why no latency validity check is needed.
+         */
+        if (expr_filter(data))
             perf_output(ctx, data, offsetof(struct kvm_vcpu_event, run_delay));
     }
     return 0;

@@ -9,6 +9,7 @@
 #include <trace_helpers.h>
 #include <stack_helpers.h>
 #include <latency_helpers.h>
+#include <bpf_expr_filter.h>
 #include <bpf-skel/kvm_exit.h>
 #include <bpf-skel/kvm_exit.skel.h>
 #include <internal/xyarray.h>
@@ -243,7 +244,15 @@ static int bpf_kvm_exit_init(struct prof_dev *dev)
         tgidmap = NULL;
     }
 
-    ctx->obj->rodata->filter_latency = dev->env->threshold ? : 1000000 /* 1ms */;
+    /*
+     * Install the kernel-side expression filter, if one was given. Must happen
+     * before load: expr_filter() is a subprogram, and libbpf copies it into its
+     * callers during load.
+     */
+    if (dev->env->filter &&
+        bpf_expr_filter_apply(ctx->obj->obj, dev->env->filter, dev->env->verbose) < 0)
+        goto failed;
+
     if (kvm_exit_bpf__load(ctx->obj))
         goto failed;
 
@@ -494,7 +503,7 @@ static u64 bpf_kvm_exit_minevtime(struct prof_dev *dev)
 }
 
 static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm_exit",
-    "[OPTION...] [-C cpus | -p pid] [-i interval] [--perins] [--than ns] [--threshold ns]",
+    "[OPTION...] [-C cpus | -p pid] [-i interval] [--perins] [--than ns] [--filter expr]",
     "Generate bpf:kvm_exit event.",
     "",
     "SYNOPSIS",
@@ -502,8 +511,18 @@ static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm_exit",
     "    in kernel space to generate bpf:kvm_exit events with detailed latency breakdown.",
     "",
     "    Aggregates exit latency distribution (min/avg/p99/max) by exit_reason, outputs",
-    "    at intervals specified by -i. Use --threshold to filter events in BPF (kernel),",
-    "    use --than to display events exceeding the threshold (excludes HLT exits).",
+    "    at intervals specified by -i. Use --filter to drop events in BPF (kernel), use",
+    "    --than to display events exceeding a threshold (excludes HLT exits).",
+    "",
+    "FILTER",
+    "    --filter takes a C expression over the BPF-event fields below, compiled to BPF",
+    "    and evaluated in the kernel; an event is kept when it evaluates non-zero. Most",
+    "    C operators work, but string and symbol builtins do not -- an unsupported",
+    "    construct is reported at startup rather than silently ignored.",
+    "",
+    "    Fields may also be assigned, both to rewrite what is reported and, since the",
+    "    expression language has no variables of its own, to hold a temporary in an",
+    "    otherwise unused field.",
     "",
     "Attach modes",
     "    -C cpus    System-wide monitoring on specified CPUs",
@@ -529,12 +548,18 @@ static const char *bpf_kvm_exit_desc[] = PROFILER_DESC("bpf:kvm_exit",
     "    "PROGRAME" bpf:kvm_exit -C 1-4 -i 1000 --perins",
     "        # Monitor CPUs 1-4, output per-instance stats every 1s",
     "",
-    "    "PROGRAME" bpf:kvm_exit -C 0-7 -i 1000 --threshold 10ms --than 20ms",
-    "        # Filter exits < 10ms in BPF, display exits > 20ms (non-HLT)");
+    "    "PROGRAME" bpf:kvm_exit -C 0-7 -i 1000 --filter 'latency > 10000000' --than 20ms",
+    "        # Drop exits < 10ms in BPF, display exits > 20ms (non-HLT)",
+    "",
+    "    "PROGRAME" bpf:kvm_exit -C 0-7 -i 1000 --filter 'exit_reason != 12'",
+    "        # Ignore HLT exits entirely, in the kernel",
+    "",
+    "    "PROGRAME" bpf:kvm_exit -C 0-7 -i 1000 --filter 'latency > 1000000 && switches > 0'",
+    "        # Exits over 1ms that were also preempted");
 static const char *bpf_kvm_exit_argv[] = PROFILER_ARGV("bpf:kvm_exit",
     PROFILER_ARGV_OPTION,
     PROFILER_ARGV_PROFILER, "perins", "than",
-    "threshold  Vmexit latency threshold, Dflt: 1ms",
+    "filter     Expression filter, evaluated in the kernel",
     "detail     Display per-thread stat",
     "output2    Output the non-HLT maximum latency for each process");
 struct monitor bpf_kvm_exit = {
