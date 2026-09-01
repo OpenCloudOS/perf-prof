@@ -4008,6 +4008,24 @@ bpf_object__find_program_by_name(const struct bpf_object *obj,
 	return errno = ENOENT, NULL;
 }
 
+/* perf-prof local addition; see libbpf.h for why this exists. */
+struct bpf_program *
+bpf_object__find_subprog_by_name(const struct bpf_object *obj,
+				 const char *name)
+{
+	struct bpf_program *prog;
+	size_t i;
+
+	for (i = 0; i < obj->nr_programs; i++) {
+		prog = &obj->programs[i];
+		if (!prog_is_subprog(obj, prog))
+			continue;
+		if (!strcmp(prog->name, name))
+			return prog;
+	}
+	return errno = ENOENT, NULL;
+}
+
 static bool bpf_object__shndx_is_data(const struct bpf_object *obj,
 				      int shndx)
 {

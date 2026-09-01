@@ -280,6 +280,29 @@ LIBBPF_API struct bpf_program *
 bpf_object__find_program_by_name(const struct bpf_object *obj,
 				 const char *name);
 
+/*
+ * perf-prof local addition.
+ *
+ * Find a subprogram (a __noinline function, which lives in .text) by name.
+ * bpf_object__find_program_by_name() and bpf_object__next_program() both skip
+ * subprograms deliberately, and struct bpf_program is opaque, so there is
+ * otherwise no way to reach one.
+ *
+ * The point is to be able to replace a placeholder subprogram's instructions
+ * with generated code via bpf_program__set_insns(), between bpf_object__open()
+ * and bpf_object__load() -- that is, before libbpf copies the subprogram into
+ * each of its callers. Because that copy happens afterwards, the replacement
+ * need not be the same length as the placeholder.
+ *
+ * Deliberately not LIBBPF_API, and not listed in libbpf.map: this is not part
+ * of the upstream ABI, so it claims no version node and does not disturb the
+ * map's symbol-count check (see check_abi in lib/bpf/Makefile). perf-prof
+ * links libbpf.a statically, so it does not need to be exported.
+ */
+struct bpf_program *
+bpf_object__find_subprog_by_name(const struct bpf_object *obj,
+				 const char *name);
+
 LIBBPF_API int
 libbpf_prog_type_by_name(const char *name, enum bpf_prog_type *prog_type,
 			 enum bpf_attach_type *expected_attach_type);
