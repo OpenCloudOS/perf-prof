@@ -5,7 +5,7 @@ from conftest import result_check
 
 def test_bpf(runtime, memleak_check):
     #perf-prof bpf:kvm_exit --order -i 5000 --perins --detail
-    prof = PerfProf(["bpf:kvm_exit", "-i", "1000", "--perins", "--detail", "--threshold", "2ms"])
+    prof = PerfProf(["bpf:kvm_exit", "-i", "1000", "--perins", "--detail", "--filter", "latency > 2000000"])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
@@ -29,7 +29,107 @@ def test_bpf_3(runtime, memleak_check):
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
 
-def test_bpf_3(runtime, memleak_check):
+def test_bpf_4(runtime, memleak_check):
     prof = PerfProf(["bpf:kvm_exit", "-i", "1000", "--perins", "--detail", "--than", "10ms"])
     for std, line in prof.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+
+#
+# --filter: a C expression compiled to BPF and evaluated in the kernel.
+#
+def bpf_filter(expr, runtime, memleak_check, args=None):
+    cmdline = ["bpf:kvm_exit", "-i", "1000", "--filter", expr]
+    if args:
+        cmdline.extend(args)
+    prof = PerfProf(cmdline)
+    for std, line in prof.run(runtime, memleak_check):
+        result_check(std, line, runtime, memleak_check)
+
+def test_filter_eq(runtime, memleak_check):
+    bpf_filter('exit_reason == 12', runtime, memleak_check)
+def test_filter_ne(runtime, memleak_check):
+    bpf_filter('exit_reason != 12', runtime, memleak_check)
+def test_filter_unsigned_cmp(runtime, memleak_check):
+    bpf_filter('exit_reason > 1 && exit_reason < 100', runtime, memleak_check)
+def test_filter_signed_cmp(runtime, memleak_check):
+    bpf_filter('latency > 1000000', runtime, memleak_check)
+def test_filter_narrow_field(runtime, memleak_check):
+    bpf_filter('isa == 1 || switches > 0', runtime, memleak_check)
+def test_filter_logical_and(runtime, memleak_check):
+    bpf_filter('exit_reason == 12 && latency > 1000000', runtime, memleak_check)
+def test_filter_logical_or(runtime, memleak_check):
+    bpf_filter('exit_reason == 12 || switches > 2', runtime, memleak_check)
+def test_filter_ternary(runtime, memleak_check):
+    bpf_filter('exit_reason == 12 ? latency > 100 : 0', runtime, memleak_check)
+def test_filter_bitops(runtime, memleak_check):
+    bpf_filter('(1 << isa) & 6', runtime, memleak_check)
+def test_filter_arith(runtime, memleak_check):
+    bpf_filter('latency - run_delay > 1000', runtime, memleak_check)
+def test_filter_unsigned_div(runtime, memleak_check):
+    bpf_filter('(unsigned long)latency / 1000 > 5', runtime, memleak_check)
+def test_filter_field_vs_field(runtime, memleak_check):
+    bpf_filter('sched_latency > run_delay', runtime, memleak_check)
+def test_filter_shift(runtime, memleak_check):
+    bpf_filter('latency >> 10 > 0', runtime, memleak_check)
+def test_filter_not(runtime, memleak_check):
+    bpf_filter('!switches', runtime, memleak_check)
+
+# Assignment: rewrites the event, and doubles as the only way to hold a
+# temporary since the expression language has no variables of its own.
+def test_filter_assign(runtime, memleak_check):
+    bpf_filter('exit_reason = 12, exit_reason == 12', runtime, memleak_check)
+def test_filter_assign_temp(runtime, memleak_check):
+    bpf_filter('sched_latency = latency, sched_latency > 1000', runtime, memleak_check)
+
+# run_delay/sched_latency are only resolved just before output; the filter has
+# to run after that, so referring to them must still work.
+def test_filter_run_delay(runtime, memleak_check):
+    bpf_filter('run_delay > 1000', runtime, memleak_check)
+def test_filter_sched_latency(runtime, memleak_check):
+    bpf_filter('sched_latency > 0 && switches > 0', runtime, memleak_check)
+
+def test_filter_with_perins(runtime, memleak_check):
+    bpf_filter('latency > 1000000', runtime, memleak_check, ["--perins", "--detail"])
+def test_filter_with_order(runtime, memleak_check):
+    bpf_filter('exit_reason == 12', runtime, memleak_check, ["--order"])
+def test_filter_pid_mode(runtime, memleak_check):
+    # kvm_entry_pid() takes a different path than the oncpu kvm_entry().
+    bpf_filter('exit_reason == 12', runtime, memleak_check, ["-p", "1"])
+def test_filter_verbose(runtime, memleak_check):
+    # -v dumps the VM and BPF instructions; exercises expr_bpf_dump(). Not run
+    # under the leak checker: the first printf() from the dump makes glibc
+    # allocate stdio's 4096-byte buffer, which it never frees, and that shows
+    # up as a leak that has nothing to do with the filter.
+    if memleak_check:
+        return
+    bpf_filter('exit_reason == 12', runtime, memleak_check, ["-v"])
+
+
+#
+# Constructs the BPF backend cannot express must be rejected at startup, with a
+# diagnostic, rather than producing code the verifier rejects later.
+#
+def bpf_filter_reject(expr, expected, stderr=True):
+    prof = PerfProf(["bpf:kvm_exit", "-i", "1000", "--filter", expr])
+    want = PerfProf.STDERR if stderr else PerfProf.STDOUT
+    found = False
+    for std, line in prof.run(3, False):
+        if std == want and expected in line:
+            found = True
+    assert found, f"expected {expected!r} for filter {expr!r}"
+
+def test_filter_reject_signed_div():
+    bpf_filter_reject('latency / 1000 > 5', 'signed division')
+def test_filter_reject_signed_mod():
+    bpf_filter_reject('latency % 7 == 0', 'signed division')
+def test_filter_reject_ksymbol():
+    bpf_filter_reject('ksymbol(latency)', 'ksymbol()')
+def test_filter_reject_comm_get():
+    bpf_filter_reject('comm_get(pid) == "x"', 'comm_get()')
+def test_filter_reject_string_literal():
+    bpf_filter_reject('printf("%d", pid)', 'string literals')
+def test_filter_reject_undefined_field():
+    # The expression front end reports syntax errors on stdout, along with the
+    # list of fields that are available.
+    bpf_filter_reject('nosuchfield == 1', 'undefined variable', stderr=False)
