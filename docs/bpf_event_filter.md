@@ -159,7 +159,10 @@ if (kvm_exit_bpf__load(ctx->obj))
 
 ### 4.3 事件结构体的要求
 
-- 定长 struct，成员是标量（整型或枚举）；
+- 定长 struct，成员是标量（整型或枚举）或标量数组；
+- 数组可以按下标访问（`comm[0]`、`tag[5]`），下标必须是 verifier 能定界的：常量或掩码过的
+  值（`tag[i & 7]`）可以，裸变量下标会在加载时被拒（`invalid access to map value`）。常量
+  下标**不做**范围检查，越界会读到相邻字段——和用户态 VM 行为一致；
 - 位域、指针、嵌套聚合会被跳过（位域没有字节偏移可加载，指针需要 `bpf_probe_read()`，
   聚合没有表达式能用的值语义）。被跳过的字段在表达式里引用会报 `undefined variable`；
 - 事件必须在**可写内存**里（`.bss` 或 map value），因为表达式允许赋值。
@@ -218,25 +221,60 @@ EMIT(BPF_LDX_MEM(size, BPF_A, BPF_REG_1, offset));
 | `INT` | 4 | `BPF_W` |
 | `LONG` / 指针 | 8 | `BPF_DW` |
 
-### 5.4 指令映射表
+### 5.4 数组下标
+
+数组不需要后端做任何特殊处理，是 5.3 那个"地址在 data 范围内就换成 `r1 + 偏移`"的分支顺带
+支撑起来的。
+
+`tag[5]` 编译出的 VM 指令里，`IMM` 后面跟的是 `PSH` 而不是 `LI`，所以走**取址**路径——基址
+在那一步就已经变成 `r1 + 40` 这个合法的 map value 指针，后面的下标运算和解引用都在它上面做，
+verifier 自然接受。缩放也是前端做的：`IMM 4; MUL` 里那个 4 就是 `elementsize`。
+
+以 `int tag[8]`（偏移 40）为例，`tag[5] == 7`：
+
+```
+VM                  eBPF
+IMM 0x1562428        0: r0 = r1        1: r0 += 40    ← &tag
+PSH                  2: r2 = r0
+IMM 0x5              3: r0 = 5                        ← 下标
+PSH                  4: r3 = r0
+IMM 0x4              5: r0 = 4                        ← elementsize
+MUL                  6: r3 *= r0       7: r0 = r3     ← 5 * 4 = 20
+ADD                  8: r2 += r0       9: r0 = r2     ← 40 + 20 = 60
+LI  0x2             10: r0 = *(u32 *)(r0 + 0)         ← BPF_W，一个元素
+```
+
+注意加载宽度是 `BPF_W`（4 字节，元素宽）而不是整个数组的 32 字节 —— `size` 与
+`elementsize` 的区分贯穿整条链路。
+
+**下标必须能被 verifier 定界**：常量、或掩码过的变量（`tag[i & 7]`）都行；裸变量（`tag[isa]`）
+会被拒：
+
+```
+invalid access to map value, value_size=299080 off=561116 size=4
+```
+
+常量下标**不做**范围检查，`tag[16]` 能加载、读到相邻字段——和用户态 VM 一致。
+
+### 5.5 指令映射表
 
 | VM 指令 | eBPF | 说明 |
 |---------|------|------|
 | `IMM`（字段）+ `LI` | `BPF_LDX_MEM` | 折叠成一条，见 5.3 |
-| `IMM`（字段），无 `LI` | `MOV r0,r1` + `ADD imm` | 取址，如 `&pid` |
+| `IMM`（字段），无 `LI` | `MOV r0,r1` + `ADD imm` | 取址：`&pid`，以及数组下标的基址，见 5.4 |
 | `IMM`（立即数） | `BPF_MOV64_IMM` | |
 | `IMM addr;PSH;值;SI` | `BPF_STX_MEM` | 赋值 |
 | `PSH` | `BPF_MOV64_REG(slot, r0)` | 栈槽即寄存器 |
 | `OR XOR AND ADD SUB MUL` | `BPF_ALU64_REG` | 一对一 |
 | `SHL SHR SAR` | `BPF_LSH / BPF_RSH / BPF_ARSH` | |
 | `DIVu MODu` | `BPF_DIV / BPF_MOD` | 仅无符号 |
-| `EQ NE LT GT LE GE`（含 u 变体） | 4 条，见 5.5 | eBPF 无 set-on-condition |
+| `EQ NE LT GT LE GE`（含 u 变体） | 4 条，见 5.6 | eBPF 无 set-on-condition |
 | `BZ / BNZ` | `BPF_JMP_IMM(JEQ/JNE, r0, 0, ...)` | 目标需回填 |
 | `JMP` | `BPF_JMP_A` | 目标需回填 |
 | `NTHL / NTHS` | `BPF_ENDIAN(BPF_TO_BE, 32/16)` | 一条搞定 |
 | `EXIT` | `BPF_EXIT_INSN` | 结果已在 r0 |
 
-### 5.5 比较：顺序很关键
+### 5.6 比较：顺序很关键
 
 eBPF 没有 set-on-condition，布尔值要用分支构造。这里有个陷阱：**右操作数就在累加器
 （r0）里**，如果先把结果写进 r0 就会把它冲掉。所以必须先比较、后写结果：
@@ -250,7 +288,7 @@ r0 = 1
 
 （第一版实现写成了 `r0 = 1; if(...) goto +1; r0 = 0`，正好踩中这个 bug。）
 
-### 5.6 跳转回填
+### 5.7 跳转回填
 
 `BZ`/`BNZ`/`JMP` 的目标是 VM 指令地址，需要映射到 eBPF 指令下标。做法是：
 
@@ -261,7 +299,7 @@ r0 = 1
 > 只回填记录过的跳转。第一版遍历所有 `BPF_JMP` 类指令去 patch，把 5.5 里比较指令自己
 > 已经算好的相对偏移也改坏了。
 
-### 5.7 符号扩展
+### 5.8 符号扩展
 
 `BPF_LDX_MEM` 是**零扩展**。窄的有符号字段需要手工符号扩展，否则有符号比较行为和用户态
 VM 不一致：
@@ -273,7 +311,7 @@ EMIT(BPF_ALU64_IMM(BPF_ARSH, BPF_A, bits));
 
 （`BPF_MEMSX` 一条即可，但那是 6.7+。）
 
-### 5.8 不支持的构造
+### 5.9 不支持的构造
 
 全部在**编译期**报错并给出具体原因，不会生成让 verifier 报晦涩错误的代码：
 
@@ -285,7 +323,7 @@ EMIT(BPF_ALU64_IMM(BPF_ARSH, BPF_A, bits));
 | `printf()` / `system()` | 是输出/执行动作，不是过滤 |
 | `strncmp()` / `~` / 字符串 `==` `!=` | 需要无界循环 |
 | `syscall_name()` / `exit_reason_str()` | 返回字符串，内核侧无意义 |
-| 数组下标（变量偏移） | verifier 要求显式 bounds masking |
+| 数组的**裸变量**下标 | verifier 无法定界，报 `invalid access to map value`。常量和掩码下标可以，见 4.3 |
 
 字段名写错仍然走原有诊断，带 `^` 定位并列出可用字段：
 
@@ -300,7 +338,7 @@ Available variables:
      ...
 ```
 
-### 5.9 赋值：为什么允许写事件
+### 5.10 赋值：为什么允许写事件
 
 后端**支持** `SI`（赋值），这是有意的，两个理由：
 
@@ -445,7 +483,7 @@ perf-prof bpf:kvm_exit --filter '...' -v
 | 报错来自 | 形态 | 怎么查 |
 |---------|------|--------|
 | 表达式前端 | `undefined variable` 等，带 `^` 指位置 | 对照 `-v` 打出的字段表，确认字段名，以及该字段是不是标量（见 4.3） |
-| `expr_to_bpf()` | `expr: cannot compile to BPF: ...` | 用了不支持的构造，见 5.8 |
+| `expr_to_bpf()` | `expr: cannot compile to BPF: ...` | 用了不支持的构造，见 5.9 |
 | 内核 verifier | 加载失败，附带逐指令日志 | 日志会给出问题指令和寄存器状态；若怀疑是占位符本身的问题，见第六节的对照表 |
 
 verifier 日志比看起来好用——它标出出错指令的下标和当时每个寄存器的类型，和 `-v` 打出的
