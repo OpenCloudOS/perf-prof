@@ -933,8 +933,35 @@ void expr_dump(struct expr_prog *prog)
  * register, avoiding any memory traffic. r1 holds the event pointer and
  * r0 the accumulator, leaving r2..r9 for slots.
  *
- * Note the verifier requires a subprogram to write r6-r9 before reading
- * them, which is satisfied because a slot is always pushed before use.
+ * Using r6-r9 would need no saving on our part either, even though they are
+ * callee-saved in the BPF calling convention, and this holds whether or not
+ * the JIT is on:
+ *
+ *  - JIT: a subprogram is compiled as its own bpf_prog (jit_subprogs() splits
+ *    each one out and calls bpf_int_jit_compile() on it), so it gets its own
+ *    prologue and epilogue. On x86 r6-r9 map one-to-one onto the callee-saved
+ *    rbx/r13/r14/r15, which the prologue pushes and every exit path pops, so a
+ *    caller's r6-r9 survive the call even if the caller uses them for
+ *    something else. How many get pushed is a per-kernel detail -- before 5.10
+ *    the prologue pushed all four unconditionally, and since then
+ *    detect_reg_usage() pushes only the ones that subprogram actually touches
+ *    -- but either way the saving is the JIT's job, not the generated code's.
+ *
+ *  - Interpreter: fixup_call_args() rewrites the call to BPF_CALL_ARGS, which
+ *    dispatches to one of interpreters_args[] (picked by stack depth). Each of
+ *    those declares a fresh `u64 regs[MAX_BPF_EXT_REG]' on its own C stack
+ *    frame and only copies r1-r5 in from the caller, so the callee's r6-r9 are
+ *    different memory entirely and cannot alias the caller's.
+ *
+ * What the verifier does require is that a subprogram write r6-r9 before
+ * reading them, which is not about protecting the caller: interpreters_args[]
+ * leaves that array uninitialised, so a read would return stack garbage. A
+ * slot is always pushed before it is read, so this is satisfied either way.
+ *
+ * Slots still start at r2 rather than r6, because r2-r5 map onto x86 registers
+ * that are caller-saved (rsi/rdx/rcx/r8) and so are never pushed at all, on
+ * any kernel. The usual reason to prefer r6-r9 -- surviving a helper call --
+ * does not apply, because every builtin that would need one is rejected below.
  */
 
 #define BPF_A          BPF_REG_0          /* accumulator, mirrors VM's `a' */
