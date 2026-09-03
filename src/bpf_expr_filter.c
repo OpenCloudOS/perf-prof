@@ -96,9 +96,9 @@ expr_filter_event_type(struct bpf_object *obj, struct btf *btf,
 
 /*
  * Build the global variable declarations for the event struct, in the form
- * expr_compile() expects. Only scalar members are usable; anything else is
- * skipped, so an expression naming it fails to compile with the usual
- * "undefined variable" diagnostic.
+ * expr_compile() expects. Scalar members and arrays of scalars are usable;
+ * anything else is skipped, so an expression naming it fails to compile with
+ * the usual "undefined variable" diagnostic.
  *
  * Returns a malloc'd array terminated by a NULL name, or NULL on failure.
  * The strings point into the BTF, which outlives the returned array's use.
@@ -129,9 +129,9 @@ struct global_var_declare *bpf_expr_filter_fields(struct bpf_object *obj)
         return NULL;
 
     for (i = 0, n = 0, m = btf_members(st); i < vlen; i++, m++) {
-        const struct btf_type *ft;
+        const struct btf_type *ft, *elem;
         __u32 bit_off = btf_member_bit_offset(st, i);
-        __s64 size;
+        __s64 size, elemsize;
         int fid;
 
         /* Bitfields have no byte offset to load from. */
@@ -144,21 +144,46 @@ struct global_var_declare *bpf_expr_filter_fields(struct bpf_object *obj)
         if (!ft || size <= 0)
             continue;
 
+        /*
+         * An array of scalars is usable too: expr_compile() derives the
+         * element type from size vs elementsize, so `comm[0]' resolves to a
+         * load of one element. Describe it that way, as tep__event_fields()
+         * does for a tracepoint's char[] fields.
+         *
+         * The subscript has to be something the verifier can bound. A constant
+         * or a masked value (`comm[i & 15]') is fine; an unconstrained variable
+         * is rejected at load time with "invalid access to map value". Note the
+         * expression compiler does not range-check a constant subscript either,
+         * so a deliberately out-of-range one reads adjacent event bytes rather
+         * than failing -- same as the userspace VM.
+         */
+        elem = ft;
+        elemsize = size;
+        if (btf_is_array(ft)) {
+            const struct btf_array *arr = btf_array(ft);
+            int eid = btf__resolve_type(btf, arr->type);
+
+            elem = eid < 0 ? NULL : btf__type_by_id(btf, eid);
+            elemsize = btf__resolve_size(btf, arr->type);
+            if (!elem || elemsize <= 0 || arr->nelems == 0)
+                continue;
+        }
+
         /* Scalars only: an integer or an enum. Pointers into kernel memory
          * would need bpf_probe_read(), and structs have no value semantics
          * the expression language can use. */
-        if (!btf_is_int(ft) && !btf_is_enum(ft))
+        if (!btf_is_int(elem) && !btf_is_enum(elem))
             continue;
-        if (size != 1 && size != 2 && size != 4 && size != 8)
+        if (elemsize != 1 && elemsize != 2 && elemsize != 4 && elemsize != 8)
             continue;
 
         declare[n].name = btf__name_by_offset(btf, m->name_off);
         declare[n].offset = bit_off / 8;
         declare[n].size = size;
-        declare[n].elementsize = size;
+        declare[n].elementsize = elemsize;
         /* Enums are unsigned unless BTF says otherwise. */
-        declare[n].is_unsigned = btf_is_enum(ft) ||
-                                 !(btf_int_encoding(ft) & BTF_INT_SIGNED);
+        declare[n].is_unsigned = btf_is_enum(elem) ||
+                                 !(btf_int_encoding(elem) & BTF_INT_SIGNED);
         n++;
     }
 
@@ -251,12 +276,18 @@ void bpf_expr_filter_help(struct bpf_object *obj)
         return;
 
     printf("Available fields (%s):\n", bpf_object__name(obj) ? : "(unknown)");
-    for (d = declare; d->name; d++)
-        printf("    %s%s %s\n",
-               d->is_unsigned ? "unsigned " : "",
-               d->size == 1 ? "char" : d->size == 2 ? "short" :
-               d->size == 4 ? "int" : "long",
+    for (d = declare; d->name; d++) {
+        /* Name the element type, not the whole field: for an array `size' is
+         * the total length, and only `elementsize' says what a subscript
+         * yields. */
+        printf("    %s%s %s", d->is_unsigned ? "unsigned " : "",
+               d->elementsize == 1 ? "char" : d->elementsize == 2 ? "short" :
+               d->elementsize == 4 ? "int" : "long",
                d->name);
+        if (d->size != d->elementsize)
+            printf("[%d]", d->size / d->elementsize);
+        printf("\n");
+    }
     free(declare);
 }
 
