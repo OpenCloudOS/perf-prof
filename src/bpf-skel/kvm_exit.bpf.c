@@ -31,6 +31,7 @@ static __always_inline int kvm_exit_oncpu(u32 exit_reason, u32 isa)
     struct kvm_vcpu_event *data;
     u64 cpu = bpf_get_smp_processor_id();
 
+    barrier_var(cpu);
     if (cpu >= MAX_CPUS || !work_cpus[cpu])
         return 0;
 
@@ -81,6 +82,7 @@ int BPF_PROG(kvm_entry) // int vcpu_id | unsigned long vcpu_pc
     struct kvm_vcpu_event *data;
     u64 cpu = bpf_get_smp_processor_id();
 
+    barrier_var(cpu);
     if (cpu >= MAX_CPUS || !work_cpus[cpu])
         return 0;
 
@@ -122,6 +124,7 @@ int BPF_PROG(sched_switch, bool preempt, struct task_struct *prev, struct task_s
     u32 next_pid;
     u64 time, run_delay;
 
+    barrier_var(cpu);
     if (cpu >= MAX_CPUS || !work_cpus[cpu])
         return 0;
 
