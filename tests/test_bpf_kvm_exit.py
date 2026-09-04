@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 
+import platform
+
 from PerfProf import PerfProf
 from conftest import result_check
+
+def kernel_release():
+    # (major, minor) of the running kernel, for gating on instructions that
+    # only exist from a given version.
+    major, minor = platform.release().split('.')[:2]
+    return int(major), int(minor)
 
 def test_bpf(runtime, memleak_check):
     #perf-prof bpf:kvm_exit --order -i 5000 --perins --detail
@@ -75,6 +83,17 @@ def test_filter_shift(runtime, memleak_check):
 def test_filter_not(runtime, memleak_check):
     bpf_filter('!switches', runtime, memleak_check)
 
+# A narrow signed load has to be sign-extended to match the userspace VM, both
+# when the field access folds into one load off the event pointer and when it
+# does not -- the second form computes the address first, so the load reads
+# through the accumulator instead.
+def test_filter_signed_narrow_load(runtime, memleak_check):
+    bpf_filter('*(char *)&latency < 0', runtime, memleak_check)
+def test_filter_signed_narrow_load_unfolded(runtime, memleak_check):
+    bpf_filter('*(char *)((char *)&latency + 1) < 0', runtime, memleak_check)
+def test_filter_signed_short_load(runtime, memleak_check):
+    bpf_filter('*(short *)&latency < 0', runtime, memleak_check)
+
 # A constant large enough to look like a heap address must still be treated as
 # a constant: the backend tells fields, string literals and plain immediates
 # apart by address range, and those ranges have to be bounded on both sides.
@@ -134,10 +153,19 @@ def bpf_filter_reject(expr, expected, stderr=True):
             found = True
     assert found, f"expected {expected!r} for filter {expr!r}"
 
-def test_filter_reject_signed_div():
-    bpf_filter_reject('latency / 1000 > 5', 'signed division')
-def test_filter_reject_signed_mod():
-    bpf_filter_reject('latency % 7 == 0', 'signed division')
+# Signed / and % need the 6.6 div/mod encoding, so which behaviour is correct
+# depends on the kernel under test: accepted on 6.6+, refused with a diagnostic
+# below that.
+def test_filter_signed_div(runtime, memleak_check):
+    if kernel_release() >= (6, 6):
+        bpf_filter('latency / 1000 > 5', runtime, memleak_check)
+    else:
+        bpf_filter_reject('latency / 1000 > 5', 'signed division')
+def test_filter_signed_mod(runtime, memleak_check):
+    if kernel_release() >= (6, 6):
+        bpf_filter('latency % 7 == 0', runtime, memleak_check)
+    else:
+        bpf_filter_reject('latency % 7 == 0', 'signed division')
 def test_filter_reject_ksymbol():
     bpf_filter_reject('ksymbol(latency)', 'ksymbol()')
 def test_filter_reject_comm_get():
