@@ -984,7 +984,9 @@ void expr_dump(struct expr_prog *prog)
  * does not apply, because every builtin that would need one is rejected below.
  */
 
-#define BPF_A          BPF_REG_0          /* accumulator, mirrors VM's `a' */
+/* Named BPF_ACC, not BPF_A: <uapi/linux/filter.h>, pulled in by
+ * <linux/filter.h>, uses BPF_A for a classic-BPF addressing mode. */
+#define BPF_ACC          BPF_REG_0          /* accumulator, mirrors VM's `a' */
 #define BPF_EVENT      BPF_REG_1          /* event pointer, never clobbered */
 #define BPF_SLOT_FIRST BPF_REG_2
 #define BPF_SLOT_LAST  BPF_REG_9
@@ -1086,10 +1088,10 @@ static void emit_imm64(struct bpf_emit *e, int reg, long v)
  */
 static void emit_cmp(struct bpf_emit *e, int op, int lhs)
 {
-    emit(e, BPF_JMP_REG(op, lhs, BPF_A, 2));
-    emit(e, BPF_MOV64_IMM(BPF_A, 0));
+    emit(e, BPF_JMP_REG(op, lhs, BPF_ACC, 2));
+    emit(e, BPF_MOV64_IMM(BPF_ACC, 0));
     emit(e, BPF_JMP_A(1));
-    emit(e, BPF_MOV64_IMM(BPF_A, 1));
+    emit(e, BPF_MOV64_IMM(BPF_ACC, 1));
 }
 
 /*
@@ -1163,25 +1165,25 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
 
                     e.pc_map[pc - base] = e.nr_insn;
                     pc += 2;
-                    emit(&e, BPF_LDX_MEM(sz, BPF_A, BPF_EVENT, off));
+                    emit(&e, BPF_LDX_MEM(sz, BPF_ACC, BPF_EVENT, off));
                     /* Narrow loads zero-extend; sign-extend by hand so that
                      * signed comparisons behave like the userspace VM. */
                     if (!(type & UNSIGNED) && type < PTR && sz != BPF_DW) {
                         int bits = sz == BPF_B ? 56 : (sz == BPF_H ? 48 : 32);
-                        emit(&e, BPF_ALU64_IMM(BPF_LSH, BPF_A, bits));
-                        emit(&e, BPF_ALU64_IMM(BPF_ARSH, BPF_A, bits));
+                        emit(&e, BPF_ALU64_IMM(BPF_LSH, BPF_ACC, bits));
+                        emit(&e, BPF_ALU64_IMM(BPF_ARSH, BPF_ACC, bits));
                     }
                 } else if (prog->data &&
                            v >= (long)prog->data &&
                            v < (long)prog->data + prog->datalen) {
                     /* Address of a field, e.g. `&pid'. */
-                    emit(&e, BPF_MOV64_REG(BPF_A, BPF_EVENT));
-                    emit(&e, BPF_ALU64_IMM(BPF_ADD, BPF_A, (int)(v - (long)prog->data)));
+                    emit(&e, BPF_MOV64_REG(BPF_ACC, BPF_EVENT));
+                    emit(&e, BPF_ALU64_IMM(BPF_ADD, BPF_ACC, (int)(v - (long)prog->data)));
                 } else if (prog->str && v >= (long)prog->str &&
                            v < (long)prog->str + prog->strsize) {
                     emit_fail(&e, "string literals are not supported by the BPF backend");
                 } else {
-                    emit_imm64(&e, BPF_A, v);
+                    emit_imm64(&e, BPF_ACC, v);
                 }
                 break;
             }
@@ -1189,11 +1191,11 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                 /* A dereference that was not folded above: the address is in
                  * the accumulator. */
                 int sz = bpf_size_of(&e, *pc++);
-                emit(&e, BPF_LDX_MEM(sz, BPF_A, BPF_A, 0));
+                emit(&e, BPF_LDX_MEM(sz, BPF_ACC, BPF_ACC, 0));
                 break;
             }
             case PSH:
-                emit(&e, BPF_MOV64_REG(slot_reg(&e, e.depth), BPF_A));
+                emit(&e, BPF_MOV64_REG(slot_reg(&e, e.depth), BPF_ACC));
                 e.depth++;
                 if (e.depth > BPF_NR_SLOTS)
                     emit_fail(&e, "expression too deeply nested for register allocation");
@@ -1204,7 +1206,7 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                 long target = *pc++;
                 int at = e.nr_insn;
 
-                emit(&e, BPF_JMP_IMM(op == BZ ? BPF_JEQ : BPF_JNE, BPF_A, 0, 0));
+                emit(&e, BPF_JMP_IMM(op == BZ ? BPF_JEQ : BPF_JNE, BPF_ACC, 0, 0));
                 if (!e.failed) {
                     e.fixup_at[e.nr_fixup] = at;
                     e.fixup_to[e.nr_fixup] = (int)(((long *)target) - base);
@@ -1247,19 +1249,19 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                     /* Arithmetic and bitwise: a = lhs <op> a. Operands are
                      * reversed relative to BPF's dst <op>= src, so compute
                      * into the slot register and move back. */
-                    case OR:   emit(&e, BPF_ALU64_REG(BPF_OR,  lhs, BPF_A)); goto commit;
-                    case XOR:  emit(&e, BPF_ALU64_REG(BPF_XOR, lhs, BPF_A)); goto commit;
-                    case AND:  emit(&e, BPF_ALU64_REG(BPF_AND, lhs, BPF_A)); goto commit;
-                    case SHL:  emit(&e, BPF_ALU64_REG(BPF_LSH, lhs, BPF_A)); goto commit;
-                    case SHR:  emit(&e, BPF_ALU64_REG(BPF_RSH, lhs, BPF_A)); goto commit;
-                    case SAR:  emit(&e, BPF_ALU64_REG(BPF_ARSH, lhs, BPF_A)); goto commit;
-                    case ADD:  emit(&e, BPF_ALU64_REG(BPF_ADD, lhs, BPF_A)); goto commit;
-                    case SUB:  emit(&e, BPF_ALU64_REG(BPF_SUB, lhs, BPF_A)); goto commit;
-                    case MUL:  emit(&e, BPF_ALU64_REG(BPF_MUL, lhs, BPF_A)); goto commit;
-                    case DIVu: emit(&e, BPF_ALU64_REG(BPF_DIV, lhs, BPF_A)); goto commit;
-                    case MODu: emit(&e, BPF_ALU64_REG(BPF_MOD, lhs, BPF_A)); goto commit;
+                    case OR:   emit(&e, BPF_ALU64_REG(BPF_OR,  lhs, BPF_ACC)); goto commit;
+                    case XOR:  emit(&e, BPF_ALU64_REG(BPF_XOR, lhs, BPF_ACC)); goto commit;
+                    case AND:  emit(&e, BPF_ALU64_REG(BPF_AND, lhs, BPF_ACC)); goto commit;
+                    case SHL:  emit(&e, BPF_ALU64_REG(BPF_LSH, lhs, BPF_ACC)); goto commit;
+                    case SHR:  emit(&e, BPF_ALU64_REG(BPF_RSH, lhs, BPF_ACC)); goto commit;
+                    case SAR:  emit(&e, BPF_ALU64_REG(BPF_ARSH, lhs, BPF_ACC)); goto commit;
+                    case ADD:  emit(&e, BPF_ALU64_REG(BPF_ADD, lhs, BPF_ACC)); goto commit;
+                    case SUB:  emit(&e, BPF_ALU64_REG(BPF_SUB, lhs, BPF_ACC)); goto commit;
+                    case MUL:  emit(&e, BPF_ALU64_REG(BPF_MUL, lhs, BPF_ACC)); goto commit;
+                    case DIVu: emit(&e, BPF_ALU64_REG(BPF_DIV, lhs, BPF_ACC)); goto commit;
+                    case MODu: emit(&e, BPF_ALU64_REG(BPF_MOD, lhs, BPF_ACC)); goto commit;
                     commit:
-                        emit(&e, BPF_MOV64_REG(BPF_A, lhs));
+                        emit(&e, BPF_MOV64_REG(BPF_ACC, lhs));
                         break;
 
                     case EQ:  emit_cmp(&e, BPF_JEQ, lhs); break;
@@ -1318,15 +1320,15 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                 /* The slot holds a complete address, hence offset 0. The
                  * accumulator keeps the stored value, so an assignment still
                  * evaluates to it. */
-                emit(&e, BPF_STX_MEM(sz, slot_reg(&e, e.depth), BPF_A, 0));
+                emit(&e, BPF_STX_MEM(sz, slot_reg(&e, e.depth), BPF_ACC, 0));
                 break;
             }
 
             case NTHL:
-                emit(&e, BPF_ENDIAN(BPF_TO_BE, BPF_A, 32));
+                emit(&e, BPF_ENDIAN(BPF_TO_BE, BPF_ACC, 32));
                 break;
             case NTHS:
-                emit(&e, BPF_ENDIAN(BPF_TO_BE, BPF_A, 16));
+                emit(&e, BPF_ENDIAN(BPF_TO_BE, BPF_ACC, 16));
                 break;
 
             case PRTF:      emit_fail(&e, "printf() is not supported by the BPF backend"); break;
