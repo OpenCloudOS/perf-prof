@@ -133,3 +133,13 @@ def test_filter_reject_undefined_field():
     # The expression front end reports syntax errors on stdout, along with the
     # list of fields that are available.
     bpf_filter_reject('nosuchfield == 1', 'undefined variable', stderr=False)
+
+def test_filter_reject_cpu_global():
+    # _cpu and _pid are perf sample-header globals with no meaning in the kernel;
+    # they must not compile silently (they would emit a dereference of the
+    # userspace prog->glo address). EXPR_F_NO_SAMPLE_GLO withholds them so that
+    # an `undefined variable' error is raised instead.
+    bpf_filter_reject('_cpu == 0', 'undefined variable', stderr=False)
+
+def test_filter_reject_pid_global():
+    bpf_filter_reject('_pid == 0', 'undefined variable', stderr=False)

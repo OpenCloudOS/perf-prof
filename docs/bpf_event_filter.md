@@ -317,6 +317,7 @@ EMIT(BPF_ALU64_IMM(BPF_ARSH, BPF_A, bits));
 
 | 构造 | 原因 |
 |------|------|
+| `_cpu` / `_pid` | perf 采样头字段，内核侧不存在（见 5.3 注脚） |
 | 有符号 `/` `%` | 需要符号修正序列；`BPF_SDIV`/`BPF_SMOD` 是 6.7+ |
 | `ksymbol()` | 依赖用户态 `/proc/kallsyms` 符号表 |
 | `comm_get()` | 依赖用户态 pid→comm 缓存 |
@@ -332,11 +333,13 @@ $ perf-prof bpf:kvm_exit --filter 'nosuchfield == 1'
 nosuchfield == 1
              ^ undefined variable
 Available variables:
-     int _cpu
-     int _pid
      unsigned int tgid
+     unsigned int pid
      ...
 ```
+
+`_cpu` / `_pid` 是 perf 采样头里的字段（从 `PERF_SAMPLE_CPU` / `PERF_SAMPLE_TID` 填入），
+在内核侧 BPF 过滤器里不存在，使用它们同样会报 `undefined variable`。
 
 ### 5.10 赋值：为什么允许写事件
 
