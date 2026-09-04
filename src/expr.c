@@ -1060,6 +1060,25 @@ static int bpf_size_of(struct bpf_emit *e, long type)
 }
 
 /*
+ * Load a 64-bit constant. BPF_MOV64_IMM only carries 32 bits, sign-extended,
+ * so wider values need ld_imm64, which occupies two instruction slots: the low
+ * half in the first slot's imm, the high half in the second's. The second slot
+ * is not an instruction of its own -- its opcode must be zero -- so jump
+ * offsets, which count slots, stay correct without any special casing.
+ */
+static void emit_imm64(struct bpf_emit *e, int reg, long v)
+{
+    if (v == (int)v) {
+        emit(e, BPF_MOV64_IMM(reg, (int)v));
+        return;
+    }
+    /* BPF_LD_IMM64(reg, v), expanded: the macro is two comma-separated
+     * initialisers, so it cannot be handed to emit() as one argument. */
+    emit(e, BPF_RAW_INSN(BPF_LD | BPF_DW | BPF_IMM, reg, 0, 0, (__u32)v));
+    emit(e, BPF_RAW_INSN(0, 0, 0, 0, (__u32)((__u64)v >> 32)));
+}
+
+/*
  * Emit `a = (slot <cond> a)`. eBPF has no set-on-condition, so materialise
  * the boolean with a branch. The comparison must happen before the result
  * register is written, because the right operand lives in the accumulator:
@@ -1162,9 +1181,7 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                            v < (long)prog->str + prog->strsize) {
                     emit_fail(&e, "string literals are not supported by the BPF backend");
                 } else {
-                    emit(&e, BPF_MOV64_IMM(BPF_A, (int)v));
-                    if (v != (int)v)
-                        emit_fail(&e, "64-bit immediate is not supported by the BPF backend");
+                    emit_imm64(&e, BPF_A, v);
                 }
                 break;
             }
