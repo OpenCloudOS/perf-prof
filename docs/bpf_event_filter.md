@@ -221,6 +221,28 @@ EMIT(BPF_LDX_MEM(size, BPF_A, BPF_REG_1, offset));
 | `INT` | 4 | `BPF_W` |
 | `LONG` / 指针 | 8 | `BPF_DW` |
 
+#### 5.3.1 IMM 的三种归类
+
+`IMM` 的操作数可能是字段地址、字符串字面量地址，或者一个普通立即数。三者只能靠**地址区间**
+区分，因此区间两端都要收紧，否则足够大的常量会被误判成地址：
+
+| 判据 | 归类 | 生成 |
+|------|------|------|
+| `data ≤ v < data + datalen`，且下一条是 `LI` | 字段读 | `BPF_LDX_MEM`（折叠） |
+| `data ≤ v < data + datalen` | 字段取址 | `MOV r0,r1` + `ADD imm` |
+| `str ≤ v < str + strsize` | 字符串字面量 | 报错，见 5.9 |
+| 其余 | 立即数 | `BPF_MOV64_IMM` / `ld_imm64`，见 5.5.1 |
+
+两处上界的取值有讲究：
+
+- 用 `datalen` 而不是 `datasize`。`datalen` 是声明字段占据的实际范围 `max(offset + size)`；
+  `datasize` 是按 256 字节向上取整的**分配容量**——tracepoint 记录有变长部分，
+  `expr_load_data()` 要按容量拷贝，所以 `datasize` 必须保持是容量。用容量做判据会把最后一个
+  字段之后的空隙也算成字段。eBPF 事件是定长结构体，`datalen` 即精确值。
+- `prog->str` 只存放表达式自己的字符串字面量；声明的全局变量名另存在 `prog->names`。
+  两者分开，"这个地址是不是字面量"才是一个干净的区间判断，变量名不会落进来。
+  `-v` 输出的 `Strings:` 一节也因此只列真正的字面量。
+
 ### 5.4 数组下标
 
 数组不需要后端做任何特殊处理，是 5.3 那个"地址在 data 范围内就换成 `r1 + 偏移`"的分支顺带
@@ -262,7 +284,7 @@ invalid access to map value, value_size=299080 off=561116 size=4
 |---------|------|------|
 | `IMM`（字段）+ `LI` | `BPF_LDX_MEM` | 折叠成一条，见 5.3 |
 | `IMM`（字段），无 `LI` | `MOV r0,r1` + `ADD imm` | 取址：`&pid`，以及数组下标的基址，见 5.4 |
-| `IMM`（立即数） | `BPF_MOV64_IMM` | |
+| `IMM`（立即数） | `BPF_MOV64_IMM` / `ld_imm64` | 超过 32 位用后者，见 5.5.1 |
 | `IMM addr;PSH;值;SI` | `BPF_STX_MEM` | 赋值 |
 | `PSH` | `BPF_MOV64_REG(slot, r0)` | 栈槽即寄存器 |
 | `OR XOR AND ADD SUB MUL` | `BPF_ALU64_REG` | 一对一 |
@@ -273,6 +295,24 @@ invalid access to map value, value_size=299080 off=561116 size=4
 | `JMP` | `BPF_JMP_A` | 目标需回填 |
 | `NTHL / NTHS` | `BPF_ENDIAN(BPF_TO_BE, 32/16)` | 一条搞定 |
 | `EXIT` | `BPF_EXIT_INSN` | 结果已在 r0 |
+
+#### 5.5.1 宽立即数
+
+`BPF_MOV64_IMM` 只能带 32 位、且做符号扩展，更宽的常量用 `ld_imm64`：它占**两个指令槽**，
+低 32 位在第一个槽的 `imm`，高 32 位在第二个槽的 `imm`。
+
+```
+--filter 'latency > 10000000000'          10000000000 = 0x2_540BE400
+
+    0: r0 = *(u64 *)(r1 + 16)             ← latency
+    1: r2 = r0
+    2: code=0x18  imm=1410065408          ← ld_imm64 低半：0x540BE400
+    3: code=0x00  imm=2                   ← 高半；opcode 为 0，不是独立指令
+    4: if r2 > r0 goto +2
+```
+
+第二个槽的 opcode 必须是 0，它不是一条独立指令，但**占一个槽位**。跳转偏移本来就按槽位计数，
+所以回填（5.7）不需要为它做任何特殊处理。
 
 ### 5.6 比较：顺序很关键
 
@@ -317,7 +357,7 @@ EMIT(BPF_ALU64_IMM(BPF_ARSH, BPF_A, bits));
 
 | 构造 | 原因 |
 |------|------|
-| `_cpu` / `_pid` | perf 采样头字段，内核侧不存在（见 5.3 注脚） |
+| `_cpu` / `_pid` | perf 采样头字段，内核侧不存在（见下文） |
 | 有符号 `/` `%` | 需要符号修正序列；`BPF_SDIV`/`BPF_SMOD` 是 6.7+ |
 | `ksymbol()` | 依赖用户态 `/proc/kallsyms` 符号表 |
 | `comm_get()` | 依赖用户态 pid→comm 缓存 |

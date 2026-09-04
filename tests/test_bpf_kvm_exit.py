@@ -75,6 +75,21 @@ def test_filter_shift(runtime, memleak_check):
 def test_filter_not(runtime, memleak_check):
     bpf_filter('!switches', runtime, memleak_check)
 
+# A constant large enough to look like a heap address must still be treated as
+# a constant: the backend tells fields, string literals and plain immediates
+# apart by address range, and those ranges have to be bounded on both sides.
+def test_filter_large_immediate(runtime, memleak_check):
+    bpf_filter('pid > 1000000000', runtime, memleak_check)
+def test_filter_large_immediate_signed(runtime, memleak_check):
+    bpf_filter('latency > 2000000000', runtime, memleak_check)
+
+# Past 32 bits the constant needs ld_imm64, which occupies two instruction
+# slots; the second must not be miscounted when jump offsets are resolved.
+def test_filter_imm64(runtime, memleak_check):
+    bpf_filter('latency > 10000000000', runtime, memleak_check)
+def test_filter_imm64_before_branch(runtime, memleak_check):
+    bpf_filter('latency > 10000000000 && exit_reason == 12', runtime, memleak_check)
+
 # Assignment: rewrites the event, and doubles as the only way to hold a
 # temporary since the expression language has no variables of its own.
 def test_filter_assign(runtime, memleak_check):
