@@ -234,7 +234,7 @@ int bpf_expr_filter_apply(struct bpf_object *obj, const char *expr_str, int verb
     if (!dup)
         goto out;
 
-    prog = expr_compile(dup, declare);
+    prog = expr_compile_flags(dup, declare, EXPR_F_NO_SAMPLE_GLO);
     if (!prog)
         goto out;
 

@@ -493,7 +493,8 @@ static int wildcard_match(const char *str, const char *pattern)
     return !*p;
 }
 static void dump_symtab(struct symbol_table *symtab, int nr, bool print_value);
-struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare)
+struct expr_prog *expr_compile_flags(char *expr_str, struct global_var_declare *declare,
+                                     unsigned int flags)
 {
     int i, err;
     int nr_insn = 1024;
@@ -550,8 +551,10 @@ struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declar
     ADD_LIB("system", INT, SYSTEM);
 
     // add default global var to symbol table
-    ADD_GLO("_cpu", INT, &prog->glo._cpu);
-    ADD_GLO("_pid", INT, &prog->glo._pid);
+    if (!(flags & EXPR_F_NO_SAMPLE_GLO)) {
+        ADD_GLO("_cpu", INT, &prog->glo._cpu);
+        ADD_GLO("_pid", INT, &prog->glo._pid);
+    }
 
 
     data = d; // reset data
@@ -664,6 +667,11 @@ err_return:
     if (le) free(le);
     if (prog) free(prog);
     return NULL;
+}
+
+struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare)
+{
+    return expr_compile_flags(expr_str, declare, 0);
 }
 
 long expr_run(struct expr_prog *prog)
@@ -1080,6 +1088,27 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
 
     for (i = 0; i <= prog->nr_insn; i++)
         e.pc_map[i] = -1;
+
+    /*
+     * Every global the expression touches must live in the event, because the
+     * only base register this backend has is the event pointer. A global
+     * outside that range is backed by userspace memory the kernel cannot
+     * reach; its address would otherwise fall through to the plain-immediate
+     * case below and be emitted as a scalar, giving a load from a truncated
+     * host address with no diagnostic. Catch it here instead of trusting the
+     * frontend to have withheld the symbol (see EXPR_F_NO_SAMPLE_GLO).
+     */
+    for (i = 0; i < prog->nr_syms; i++) {
+        struct symbol_table *sym = &prog->symtab[i];
+
+        if (sym->token != Id || sym->class != Glo || !sym->ref)
+            continue;
+        if (prog->data && sym->value >= (long)prog->data &&
+            sym->value < (long)prog->data + prog->datasize)
+            continue;
+        emit_fail(&e, "variable is not a field of the event");
+        goto out;
+    }
 
     /* prog->insn[0] is unused: expr_compile() pre-increments before storing. */
     pc = base + 1;

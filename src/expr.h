@@ -41,7 +41,22 @@ struct global_var_declare {
 
 #define GLOBAL(a,b,c,d) &((struct expr_global){a,b,c,d})
 
+/*
+ * Omit the _cpu and _pid globals.
+ *
+ * Those two are not event fields: they are read from the perf sample header
+ * (PERF_SAMPLE_CPU / PERF_SAMPLE_TID) into struct expr_global, so they only
+ * exist for events a userspace consumer pulls off a ring buffer. A backend
+ * without that header -- notably the BPF filter, which runs in the kernel and
+ * sees nothing but the event struct -- passes this so that naming them is an
+ * `undefined variable' error. Without it they compile to a load from the
+ * userspace address of prog->glo, which is silently wrong rather than refused.
+ */
+#define EXPR_F_NO_SAMPLE_GLO    (1U << 0)
+
 struct expr_prog *expr_compile(char *expr_str, struct global_var_declare *declare);
+struct expr_prog *expr_compile_flags(char *expr_str, struct global_var_declare *declare,
+                                     unsigned int flags);
 long expr_run(struct expr_prog *prog);
 int expr_load_glo(struct expr_prog *prog, const char *name, long value);
 int expr_load_data(struct expr_prog *prog, void *d, int size);
