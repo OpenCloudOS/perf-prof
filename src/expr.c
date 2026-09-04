@@ -499,8 +499,12 @@ struct expr_prog *expr_compile_flags(char *expr_str, struct global_var_declare *
     int i, err;
     int nr_insn = 1024;
     int datasize = 256;
-    int strsize = strlen(expr_str);
+    /* Upper bound on the literals: each one loses its two delimiters and gains
+     * a terminator, so it never outgrows its source text. The +1 guarantees a
+     * zero byte past the last literal, where expr_dump() stops walking. */
+    int strsize = strlen(expr_str) + 1;
     char *d, *s;
+    char *names = NULL, *nm;
     struct expr_prog *prog = NULL;
 
     // reset
@@ -571,21 +575,21 @@ struct expr_prog *expr_compile_flags(char *expr_str, struct global_var_declare *
             name_size += strlen(declare->name) + 1;
             declare ++;
         }
-        s = realloc(s, name_size + strsize);
-        if (!s) goto err_return;
-        memset(s + name_size, 0, strsize);
+        /* Copy the names: declare[] and its name fields (e.g. the synthetic
+         * "_offset", "_len") are temporary and the caller frees them once this
+         * returns, yet symtab[].name keeps pointing at them for expr_dump().
+         * They get a buffer of their own rather than sharing `str', which then
+         * holds nothing but the expression's own string literals. */
+        names = malloc(name_size);
+        if (!names) goto err_return;
 
     restart:
         max_offset = 0;
         declare = save;
-        str = s;
+        nm = names;
         while (declare->name) {
-            // FIX: Copy declare->name to safe buffer to prevent access after free
-            // declare structure and its name fields (e.g., "_offset", "_len") are temporary
-            // released after expr_compile, but expr_dump needs to access later
-            // Solution: Copy names to str buffer for safe long-term access by expr_dump
-            p = strcpy(str, declare->name);
-            str += strlen(declare->name) + 1;
+            p = strcpy(nm, declare->name);
+            nm += strlen(declare->name) + 1;
             next();
             id->class = Glo;
             switch (declare->elementsize) {
@@ -630,9 +634,15 @@ struct expr_prog *expr_compile_flags(char *expr_str, struct global_var_declare *
 
     prog->symtab = realloc(symtab, n_syms*sizeof(*symtab));
     prog->nr_syms = n_syms;
-    if (data - d) { prog->data = d; prog->datasize = datasize; }
-    else { free(d); prog->data = NULL; prog->datasize = 0; }
-    if (str - s) prog->str = s; else { free(s); prog->str = NULL; }
+    if (data - d) {
+        prog->data = d; prog->datasize = datasize; prog->datalen = data - d;
+    } else {
+        free(d); prog->data = NULL; prog->datasize = 0; prog->datalen = 0;
+    }
+    if (str - s) { prog->str = s; prog->strsize = str - s; }
+    else { free(s); prog->str = NULL; prog->strsize = 0; }
+    prog->names = names;
+    names = NULL;
     prog->insn = realloc(le, nr_insn*sizeof(long));
     prog->nr_insn = nr_insn;
     // FIX: Instruction relocation mechanism for jump targets after realloc
@@ -664,6 +674,7 @@ err_return:
     if (symtab) free(symtab);
     if (d) free(d);
     if (s) free(s);
+    if (names) free(names);
     if (le) free(le);
     if (prog) free(prog);
     return NULL;
@@ -849,6 +860,7 @@ void expr_destroy(struct expr_prog *prog)
     }
     if (prog->symtab) free(prog->symtab);
     if (prog->data) free(prog->data);
+    if (prog->names) free(prog->names);
     if (prog->str) free(prog->str);
     if (prog->insn) free(prog->insn);
     free(prog);
@@ -1104,7 +1116,7 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
         if (sym->token != Id || sym->class != Glo || !sym->ref)
             continue;
         if (prog->data && sym->value >= (long)prog->data &&
-            sym->value < (long)prog->data + prog->datasize)
+            sym->value < (long)prog->data + prog->datalen)
             continue;
         emit_fail(&e, "variable is not a field of the event");
         goto out;
@@ -1125,7 +1137,7 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                  * a field access: fold the pair into one load off the event
                  * pointer. */
                 if (prog->data && pc < insn_end && *pc == LI &&
-                    v >= (long)prog->data && v < (long)prog->data + prog->datasize) {
+                    v >= (long)prog->data && v < (long)prog->data + prog->datalen) {
                     long type = pc[1];
                     int off = (int)(v - (long)prog->data);
                     int sz = bpf_size_of(&e, type);
@@ -1142,11 +1154,12 @@ struct bpf_insn *expr_to_bpf(struct expr_prog *prog, int *nr_insn)
                     }
                 } else if (prog->data &&
                            v >= (long)prog->data &&
-                           v < (long)prog->data + prog->datasize) {
+                           v < (long)prog->data + prog->datalen) {
                     /* Address of a field, e.g. `&pid'. */
                     emit(&e, BPF_MOV64_REG(BPF_A, BPF_EVENT));
                     emit(&e, BPF_ALU64_IMM(BPF_ADD, BPF_A, (int)(v - (long)prog->data)));
-                } else if (prog->str && v >= (long)prog->str) {
+                } else if (prog->str && v >= (long)prog->str &&
+                           v < (long)prog->str + prog->strsize) {
                     emit_fail(&e, "string literals are not supported by the BPF backend");
                 } else {
                     emit(&e, BPF_MOV64_IMM(BPF_A, (int)v));

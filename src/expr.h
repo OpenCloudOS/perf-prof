@@ -24,8 +24,30 @@ struct expr_prog {
     int nr_syms;
     struct expr_global glo; // default global variables
     char *data; //global var
+    /*
+     * datasize is the allocated capacity, rounded up in 256-byte steps. It is
+     * the bound expr_load_data() copies within, and it has to stay a capacity:
+     * a tracepoint record has variable-length parts, so the data actually
+     * loaded can be longer than what the fixed declarations cover.
+     *
+     * datalen is the extent the declared globals occupy, i.e. max(offset +
+     * size). Range checks that ask "is this address a field?" want this one --
+     * datasize would also accept the slack past the last field.
+     */
     int datasize;
+    int datalen;
+    /*
+     * Two separate buffers, deliberately not one.
+     *
+     * names holds copies of the declared globals' names; symtab entries point
+     * into it, so it has to outlive the caller's declare[]. str holds only the
+     * string literals the expression itself contains. Keeping them apart means
+     * "is this address a string literal?" is a plain range test on str, with
+     * no risk of a global's name answering yes.
+     */
+    char *names;
     char *str;
+    int strsize;
     long *insn;
     int nr_insn;
     int debug;
