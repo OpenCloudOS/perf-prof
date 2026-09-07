@@ -50,11 +50,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <setjmp.h>
+#include <stdarg.h>
 #include <arpa/inet.h>
 
 #include <monitor.h>
 #ifdef CONFIG_LIBBPF
 #include <linux/filter.h>
+#include <linux/bpf_disasm.h>
 #endif
 #include <tep.h>
 #include <expr.h>
@@ -1492,15 +1494,53 @@ out:
     return NULL;
 }
 
+static void print_insn(void *private_data, const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+/*
+ * Disassemble the generated program in the syntax `bpftool prog dump xlated'
+ * prints, e.g.
+ *
+ *      0: (79) r0 = *(u64 *)(r1 +8)
+ *      1: (bf) r2 = r0
+ *      2: (25) if r2 > 0x64 goto pc+2
+ *
+ * The formatting is the kernel's own print_bpf_insn() (lib/bpf_disasm.c, a
+ * verbatim copy of kernel/bpf/disasm.c), which bpftool links against rather
+ * than reimplements -- so this output and bpftool's cannot drift apart. This
+ * function is bpftool's dump_xlated_plain() minus everything that only applies
+ * to a loaded program: there is no BTF, no line info, and no kallsyms, since
+ * the program has not been through the verifier yet and calls nothing.
+ */
 void expr_bpf_dump(struct bpf_insn *insn, int nr_insn)
 {
+    const struct bpf_insn_cbs cbs = {
+        .cb_print = print_insn,
+    };
+    bool double_insn = false;
     int i;
 
     printf("BPF instruction:\n");
-    for (i = 0; i < nr_insn; i++)
-        printf("  %3d: code=0x%02x dst=r%u src=r%u off=%-4d imm=%d\n",
-               i, insn[i].code, insn[i].dst_reg, insn[i].src_reg,
-               insn[i].off, insn[i].imm);
+    for (i = 0; i < nr_insn; i++) {
+        /* The second half of an ld_imm64 is not an instruction of its own; it
+         * was consumed by the one before it. It still occupies an index, so
+         * that the pc%+d in the jumps above stays meaningful. */
+        if (double_insn) {
+            double_insn = false;
+            continue;
+        }
+        double_insn = insn[i].code == (BPF_LD | BPF_IMM | BPF_DW);
+
+        printf("  %3d: ", i);
+        /* print_bpf_insn() terminates the line itself. */
+        print_bpf_insn(&cbs, insn + i, true);
+    }
 }
 
 #endif /* CONFIG_LIBBPF */
