@@ -117,6 +117,18 @@ static void synerr(const char *s)
     longjmp(synerr_jmp, -1);
 }
 
+/*
+ * Whether `t' is a `char *' for the string operators (~, ==, !=), ignoring
+ * signedness: since 3bc753c06dd0 ("kbuild: treat char as always unsigned"),
+ * in v6.2, the kernel is built with -funsigned-char, so a `char comm[16]' is
+ * described as signed:0 and arrives here as unsigned. No string operator
+ * looks at the sign of a character, so accept either spelling.
+ */
+static bool is_char_ptr(long t)
+{
+    return (t & ~UNSIGNED) == (CHAR|PTR);
+}
+
 static int typeop(int op)
 {
     switch (op) {
@@ -332,13 +344,13 @@ static void expr(int lev)
         else if (tk == And) { next(); *++e = PSH; expr(Eq);  *++e = AND; ty = INT; }
         else if (tk == Eq)  {
             next(); *++e = PSH; expr(Lt);
-            if (t == (CHAR|PTR) && ty == (CHAR|PTR)) *++e = STREQ;
+            if (is_char_ptr(t) && is_char_ptr(ty)) *++e = STREQ;
             else *++e = EQ;
             ty = INT;
         }
         else if (tk == Ne)  {
             next(); *++e = PSH; expr(Lt);
-            if (t == (CHAR|PTR) && ty == (CHAR|PTR)) *++e = STRNE;
+            if (is_char_ptr(t) && is_char_ptr(ty)) *++e = STRNE;
             else *++e = NE;
             ty = INT;
         }
@@ -347,9 +359,9 @@ static void expr(int lev)
         else if (tk == Le)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?LEu:LE;  ty = INT; }
         else if (tk == Ge)  { next(); *++e = PSH; expr(Shl); *++e = (t>=PTR || ty>=PTR || ((t|ty)&UNSIGNED))?GEu:GE;  ty = INT; }
         else if (tk == Match) {
-            if ( t != (CHAR|PTR)) synerr("~ operator requires char * operand");
+            if (!is_char_ptr(t)) synerr("~ operator requires char * operand");
             next(); *++e = PSH; expr(Shl);
-            if (ty != (CHAR|PTR)) synerr("~ operator requires char * operand");
+            if (!is_char_ptr(ty)) synerr("~ operator requires char * operand");
             *++e = MATCH; ty = INT;
         }
         else if (tk == Shl) { next(); *++e = PSH; expr(Add); *++e = SHL; ty = INT; }
