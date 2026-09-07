@@ -2,6 +2,7 @@
 
 from PerfProf import PerfProf
 from conftest import result_check
+import pytest
 
 def expr(args, runtime, memleak_check):
     cmdline = ["expr"]
@@ -9,6 +10,19 @@ def expr(args, runtime, memleak_check):
     expr = PerfProf(cmdline)
     for std, line in expr.run(runtime, memleak_check):
         result_check(std, line, runtime, memleak_check)
+
+def field_exists(event, field):
+    format = PerfProf.event_format(event)
+    return format != None and field in format['field']
+
+# 58b9987de86c ("sched/tracing: Remove the redundant 'success' in the sched
+# tracepoint"), in v5.14, dropped sched_wakeup's `success' field, which was
+# always 1 by then. Tests that name it -- whether reading it or just using it
+# as somewhere to park a value, the expression language having no variables of
+# its own -- cannot compile on a 5.14+ kernel.
+requires_wakeup_success = pytest.mark.skipif(
+    not field_exists('sched:sched_wakeup', 'success'),
+    reason="'success' not in 'sched:sched_wakeup' (removed in 5.14)")
 
 def test_expr_sched_wakeup_u0(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid'], runtime, memleak_check)
@@ -67,12 +81,15 @@ def test_expr_sched_wakeup4(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("*(char *)&pid=%d, *comm=%c, comm=%s ", *(char *)&pid, *comm, comm)'], runtime, memleak_check)
 def test_expr_sched_wakeup4_u1(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("*(unsigned char *)&pid=%d, *comm=%c, comm=%s ", *(unsigned char *)&pid, *comm, comm)'], runtime, memleak_check)
+@requires_wakeup_success
 def test_expr_sched_wakeup5(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("!success=%d, ~common_flags=%x, +pid=%d, -pid=%d ", !success, ~common_flags, +pid, -pid)'], runtime, memleak_check)
 def test_expr_sched_wakeup6(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("++pid=%d, --pid=%d ", ++pid, --pid)'], runtime, memleak_check)
+@requires_wakeup_success
 def test_expr_sched_wakeup7(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid=100,success=0,comm[0]=\'A\',printf("pid=%d, success=%d, comm=%s ", pid, success, comm)'], runtime, memleak_check)
+@requires_wakeup_success
 def test_expr_sched_wakeup8(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'printf("pid||sucess=%d, !success||0&&pid=%d, pid&&0=%d ", pid||success, !success||0&&pid, pid&&0)'], runtime, memleak_check)
 def test_expr_sched_wakeup9(runtime, memleak_check):
@@ -140,6 +157,7 @@ def test_expr_complex_ternary(runtime, memleak_check):
 def test_expr_complex_bitwise(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', '(target_cpu & 0xF) | (prio << 4)'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_complex_logical(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid > 0 && prio < 100 && success == 1'], runtime, memleak_check)
 
@@ -156,6 +174,7 @@ def test_expr_complex_array_access(runtime, memleak_check):
 def test_expr_precedence_1(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid++ + prio'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_precedence_2(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', '!success + 1'], runtime, memleak_check)
 
@@ -168,6 +187,7 @@ def test_expr_precedence_4(runtime, memleak_check):
 def test_expr_precedence_5(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid & 0xFF ^ target_cpu'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_precedence_6(runtime, memleak_check):
     expr(['-e', 'sched:sched_wakeup', 'pid > 100 && prio < 50 || success'], runtime, memleak_check)
 
@@ -219,12 +239,14 @@ def test_expr_irq_events(runtime, memleak_check):
     expr(['-e', 'irq:softirq_entry', 'vec'], runtime, memleak_check)
 
 # Performance and stress tests
+@requires_wakeup_success
 def test_expr_large_expression(runtime, memleak_check):
     large_expr = 'pid + prio + target_cpu + common_pid + success'
     for i in range(10):
         large_expr += f' + {i}'
     expr(['-e', 'sched:sched_wakeup', large_expr], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_deep_nesting(runtime, memleak_check):
     nested_expr = 'pid > 0 ? (prio < 100 ? (success == 1 ? target_cpu : 0) : 1) : 2'
     expr(['-e', 'sched:sched_wakeup', nested_expr], runtime, memleak_check)
@@ -449,6 +471,7 @@ def test_expr_match_result_as_condition(runtime, memleak_check):
     # Test match result directly as boolean condition
     expr(['-e', 'sched:sched_wakeup', 'comm ~ "*perf*" && pid > 0'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_match_with_assignment(runtime, memleak_check):
     # Test match result assigned to variable (uses expression side-effect)
     expr(['-e', 'sched:sched_wakeup', 'success = comm ~ "*perf*", success'], runtime, memleak_check)
@@ -534,6 +557,7 @@ def test_expr_tilde_operator_bitwise(runtime, memleak_check):
     # Test ~ operator result in bitwise operations
     expr(['-e', 'sched:sched_wakeup', '((comm ~ "*perf*") << 1) | (comm ~ "[gs]*")'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_tilde_operator_with_assignment(runtime, memleak_check):
     # Test ~ operator result assigned to variable
     expr(['-e', 'sched:sched_wakeup', 'success = (comm ~ "*perf*"), success'], runtime, memleak_check)
@@ -645,10 +669,12 @@ def test_expr_string_inequality_nested_ternary(runtime, memleak_check):
     # Test != operator in nested ternary expressions
     expr(['-e', 'sched:sched_wakeup', 'comm != "swapper" ? (prio < 100 ? 1 : 2) : 0'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_string_equality_assignment(runtime, memleak_check):
     # Test == operator result assigned to variable
     expr(['-e', 'sched:sched_wakeup', 'success = (comm == "systemd"), success'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_string_inequality_assignment(runtime, memleak_check):
     # Test != operator result assigned to variable
     expr(['-e', 'sched:sched_wakeup', 'success = (comm != "swapper"), success'], runtime, memleak_check)
@@ -747,6 +773,7 @@ def test_expr_system_conditional(runtime, memleak_check):
     # Test system() in conditional expression
     expr(['-e', 'sched:sched_wakeup', 'pid > 100 ? system("true") : 0'], runtime, memleak_check)
 
+@requires_wakeup_success
 def test_expr_system_assignment(runtime, memleak_check):
     # Test system() result assignment
     expr(['-e', 'sched:sched_wakeup', 'success = system("true"), success'], runtime, memleak_check)
