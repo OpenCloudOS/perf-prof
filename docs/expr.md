@@ -94,7 +94,7 @@ int system(const char *format, ...)  // 格式化并执行命令
 - 重载位非操作符 (~)，变成一个二元操作符，左操作数为字符串，右操作数为匹配的模式
 - 支持标准的 trace event filter 通配符语法
 - 优先级与关系运算符 (>,>=,<,<=) 相同
-- 仅支持 char* 类型操作数
+- 仅支持 char* 类型操作数，`char *` 与 `unsigned char *` 同等看待（见下文“char 的符号性”）
 
 #### 支持的通配符
 
@@ -148,6 +148,22 @@ int system(const char *format, ...)  // 格式化并执行命令
 
 - `==` / `!=`: 精确匹配，完全相等才返回真
 - `~`: 通配符匹配，支持 *, ?, [abc] 等模式
+
+### char 的符号性
+
+字段类型来自 tracefs 的 `format` 文件，而内核自 3bc753c06dd0 ("kbuild: treat
+char as always unsigned")（v6.2）起使用 `-funsigned-char` 编译。因此同一个
+`char comm[16]`，低版本内核报告 `signed:1`，6.2+ 报告 `signed:0`，
+perf-prof 分别看到 `char [16]` 与 `unsigned char [16]`：
+
+```
+# cat /sys/kernel/debug/tracing/events/sched/sched_wakeup/format
+	field:char comm[16];	offset:8;	size:16;	signed:0;
+```
+
+字符串运算符 (`~`, `==`, `!=`) 从不关心字符的符号，所以两种写法一律按
+`char *` 处理，`comm ~ "*perf*"` 在两类内核上行为一致。其余运算符仍按字段
+声明的符号性处理：符号字段做符号扩展和符号比较，无符号字段做零扩展和无符号比较。
 
 ## 字段类型支持
 

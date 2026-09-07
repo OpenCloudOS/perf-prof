@@ -790,3 +790,35 @@ def test_expr_system_bitwise(runtime, memleak_check):
 def test_expr_system_read_proc(runtime, memleak_check):
     # Test system() result in read operations
     expr(['-e', 'sched:sched_wakeup', 'system("cat /proc/%d/status", pid)'], runtime, memleak_check)
+
+
+# Tests for char signedness in the string operators.
+#
+# A `char comm[16]' is reported as signed:1 by kernels before 6.2 and signed:0
+# from 6.2 on, because 3bc753c06dd0 ("kbuild: treat char as always unsigned")
+# builds the kernel with -funsigned-char. The string operators must accept
+# either, so that these pass on both.
+
+def test_expr_match_char_ptr_cast(runtime, memleak_check):
+    # ~ with an explicitly signed char * left operand
+    expr(['-e', 'sched:sched_wakeup', '(char *)comm ~ "*perf*"'], runtime, memleak_check)
+
+def test_expr_match_unsigned_char_ptr_cast(runtime, memleak_check):
+    # ~ with an explicitly unsigned char * left operand
+    expr(['-e', 'sched:sched_wakeup', '(unsigned char *)comm ~ "*perf*"'], runtime, memleak_check)
+
+def test_expr_match_unsigned_char_ptr_both(runtime, memleak_check):
+    # ~ with both operands cast to unsigned char *
+    expr(['-e', 'sched:sched_wakeup', '(unsigned char *)comm ~ (unsigned char *)"*perf*"'], runtime, memleak_check)
+
+def test_expr_string_equality_unsigned_char_ptr(runtime, memleak_check):
+    # == must still be a strcmp(), not an address comparison
+    expr(['-e', 'sched:sched_wakeup', '(unsigned char *)comm == "swapper/0"'], runtime, memleak_check)
+
+def test_expr_string_inequality_unsigned_char_ptr(runtime, memleak_check):
+    # != must still be a strcmp(), not an address comparison
+    expr(['-e', 'sched:sched_wakeup', '(unsigned char *)comm != "swapper/0"'], runtime, memleak_check)
+
+def test_expr_match_unsigned_char_ptr_in_filter(runtime, memleak_check):
+    # The same, in a userspace filter rather than the expression proper
+    expr(['-e', 'sched:sched_wakeup/(unsigned char *)comm~"*perf*"/', 'prio'], runtime, memleak_check)
