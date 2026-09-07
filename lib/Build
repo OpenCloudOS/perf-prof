@@ -4,6 +4,10 @@ perf-prof-y += cgroup.o epoll.o tdigest.o
 perf-prof-$(CONFIG_RPMALLOC) += rpmalloc.o
 CFLAGS_rpmalloc.o += -Wno-declaration-after-statement -Wno-redundant-decls -DENABLE_STATISTICS=1
 
+# Verbatim kernel source; -Wnested-externs trips on the BUILD_BUG_ON in it.
+perf-prof-$(CONFIG_LIBBPF) += bpf_disasm.o
+CFLAGS_bpf_disasm.o += -Wno-nested-externs
+
 perf-prof-y += demangle-cxx.o
 perf-prof-y += demangle-java.o
 perf-prof-y += demangle-rust.o
