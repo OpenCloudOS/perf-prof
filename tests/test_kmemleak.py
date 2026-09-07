@@ -6,7 +6,7 @@ import pytest
 
 def test_kmemleak_kmalloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
-                '--alloc', 'kmem:kmalloc//ptr=ptr/size=bytes_req/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/',
+                '--alloc', 'kmem:kmalloc*//ptr=ptr/size=bytes_req/',
                 '--free', 'kmem:kfree//ptr=ptr/',
                 '-m', '256', '--order', '-g'])
     for std, line in kmemleak.run(runtime, memleak_check):
@@ -14,7 +14,7 @@ def test_kmemleak_kmalloc(runtime, memleak_check):
 
 def test_kmemleak_userspace_ftrace_filter(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
-                '--alloc', 'kmem:kmalloc/bytes_req==bytes_alloc/ptr=ptr/size=bytes_req/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/',
+                '--alloc', 'kmem:kmalloc*/bytes_req==bytes_alloc/ptr=ptr/size=bytes_req/',
                 '--free', 'kmem:kfree//ptr=ptr/',
                 '-m', '256', '--order', '-g'])
     for std, line in kmemleak.run(runtime, memleak_check):
@@ -22,7 +22,7 @@ def test_kmemleak_userspace_ftrace_filter(runtime, memleak_check):
 
 def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
-                '--alloc', 'kmem:kmem_cache_alloc//ptr=ptr/size=bytes_req/stack/,kmem:kmem_cache_alloc_node//ptr=ptr/size=bytes_req/stack/',
+                '--alloc', 'kmem:kmem_cache_alloc*//ptr=ptr/size=bytes_req/stack/',
                 '--free', 'kmem:kmem_cache_free//ptr=ptr/',
                 '-m', '256', '--order'])
     for std, line in kmemleak.run(runtime, memleak_check):
@@ -30,7 +30,7 @@ def test_kmemleak_kmem_cache_alloc(runtime, memleak_check):
 
 def test_kmemleak_kmem_cache_alloc_than1s(runtime, memleak_check):
     kmemleak = PerfProf(['kmemleak',
-                '--alloc', 'kmem:kmem_cache_alloc//ptr=ptr/size=bytes_req/stack/,kmem:kmem_cache_alloc_node//ptr=ptr/size=bytes_req/stack/',
+                '--alloc', 'kmem:kmem_cache_alloc*//ptr=ptr/size=bytes_req/stack/',
                 '--free', 'kmem:kmem_cache_free//ptr=ptr/',
                 '-m', '256', '--order', '--than', '1s'])
     for std, line in kmemleak.run(runtime, memleak_check):

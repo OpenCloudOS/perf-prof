@@ -129,7 +129,7 @@ def test_num_dist_dwarf(runtime, memleak_check, sysctl_kernel_sched_schedstats):
 def test_kmemleak_dwarf(runtime, memleak_check):
     #perf-prof kmemleak --alloc 'kmem:kmalloc//ptr=ptr/size=bytes_req/stack/' --free 'kmem:kfree//ptr=ptr/' -m 256 --order -g --user-callchain=dwarf
     prof = PerfProf(['kmemleak',
-                     '--alloc', 'kmem:kmalloc//ptr=ptr/size=bytes_req/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/',
+                     '--alloc', 'kmem:kmalloc*//ptr=ptr/size=bytes_req/',
                      '--free', 'kmem:kfree//ptr=ptr/',
                      '-m', '256', '--order', '-g', '--user-callchain=dwarf'])
     for std, line in prof.run(runtime, memleak_check):
@@ -143,7 +143,7 @@ def test_kmemleak_dwarf(runtime, memleak_check):
 def test_kmemprof_dwarf(runtime, memleak_check):
     #perf-prof kmemprof -e 'kmem:kmalloc//ptr=ptr/size=bytes_req/stack/' -e 'kmem:kfree//ptr=ptr/stack/' -m 512 --order -i 1000 -k ptr --user-callchain=dwarf
     prof = PerfProf(['kmemprof',
-                     '-e', 'kmem:kmalloc//key=ptr/size=bytes_req/stack/,kmem:kmalloc_node//key=ptr/size=bytes_req/stack/',
+                     '-e', 'kmem:kmalloc*//key=ptr/size=bytes_req/stack/',
                      '-e', 'kmem:kfree//key=ptr/stack/',
                      '-m', '512', '--order', '-i', '1000', '--user-callchain=dwarf'])
     for std, line in prof.run(runtime, memleak_check):

@@ -6,7 +6,7 @@ import pytest
 
 def test_kmemprof_kmalloc(runtime, memleak_check):
     kmemprof = PerfProf(['kmemprof',
-                '-e', 'kmem:kmalloc//ptr=ptr/size=bytes_req/stack/,kmem:kmalloc_node//ptr=ptr/size=bytes_req/stack/',
+                '-e', 'kmem:kmalloc*//ptr=ptr/size=bytes_req/stack/',
                 '-e', 'kmem:kfree//ptr=ptr/stack/',
                 '-m', '512', '--order', '-i', '1000', '-k', 'ptr'])
     for std, line in kmemprof.run(runtime, memleak_check):
@@ -15,7 +15,7 @@ def test_kmemprof_kmalloc(runtime, memleak_check):
 
 def test_kmemprof_kmem_cache_alloc(runtime, memleak_check):
     kmemprof = PerfProf(['kmemprof',
-                '-e', 'kmem:kmem_cache_alloc//ptr=ptr/size=bytes_req/stack/,kmem:kmem_cache_alloc_node//ptr=ptr/size=bytes_req/stack/',
+                '-e', 'kmem:kmem_cache_alloc*//ptr=ptr/size=bytes_req/stack/',
                 '-e', 'kmem:kmem_cache_free//ptr=ptr/stack/',
                 '-m', '512', '--order', '-i', '1000', '-k', 'ptr'])
     for std, line in kmemprof.run(runtime, memleak_check):
