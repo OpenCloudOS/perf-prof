@@ -196,6 +196,64 @@ if (kvm_exit_bpf__load(ctx->obj))
 
 栈深度超过 8 会报错（`expression too deeply nested`），实践中不会触及。
 
+#### 5.2.1 破坏 r2–r9 为什么是安全的
+
+占位符的函数体只有 `r0 = 1; exit`，只读 r1；替换进去的表达式却会写 r2–r9。调用点是
+clang 在**编译 BPF 程序时**生成的，那时表达式还不存在——它会不会假设这些寄存器跨调用不变？
+不会，但两半的理由不同。
+
+**r2–r5：caller-saved，是 ABI 规定，与被调用者的函数体无关。** clang 从不把跨调用存活的
+值留在这里，哪怕它能看穿被调用者只用了 r1。构造一个 8 个值跨调用存活的高压场景，编译出来是：
+
+```
+    0: r2 = *(u64 *)(r1 + 0x38)
+    1: *(u64 *)(r10 - 0x8) = r2     ← r2 只作搬运的中转，值溢出到栈
+    ...
+    8: r8 = *(u64 *)(r1 + 0x18)     ← 要跨调用存活的，进 r6-r9
+   11: r7 = *(u64 *)(r1 + 0x0)
+   12: call 0x13                    ← expr_filter()，函数体只有 r0 = 1; exit
+   13: r0 <<= 0x20                  ← 调用后只认 r0
+```
+
+跨调用存活的值全在 r6–r9 和栈上，r2 只用作同一条指令内的搬运中转。BPF 后端也没有启用
+IPRA（跨过程寄存器分配，`-mllvm -enable-ipra`，正是"看穿被调用者实际用了哪些寄存器"的那个
+优化）——开着它编译，代码一模一样。
+
+verifier 还会再兜一层：`clear_caller_saved_regs()` 在每个 subprog 调用后把 r0–r5 标成
+`NOT_INIT`，调用方若真敢读就是 `R2 !read_ok`。
+
+**r6–r9：callee-saved，由 JIT 按替换后的指令流现场决定保存哪些。** 这一半才是真问题：栈槽
+从 `r2` 起编号，深度超过 4 就用到 r6，而占位符里这些寄存器根本不出现。
+
+```
+--filter 'latency > (run_delay + (sched_latency + (exit_reason + (isa + (switches + (pid + tgid))))))'
+
+    1: (bf) r2 = r0                 ← 栈槽 0，caller-saved 区
+    3: (bf) r3 = r0
+    5: (bf) r4 = r0
+    7: (bf) r5 = r0                 ← 栈槽 3，到这里 caller-saved 用尽
+    9: (bf) r6 = r0                 ← 栈槽 4 起进 callee-saved，占位符里不出现
+   11: (bf) r7 = r0
+   13: (bf) r8 = r0
+```
+
+关键在于**内核从头到尾没见过占位符**：替换发生在 `bpf_object__load()` 之前（见第二节的注入
+窗口），verifier 和 JIT 拿到的只有最终指令。`jit_subprogs()` 把每个 subprog 做成独立的
+`bpf_prog` 单独 JIT，x86 后端在 `do_jit()` 里现场扫描当前指令流：
+
+```c
+detect_reg_usage(insn, insn_cnt, callee_regs_used);   /* 逐条看 dst_reg/src_reg 是否命中 r6-r9 */
+emit_prologue(...);
+push_callee_regs(&prog, callee_regs_used);            /* 命中的才 push，epilogue 对称 pop */
+```
+
+arm64 的 `push_callee_regs()` / `pop_callee_regs()` 同理。解释器路径的机制不同但同样安全：
+`DEFINE_BPF_PROG_RUN_ARGS` 给每一帧一个全新的 `u64 regs[MAX_BPF_EXT_REG]`，调用者的 r6–r9
+在自己的数组里，物理上碰不到。
+
+所以后端不需要为了保护调用者而限制可用寄存器。真正被编译期约定绑死的只有**入口**——参数必须
+在 r1、返回值必须在 r0，这正是第六节里 `asm volatile` 必须消费 `event` 的原因。
+
 ### 5.3 核心：字段访问
 
 这是整个翻译的关键，也是"表达式里的 `exit_reason` 怎么变成 `event->exit_reason`"的答案。
