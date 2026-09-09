@@ -992,17 +992,30 @@ void expr_dump(struct expr_prog *prog)
  * leaves that array uninitialised, so a read would return stack garbage. A
  * slot is always pushed before it is read, so this is satisfied either way.
  *
- * Slots still start at r2 rather than r6, because r2-r5 map onto x86 registers
- * that are caller-saved (rsi/rdx/rcx/r8) and so are never pushed at all, on
- * any kernel. The usual reason to prefer r6-r9 -- surviving a helper call --
- * does not apply, because every builtin that would need one is rejected below.
+ * Slots would normally start at r2 rather than r6, because r2-r5 map onto x86
+ * registers that are caller-saved (rsi/rdx/rcx/r8) and so are never pushed at
+ * all, on any kernel. The usual reason to prefer r6-r9 -- surviving a helper
+ * call -- does not apply, because every builtin that would need one is
+ * rejected below.
+ *
+ * That rests on clang honouring the calling convention: the call site is
+ * compiled against a placeholder whose body is only `r0 = 1; exit', so nothing
+ * but the ABI stops it from keeping a value in r2-r5 across the call. The build
+ * checks this rather than assuming it -- src/bpf-skel/slot_check.bpf.c is
+ * compiled and inspected by scripts/bpf_slot_check.py -- and defines
+ * BPF_SLOT_FIRST_R6 if the check either fails or cannot be run, which costs
+ * four slots and nothing else. See docs/bpf_event_filter.md 5.2.1 and 5.2.2.
  */
 
 /* Named BPF_ACC, not BPF_A: <uapi/linux/filter.h>, pulled in by
  * <linux/filter.h>, uses BPF_A for a classic-BPF addressing mode. */
 #define BPF_ACC        BPF_REG_0          /* accumulator, mirrors VM's `a' */
 #define BPF_EVENT      BPF_REG_1          /* event pointer, never clobbered */
+#ifdef BPF_SLOT_FIRST_R6
+#define BPF_SLOT_FIRST BPF_REG_6
+#else
 #define BPF_SLOT_FIRST BPF_REG_2
+#endif
 #define BPF_SLOT_LAST  BPF_REG_9
 #define BPF_NR_SLOTS   (BPF_SLOT_LAST - BPF_SLOT_FIRST + 1)
 
